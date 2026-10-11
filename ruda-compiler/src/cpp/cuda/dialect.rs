@@ -28,6 +28,11 @@ pub struct CudaDialect<M> {
 impl<M: DialectWmmaCompiler<Self>> Dialect for CudaDialect<M> {
     type Architecture = CudaArchitecture;
     fn supports_native_addresses() -> bool { true }
+    fn format_non_finite_float(value: f64) -> String {
+        if value.is_nan() { "CUDART_NAN".into() }
+        else if value.is_sign_negative() { "-CUDART_INF".into() }
+        else { "CUDART_INF".into() }
+    }
 }
 
 impl<M: DialectWmmaCompiler<Self>> DialectIncludes<Self> for CudaDialect<M> {
@@ -35,6 +40,7 @@ impl<M: DialectWmmaCompiler<Self>> DialectIncludes<Self> for CudaDialect<M> {
 
     fn compile_includes(f: &mut std::fmt::Formatter<'_>, flags: &Flags<Self>) -> std::fmt::Result {
         f.write_str("#include <cuda_runtime.h>\n")?;
+        f.write_str("#include <math_constants.h>\n")?;
         if flags.elem_fp4 {
             f.write_str("#include <cuda_fp4.h>\n")?;
         }

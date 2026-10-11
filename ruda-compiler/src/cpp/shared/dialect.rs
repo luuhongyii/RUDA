@@ -36,6 +36,7 @@ pub trait Dialect:
 {
     type Architecture: Architecture;
     fn supports_native_addresses() -> bool { false }
+    fn format_non_finite_float(value: f64) -> String { value.to_string() }
 }
 
 // Includes

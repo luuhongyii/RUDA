@@ -103,9 +103,9 @@ fn half_division_is_not_emitted_as_invalid_ptx() {
 }
 
 #[test]
-fn half_fma_preserves_existing_f32_intermediate() {
+fn half_fma_uses_native_single_rounding() {
     for kind in [FloatKind::F16, FloatKind::BF16] {
-        let mut k = kernel("half_fma");
+        let mut k = kernel(&format!("half_fma_{kind:?}"));
         let ty = Type::scalar(ElemType::Float(kind));
         let a = Variable::constant(ConstantValue::Float(1.25), ty);
         k.body.register(Instruction::new(
@@ -113,12 +113,13 @@ fn half_fma_preserves_existing_f32_intermediate() {
             local(0, ty),
         ));
         let result = compile(k, ExecutionMode::Checked, UIntKind::U32).unwrap();
-        assert!(result.source.contains("fma.rn.f32"));
         assert!(result.source.contains(&format!(
-            "cvt.rn.{}.f32",
+            "fma.rn.{}",
             types::Scalar::of(ty).unwrap().suffix()
         )));
-        assert!(!result.source.contains("fma.rn.f16"));
-        assert!(!result.source.contains("fma.rn.bf16"));
+        assert!(!result.source.contains("fma.rn.f32"));
+        assert!(!result.source.contains("cvt.rn.f16.f32"));
+        assert!(!result.source.contains("cvt.rn.bf16.f32"));
+        export(&result);
     }
 }

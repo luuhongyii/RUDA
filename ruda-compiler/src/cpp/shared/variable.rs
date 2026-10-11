@@ -226,6 +226,11 @@ pub(crate) fn format_const<D: Dialect>(number: &ConstantValue, item: &Item<D>) -
         Elem::FP8(FP8Kind::E5M2) => e5m2::from_f64(number.as_f64()).to_bits(),
         Elem::FP8(FP8Kind::UE8M0) => ue8m0::from_f64(number.as_f64()).to_bits(),
         _ => {
+            if let ConstantValue::Float(value) = number {
+                if !value.is_finite() {
+                    return D::format_non_finite_float(*value);
+                }
+            }
             return format!("{number}");
         }
     };
@@ -713,5 +718,43 @@ impl<D: Dialect> FmtLeft for IndexedVariable<D> {
 impl FmtLeft for &String {
     fn fmt_left(&self) -> String {
         self.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpp::cuda::{CudaDialect, mma::CudaWmmaCompiler};
+
+    type D = CudaDialect<CudaWmmaCompiler>;
+
+    #[test]
+    fn cuda_non_finite_constants_scalar_vector_and_indexed() {
+        for (value, literal) in [(f64::INFINITY, "CUDART_INF"),
+                                 (f64::NEG_INFINITY, "-CUDART_INF"),
+                                 (f64::NAN, "CUDART_NAN")] {
+            for elem in [Elem::<D>::F16, Elem::BF16, Elem::F32, Elem::F64] {
+                let scalar = Variable::Constant(ConstantValue::Float(value), Item::scalar(elem, false));
+                assert_eq!(scalar.to_string(), format!("{elem}({literal})"));
+                let vector = Variable::Constant(ConstantValue::Float(value), Item::new(elem, 4, false));
+                let lanes = (0..4).map(|_| format!("{elem}({literal})")).collect::<Vec<_>>().join(",");
+                assert_eq!(vector.to_string(), format!("{} {{ {lanes} }}", vector.item()));
+                assert_eq!(vector.index(2).to_string(), format!("{elem}({literal})"));
+            }
+        }
+    }
+
+    #[test]
+    fn cuda_finite_and_minifloat_constants_unchanged() {
+        let item = Item::<D>::scalar(Elem::F32, false);
+        for value in [ConstantValue::Float(-1.25), ConstantValue::Float(0.0),
+                      ConstantValue::Float(-0.0), ConstantValue::Int(7), ConstantValue::UInt(9),
+                      ConstantValue::Bool(true)] {
+            assert_eq!(format_const(&value, &item), value.to_string());
+        }
+        let item = Item::<D>::scalar(Elem::FP8(FP8Kind::E4M3), false);
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1.0] {
+            assert_eq!(format_const(&ConstantValue::Float(value), &item), e4m3::from_f64(value).to_bits().to_string());
+        }
     }
 }
