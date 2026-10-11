@@ -51,11 +51,11 @@ where
     pub async fn start(
         runner: Runner<B>,
         data_service: Arc<TensorDataService<B, P>>,
-    ) -> Sender<ProcessorTask> {
+    ) -> (Sender<ProcessorTask>, tokio::task::JoinHandle<()>) {
         // channel for tasks to execute
         let (task_sender, mut task_rec) = tokio::sync::mpsc::channel(1);
 
-        tokio::spawn(async move {
+        let worker = tokio::spawn(async move {
             while let Some(item) = task_rec.recv().await {
                 match item {
                     ProcessorTask::RegisterOperation(op) => {
@@ -63,25 +63,25 @@ where
                     }
                     ProcessorTask::RegisterGraph(id, graph, callback) => {
                         let result = runner.register_graph(graph);
-                        callback.send(TaskResponse { content: TaskResponseContent::RegisterGraph(result), id }).await.unwrap();
+                        let _ = callback.send(TaskResponse { content: TaskResponseContent::RegisterGraph(result), id }).await;
                     }
                     ProcessorTask::ExecuteGraph(id, graph, bindings, callback) => {
                         let result = runner.execute_graph(graph, bindings);
-                        callback.send(TaskResponse { content: TaskResponseContent::ExecuteGraph(result), id }).await.unwrap();
+                        let _ = callback.send(TaskResponse { content: TaskResponseContent::ExecuteGraph(result), id }).await;
                     }
                     ProcessorTask::RemoveGraph(id, graph, callback) => {
                         let result = runner.remove_graph(graph);
-                        callback.send(TaskResponse { content: TaskResponseContent::RemoveGraph(result), id }).await.unwrap();
+                        let _ = callback.send(TaskResponse { content: TaskResponseContent::RemoveGraph(result), id }).await;
                     }
                     ProcessorTask::Sync(id, callback) => {
                         let result = runner.sync();
-                        callback
+                        // The responder may already be gone when the client disconnected.
+                        let _ = callback
                             .send(TaskResponse {
                                 content: TaskResponseContent::SyncBackend(result),
                                 id,
                             })
-                            .await
-                            .unwrap();
+                            .await;
                     }
                     ProcessorTask::RegisterTensor(id, data) => {
                         runner.register_tensor_data_id(id, data);
@@ -110,36 +110,38 @@ where
                     }
                     ProcessorTask::ReadTensor(id, tensor, callback) => {
                         let tensor = runner.read_tensor_async(tensor).await;
-                        callback
+                        let _ = callback
                             .send(TaskResponse {
                                 content: TaskResponseContent::ReadTensor(tensor),
                                 id,
                             })
-                            .await
-                            .unwrap();
+                            .await;
                     }
                     ProcessorTask::Close => {
                         let device = runner.device();
-                        runner.sync().unwrap();
+                        if let Err(err) = runner.sync() {
+                            log::error!("Failed to sync runner while closing stream: {err:?}");
+                        }
                         core::mem::drop(runner);
-                        B::sync(&device).unwrap();
+                        if let Err(err) = B::sync(&device) {
+                            log::error!("Failed to sync device while closing stream: {err:?}");
+                        }
                         break;
                     }
                     ProcessorTask::Seed(seed) => runner.seed(seed),
                     ProcessorTask::DTypeUsage(id, dtype, callback) => {
                         let result = runner.dtype_usage(dtype);
-                        callback
+                        let _ = callback
                             .send(TaskResponse {
                                 content: TaskResponseContent::DTypeUsage(result),
                                 id,
                             })
-                            .await
-                            .unwrap();
+                            .await;
                     }
                 }
             }
         });
 
-        task_sender
+        (task_sender, worker)
     }
 }

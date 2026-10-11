@@ -13,10 +13,22 @@ use crate::shared::{ComputeTask, ConnectionId, SessionId, Task, TaskResponse};
 
 use super::stream::Stream;
 
+/// A request violated the session protocol; the connection that sent it is closed.
+#[derive(Debug)]
+pub enum SessionError {
+    /// The first message on a request connection was not [`Task::Init`].
+    NotInitialized,
+    /// A non-compute task arrived after initialization.
+    UnexpectedTask,
+    /// The session was closed or never registered.
+    UnknownSession(SessionId),
+}
+
 /// A session manager control the creation of sessions.
 ///
 /// Each session manages its own stream, spawning one thread per stream to mimic the same behavior
-/// a native backend would have.
+/// a native backend would have. Sessions share the device but not the tensor or graph context,
+/// since every client numbers its tensors from zero.
 pub struct SessionManager<B, P>
 where
     B: BackendIr,
@@ -53,17 +65,15 @@ where
     }
 
     /// Register a new responder for the session. Only one responder can exist for a session for
-    /// now.
+    /// now; `None` is returned if the session already has one.
     pub async fn register_responder(
         &self,
         session_id: SessionId,
-    ) -> Receiver<Receiver<TaskResponse>> {
+    ) -> Option<Receiver<Receiver<TaskResponse>>> {
         log::info!("Register responder for session {session_id}");
         let mut sessions = self.sessions.lock().await;
-        self.register_session(&mut sessions, session_id);
-
-        let session = sessions.get_mut(&session_id).unwrap();
-        session.init_responder()
+        self.register_session(&mut sessions, session_id)
+            .init_responder()
     }
 
     /// Get the stream for the current session and task.
@@ -71,7 +81,7 @@ where
         &self,
         session_id: &mut Option<SessionId>,
         task: Task,
-    ) -> Option<(Stream<B, P>, ConnectionId, ComputeTask)> {
+    ) -> Result<Option<(Stream<B, P>, ConnectionId, ComputeTask)>, SessionError> {
         let mut sessions = self.sessions.lock().await;
 
         let session_id = match session_id {
@@ -81,41 +91,52 @@ where
                     log::info!("Init requester for session {id}");
                     *session_id = Some(id);
                     self.register_session(&mut sessions, id);
-                    return None;
+                    return Ok(None);
                 }
-                _ => panic!("The first message should initialize the session"),
+                _ => return Err(SessionError::NotInitialized),
             },
         };
 
-        match sessions.get_mut(&session_id) {
-            Some(session) => {
-                let (task, connection_id) = match task {
-                    Task::Compute(task, connection_id) => (task, connection_id),
-                    _ => panic!("Only support compute tasks."),
-                };
-                let stream = session.select(connection_id.stream_id).await;
-                Some((stream, connection_id, task))
-            }
-            None => panic!("To be initialized"),
-        }
+        let session = sessions
+            .get_mut(&session_id)
+            .ok_or(SessionError::UnknownSession(session_id))?;
+        let (task, connection_id) = match task {
+            Task::Compute(task, connection_id) => (task, connection_id),
+            _ => return Err(SessionError::UnexpectedTask),
+        };
+        let stream = session.select(connection_id.stream_id).await;
+        Ok(Some((stream, connection_id, task)))
     }
 
     /// Close the session with the given id.
+    ///
+    /// The session is removed before its streams are drained so that slow cleanup never blocks
+    /// other sessions.
     pub async fn close(&self, session_id: Option<SessionId>) {
-        if let Some(id) = session_id {
-            let mut sessions = self.sessions.lock().await;
-            if let Some(session) = sessions.get_mut(&id) {
-                session.close().await;
-            }
+        let Some(id) = session_id else {
+            return;
+        };
+        let session = self.sessions.lock().await.remove(&id);
+        if let Some(mut session) = session {
+            session.close().await;
         }
     }
 
-    fn register_session(&self, sessions: &mut HashMap<SessionId, Session<B, P>>, id: SessionId) {
+    /// Number of sessions currently registered.
+    pub async fn session_count(&self) -> usize {
+        self.sessions.lock().await.len()
+    }
+
+    fn register_session<'a>(
+        &self,
+        sessions: &'a mut HashMap<SessionId, Session<B, P>>,
+        id: SessionId,
+    ) -> &'a mut Session<B, P> {
         sessions.entry(id).or_insert_with(|| {
             log::info!("Creating a new session {id}");
 
-            Session::new(self.runner.clone(), self.data_service.clone())
-        });
+            Session::new(self.runner.fork(), self.data_service.clone())
+        })
     }
 }
 
@@ -136,10 +157,8 @@ where
         }
     }
 
-    fn init_responder(&mut self) -> Receiver<Receiver<TaskResponse>> {
-        let mut receiver = None;
-        core::mem::swap(&mut receiver, &mut self.receiver);
-        receiver.expect("Only one responder per session is possible.")
+    fn init_responder(&mut self) -> Option<Receiver<Receiver<TaskResponse>>> {
+        self.receiver.take()
     }
 
     /// Select the current [stream](Stream) based on the given task.
@@ -166,5 +185,103 @@ where
             log::info!("Closing stream {id}");
             stream.close().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ruda_communication::websocket::WebSocket;
+    use ruda_tensor_host::Host;
+    use tokio_util::sync::CancellationToken;
+
+    fn manager() -> SessionManager<Host, WebSocket> {
+        let data_service = Arc::new(TensorDataService::new(CancellationToken::new()));
+        SessionManager::new(Default::default(), data_service)
+    }
+
+    fn seed_task() -> Task {
+        Task::Compute(ComputeTask::Seed(0), ConnectionId::new(0, StreamId::current()))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn closed_sessions_are_removed() {
+        let manager = manager();
+        for _ in 0..16 {
+            let id = SessionId::new();
+            let mut current = None;
+            assert!(manager.stream(&mut current, Task::Init(id)).await.unwrap().is_none());
+            let _responder = manager.register_responder(id).await.unwrap();
+            let (stream, _, _) = manager.stream(&mut current, seed_task()).await.unwrap().unwrap();
+            stream.seed(1).await.unwrap();
+            manager.close(current).await;
+        }
+        assert_eq!(manager.session_count().await, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn closing_one_session_keeps_others_usable() {
+        let manager = manager();
+        let (mut first, mut second) = (None, None);
+        manager.stream(&mut first, Task::Init(SessionId::new())).await.unwrap();
+        manager.stream(&mut second, Task::Init(SessionId::new())).await.unwrap();
+
+        manager.close(first).await;
+        manager.close(first).await;
+
+        let (stream, _, _) = manager.stream(&mut second, seed_task()).await.unwrap().unwrap();
+        stream.seed(1).await.unwrap();
+        assert!(matches!(
+            manager.stream(&mut first, seed_task()).await,
+            Err(SessionError::UnknownSession(_))
+        ));
+        assert_eq!(manager.session_count().await, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn requests_before_init_are_rejected() {
+        let manager = manager();
+        let mut current = None;
+        assert!(matches!(
+            manager.stream(&mut current, seed_task()).await,
+            Err(SessionError::NotInitialized)
+        ));
+        assert_eq!(manager.session_count().await, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn second_responder_is_refused() {
+        let manager = manager();
+        let id = SessionId::new();
+        assert!(manager.register_responder(id).await.is_some());
+        assert!(manager.register_responder(id).await.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sessions_with_equal_tensor_ids_keep_separate_values() {
+        use ruda_tensor::{DType, Shape, TensorData};
+        use ruda_tensor::graph::{TensorId, TensorIr, TensorStatus};
+        use ruda_tensor_router::RunnerClient;
+
+        let manager = manager();
+        let (a, b) = (SessionId::new(), SessionId::new());
+        let (mut first, mut second) = (None, None);
+        manager.stream(&mut first, Task::Init(a)).await.unwrap();
+        manager.stream(&mut second, Task::Init(b)).await.unwrap();
+        let (runner_a, runner_b) = {
+            let sessions = manager.sessions.lock().await;
+            (sessions[&a].runner.clone(), sessions[&b].runner.clone())
+        };
+        let id = TensorId::new(0);
+        runner_a.register_tensor_data_id(id, TensorData::new(vec![1.5f32], [1]));
+        runner_b.register_tensor_data_id(id, TensorData::new(vec![9.0f32], [1]));
+        let tensor = TensorIr { id, shape: Shape::new([1]), dtype: DType::F32,
+            status: TensorStatus::ReadOnly };
+        assert_eq!(runner_a.read_tensor_async(tensor.clone()).await.unwrap()
+            .to_vec::<f32>().unwrap(), vec![1.5]);
+        manager.close(first).await;
+        assert_eq!(runner_b.read_tensor_async(tensor).await.unwrap()
+            .to_vec::<f32>().unwrap(), vec![9.0]);
+        manager.close(second).await;
     }
 }
