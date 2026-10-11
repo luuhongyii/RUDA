@@ -6067,7 +6067,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-runtime"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "async-channel",
  "bytemuck",
