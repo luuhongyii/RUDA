@@ -39,6 +39,8 @@ pub enum Operation {
     #[operation(nested)]
     TypedMemory(super::TypedMemory),
     #[operation(nested)]
+    Pointer(super::PointerOp),
+    #[operation(nested)]
     Atomic(AtomicOp),
     #[operation(nested)]
     Metadata(Metadata),
@@ -188,6 +190,7 @@ impl Display for Operation {
             Operation::Bitwise(bitwise) => write!(f, "{bitwise}"),
             Operation::Operator(operator) => write!(f, "{operator}"),
             Operation::TypedMemory(memory) => write!(f, "{memory}"),
+            Operation::Pointer(pointer) => write!(f, "{pointer:?}"),
             Operation::Atomic(atomic) => write!(f, "{atomic}"),
             Operation::Metadata(metadata) => write!(f, "{metadata}"),
             Operation::Branch(branch) => write!(f, "{branch}"),

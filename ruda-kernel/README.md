@@ -35,6 +35,31 @@ require a writable kernel binding. Existing slices and native pointer operations
 remain available. Typed load/store currently supports non-atomic elements; this
 interface does not establish GPU alias, lifetime, or race-freedom proofs.
 
+Calling `.value()` on a `Ptr` produces `ValuePtr<E, S, A>`, represented by a
+distinct pointer type in IR. These values support assignment, branch results,
+loop-carried offsets, helper-function parameters and returns, and the same
+load/store/selection/permission-downgrade operations. Before the existing SSA
+pass, bound-storage pointer values are lowered to storage selectors and element
+offsets; non-atomic accesses retain the address-space and permission descriptors.
+`ValuePtr<E, GlobalSpace, A>` can also be a kernel argument, using `ArrayArg` and
+the existing buffer-binding ABI, including allocation offsets and inplace aliases.
+
+For `ValuePtr<Atomic<E>, S, A>`, `.atomic_load()` returns `E`; `ReadWrite` also
+provides `.atomic_store()`, `.swap()`, `.fetch_add()`, `.fetch_sub()`,
+`.fetch_min()`, and `.fetch_max()`. Integer atomics additionally support
+`.fetch_and()`, `.fetch_or()`, `.fetch_xor()`, and `.compare_exchange_weak()`.
+These retain the existing backend atomic semantics and capability restrictions.
+
+`.native_address()` exports a byte address, and
+`ValuePtr<E, S, A>::from_native(address)` imports one on the existing
+native-address backends (CUDA/HIP/PTX). Imported addresses must be valid, aligned,
+live for the entire kernel, and have the declared address space and access permissions; they carry
+no bounds metadata. Native imports are not supported by WGSL, logical SPIR-V,
+Metal, or the CPU memref backend. Imported native atomics use the existing
+U64-to-atomic-reference support of the direct PTX backend; CUDA/HIP C++ lowering
+does not support that conversion.
+The original `Ptr` storage-view path, slices, and native operations are unchanged.
+
 ## Features
 
 Default features: `frontend-default`.

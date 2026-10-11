@@ -268,6 +268,7 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
                 Item::new(self.compile_storage_type(ty), vector_size, false)
             }
             gpu::Type::Semantic(_) => Item::new(Elem::Bool, 1, true),
+            gpu::Type::Pointer(_) => unreachable!("pointer values are lowered before C++ type emission"),
         };
         if item.elem != super::Elem::TF32 {
             self.items.insert(item);

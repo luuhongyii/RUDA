@@ -161,3 +161,129 @@ fn typed_pointer_rejects_writable_read_only_binding() {
     kernel.buffers[1].visibility = Visibility::Read;
     assert!(kernel.validate_typed_memory().is_err());
 }
+
+fn pointer_value_kernel(width: usize) -> KernelDefinition {
+    let mut kernel = kernel(true, width);
+    let mut instructions = Vec::new();
+    for inst in core::mem::take(&mut kernel.body.instructions) {
+        if let Operation::TypedMemory(memory) = &inst.operation {
+            let pointer = *kernel.body.create_local(memory.pointer().ty.value_type());
+            instructions.push(Instruction::new(PointerOp::Address(*memory.pointer()), pointer));
+            instructions.push(match memory {
+                TypedMemory::Load(_) => Instruction::new(PointerOp::Load { pointer, checked: true }, inst.out()),
+                TypedMemory::Store { value, .. } => Instruction::no_out(PointerOp::Store { pointer, value: *value, checked: true }),
+            });
+        } else { instructions.push(inst); }
+    }
+    kernel.body.instructions = instructions;
+    kernel
+}
+
+fn compile_values<C: Compiler + Default>(widths: &[usize]) {
+    for width in widths {
+        for mode in [ExecutionMode::Checked, ExecutionMode::Unchecked] {
+            let generated = C::default().compile(pointer_value_kernel(*width), &Default::default(), mode, UIntKind::U32.into()).unwrap().to_string();
+            assert!(!generated.is_empty());
+            assert!(!generated.contains("ptr<"));
+        }
+    }
+}
+
+#[cfg(feature = "lowering-cpp")]
+#[test]
+fn pointer_value_cuda_hip_codegen() {
+    use crate::dsl::lowering::cpp::{CudaCompiler, HipCompiler};
+    compile_values::<CudaCompiler<ruda_compiler::cpp::cuda::mma::CudaWmmaCompiler>>(&[1, 4]);
+    compile_values::<HipCompiler<ruda_compiler::cpp::hip::mma::RocWmmaCompiler>>(&[1, 4]);
+}
+
+#[cfg(feature = "lowering-metal")]
+#[test]
+fn pointer_value_metal_codegen() { compile_values::<crate::dsl::lowering::cpp::MslCompiler>(&[1, 4]); }
+
+#[cfg(feature = "lowering-wgsl")]
+#[test]
+fn pointer_value_wgsl_codegen() { compile_values::<crate::dsl::lowering::wgsl::WgslCompiler>(&[1, 4, 8]); }
+
+#[cfg(feature = "lowering-spirv")]
+#[test]
+fn pointer_value_spirv_codegen() {
+    for width in [1, 4, 8] {
+        let result = crate::dsl::lowering::spirv::compiler::<ruda_compiler::spirv::GLCompute>()
+            .compile(pointer_value_kernel(width), &Default::default(), ExecutionMode::Checked, UIntKind::U32.into()).unwrap();
+        assert!(!result.assembled_module.is_empty());
+    }
+}
+
+#[test]
+fn pointer_value_binding_permissions() {
+    let mut kernel = pointer_value_kernel(1);
+    kernel.buffers[1].visibility = Visibility::Read;
+    assert!(kernel.validate_typed_memory().is_err());
+}
+
+#[crate::dsl::prelude::ruda]
+fn pointer_value_atomic_dsl(first: &mut crate::dsl::prelude::Array<crate::dsl::prelude::Atomic<u32>>) {
+    use crate::dsl::prelude::*;
+    let pointer = first.to_slice_mut().typed::<GlobalSpace>().ptr(0).value();
+    pointer.atomic_store(1);
+    let _loaded = pointer.read_only().atomic_load();
+    let _old = pointer.swap(2);
+    let _added = pointer.fetch_add(3);
+    let _subtracted = pointer.fetch_sub(1);
+    let _minimum = pointer.fetch_min(2);
+    let _maximum = pointer.fetch_max(4);
+    let _and = pointer.fetch_and(3);
+    let _or = pointer.fetch_or(4);
+    let _xor = pointer.fetch_xor(1);
+    let _cas = pointer.compare_exchange_weak(4, 5);
+}
+
+fn pointer_value_atomic_kernel() -> KernelDefinition {
+    use crate::dsl::prelude::{Array, Atomic, NativeExpand};
+    let mut k = kernel(true, 1);
+    k.body.instructions.clear();
+    k.options.kernel_name = "pointer_value_atomic".into();
+    let ty = Type::new(StorageType::Atomic(ElemType::UInt(UIntKind::U32)));
+    k.buffers = vec![KernelArg { id: 0, visibility: Visibility::ReadWrite, ty, size: None, has_extended_meta: false }];
+    k.body.register_type::<u32>(UIntKind::U32.into());
+    let array: NativeExpand<Array<Atomic<u32>>> = ManagedVariable::Plain(Variable::new(VariableKind::GlobalOutputArray(0), ty)).into();
+    pointer_value_atomic_dsl::expand(&mut k.body, array);
+    k
+}
+
+#[cfg(feature = "lowering-cpp")]
+#[test]
+fn pointer_value_atomic_cuda_hip_codegen() {
+    use crate::dsl::lowering::cpp::{CudaCompiler, HipCompiler};
+    let cuda = CudaCompiler::<ruda_compiler::cpp::cuda::mma::CudaWmmaCompiler>::default()
+        .compile(pointer_value_atomic_kernel(), &Default::default(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap().to_string();
+    let hip = HipCompiler::<ruda_compiler::cpp::hip::mma::RocWmmaCompiler>::default()
+        .compile(pointer_value_atomic_kernel(), &Default::default(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap().to_string();
+    assert!(cuda.contains("atomicAdd") && cuda.contains("atomicCAS"));
+    assert!(hip.contains("atomicAdd") && hip.contains("atomicCAS"));
+}
+
+#[cfg(feature = "lowering-metal")]
+#[test]
+fn pointer_value_atomic_metal_codegen() {
+    let metal = crate::dsl::lowering::cpp::MslCompiler::default()
+        .compile(pointer_value_atomic_kernel(), &Default::default(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap().to_string();
+    assert!(metal.contains("atomic_fetch_add") && metal.contains("atomic_compare_exchange"));
+}
+
+#[cfg(feature = "lowering-wgsl")]
+#[test]
+fn pointer_value_atomic_wgsl_codegen() {
+    let wgsl = crate::dsl::lowering::wgsl::WgslCompiler::default()
+        .compile(pointer_value_atomic_kernel(), &Default::default(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap().to_string();
+    assert!(wgsl.contains("atomicAdd") && wgsl.contains("atomicCompareExchangeWeak"));
+}
+
+#[cfg(feature = "lowering-spirv")]
+#[test]
+fn pointer_value_atomic_spirv_codegen() {
+    let result = crate::dsl::lowering::spirv::compiler::<ruda_compiler::spirv::GLCompute>()
+        .compile(pointer_value_atomic_kernel(), &Default::default(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap();
+    assert!(!result.assembled_module.is_empty());
+}

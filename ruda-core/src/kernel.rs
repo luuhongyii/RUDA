@@ -60,6 +60,19 @@ impl KernelDefinition {
             use crate::ir::{Branch, Operation, PointerAccess, VariableKind};
             for instruction in &scope.instructions {
                 match &instruction.operation {
+                    Operation::Pointer(op) => {
+                        op.validate(instruction.out)?;
+                        if let crate::ir::PointerOp::Address(pointer) = op {
+                            if let VariableKind::GlobalInputArray(id) | VariableKind::GlobalOutputArray(id) = pointer.base.kind {
+                                let binding = kernel.buffers.iter().find(|binding| binding.id == id)
+                                    .ok_or_else(|| alloc::format!("pointer value refers to unknown buffer {id}"))?;
+                                if binding.ty != pointer.base.ty { return Err("pointer value buffer type mismatch".into()); }
+                                if pointer.ty.access == PointerAccess::ReadWrite && binding.visibility != Visibility::ReadWrite {
+                                    return Err("read-only binding cannot provide a writable pointer value".into());
+                                }
+                            }
+                        }
+                    }
                     Operation::TypedMemory(op) => {
                         op.validate(instruction.out)?;
                         let pointer = op.pointer();

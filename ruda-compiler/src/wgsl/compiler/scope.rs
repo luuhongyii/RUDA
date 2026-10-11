@@ -76,6 +76,7 @@ impl<P: WgslLowering> WgslCompiler<P> {
             }
             ruda::Operation::NonSemantic(_) => {}
             ruda::Operation::TypedMemory(_) => unreachable!(),
+            ruda::Operation::Pointer(_) => unreachable!("pointer values are lowered before WGSL emission"),
             ruda::Operation::Barrier(_) => {
                 panic!("Barrier isn't supported on wgpu.")
             }

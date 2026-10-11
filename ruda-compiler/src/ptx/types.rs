@@ -30,6 +30,7 @@ impl Scalar {
             Type::Scalar(StorageType::Atomic(elem)) => Self::of(Type::scalar(elem)),
             Type::Scalar(_) | Type::Vector(_, _) => Self::of(ty.with_vector_size(1)),
             Type::Semantic(_) => Err(unsupported("semantic type has no memory element")),
+            Type::Pointer(_) => Err(unsupported("pointer values must be lowered before PTX memory emission")),
         }
     }
 

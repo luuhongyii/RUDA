@@ -177,11 +177,12 @@ impl Optimizer {
     /// Create a new optimizer with the scope, `RudaDim` and execution mode passed into the compiler.
     /// Parses the scope and runs several optimization and analysis loops.
     pub fn new(
-        expand: Scope,
+        mut expand: Scope,
         ruda_dim: RudaDim,
         transformers: Vec<Rc<dyn IrTransformer>>,
         processors: Vec<Box<dyn Processor>>,
     ) -> Self {
+        expand.lower_pointer_values().expect("valid pointer values before SSA");
         let mut opt = Self {
             root_scope: expand.clone(),
             ruda_dim,
@@ -197,7 +198,8 @@ impl Optimizer {
 
     /// Create a new optimizer with the scope, `RudaDim` and execution mode passed into the compiler.
     /// Parses the scope and runs several optimization and analysis loops.
-    pub fn shared_only(expand: Scope, ruda_dim: RudaDim) -> Self {
+    pub fn shared_only(mut expand: Scope, ruda_dim: RudaDim) -> Self {
+        expand.lower_pointer_values().expect("valid pointer values before shared-memory analysis");
         let mut opt = Self {
             root_scope: expand.clone(),
             ruda_dim,

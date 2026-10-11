@@ -321,6 +321,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
                 Item::Vector(self.compile_storage_type(storage), size as u32)
             }
             core::Type::Semantic(_) => unimplemented!("Can't compile semantic type"),
+            core::Type::Pointer(_) => unreachable!("pointer values are lowered before SPIR-V type emission"),
         }
     }
 

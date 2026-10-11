@@ -14,6 +14,7 @@ impl<P: WgslLowering> WgslCompiler<P> {
                 }
             }
             ruda::Type::Semantic(_) => unimplemented!("Can't compile semantic type"),
+            ruda::Type::Pointer(_) => unreachable!("pointer values are lowered before WGSL type emission"),
         }
     }
 

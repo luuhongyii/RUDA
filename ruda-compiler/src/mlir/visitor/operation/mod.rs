@@ -162,6 +162,7 @@ impl<'a> Visitor<'a> {
             Operation::TypedMemory(_) => {
                 unreachable!("typed memory is lowered when visiting an instruction");
             }
+            Operation::Pointer(_) => unreachable!("pointer values are lowered before MLIR emission"),
             Operation::CoopMma(_) | Operation::Plane(_) | Operation::Tma(_) => {
                 panic!("{operation} is not supported on CPU.");
             }

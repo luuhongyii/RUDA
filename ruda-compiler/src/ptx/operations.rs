@@ -451,6 +451,7 @@ impl Emitter {
                 self.line(format!("bra {end};"));
             }
             Branch::Return => self.line("ret;"),
+            Branch::Unreachable => self.line("trap;"),
             other => return Err(unsupported(format!("branch {other:?}"))),
         }
         Ok(())

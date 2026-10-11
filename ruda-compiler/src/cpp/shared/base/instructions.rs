@@ -23,6 +23,7 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
             gpu::Operation::Bitwise(op) => self.compile_bitwise(op, out, instructions),
             gpu::Operation::Operator(op) => self.compile_operator(op, out, instructions),
             gpu::Operation::TypedMemory(_) => unreachable!(),
+            gpu::Operation::Pointer(_) => unreachable!("pointer values are lowered before C++ emission"),
             gpu::Operation::Atomic(op) => self.compile_atomic(op, out, instructions),
             gpu::Operation::Metadata(op) => instructions.push(self.compile_metadata(op, out)),
             gpu::Operation::Branch(val) => self.compile_branch(instructions, val),

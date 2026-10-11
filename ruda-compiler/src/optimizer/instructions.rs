@@ -55,6 +55,7 @@ impl Optimizer {
                 visit_read(self, &mut pointer.base);
                 visit_read(self, &mut pointer.index);
             }
+            Operation::Pointer(_) => unreachable!("pointer values are lowered before SSA"),
             Operation::Atomic(atomic) => self.visit_atomic(atomic, out, visit_read),
             Operation::Metadata(meta) => self.visit_meta(meta, visit_read),
             // Sync has no outputs
@@ -274,7 +275,7 @@ impl Optimizer {
                 self.visit_unop(unary_operator, visit_read);
             }
             AtomicOp::CompareAndSwap(op) => {
-                visit_read(self, &mut op.cmp);
+                visit_read(self, &mut op.input);
                 visit_read(self, &mut op.cmp);
                 visit_read(self, &mut op.val);
             }

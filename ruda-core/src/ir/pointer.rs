@@ -29,6 +29,36 @@ pub struct PointerType {
     pub access: PointerAccess,
 }
 
+/// Non-recursive, copyable representation of a first-class pointer's type.
+#[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PointerValueType {
+    pub storage: super::StorageType,
+    pub width: usize,
+    pub address_space: AddressSpace,
+    pub access: PointerAccess,
+}
+
+impl PointerValueType {
+    pub fn pointee(self) -> Type {
+        Type::new(self.storage).with_vector_size(self.width)
+    }
+
+    pub fn view(self) -> PointerType {
+        PointerType { pointee: self.pointee(), address_space: self.address_space, access: self.access }
+    }
+}
+
+impl PointerType {
+    pub fn value_type(self) -> Type {
+        assert!(!self.pointee.is_pointer() && !self.pointee.is_semantic(), "pointer pointee must have storage");
+        Type::Pointer(PointerValueType {
+            storage: self.pointee.storage_type(), width: self.pointee.vector_size(),
+            address_space: self.address_space, access: self.access,
+        })
+    }
+}
+
 #[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash)]
 pub struct TypedPointer {
@@ -62,7 +92,7 @@ impl TypedPointer {
                 self.ty.address_space, space
             ));
         }
-        if self.ty.pointee.is_semantic()
+        if self.ty.pointee.is_pointer() || self.base.ty.is_pointer() || self.ty.pointee.is_semantic()
             || self.base.ty.is_semantic()
             || self.base.ty.storage_type() != self.ty.pointee.storage_type()
         {

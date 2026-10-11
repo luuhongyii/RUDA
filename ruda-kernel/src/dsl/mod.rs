@@ -293,6 +293,9 @@ mod tests {
 pub use crate::{unexpanded, expand_error, expand_assert, size, define, debug_print, debug_print_expand, define_scalar, define_size};
 
 #[cfg(feature = "frontend-tests")]
+pub use crate::testgen_pointer_value;
+
+#[cfg(feature = "frontend-tests")]
 pub use crate::{testgen_all_reduce, testgen_assign, testgen_atomic_untyped, testgen_atomic_int, testgen_atomic_float, testgen_barrier, testgen_binary, testgen_binary_untyped, testgen_branch, testgen_cluster, testgen_cmma, testgen_comparison, testgen_const_match, testgen_constants, testgen_debug, testgen_different_rank, testgen_enums, testgen_file, testgen_index, testgen_launch, testgen_launch_untyped, testgen_metadata, testgen_minifloat, testgen_all, testgen_float, testgen_int, testgen_uint, testgen_untyped, as_bytes, as_type, testgen_numeric, testgen_plane, testgen_properties, testgen_saturating_uint, testgen_saturating_int, testgen_sequence, testgen_slice, testgen_stream, testgen_sync_plane, testgen_tensor_indexing, testgen_tensormap, testgen_to_client, testgen_topology, testgen_unary, testgen_unary_int, testgen_unroll, testgen_vector};
 
 pub mod lowering;

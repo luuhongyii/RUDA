@@ -40,6 +40,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             Operation::Bitwise(operator) => self.compile_bitwise(operator, inst.out, uniform),
             Operation::Operator(operator) => self.compile_operator(operator, inst.out, uniform),
             Operation::TypedMemory(_) => unreachable!(),
+            Operation::Pointer(_) => unreachable!("pointer values are lowered before SPIR-V emission"),
             Operation::Atomic(atomic) => self.compile_atomic(atomic, inst.out, inst.modes),
             Operation::Branch(_) => unreachable!("Branches shouldn't exist in optimized IR"),
             Operation::Metadata(meta) => self.compile_meta(meta, inst.out, uniform),

@@ -10,6 +10,9 @@ use ruda_kernel_macros::{intrinsic, ruda};
 #[cfg(test)]
 mod tests;
 
+mod value;
+pub use value::*;
+
 mod sealed {
     pub trait Sealed {}
 }
@@ -109,6 +112,20 @@ impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaType for &Ptr<
 }
 
 impl PointerNode {
+    fn value(&self, scope: &mut Scope) -> ManagedVariable {
+        use ruda_core::ir::{PointerOp, Select};
+        let (operation, ty) = match self {
+            Self::Element(pointer) => (PointerOp::Address(*pointer), pointer.ty.value_type()),
+            Self::Select { condition, then, otherwise } => {
+                let then = then.value(scope);
+                let otherwise = otherwise.value(scope);
+                (PointerOp::Select(Select { cond: *condition, then: *then, or_else: *otherwise }), then.ty)
+            }
+        };
+        let out = scope.create_local(ty);
+        scope.register(Instruction::new(operation, *out));
+        out
+    }
     fn pointee(&self) -> Type {
         match self {
             Self::Element(pointer) => pointer.ty.pointee,
@@ -194,6 +211,10 @@ impl PointerNode {
 
 #[ruda]
 impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> Ptr<E, S, A> {
+    /// Materialize a pointer value that can be reassigned and carried across branches and loops.
+    pub fn value(&self) -> ValuePtr<E, S, A> {
+        intrinsic!(|scope| { NativeExpand::new(self.node.value(scope)) })
+    }
     pub fn offset(&self, offset: usize) -> Self {
         intrinsic!(|scope| {
             PtrExpand {

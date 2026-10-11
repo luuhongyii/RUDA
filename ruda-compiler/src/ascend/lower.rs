@@ -115,6 +115,7 @@ impl Lower {
 
 pub(super) fn lower(mut k:KernelDefinition,elements:u64)->Result<Program> {
     k.validate_typed_memory().map_err(invalid)?;
+    k.body.lower_pointer_values().map_err(invalid)?;
     if !ident(&k.options.kernel_name) {return Err(invalid("kernel entry must be a short ASCII identifier beginning with a letter"));}
     if k.options.debug_symbols || k.options.cluster_dim.is_some() {return Err(unsupported("debug symbols/clusters"));}
     if k.ruda_dim.x==0 || k.ruda_dim.y!=1 || k.ruda_dim.z!=1 {return Err(unsupported("only nonzero one-dimensional logical lane launch is accepted"));}

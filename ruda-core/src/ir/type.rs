@@ -449,6 +449,8 @@ pub enum Type {
     Vector(StorageType, VectorSize),
     /// No defined physical representation, purely semantic. i.e. barrier, pipeline
     Semantic(SemanticType),
+    /// A pointer value, distinct from its pointee and from integer byte addresses.
+    Pointer(super::PointerValueType),
 }
 
 pub type VectorSize = usize;
@@ -473,6 +475,7 @@ impl Type {
     }
 
     pub fn with_vector_size(self, vector_size: VectorSize) -> Type {
+        assert!(!self.is_pointer(), "pointer values cannot be vectorized");
         match vector_size > 1 {
             true => Type::Vector(self.storage_type(), vector_size),
             false => Type::Scalar(self.storage_type()),
@@ -480,6 +483,7 @@ impl Type {
     }
 
     pub fn with_storage_type(self, storage: StorageType) -> Type {
+        assert!(!self.is_pointer(), "pointer storage cannot be changed by a numeric cast");
         let vector_size = self.vector_size();
         Type::new(storage).with_vector_size(vector_size)
     }
@@ -489,6 +493,7 @@ impl Type {
             Type::Scalar(_) => 1,
             Type::Vector(_, vector_size) => *vector_size,
             Type::Semantic(_) => 0,
+            Type::Pointer(_) => 1,
         }
     }
 
@@ -497,6 +502,7 @@ impl Type {
             Type::Scalar(ty) => ty.size(),
             Type::Vector(ty, vector_size) => ty.size() * *vector_size,
             Type::Semantic(_) => 0,
+            Type::Pointer(_) => panic!("pointer layout is selected by backend lowering"),
         }
     }
 
@@ -505,6 +511,7 @@ impl Type {
             Type::Scalar(ty) => ty.size_bits(),
             Type::Vector(ty, vector_size) => ty.size_bits() * *vector_size,
             Type::Semantic(_) => 0,
+            Type::Pointer(_) => panic!("pointer layout is selected by backend lowering"),
         }
     }
 
@@ -513,45 +520,55 @@ impl Type {
             Type::Scalar(ty) => ty.packing_factor(),
             Type::Vector(ty, _) => ty.packing_factor(),
             Type::Semantic(_) => 1,
+            Type::Pointer(_) => 1,
         }
     }
 
     pub fn is_atomic(&self) -> bool {
-        !self.is_semantic() && self.storage_type().is_atomic()
+        !self.is_semantic() && !self.is_pointer() && self.storage_type().is_atomic()
     }
 
     pub fn is_int(&self) -> bool {
-        !self.is_semantic() && self.storage_type().is_int()
+        !self.is_semantic() && !self.is_pointer() && self.storage_type().is_int()
     }
 
     pub fn is_signed_int(&self) -> bool {
-        !self.is_semantic() && self.storage_type().is_signed_int()
+        !self.is_semantic() && !self.is_pointer() && self.storage_type().is_signed_int()
     }
 
     pub fn is_unsigned_int(&self) -> bool {
-        !self.is_semantic() && self.storage_type().is_unsigned_int()
+        !self.is_semantic() && !self.is_pointer() && self.storage_type().is_unsigned_int()
     }
 
     pub fn is_float(&self) -> bool {
-        !self.is_semantic() && self.storage_type().is_float()
+        !self.is_semantic() && !self.is_pointer() && self.storage_type().is_float()
     }
 
     pub fn is_bool(&self) -> bool {
-        !self.is_semantic() && self.storage_type().is_bool()
+        !self.is_semantic() && !self.is_pointer() && self.storage_type().is_bool()
     }
 
     pub fn storage_type(&self) -> StorageType {
         match self {
             Type::Scalar(ty) | Type::Vector(ty, _) => *ty,
             Type::Semantic(_) => unimplemented!("Can't get storage for semantic type"),
+            Type::Pointer(_) => panic!("pointer values have no numeric storage type"),
         }
     }
 
     pub fn is_semantic(&self) -> bool {
         match self {
-            Type::Scalar(_) | Type::Vector(_, _) => false,
+            Type::Scalar(_) | Type::Vector(_, _) | Type::Pointer(_) => false,
             Type::Semantic(_) => true,
         }
+    }
+
+    pub fn is_pointer(&self) -> bool {
+        matches!(self, Self::Pointer(_))
+    }
+
+    pub fn pointer_type(&self) -> Option<super::PointerValueType> {
+        match self { Self::Pointer(ty) => Some(*ty), _ => None }
     }
 
     pub fn constant(&self, value: ConstantValue) -> Variable {
@@ -565,6 +582,7 @@ impl Display for Type {
             Type::Scalar(ty) => write!(f, "{ty}"),
             Type::Vector(ty, vector_size) => write!(f, "vector<{ty}, {vector_size}>"),
             Type::Semantic(ty) => write!(f, "{ty}"),
+            Type::Pointer(ty) => write!(f, "ptr<{:?}, {:?}, {}>", ty.address_space, ty.access, ty.pointee()),
         }
     }
 }

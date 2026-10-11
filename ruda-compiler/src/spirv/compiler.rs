@@ -144,6 +144,9 @@ impl<T: SpirvTarget> Compiler for SpirvCompiler<T> {
         value.validate_typed_memory().map_err(|reason| CompilationError::Validation {
             reason, backtrace: BackTrace::capture(),
         })?;
+        value.body.lower_pointer_values().map_err(|reason| CompilationError::Validation {
+            reason, backtrace: BackTrace::capture(),
+        })?;
         let errors = value.body.pop_errors();
         if !errors.is_empty() {
             let mut reason = "Can't compile spirv kernel".to_string();
