@@ -4,6 +4,41 @@ use crate::execution::CudaServer;
 use ruda_core::{device::DeviceId,device_handle::DeviceHandle,backtrace::BackTrace};
 use ruda::runtime::server::{Handle,ServerError};
 
+/// CUDA handles borrowed during a synchronous external-runtime operation.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeScope {
+    /// The RUDA device service's current CUDA context, not an owned handle.
+    pub context: usize,
+    /// The selected RUDA stream, not an owned handle.
+    pub stream: usize,
+}
+
+/// Execute an external CUDA runtime on the RUDA device service thread.
+/// Pending RUDA work on this stream completes before the callback; work the
+/// callback submits to this stream completes before this function returns.
+/// No graph, allocator, or default kernel-dispatch policy is changed.
+///
+/// # Safety
+/// The callback must not destroy the borrowed context/stream, change the current
+/// context, reenter the RUDA device service, or unwind through a foreign ABI.
+/// Work submitted to other streams must be joined to this stream before return.
+/// External allocations and modules remain the callback owner's responsibility.
+/// RUDA buffer pointers must not be accessed without a separate lifetime and
+/// dependency agreement; this interface does not export RUDA allocations.
+pub unsafe fn native_scope<T, F>(device: DeviceId, stream: u64, operation: F)
+    -> Result<T, ServerError>
+where
+    T: Send + 'static,
+    F: FnOnce(NativeScope) -> Result<T, String> + Send + 'static,
+{
+    DeviceHandle::<CudaServer>::new(device)
+        .submit_blocking(move |server| server.interop_native_scope(stream, operation))
+        .map_err(|e| ServerError::Generic {
+            reason: format!("external CUDA device queue failed: {e:?}"),
+            backtrace: BackTrace::capture(),
+        })?
+}
+
 #[derive(Clone,Copy,Debug)]
 pub enum StreamCommand {
     Create, Validate(u64), Query(u64), Synchronize(u64),

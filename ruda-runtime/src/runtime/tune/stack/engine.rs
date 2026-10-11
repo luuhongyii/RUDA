@@ -304,15 +304,15 @@ impl StackTuner {
     /// key return InvalidInput. Trials may synchronize; memory hits do not.
     /// A returned decision does not execute the caller's live request.
     pub fn select(&self, problem: &Problem, candidates: &[Candidate], reference: usize, runner: &mut impl TrialRunner) -> Result<Decision, TuneFailure> {
-        self.select_candidates(problem, candidates, reference, runner)
+        self.select_candidates(problem.into(), candidates, reference, runner)
     }
 
-    pub(super) fn select_candidates<C: CandidateSource>(&self, problem: &Problem, candidates: &[C], reference: usize, runner: &mut impl TrialRunner) -> Result<Decision, TuneFailure> {
+    pub(super) fn select_candidates<C: CandidateSource>(&self, problem: ProblemView<'_>, candidates: &[C], reference: usize, runner: &mut impl TrialRunner) -> Result<Decision, TuneFailure> {
         let key = self.prepare_key(problem, candidates, reference)?;
         self.select_prepared_candidates(problem, candidates, reference, &key, runner)
     }
 
-    pub(super) fn prepare_key<C: CandidateSource>(&self, problem: &Problem, candidates: &[C], reference: usize) -> Result<String, TuneFailure> {
+    pub(super) fn prepare_key<C: CandidateSource>(&self, problem: ProblemView<'_>, candidates: &[C], reference: usize) -> Result<String, TuneFailure> {
         if candidates.is_empty() || candidates.len() > 4096 || reference >= candidates.len()
             || problem.operation.is_empty() || problem.environment.is_empty() || problem.workload.is_empty() {
             return Err(TuneFailure::invalid("a workload, environment and valid reference candidate are required"));
@@ -330,9 +330,9 @@ impl StackTuner {
         Ok(key)
     }
 
-    pub(super) fn select_prepared_candidates<C: CandidateSource>(&self, problem: &Problem, candidates: &[C], reference: usize, key: &str, runner: &mut impl TrialRunner) -> Result<Decision, TuneFailure> {
+    pub(super) fn select_prepared_candidates<C: CandidateSource>(&self, problem: ProblemView<'_>, candidates: &[C], reference: usize, key: &str, runner: &mut impl TrialRunner) -> Result<Decision, TuneFailure> {
         let fallback = |source| Decision { index: reference, reference_index: reference, name: String::clone(candidates[reference].view().name), source, verified: false, ratio: None, cache_key: key.to_string() };
-        if self.lock().poisoned_devices.contains(&problem.environment) {
+        if self.lock().poisoned_devices.contains(problem.environment) {
             return Err(TuneFailure { kind: FailureKind::Quarantined, message: "device tuning lane is quarantined after an unconfirmed device completion".into() });
         }
         if self.policy.mode == Mode::Disabled { return Ok(fallback(DecisionSource::Disabled)); }
@@ -353,11 +353,11 @@ impl StackTuner {
         if is_tuning() { return Ok(fallback(DecisionSource::Nested)); }
         let _permit = {
             let mut s = self.lock();
-            if s.pending.contains(key) || s.devices.contains(&problem.environment) || s.pending.len() >= self.policy.max_parallel_tunes {
+            if s.pending.contains(key) || s.devices.contains(problem.environment) || s.pending.len() >= self.policy.max_parallel_tunes {
                 s.stats.busy_fallbacks += 1; return Ok(fallback(DecisionSource::Busy));
             }
-            s.pending.insert(key.to_string()); s.devices.insert(problem.environment.clone()); s.stats.misses += 1;
-            Permit { tuner: self, key: key.to_string(), device: problem.environment.clone() }
+            s.pending.insert(key.to_string()); s.devices.insert(problem.environment.to_string()); s.stats.misses += 1;
+            Permit { tuner: self, key: key.to_string(), device: problem.environment.to_string() }
         };
         let _depth = DepthGuard::enter();
         if problem.persistent {
@@ -373,7 +373,7 @@ impl StackTuner {
                                     let mut record = record; record.verified = checked;
                                     self.insert(record); self.lock().stats.disk_hits += 1; return Ok(decision);
                                 }
-                                Err(e) if e.kind == FailureKind::Device => { self.fail_device(&problem.environment); return Err(e); }
+                                Err(e) if e.kind == FailureKind::Device => { self.fail_device(problem.environment); return Err(e); }
                                 Err(_) => { if disk.remove(&key).is_err() { self.lock().stats.cache_warnings += 1; } }
                             }
                         }
@@ -407,18 +407,18 @@ impl StackTuner {
                 }
                 if s.reports.len() >= self.policy.capacity.min(128) { s.reports.pop_front(); }
                 s.reports.push_back(TuneReport {
-                    operation: problem.operation.clone(), environment: problem.environment.clone(),
-                    workload: problem.workload.clone(), execution_context: problem.execution_context.clone(),
+                    operation: problem.operation.to_string(), environment: problem.environment.to_string(),
+                    workload: problem.workload.to_string(), execution_context: problem.execution_context.to_string(),
                     winner: String::clone(candidates[reference].view().name), elapsed: Duration::ZERO, budget_exhausted: false,
                     candidates: std::vec![CandidateReport { name: String::clone(candidates[reference].view().name), samples: 0,
                         ratio: None, relative_mad: None, verified: false, note: e.message }],
                 });
                 Ok(fallback(DecisionSource::ValidationUnavailable))
             }
-            Err(e) => { if e.kind == FailureKind::Device { self.fail_device(&problem.environment); } Err(e) }
+            Err(e) => { if e.kind == FailureKind::Device { self.fail_device(problem.environment); } Err(e) }
         }
     }
-    fn explore<C: CandidateSource>(&self, problem: &Problem, candidates: &[C], reference: usize, key: &str, runner: &mut impl TrialRunner) -> Result<(Decision, TuneReport, Record), TuneFailure> {
+    fn explore<C: CandidateSource>(&self, problem: ProblemView<'_>, candidates: &[C], reference: usize, key: &str, runner: &mut impl TrialRunner) -> Result<(Decision, TuneReport, Record), TuneFailure> {
         let started = Instant::now();
         // The mandatory reference is validated even if its compilation takes the whole budget.
         // Never treat a failed reference as permission to choose an unverified fast candidate.
@@ -487,7 +487,7 @@ impl StackTuner {
             reference_ns: winner_reference.as_nanos().min(u64::MAX as u128) as u64,
             winner_ns: winner_time.as_nanos().min(u64::MAX as u128) as u64, ratio: winner_ratio, verified: winner_checked };
         let decision = Decision { index: winner, reference_index: reference, name: record.winner.clone(), source: DecisionSource::Tuned, verified: winner_checked, ratio: Some(winner_ratio), cache_key: key.to_string() };
-        let report = TuneReport { operation: problem.operation.clone(), environment: problem.environment.clone(), workload: problem.workload.clone(), execution_context: problem.execution_context.clone(), winner: record.winner.clone(), elapsed: started.elapsed(), budget_exhausted: exhausted, candidates: reports };
+        let report = TuneReport { operation: problem.operation.to_string(), environment: problem.environment.to_string(), workload: problem.workload.to_string(), execution_context: problem.execution_context.to_string(), winner: record.winner.clone(), elapsed: started.elapsed(), budget_exhausted: exhausted, candidates: reports };
         Ok((decision, report, record))
     }
     /// Invalidate future selections; NEVER re-run the current stateful request after a failure.
