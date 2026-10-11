@@ -124,7 +124,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 
 ### `GraphOp`
 
-フィールド: `kind: str`; `output: str`; `left: str`; `right: str &#124; None = None`; `scalar: float = 0.0`; `shape: tuple[int, ...] &#124; None = None`; `dtype: str &#124; None = None`.
+フィールド: `kind: str`; `output: str`; `left: str`; <code>right: str &#124; None = None</code>; `scalar: float = 0.0`; <code>shape: tuple[int, ...] &#124; None = None</code>; <code>dtype: str &#124; None = None</code>.
 
 | 公開名／呼び出し | ソース |
 | --- | --- |
@@ -140,9 +140,9 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 | 公開名／呼び出し | ソース |
 | --- | --- |
 | `ruda_torch.LayerNorm` | [ソース](../../ruda-torch/python/ruda_torch/training.py#L141) |
-| `ruda_torch.layer_norm(x: torch.Tensor, weight: torch.Tensor &#124; None=None, bias: torch.Tensor &#124; None=None, *, eps: float=1e-05)` | [ソース](../../ruda-torch/python/ruda_torch/training.py#L127) |
+| <code>ruda_torch.layer_norm(x: torch.Tensor, weight: torch.Tensor &#124; None=None, bias: torch.Tensor &#124; None=None, *, eps: float=1e-05)</code> | [ソース](../../ruda-torch/python/ruda_torch/training.py#L127) |
 | `ruda_torch.RMSNorm` | [ソース](../../ruda-torch/python/ruda_torch/training.py#L82) |
-| `ruda_torch.rms_norm(x: torch.Tensor, weight: torch.Tensor &#124; None=None, *, eps: float &#124; None=None)` | [ソース](../../ruda-torch/python/ruda_torch/training.py#L65) |
+| <code>ruda_torch.rms_norm(x: torch.Tensor, weight: torch.Tensor &#124; None=None, *, eps: float &#124; None=None)</code> | [ソース](../../ruda-torch/python/ruda_torch/training.py#L65) |
 | `ruda_torch.silu_mul(gate: torch.Tensor, up: torch.Tensor)` | [ソース](../../ruda-torch/python/ruda_torch/training.py#L183) |
 | `ruda_torch.AdamW` | [ソース](../../ruda-torch/python/ruda_torch/training.py#L207) |
 | `ruda_torch.GradScaler` | [ソース](../../ruda-torch/python/ruda_torch/training.py#L521) |
@@ -237,7 +237,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 
 ### `CompileOptions`
 
-フィールド: `capture: str = 'aot'`; `native: str = 'auto'`; `device_type: str = 'ruda'`; `fullgraph: bool = False`; `dynamic: bool &#124; None = None`; `min_native_ops: int = 2`; `cache_size: int = 4`.
+フィールド: `capture: str = 'aot'`; `native: str = 'auto'`; `device_type: str = 'ruda'`; `fullgraph: bool = False`; <code>dynamic: bool &#124; None = None</code>; `min_native_ops: int = 2`; `cache_size: int = 4`.
 
 | 公開名／呼び出し | ソース |
 | --- | --- |
@@ -259,13 +259,13 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 | 公開名／呼び出し | ソース |
 | --- | --- |
 | `ruda_torch.LearnedFakeQuantize` | [ソース](../../ruda-torch/python/ruda_torch/quantization.py#L84) |
-| `ruda_torch.learned_fake_quantize(x: Tensor, scales: Tensor, *, bits: int=4, block_shape: Sequence[int] &#124; None=None, symmetric: bool=True) -> Tensor` | [ソース](../../ruda-torch/python/ruda_torch/quantization.py#L38) |
+| <code>ruda_torch.learned_fake_quantize(x: Tensor, scales: Tensor, *, bits: int=4, block_shape: Sequence[int] &#124; None=None, symmetric: bool=True) -&gt; Tensor</code> | [ソース](../../ruda-torch/python/ruda_torch/quantization.py#L38) |
 
 ### `LearnedFakeQuantize`
 
 | 公開名／呼び出し | ソース |
 | --- | --- |
-| `LearnedFakeQuantize(initial_scales: Tensor, *, bits: int=4, block_shape: Sequence[int] &#124; None=None, symmetric: bool=True)` | [ソース](../../ruda-torch/python/ruda_torch/quantization.py#L90) |
+| <code>LearnedFakeQuantize(initial_scales: Tensor, *, bits: int=4, block_shape: Sequence[int] &#124; None=None, symmetric: bool=True)</code> | [ソース](../../ruda-torch/python/ruda_torch/quantization.py#L90) |
 | `LearnedFakeQuantize.forward(x: Tensor) -> Tensor` | [ソース](../../ruda-torch/python/ruda_torch/quantization.py#L104) |
 
 ## `mhc`
@@ -314,7 +314,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 | --- | --- |
 | `ruda_torch.LightningIndexer` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L114) |
 | `ruda_torch.DSAIndexer` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L114) |
-| `ruda_torch.indexer_kl_loss(scores: torch.Tensor, teacher: torch.Tensor, valid: torch.Tensor &#124; None=None) -> torch.Tensor` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L35) |
+| <code>ruda_torch.indexer_kl_loss(scores: torch.Tensor, teacher: torch.Tensor, valid: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L35) |
 | `ruda_torch.LearnedKVCompressor` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L294) |
 | `ruda_torch.CompressedSparseAttention` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L627) |
 | `ruda_torch.HeavilyCompressedAttention` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L633) |
@@ -330,8 +330,8 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 
 | 公開名／呼び出し | ソース |
 | --- | --- |
-| `LightningIndexer(width: int, num_heads: int=4, head_dim: int=16, *, query_dim: int &#124; None=None, topk: int=32, query_chunk_size: int=32, key_chunk_size: int=128, external_keys: bool=False, detach_inputs: bool=True, rope_dim: int=0, eps: float=1e-06, device=None, dtype=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L124) |
-| `LightningIndexer.project_keys(x: torch.Tensor, pos: torch.Tensor &#124; None=None) -> torch.Tensor` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L149) |
+| <code>LightningIndexer(width: int, num_heads: int=4, head_dim: int=16, *, query_dim: int &#124; None=None, topk: int=32, query_chunk_size: int=32, key_chunk_size: int=128, external_keys: bool=False, detach_inputs: bool=True, rope_dim: int=0, eps: float=1e-06, device=None, dtype=None)</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L124) |
+| <code>LightningIndexer.project_keys(x: torch.Tensor, pos: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L149) |
 | `LightningIndexer.scores(x, keys, *, query_latent=None, query_positions=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L185) |
 | `LightningIndexer.selected_scores(x, keys, indices, *, query_latent=None, query_positions=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L191) |
 | `LightningIndexer.select(x, keys, *, allowed=None, query_latent=None, query_positions=None, key_valid=None, query_valid=None, key_end_positions=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L198) |
@@ -342,8 +342,8 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 
 | 公開名／呼び出し | ソース |
 | --- | --- |
-| `DSAIndexer(width: int, num_heads: int=4, head_dim: int=16, *, query_dim: int &#124; None=None, topk: int=32, query_chunk_size: int=32, key_chunk_size: int=128, external_keys: bool=False, detach_inputs: bool=True, rope_dim: int=0, eps: float=1e-06, device=None, dtype=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L124) |
-| `DSAIndexer.project_keys(x: torch.Tensor, pos: torch.Tensor &#124; None=None) -> torch.Tensor` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L149) |
+| <code>DSAIndexer(width: int, num_heads: int=4, head_dim: int=16, *, query_dim: int &#124; None=None, topk: int=32, query_chunk_size: int=32, key_chunk_size: int=128, external_keys: bool=False, detach_inputs: bool=True, rope_dim: int=0, eps: float=1e-06, device=None, dtype=None)</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L124) |
+| <code>DSAIndexer.project_keys(x: torch.Tensor, pos: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L149) |
 | `DSAIndexer.scores(x, keys, *, query_latent=None, query_positions=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L185) |
 | `DSAIndexer.selected_scores(x, keys, indices, *, query_latent=None, query_positions=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L191) |
 | `DSAIndexer.select(x, keys, *, allowed=None, query_latent=None, query_positions=None, key_valid=None, query_valid=None, key_end_positions=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L198) |
@@ -356,7 +356,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 | --- | --- |
 | `LearnedKVCompressor(width: int, head_dim: int, ratio: int, *, overlap=False, eps=1e-06, device=None, dtype=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L301) |
 | `LearnedKVCompressor.forward(x, valid_mask=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L351) |
-| `LearnedKVCompressor.append(x, valid_mask=None, state: CompressionState &#124; None=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L359) |
+| <code>LearnedKVCompressor.append(x, valid_mask=None, state: CompressionState &#124; None=None)</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L359) |
 
 ### `CompressedSparseAttention`
 
@@ -364,7 +364,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 | --- | --- |
 | `CompressedSparseAttention(width: int, num_heads: int, **kwargs)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L629) |
 | `CompressedSparseAttention.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
-| `CompressedSparseAttention.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
+| <code>CompressedSparseAttention.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
 
 ### `HeavilyCompressedAttention`
 
@@ -372,7 +372,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 | --- | --- |
 | `HeavilyCompressedAttention(width: int, num_heads: int, *, compress_ratio=128, **kwargs)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L635) |
 | `HeavilyCompressedAttention.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
-| `HeavilyCompressedAttention.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
+| <code>HeavilyCompressedAttention.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
 
 ### `CSA`
 
@@ -380,7 +380,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 | --- | --- |
 | `CSA(width: int, num_heads: int, **kwargs)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L629) |
 | `CSA.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
-| `CSA.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
+| <code>CSA.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
 
 ### `HCA`
 
@@ -388,7 +388,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 | --- | --- |
 | `HCA(width: int, num_heads: int, *, compress_ratio=128, **kwargs)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L635) |
 | `HCA.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
-| `HCA.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)` | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
+| <code>HCA.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [ソース](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
 
 ### `AttentionOutput`
 
@@ -400,7 +400,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 
 ### `CompressedAttentionCache`
 
-フィールド: `owner: int`; `parameter_versions: tuple`; `seen: int`; `compressed: torch.Tensor`; `compressed_valid: torch.Tensor`; `index_keys: torch.Tensor &#124; None`; `local: torch.Tensor`; `local_valid: torch.Tensor`; `compression: CompressionState`; `index_compression: CompressionState &#124; None`.
+フィールド: `owner: int`; `parameter_versions: tuple`; `seen: int`; `compressed: torch.Tensor`; `compressed_valid: torch.Tensor`; <code>index_keys: torch.Tensor &#124; None</code>; `local: torch.Tensor`; `local_valid: torch.Tensor`; `compression: CompressionState`; <code>index_compression: CompressionState &#124; None</code>.
 
 | 公開名／呼び出し | ソース |
 | --- | --- |
@@ -1176,7 +1176,7 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 
 ### `TrainingPlan`
 
-フィールド: `examples_per_microbatch: int`; `token_chunk_size: int &#124; None`; `packed: bool`; `geometry: tuple`.
+フィールド: `examples_per_microbatch: int`; <code>token_chunk_size: int &#124; None</code>; `packed: bool`; `geometry: tuple`.
 
 | 公開名／呼び出し | ソース |
 | --- | --- |
