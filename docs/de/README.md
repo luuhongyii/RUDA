@@ -17,11 +17,13 @@ Von Ihrem ersten GPU-Kernel bis hin zu Rechenbibliotheken, Tensortraining und lo
 
 ## Erste Schritte
 
+- [Native PyTorch: Schnellstart](native-pytorch-quickstart.md): Installation, Datenübertragung, FP32-Training und Fehlerdiagnose.
 - [Installation und Schnellstart](getting-started.md): Quelleneinrichtung, Backend-Auswahl und Ihr erstes Beispiel.
 - [Beispiele und Tutorials](samples.md): Vektoraddition, Tensoren, gemeinsam genutzter Speicher und halbe Präzision.
 
 ## Programmierhandbücher
 
+- [Python: paralleles Training, Daten und Wiederherstellung](parallel-and-data.md): TP/FSDP/ZeRO, Pipelines, Sampler, Checkpoints und Tuning.
 - [Ruda Programmierhandbuch](programming-guide.md): Host- und Gerätecode, Ausführungshierarchie, Speicher, Synchronisierung und Sicherheit.
 - [Tensoren und Frameworks](tensor-framework.md): Gerätetensoren, Bibliotheksversand, Fusion und automatische Differenzierung.
 - [Trainings- und Speicherstatus](training.md): Trainingsschritte, Gradientenakkumulation, Lernratenplanung, Speichern und Wiederherstellen.
@@ -40,6 +42,8 @@ Von Ihrem ersten GPU-Kernel bis hin zu Rechenbibliotheken, Tensortraining und lo
 
 ## API Referenzen
 
+- [Rust-API](rust-api.md): rustdoc nach Crate und Version.
+- [Öffentliche Python-API-Signaturen](python-api-signatures.md): Funktionen, Konstruktoren, Methoden und Quellcodepositionen.
 - [Laufzeit API](runtime-api.md): Geräte-Clients, Speicher, Übermittlung, Rücklesen und Synchronisierung.
 - [Treiber API und Backends](driver-api.md): Backend-Typen, Geräteauswahl und Laufzeitintegration.
 - [Native PyTorch-API](native-pytorch-api.md): Komponentenversionen, Tensorverträge, Optimizer, Streams und Attention.

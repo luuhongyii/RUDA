@@ -2,6 +2,14 @@
 
 [Содержание](README.md) · [Подробная справка методов](../en/native-pytorch-api.md)
 
+[Публичные сигнатуры](python-api-signatures.md) · [Параллельное обучение, данные и восстановление](parallel-and-data.md)
+
+## Случайные числа и состояние
+
+`Generator(seed=None)` использует Philox4x32-10. `manual_seed`/`manual_seed_all` инициализируют генератор по умолчанию для единственного устройства; seed — знаковое или беззнаковое 64-битное целое. `get_rng_state`/`set_rng_state` и методы Generator `get_state`/`set_state` работают с RUDA-состоянием: CPU uint8 тензор из 24 байт, не состояние CUDA RNG. Варианты `_all` используют список из одного состояния.
+
+`uniform_`, `normal_`, `bernoulli_` заполняют RUDA FP32/FP16/BF16 через native random API 1. Параметры конечны, границы упорядочены, стандартное отклонение неотрицательно, вероятность в `[0,1]`. `generator` — RUDA Generator; по умолчанию используется `default_generator`. Зарезервированный counter не используется повторно после ошибки dispatch. `get_amp_supported_dtype` возвращает FP16/BF16, `is_initialized` — состояние инициализации. `register_random_ops` вызывается при импорте, повторная регистрация не нужна. [Исходный код](../../ruda-torch/python/ruda_torch/random.py).
+
 Импорт ruda_torch регистрирует PrivateUse1, другой backend в том же процессе несовместим. ruda:0 и torch.cuda — разные allocations. device_count1/current_device0. is_available означает инициализацию, не всю hardware capability. execution_stats — cumulative counters, не timer.
 
 Rust/C++ требуют base ABI10, graph3, training4. Router/sequence/NF4 decode/NF4 matmul API1, paged backward совместимый1/2, ordered2. Совпадение base ABI не предоставляет все optional features. Unsupported operator — ошибка без generic CPU fallback.

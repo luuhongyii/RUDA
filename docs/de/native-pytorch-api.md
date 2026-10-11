@@ -2,6 +2,14 @@
 
 [Inhalt](README.md) · [Ausführliche Methodenreferenz](../en/native-pytorch-api.md)
 
+[Öffentliche Signaturen](python-api-signatures.md) · [Paralleles Training, Daten und Wiederherstellung](parallel-and-data.md)
+
+## Zufall und Zustand
+
+`Generator(seed=None)` verwendet Philox4x32-10. `manual_seed`/`manual_seed_all` initialisieren den Standardgenerator für das einzelne Gerät; Seeds sind vorzeichenbehaftete oder vorzeichenlose 64-Bit-Ganzzahlen. `get_rng_state`/`set_rng_state` und Generator `get_state`/`set_state` verwenden einen RUDA-spezifischen CPU-uint8-Zustand mit 24 Bytes, keinen CUDA-RNG-Zustand. Die `_all`-Varianten verwenden eine Liste mit einem Zustand.
+
+`uniform_`, `normal_` und `bernoulli_` füllen FP32/FP16/BF16-RUDA-Tensoren über native random API 1. Parameter müssen endlich, Grenzen geordnet, Standardabweichung nichtnegativ und Wahrscheinlichkeit in `[0,1]` sein. `generator` ist ein RUDA Generator; ohne Angabe gilt `default_generator`. Reservierte Counter eines fehlgeschlagenen Dispatch werden nicht wiederverwendet. `get_amp_supported_dtype` liefert FP16/BF16, `is_initialized` den Initialisierungszustand. `register_random_ops` läuft beim Import; keine erneute Registrierung ist nötig. [Quellcode](../../ruda-torch/python/ruda_torch/random.py).
+
 Import ruda_torch registriert PrivateUse1; kein anderer Backend im selben Prozess. ruda:0 und torch.cuda verwenden verschiedene Allokationen. device_count1/current_device0. is_available zeigt Initialisierung, nicht vollständige Hardwarefähigkeit. execution_stats sind kumulative Zähler, keine Timer.
 
 Rust/C++: Basis-ABI10, Graph3, Training4. Router/Sequence/NF4-Decode/NF4-Matmul jeweils1, Paged-Backward kompatibel1/2 und Ordered2. Basis-ABI allein stellt keine optionalen APIs bereit. Nichtunterstützte Operatoren schlagen fehl; kein generischer CPU-Fallback.

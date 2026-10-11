@@ -30,6 +30,7 @@
 - [数据管线与模型存储](data-and-storage.md)：样本组批、权重保存与检查点格式导入。
 - [训练与状态保存](training.md)：训练步、FP32 主参数／累积、混合存储 checkpoint、token 加权副本、可微分集合通信和学习率调度。
 - [Rank、设备与分布式训练](distributed-training.md)：显式 rendezvous、设备映射、集合调用顺序、加权梯度与逐 rank 恢复。
+- [Python 并行训练、数据与恢复](parallel-and-data.md)：TP／FSDP／ZeRO、流水线、sampler、checkpoint 格式与完整更新调优。
 - [架构组件与 Python Muon](architecture-training.md)：mHC、DSA／CSA／HCA、压缩 KV 缓存与混合模型组合。
 - [LoRA 与 NF4 微调](finetuning.md)：准确目标选择、流式权重、因果监督、token 加权累积、适配器与断点恢复。
 - [通用 PyTorch 模型编译](model-compiler.md)：AOT 前向／反向、原生分段、配置及缓存所有权。
@@ -44,6 +45,8 @@
 
 ## API 参考
 
+- [Rust API 参考](rust-api.md)：运行时、Kernel、计算库、张量与模型 crate 的版本化 rustdoc。
+- [Python 公开 API 签名](python-api-signatures.md)：公开包／模块函数、构造器、方法、字段与准确源码位置。
 - [全栈 Crate 与 API 索引](api-reference.md)：整个 workspace 的包名、Rust 导入名、职责与源码入口。
 - [Runtime API](runtime-api.md)：设备客户端、内存、提交、回读与同步。
 - [Driver API 与后端](driver-api.md)：后端类型、设备选择和运行时接入。

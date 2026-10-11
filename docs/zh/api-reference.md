@@ -2,6 +2,8 @@
 
 [文档首页](README.md) · [English](../en/api-reference.md)
 
+[Rust 方法与类型](rust-api.md) · [Python 签名](python-api-signatures.md) · [Python 并行训练](parallel-and-data.md)
+
 ## 按任务选择入口层
 
 | 任务 | 首选 API | 指南 |

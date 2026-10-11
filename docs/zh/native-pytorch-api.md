@@ -2,6 +2,32 @@
 
 [文档目录](README.md) · [包指南](../../ruda-torch/README.md) · [English](../en/native-pytorch-api.md)
 
+[全部公开签名](python-api-signatures.md) · [并行训练、数据与恢复](parallel-and-data.md)
+
+## 随机数生成器与可恢复状态
+
+`Generator(seed=None)` 使用 Philox4x32-10 和 RUDA 自有 seed/counter。`manual_seed(seed)` 重置并返回默认生成器；`manual_seed_all(seed)` 设置同一单设备生成器。seed 可为有符号／无符号 64 位整数。显式生成器通过 `Generator.manual_seed`、`initial_seed`、`get_state`、`set_state` 管理状态；状态是带 RUDA 版本标记的 24 字节 CPU uint8 tensor，不是 CUDA RNG 状态。
+
+`uniform_(tensor, from_=0., to=1., generator=None)`、`normal_(tensor, mean=0., std=1., generator=None)`、`bernoulli_(tensor, p=.5, generator=None)` 使用原生 random API 1 原地填充 FP32／FP16／BF16 RUDA 存储。参数必须有限，uniform 上下界有序、标准差非负、概率在 `[0,1]`。非连续目标使用连续设备临时张量再复制回去。`generator` 必须为 RUDA Generator，不能是 CPU／CUDA 生成器；省略时使用 `default_generator`。counter 在 dispatch 前预留，失败操作不会重用其样本。
+
+`get_rng_state(device=None)`／`set_rng_state(state, device=None)` 访问默认状态；`_all` 变体使用单元素状态列表。`get_amp_supported_dtype()` 返回集成接受的 FP16／BF16，不是 GPU 能力检测。`is_initialized()` 表示 bridge 初始化。导入时已调用 `register_random_ops()` 注册 ATen random/dropout，应用不必再次注册。
+
+```python
+import torch
+import ruda_torch as r
+
+generator = r.Generator(7)
+x = torch.empty(8, device="ruda:0", dtype=torch.float32)
+saved = generator.get_state()
+r.uniform_(x, generator=generator)
+first = x.cpu()
+generator.set_state(saved)
+r.uniform_(x, generator=generator)
+torch.testing.assert_close(x.cpu(), first, rtol=0, atol=0)
+```
+
+源码：[生成器与注册](../../ruda-torch/python/ruda_torch/random.py)、[设备／RNG 包装](../../ruda-torch/python/ruda_torch/__init__.py)。
+
 ## 设备与组件契约
 
 先导入 `ruda_torch`，再创建 `ruda:0` 张量。同一进程不能已经注册其他 PrivateUse1 后端。`is_available()` 表示集成已初始化，不是 GPU 指令支持的完整清单；`device_count()` 为 1，`current_device()` 为 0。`synchronize(device=None)` 仅接受原生设备并等待完成。`execution_stats()` 返回累计内核、传输及部分库调用计数，不是计时器或 autotune 结果。

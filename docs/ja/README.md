@@ -17,11 +17,13 @@
 
 ## はじめに
 
+- [ネイティブ PyTorch クイックスタート](native-pytorch-quickstart.md)：インストール、データ転送、FP32 学習とエラー診断。
 - [インストールとクイックスタート](getting-started.md): ソースのセットアップ、バックエンドの選択、および最初の例。
 - [例とチュートリアル](samples.md): ベクトル加算、テンソル、共有メモリ、および半精度。
 
 ## プログラミング ガイド
 
+- [Python 並列学習、データと復旧](parallel-and-data.md)：TP/FSDP/ZeRO、pipeline、sampler、checkpoint と調整。
 - [Ruda プログラミング ガイド](programming-guide.md): ホストとデバイスのコード、実行階層、メモリ、同期、安全性。
 - [テンソルとフレームワーク](tensor-framework.md): デバイス テンソル、ライブラリ ディスパッチ、融合、自動微分。
 - [トレーニングと状態の保存](training.md): トレーニング ステップ、勾配の累積、学習率のスケジューリング、保存、および復元。
@@ -40,6 +42,8 @@
 
 ## API リファレンス
 
+- [Rust API](rust-api.md)：crate とバージョン別の rustdoc。
+- [Python 公開 API シグネチャ](python-api-signatures.md)：関数、コンストラクタ、メソッドとソース位置。
 - [ランタイム API](runtime-api.md): デバイス クライアント、メモリ、送信、リードバック、および同期。
 - [ドライバー API とバックエンド](driver-api.md): バックエンドの種類、デバイスの選択、およびランタイム統合。
 - [ネイティブ PyTorch API](native-pytorch-api.md): コンポーネント版、tensor 契約、optimizer、stream と attention。

@@ -2,6 +2,32 @@
 
 [Documentation](README.md) · [Package guide](../../ruda-torch/README.md) · [中文](../zh/native-pytorch-api.md)
 
+[All public signatures](python-api-signatures.md) · [Parallel training, data and recovery](parallel-and-data.md)
+
+## Random generators and reproducible state
+
+`Generator(seed=None)` uses Philox4x32-10 with RUDA-owned seed/counter state. `manual_seed(seed)` resets the default generator and returns it; `manual_seed_all(seed)` seeds that same single-device generator. Seeds fit signed/unsigned 64-bit integers. `Generator.manual_seed`, `initial_seed`, `get_state`, and `set_state` manage an explicit generator. State is a 24-byte CPU uint8 tensor with RUDA's version marker, not a CUDA RNG state.
+
+`uniform_(tensor, from_=0., to=1., generator=None)`, `normal_(tensor, mean=0., std=1., generator=None)`, and `bernoulli_(tensor, p=.5, generator=None)` fill FP32/FP16/BF16 RUDA storage in place using native random API 1. Parameters are finite, uniform bounds ordered, standard deviation nonnegative and probability in `[0,1]`. A noncontiguous target uses a contiguous device temporary and copies back. `generator` is a RUDA Generator, not a CPU/CUDA generator; omission uses `default_generator`. Counter reservation precedes dispatch and a failed operation does not reuse its reserved samples.
+
+`get_rng_state(device=None)` / `set_rng_state(state, device=None)` access default state; the `_all` variants use a one-item state list. `get_amp_supported_dtype()` returns FP16/BF16 accepted by the integration, not a GPU capability check. `is_initialized()` reports bridge initialization. `register_random_ops()` is called during import to register ATen random/dropout operations; application code need not register them again.
+
+```python
+import torch
+import ruda_torch as r
+
+generator = r.Generator(7)
+x = torch.empty(8, device="ruda:0", dtype=torch.float32)
+saved = generator.get_state()
+r.uniform_(x, generator=generator)
+first = x.cpu()
+generator.set_state(saved)
+r.uniform_(x, generator=generator)
+torch.testing.assert_close(x.cpu(), first, rtol=0, atol=0)
+```
+
+Source: [random generator and registration](../../ruda-torch/python/ruda_torch/random.py), [device/RNG wrappers](../../ruda-torch/python/ruda_torch/__init__.py).
+
 ## Device and component contracts
 
 Import `ruda_torch` before creating tensors on `ruda:0`. Another PrivateUse1 backend cannot already be registered in the process. `is_available()` reports the initialized integration, not a complete inventory of GPU instruction support. `device_count()` is 1 and `current_device()` is 0. `synchronize(device=None)` accepts the native device only and waits for completion. `execution_stats()` returns cumulative native launch, transfer and selected-library counters; it is not a timer or an autotuning result.

@@ -30,6 +30,7 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 - [Data pipelines and model storage](data-and-storage.md): batching samples, saving weights, and importing checkpoint formats.
 - [Training and saving state](training.md): training steps, FP32 masters/accumulation, mixed-storage checkpoints, token-weighted replicas, differentiable collectives and learning-rate schedules.
 - [Ranks, devices and distributed training](distributed-training.md): explicit rendezvous, device placement, collective order, weighted gradients and rank-local recovery.
+- [Python parallel training, data, and recovery](parallel-and-data.md): TP/FSDP/ZeRO, pipelines, samplers, checkpoint formats, and whole-update tuning.
 - [Architecture components and Python Muon](architecture-training.md): mHC, DSA/CSA/HCA, compressed KV caches and hybrid model composition.
 - [LoRA and NF4 fine-tuning](finetuning.md): exact target selection, streamed weights, causal supervision, token-weighted accumulation, adapters and restart checkpoints.
 - [General PyTorch model compiler](model-compiler.md): AOT forward/backward, native partitions, options and cache ownership.
@@ -44,6 +45,8 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 
 ## API references
 
+- [Rust API reference](rust-api.md): versioned rustdoc for runtime, kernels, compute libraries, tensors, and model crates.
+- [Python public API signatures](python-api-signatures.md): public package/module functions, constructors, methods, fields, and exact source locations.
 - [Full-stack crate and API index](api-reference.md): package names, Rust imports, responsibilities, and source entry points across the workspace.
 - [Runtime API](runtime-api.md): device clients, memory, submission, readback, and synchronization.
 - [Driver API and backends](driver-api.md): backend types, device selection, and runtime integration.

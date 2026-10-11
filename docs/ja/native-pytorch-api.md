@@ -2,6 +2,14 @@
 
 [目次](README.md) · [詳細なメソッド参照](../en/native-pytorch-api.md)
 
+[公開シグネチャ](python-api-signatures.md) · [並列学習、データと復旧](parallel-and-data.md)
+
+## 乱数と状態
+
+`Generator(seed=None)` は Philox4x32-10 を使います。`manual_seed`／`manual_seed_all` は単一デバイスの既定生成器を初期化し、seed は符号付き／符号なし 64 bit 整数です。`get_rng_state`／`set_rng_state` と Generator の `get_state`／`set_state` は RUDA 固有の 24 byte CPU uint8 状態を扱います。CUDA RNG 状態ではありません。`_all` 版は状態 1 個のリストを扱います。
+
+`uniform_`、`normal_`、`bernoulli_` は native random API 1 で FP32/FP16/BF16 RUDA tensor を埋めます。有限パラメータ、順序付き一様分布境界、非負の標準偏差、`[0,1]` の確率が必要です。`generator` は RUDA Generator、省略時は `default_generator`。失敗した dispatch の予約 counter は再利用されません。`get_amp_supported_dtype` は FP16/BF16、`is_initialized` は初期化状態を返します。`register_random_ops` は import 時に呼ばれるため再登録は不要です。[ソース](../../ruda-torch/python/ruda_torch/random.py)。
+
 import ruda_torch は PrivateUse1 を登録し、別 backend と同じプロセスでは使えません。ruda:0 と torch.cuda の storage は別です。device_count=1、current_device=0。is_available は統合初期化を示し、すべての GPU 命令への対応を保証しません。execution_stats は累積 counter で timer ではありません。
 
 Rust/C++ は base ABI 10、graph 3、training 4。router/sequence/NF4 decode/NF4 matmul は各 API 1、paged backward は互換 bridge の API 1/2、ordered は2。base ABI 一致だけでは任意拡張を提供しません。未対応演算はエラーで、汎用 CPU fallback はありません。

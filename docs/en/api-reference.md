@@ -2,6 +2,8 @@
 
 [Documentation](README.md) · [中文](../zh/api-reference.md)
 
+[Rust methods and types](rust-api.md) · [Python signatures](python-api-signatures.md) · [Python parallel training](parallel-and-data.md)
+
 ## Start at the right layer
 
 | Task | First API | Guide |
