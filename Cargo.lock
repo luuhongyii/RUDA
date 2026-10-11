@@ -6072,7 +6072,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-tensor"
-version = "0.21.57"
+version = "0.21.58"
 dependencies = [
  "bytemuck",
  "colored",
