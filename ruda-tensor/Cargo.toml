@@ -179,7 +179,7 @@ optional = true
 
 [dependencies.ruda-driver-wgpu]
 path = "../ruda-driver-wgpu"
-version = "0.1.87"
+version = "0.1.88"
 default-features = false
 optional = true
 
