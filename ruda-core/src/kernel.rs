@@ -53,3 +53,59 @@ pub enum Visibility {
     Read,
     ReadWrite,
 }
+
+impl KernelDefinition {
+    pub fn validate_typed_memory(&self) -> Result<(), String> {
+        fn visit(kernel: &KernelDefinition, scope: &Scope) -> Result<(), String> {
+            use crate::ir::{Branch, Operation, PointerAccess, VariableKind};
+            for instruction in &scope.instructions {
+                match &instruction.operation {
+                    Operation::TypedMemory(op) => {
+                        op.validate(instruction.out)?;
+                        let pointer = op.pointer();
+                        if let VariableKind::GlobalInputArray(id)
+                        | VariableKind::GlobalOutputArray(id) = pointer.base.kind
+                        {
+                            let binding = kernel
+                                .buffers
+                                .iter()
+                                .find(|binding| binding.id == id)
+                                .ok_or_else(|| {
+                                    alloc::format!("typed pointer refers to unknown buffer {id}")
+                                })?;
+                            if binding.ty != pointer.base.ty {
+                                return Err(
+                                    "typed pointer does not match its buffer element type".into()
+                                );
+                            }
+                            if pointer.ty.access == PointerAccess::ReadWrite
+                                && binding.visibility != Visibility::ReadWrite
+                            {
+                                return Err("read-only kernel binding cannot provide a writable typed pointer".into());
+                            }
+                        }
+                    }
+                    Operation::Branch(branch) => match branch {
+                        Branch::If(branch) => visit(kernel, &branch.scope)?,
+                        Branch::IfElse(branch) => {
+                            visit(kernel, &branch.scope_if)?;
+                            visit(kernel, &branch.scope_else)?;
+                        }
+                        Branch::Switch(branch) => {
+                            visit(kernel, &branch.scope_default)?;
+                            for (_, scope) in &branch.cases {
+                                visit(kernel, scope)?;
+                            }
+                        }
+                        Branch::RangeLoop(branch) => visit(kernel, &branch.scope)?,
+                        Branch::Loop(branch) => visit(kernel, &branch.scope)?,
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        visit(self, &self.body)
+    }
+}

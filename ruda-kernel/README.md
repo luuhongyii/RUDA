@@ -18,6 +18,23 @@ Cargo package: `ruda-kernel`. Rust import: `ruda_kernel`.
 ruda-kernel = "0.1"
 ```
 
+## Typed pointers
+
+The additive DSL interface is `Ptr<E, S, A>` and `TypedSlice<E, S, A>`, where `S` is
+`GlobalSpace`, `Workgroup`, or `Local`, and `A` is `ReadOnly` (the default) or `ReadWrite`.
+Convert an existing slice with `.typed::<GlobalSpace>()`, `.typed::<Workgroup>()`, or
+`.typed::<Local>()`; its storage origin is checked during kernel expansion.
+`.ptr(index)` produces an element pointer. Pointers support `.offset(elements)`,
+`.load()`, `.read_only()`, and `.select(condition, otherwise)`; `.store(value)` is
+available only for `ReadWrite`. Selected pointers must have the same element,
+address-space, and permission types. Typed slices support `.len()` and `.slice(start, end)`.
+
+These are logical storage views, not arbitrary native addresses. Address-space and
+permission labels remain in IR until backend lowering; writable global views also
+require a writable kernel binding. Existing slices and native pointer operations
+remain available. Typed load/store currently supports non-atomic elements; this
+interface does not establish GPU alias, lifetime, or race-freedom proofs.
+
 ## Features
 
 Default features: `frontend-default`.

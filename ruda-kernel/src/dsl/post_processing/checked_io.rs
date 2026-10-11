@@ -44,7 +44,10 @@ impl CheckedIoProcessor {
         core::mem::swap(&mut processing.instructions, &mut instructions);
 
         for instruction in instructions {
-            if let Operation::Operator(operator) = &instruction.operation {
+            let lowered = matches!(instruction.operation, Operation::TypedMemory(_))
+                .then(|| instruction.clone().lower_typed_memory().expect("valid typed memory instruction"));
+            let operation = lowered.as_ref().map_or(&instruction.operation, |instruction| &instruction.operation);
+            if let Operation::Operator(operator) = operation {
                 match operator {
                     Operator::Index(op) => {
                         let has_length = op.list.has_length();
@@ -82,7 +85,7 @@ impl CheckedIoProcessor {
                             let tmp_processing = scope.process([]);
 
                             for inst in tmp_processing.instructions {
-                                processing.instructions.push(inst);
+                                processing.instructions.push(instruction.retag_typed_memory(inst));
                             }
                             for var in tmp_processing.variables {
                                 processing.variables.push(var);
@@ -112,7 +115,7 @@ impl CheckedIoProcessor {
                             let tmp_processing = scope.process([]);
 
                             for inst in tmp_processing.instructions {
-                                processing.instructions.push(inst);
+                                processing.instructions.push(instruction.retag_typed_memory(inst));
                             }
                             for var in tmp_processing.variables {
                                 processing.variables.push(var);
@@ -140,7 +143,10 @@ impl CheckedIoProcessor {
         core::mem::swap(&mut processing.instructions, &mut instructions);
 
         for instruction in instructions {
-            if let Operation::Operator(operator) = &instruction.operation {
+            let lowered = matches!(instruction.operation, Operation::TypedMemory(_))
+                .then(|| instruction.clone().lower_typed_memory().expect("valid typed memory instruction"));
+            let operation = lowered.as_ref().map_or(&instruction.operation, |instruction| &instruction.operation);
+            if let Operation::Operator(operator) = operation {
                 match operator {
                     Operator::Index(op) => {
                         let has_length = op.list.has_length();
@@ -180,7 +186,7 @@ impl CheckedIoProcessor {
                             let tmp_processing = scope.process([]);
 
                             for inst in tmp_processing.instructions {
-                                processing.instructions.push(inst);
+                                processing.instructions.push(instruction.retag_typed_memory(inst));
                             }
                             for var in tmp_processing.variables {
                                 processing.variables.push(var);
@@ -211,7 +217,7 @@ impl CheckedIoProcessor {
                             let tmp_processing = scope.process([]);
 
                             for inst in tmp_processing.instructions {
-                                processing.instructions.push(inst);
+                                processing.instructions.push(instruction.retag_typed_memory(inst));
                             }
                             for var in tmp_processing.variables {
                                 processing.variables.push(var);

@@ -64,6 +64,9 @@ impl<P: WgslLowering> ruda_core::compiler::Compiler for WgslCompiler<P> {
         mode: ExecutionMode,
         address_type: StorageType,
     ) -> Result<Self::Representation, CompilationError> {
+        shader.validate_typed_memory().map_err(|reason| CompilationError::Validation {
+            reason, backtrace: BackTrace::capture(),
+        })?;
         self.compilation_options = *compilation_options;
         self.compile_shader(shader, mode, address_type)
     }

@@ -159,6 +159,9 @@ impl<'a> Visitor<'a> {
             Operation::Operator(operator) => {
                 self.visit_operator_with_out(operator, out);
             }
+            Operation::TypedMemory(_) => {
+                unreachable!("typed memory is lowered when visiting an instruction");
+            }
             Operation::CoopMma(_) | Operation::Plane(_) | Operation::Tma(_) => {
                 panic!("{operation} is not supported on CPU.");
             }

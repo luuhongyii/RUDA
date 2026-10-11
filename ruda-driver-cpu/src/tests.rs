@@ -2,6 +2,67 @@ pub type TestRuntime = crate::CpuRuntime;
 
 pub use half::f16;
 
+#[ruda_kernel::dsl::prelude::ruda]
+fn typed_pointer_read(
+    pointer: ruda_kernel::dsl::prelude::Ptr<f32, ruda_kernel::dsl::prelude::GlobalSpace>,
+) -> f32 {
+    pointer.load()
+}
+
+#[ruda_kernel::dsl::prelude::ruda(launch)]
+fn typed_pointer_kernel(
+    input: &ruda_kernel::dsl::prelude::Array<f32>,
+    output: &mut ruda_kernel::dsl::prelude::Array<f32>,
+) {
+    let index = UNIT_POS as usize;
+    let input_view = input
+        .to_slice()
+        .typed::<ruda_kernel::dsl::prelude::GlobalSpace>();
+    let source = input_view
+        .ptr(0)
+        .offset(index)
+        .select(index % 2 == 0, input_view.ptr(0));
+    let value = typed_pointer_read(source);
+    let mut local = ruda_kernel::dsl::prelude::Array::<f32>::new(1usize);
+    let local_ptr = local
+        .to_slice_mut()
+        .typed::<ruda_kernel::dsl::prelude::Local>()
+        .ptr(0);
+    local_ptr.store(value);
+    let mut shared = ruda_kernel::dsl::prelude::SharedMemory::<f32>::new(4usize);
+    let shared_ptr = shared
+        .to_slice_mut()
+        .typed::<ruda_kernel::dsl::prelude::Workgroup>()
+        .ptr(index);
+    shared_ptr.store(input_view.ptr(index).load());
+    ruda_kernel::dsl::prelude::sync_ruda();
+    let result = value + local_ptr.read_only().load() + shared_ptr.load();
+    output
+        .to_slice_mut()
+        .typed::<ruda_kernel::dsl::prelude::GlobalSpace>()
+        .ptr(index)
+        .store(result);
+}
+
+#[test]
+fn test_typed_pointer_spaces_permissions_offsets_and_selection_cpu() {
+    use ruda_kernel::dsl::prelude::*;
+    let client = TestRuntime::client(&Default::default());
+    let input = client.create_from_slice(f32::as_bytes(&[1.0, 2.0, 3.0, 4.0]));
+    let output = client.empty(4 * core::mem::size_of::<f32>());
+    unsafe {
+        typed_pointer_kernel::launch::<TestRuntime>(
+            &client,
+            RudaCount::new_single(),
+            RudaDim::new_1d(4),
+            ArrayArg::from_raw_parts(input, 4),
+            ArrayArg::from_raw_parts(output.clone(), 4),
+        );
+    }
+    let bytes = client.read_one_unchecked(output);
+    assert_eq!(f32::from_bytes(&bytes), &[3.0, 4.0, 9.0, 6.0]);
+}
+
 use ruda_kernel::dsl as kernel_dsl;
 use ruda_kernel::dsl::prelude::*;
 

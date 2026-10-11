@@ -46,6 +46,14 @@ impl UnrollProcessor {
         inst: &Instruction,
         mappings: &mut Mappings,
     ) -> TransformAction {
+        if let Operation::TypedMemory(memory) = &inst.operation {
+            let lowered = inst.clone().lower_typed_memory().expect("valid typed memory instruction");
+            return match self.maybe_transform(alloc, &lowered, mappings) {
+                TransformAction::Ignore => TransformAction::Ignore,
+                TransformAction::Replace(instructions) => TransformAction::Replace(
+                    instructions.into_iter().map(|instruction| memory.retag(instruction)).collect()),
+            };
+        }
         if matches!(inst.operation, Operation::Marker(_)) {
             return TransformAction::Ignore;
         }

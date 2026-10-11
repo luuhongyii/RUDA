@@ -75,6 +75,11 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
         let ops = opt.program[block].ops.clone();
         for op in ops.borrow().values() {
             match &op.operation {
+                Operation::TypedMemory(memory) => {
+                    if let VariableKind::LocalArray { id, .. } = memory.pointer().base.kind {
+                        track_consts.insert(id, false);
+                    }
+                }
                 Operation::Operator(Operator::NativeAddress(address)) => {
                     if let VariableKind::LocalArray { id, .. } = address.lhs.kind {
                         track_consts.insert(id, false);

@@ -120,6 +120,8 @@ impl ValueTable {
             Operation::Comparison(cmp) => self.create_expr_cmp(cmp, inst.out()),
             Operation::Bitwise(bitwise) => self.create_expr_simple_op(bitwise, inst.out()),
             Operation::Operator(Operator::NativeStore(_)) => Err(None),
+            Operation::TypedMemory(ir::TypedMemory::Store { .. }) => Err(None),
+            Operation::TypedMemory(ir::TypedMemory::Load(_)) => Err(value_of_var(&inst.out())),
             Operation::Operator(operator) => self.create_expr_operator(operator, inst.out()),
             Operation::Metadata(metadata) => self.create_expr_meta(metadata, inst.out()),
             Operation::Plane(_) | Operation::Atomic(_) => Err(value_of_var(&inst.out())),

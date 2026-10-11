@@ -6,6 +6,7 @@ use ruda_core::ir::{
 
 impl Emitter {
     pub fn instruction(&mut self, instruction: Instruction) -> Result<()> {
+        let instruction = instruction.lower_typed_memory().map_err(invalid)?;
         let output = instruction.out;
         self.instruction_inner(instruction)?;
         if let Some(out) = output

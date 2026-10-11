@@ -44,6 +44,17 @@ impl Optimizer {
             Operation::Comparison(comparison) => self.visit_compare(comparison, visit_read),
             Operation::Bitwise(bitwise) => self.visit_bitwise(bitwise, visit_read),
             Operation::Operator(operator) => self.visit_operator(operator, visit_read),
+            Operation::TypedMemory(memory) => {
+                let pointer = match memory {
+                    ruda_core::ir::TypedMemory::Load(pointer) => pointer,
+                    ruda_core::ir::TypedMemory::Store { pointer, value } => {
+                        visit_read(self, value);
+                        pointer
+                    }
+                };
+                visit_read(self, &mut pointer.base);
+                visit_read(self, &mut pointer.index);
+            }
             Operation::Atomic(atomic) => self.visit_atomic(atomic, out, visit_read),
             Operation::Metadata(meta) => self.visit_meta(meta, visit_read),
             // Sync has no outputs

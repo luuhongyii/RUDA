@@ -37,6 +37,8 @@ pub enum Operation {
     #[operation(nested)]
     Operator(Operator),
     #[operation(nested)]
+    TypedMemory(super::TypedMemory),
+    #[operation(nested)]
     Atomic(AtomicOp),
     #[operation(nested)]
     Metadata(Metadata),
@@ -185,6 +187,7 @@ impl Display for Operation {
             Operation::Comparison(comparison) => write!(f, "{comparison}"),
             Operation::Bitwise(bitwise) => write!(f, "{bitwise}"),
             Operation::Operator(operator) => write!(f, "{operator}"),
+            Operation::TypedMemory(memory) => write!(f, "{memory}"),
             Operation::Atomic(atomic) => write!(f, "{atomic}"),
             Operation::Metadata(metadata) => write!(f, "{metadata}"),
             Operation::Branch(branch) => write!(f, "{branch}"),
