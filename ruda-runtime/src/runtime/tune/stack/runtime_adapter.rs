@@ -174,3 +174,51 @@ pub fn try_execute_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: Autot
 fn autotune_error(name: &str, message: &str) -> AutotuneError {
     AutotuneError::Unknown { name: name.to_string(), err: message.to_string() }
 }
+
+pub struct PreparedStackOperation<K: AutotuneKey, I: TuneInputs, O: AutotuneOutput> {
+    set: Arc<TunableSet<K,I,O>>, key: K, problem: Problem,
+    indices: Vec<usize>, candidates: Vec<Candidate>, cache_key: String,
+    runtime: std::any::TypeId, device: (u16, u16, u64),
+}
+
+pub fn prepare_stack_operation<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput>(
+    name: &str, device_id: &str, client: &ComputeClient<R>, set: Arc<TunableSet<K,I,O>>, input: &I::At<'_>,
+) -> Result<PreparedStackOperation<K,I,O>, AutotuneError> {
+    let tuner = stack_autotuner().ok_or_else(|| autotune_error(name, "stack autotuning is not enabled"))?;
+    let reference = set.stack_reference().ok_or_else(|| autotune_error(name, "no explicit reference/workload signature was registered"))?;
+    if reference >= set.len() { return Err(autotune_error(name, "reference index out of range")); }
+    let key = set.generate_key(input);
+    let env = runtime_environment(client);
+    let problem = Problem { scope: if name.contains("fusion") { Scope::Graph } else { Scope::Operator },
+        operation: fields(&[name, device_id, set.stack_checksum_ref()]), environment: env.fingerprint,
+        workload: set.stack_workload(input).ok_or_else(|| autotune_error(name, "no exact workload signature"))?,
+        execution_context: env.execution_context, persistent: env.persistent };
+    let mut indices = std::vec![reference]; let mut plan = set.plan(&key);
+    let mut included = std::vec![false; set.len()]; included[reference] = true;
+    loop { let batch = plan.next(None); if batch.is_empty() { break; }
+        for index in batch { if !included[index] { indices.push(index); included[index] = true; } }
+    }
+    let candidates: Vec<_> = indices.iter().map(|&i| Candidate::new(set.fastest(i).name.clone())).collect();
+    let cache_key = tuner.prepare_key(&problem, &candidates, 0).map_err(|e| autotune_error(name, &e.to_string()))?;
+    let id = client.device_id();
+    Ok(PreparedStackOperation { set, key, problem, indices, candidates, cache_key,
+        runtime: std::any::TypeId::of::<R>(), device: (id.type_id, id.index_id, client.properties_fingerprint()) })
+}
+
+pub fn try_execute_prepared_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput>(
+    name: &str, client: &ComputeClient<R>, prepared: &PreparedStackOperation<K,I,O>, input: I::At<'a>,
+) -> Result<O, AutotuneError> {
+    let tuner = stack_autotuner().ok_or_else(|| autotune_error(name, "stack autotuning is not enabled"))?;
+    let id = client.device_id();
+    if prepared.runtime != std::any::TypeId::of::<R>()
+        || prepared.device != (id.type_id, id.index_id, client.properties_fingerprint()) {
+        return Err(autotune_error(name, "prepared operation runtime/device mismatch"));
+    }
+    let mut trials = RuntimeTrials { client: client.clone(), set: &prepared.set, key: &prepared.key,
+        input: &input, indices: &prepared.indices, timing: tuner.policy().timing };
+    let decision = tuner.select_prepared_candidates(&prepared.problem, &prepared.candidates, 0,
+        &prepared.cache_key, &mut trials).map_err(|e| autotune_error(name, &e.to_string()))?;
+    let output = prepared.set.fastest(prepared.indices[decision.index]).execute(input);
+    if output.is_err() { tuner.invalidate(&decision, true); }
+    output
+}

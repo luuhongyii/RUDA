@@ -308,6 +308,11 @@ impl StackTuner {
     }
 
     pub(super) fn select_candidates<C: CandidateSource>(&self, problem: &Problem, candidates: &[C], reference: usize, runner: &mut impl TrialRunner) -> Result<Decision, TuneFailure> {
+        let key = self.prepare_key(problem, candidates, reference)?;
+        self.select_prepared_candidates(problem, candidates, reference, &key, runner)
+    }
+
+    pub(super) fn prepare_key<C: CandidateSource>(&self, problem: &Problem, candidates: &[C], reference: usize) -> Result<String, TuneFailure> {
         if candidates.is_empty() || candidates.len() > 4096 || reference >= candidates.len()
             || problem.operation.is_empty() || problem.environment.is_empty() || problem.workload.is_empty() {
             return Err(TuneFailure::invalid("a workload, environment and valid reference candidate are required"));
@@ -322,12 +327,16 @@ impl StackTuner {
         if !candidates[reference].view().fits(&self.policy) { return Err(TuneFailure::invalid("reference does not satisfy eligibility/workspace policy")); }
         let key = cache_key_candidates(problem, candidates, reference, &self.policy);
         if key.len() > 384 * 1024 { return Err(TuneFailure::invalid("autotune key exceeds 384 KiB")); }
-        let fallback = |source| Decision { index: reference, reference_index: reference, name: String::clone(candidates[reference].view().name), source, verified: false, ratio: None, cache_key: key.clone() };
+        Ok(key)
+    }
+
+    pub(super) fn select_prepared_candidates<C: CandidateSource>(&self, problem: &Problem, candidates: &[C], reference: usize, key: &str, runner: &mut impl TrialRunner) -> Result<Decision, TuneFailure> {
+        let fallback = |source| Decision { index: reference, reference_index: reference, name: String::clone(candidates[reference].view().name), source, verified: false, ratio: None, cache_key: key.to_string() };
         if self.lock().poisoned_devices.contains(&problem.environment) {
             return Err(TuneFailure { kind: FailureKind::Quarantined, message: "device tuning lane is quarantined after an unconfirmed device completion".into() });
         }
         if self.policy.mode == Mode::Disabled { return Ok(fallback(DecisionSource::Disabled)); }
-        let memory = { self.lock().records.get(&key).cloned() };
+        let memory = { self.lock().records.get(key).cloned() };
         if let Some(record) = memory {
             if let Some(d) = self.from_record(&record, candidates, reference, DecisionSource::MemoryCache) {
                 let mut state = self.lock();
@@ -336,7 +345,7 @@ impl StackTuner {
                 return Ok(d);
             }
         }
-        let bypass = { self.lock().bypass.contains_key(&key) };
+        let bypass = { self.lock().bypass.contains_key(key) };
         if bypass {
             if self.memory_eviction == MemoryEviction::Lru { self.promote(&mut self.lock(), &key); }
             return Ok(fallback(DecisionSource::ValidationUnavailable));
@@ -344,11 +353,11 @@ impl StackTuner {
         if is_tuning() { return Ok(fallback(DecisionSource::Nested)); }
         let _permit = {
             let mut s = self.lock();
-            if s.pending.contains(&key) || s.devices.contains(&problem.environment) || s.pending.len() >= self.policy.max_parallel_tunes {
+            if s.pending.contains(key) || s.devices.contains(&problem.environment) || s.pending.len() >= self.policy.max_parallel_tunes {
                 s.stats.busy_fallbacks += 1; return Ok(fallback(DecisionSource::Busy));
             }
-            s.pending.insert(key.clone()); s.devices.insert(problem.environment.clone()); s.stats.misses += 1;
-            Permit { tuner: self, key: key.clone(), device: problem.environment.clone() }
+            s.pending.insert(key.to_string()); s.devices.insert(problem.environment.clone()); s.stats.misses += 1;
+            Permit { tuner: self, key: key.to_string(), device: problem.environment.clone() }
         };
         let _depth = DepthGuard::enter();
         if problem.persistent {
@@ -390,8 +399,8 @@ impl StackTuner {
                 // Reference benchmarking may exceed the validation/workspace budget. Preserve
                 // normal execution on the declared reference; never promote an unchecked winner.
                 let mut s = self.lock();
-                if !s.order.contains(&key) { s.order.push_back(key.clone()); }
-                s.bypass.insert(key.clone(), problem.scope);
+                if !s.order.contains(&key.to_string()) { s.order.push_back(key.to_string()); }
+                s.bypass.insert(key.to_string(), problem.scope);
                 self.promote(&mut s, &key);
                 while s.order.len() > self.policy.capacity {
                     if let Some(old) = s.order.pop_front() { s.records.remove(&old); s.banned.remove(&old); s.regressions.remove(&old); s.bypass.remove(&old); }
