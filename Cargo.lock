@@ -5842,7 +5842,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-kernel-macros"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "darling 0.23.0",
  "derive-new",
