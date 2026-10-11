@@ -105,12 +105,7 @@ impl Emitter {
         let dst = self.destination(out)?;
         if let Some(c) = c {
             let c = self.value(c)?;
-            let a = self.half_to_f32(ty, &a)?;
-            let b = self.half_to_f32(ty, &b)?;
-            let c = self.half_to_f32(ty, &c)?;
-            let intermediate = self.reg(Scalar::F32);
-            self.line(format!("fma.rn.f32 {intermediate}, {a}, {b}, {c};"));
-            self.line(format!("cvt.rn.{}.f32 {dst}, {intermediate};", ty.suffix()));
+            self.line(format!("fma.rn.{} {dst}, {a}, {b}, {c};", ty.suffix()));
         } else {
             self.half_binary(opcode, ty, &dst, &a, &b)?;
         }

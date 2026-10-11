@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ruda-triton"
+version = "0.1.0"
+description = "Triton backend that compiles kernels through Ruda"
+requires-python = ">=3.10"
+dependencies = ["triton>=3.8", "torch"]
+
+[project.entry-points."triton.backends"]
+ruda = "ruda_triton"
+
+[tool.setuptools]
+packages = ["ruda_triton"]
+
+[tool.setuptools.package-data]
+ruda_triton = ["bin/*"]

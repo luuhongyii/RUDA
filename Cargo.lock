@@ -6294,6 +6294,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruda-triton"
+version = "0.1.0"
+dependencies = [
+ "ruda-compiler",
+ "ruda-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ruintegrate"
 version = "0.1.83"
 dependencies = [
