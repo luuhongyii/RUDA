@@ -4,7 +4,7 @@
 
 **Experimental source.**
 
-Package/crate `rusolver`, directory `ruSOLVER`. Defaults to dependency-free synchronous host FP64. GPU execution is opt-in, not a hidden fallback.
+Cargo package `ruda-solver`, Rust crate `rusolver`, directory `ruSOLVER`. Defaults to dependency-free synchronous host FP64. GPU execution is opt-in, not a hidden fallback.
 
 | Operation | API | Scope |
 |---|---|---|

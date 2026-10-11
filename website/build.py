@@ -19,10 +19,11 @@ WEB = ROOT / "website"
 REPO = "https://github.com/shuqi2077/RUDA"
 ORIGIN = "https://shuqi2077.github.io"
 COPY = json.loads((WEB / "content.json").read_text(encoding="utf-8"))
-GUIDES = ["README", "getting-started", "programming-guide", "tensor-framework", "tensor-recipes",
-          "backend-composition", "data-and-storage", "training",
-          "model-inference", "samples", "fused-adamw", "gradient-guard", "muon"]
-REFERENCE = ["api-reference", "compiler-guide", "ptx", "runtime-api", "driver-api", "compatibility", "debugging"]
+GUIDES = ["README", "getting-started", "native-pytorch-quickstart", "programming-guide", "tensor-framework", "tensor-recipes",
+          "backend-composition", "data-and-storage", "training", "distributed-training",
+          "architecture-training", "finetuning", "model-compiler", "static-pytorch-graphs",
+          "model-inference", "samples", "stack-autotuning", "fused-adamw", "gradient-guard", "muon"]
+REFERENCE = ["api-reference", "native-pytorch", "native-pytorch-api", "compiler-guide", "ptx", "runtime-api", "driver-api", "compatibility", "debugging"]
 PROJECT = ["project", "CONTRIBUTING"]
 
 
@@ -97,7 +98,7 @@ class Site:
         if target == "docs/README.md":
             return self.doc(self.sources[source][0], "index")
         # Crate README links share the same underlying library manual.
-        match = re.fullmatch(r"(ruBLAS|ruDNN|ruFFT|ruPRIM|ruRAND|ruSPARSE|ruTENSOR|ruCCL)/(?:docs/(zh|ja|de|ru)/)?README.md", target)
+        match = re.fullmatch(r"(ruBLAS|ruDNN|ruFFT|ruPRIM|ruRAND|ruSPARSE|ruTENSOR|ruCCL|ruSOLVER|ruINTEGRATE)/(?:docs/(zh|ja|de|ru)/)?README.md", target)
         if match:
             target = f"docs/{match[2] or 'en'}/libraries/{match[1].lower()}.md"
         tail = ("?" + parsed.query if parsed.query else "") + ("#" + parsed.fragment if parsed.fragment else "")

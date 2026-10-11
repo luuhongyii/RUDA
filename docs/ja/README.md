@@ -51,6 +51,7 @@
 | --- | --- |
 |ruBLAS|[線形代数とグループ化行列の乗算](libraries/rublas.md)|
 |ruDNN|[ニューラル ネットワーク操作と MoE](libraries/rudnn.md)|
+|ruTENSOR|[テンソル縮約、einsum と置換](libraries/rutensor.md)|
 |ruPRIM|[削減、スキャン、およびインデックス作成](libraries/ruprim.md)|
 |ruFFT|[高速フーリエ変換](libraries/rufft.md)|
 |ruRAND|[乱数生成](libraries/rurand.md)|

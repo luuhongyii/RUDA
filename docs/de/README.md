@@ -51,6 +51,7 @@ Von Ihrem ersten GPU-Kernel bis hin zu Rechenbibliotheken, Tensortraining und lo
 | --- | --- |
 |ruBLAS|[Lineare Algebra und gruppierte Matrixmultiplikation](libraries/rublas.md)|
 |ruDNN|[Neuronale Netzwerkoperationen und MoE](libraries/rudnn.md)|
+|ruTENSOR|[Tensorkontraktionen, einsum und Permutationen](libraries/rutensor.md)|
 |ruPRIM|[Reduktionen, Scans und Indizierung](libraries/ruprim.md)|
 |ruFFT|[Schnelle Fourier-Transformationen](libraries/rufft.md)|
 |ruRAND|[Zufallszahlengenerierung](libraries/rurand.md)|

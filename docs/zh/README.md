@@ -9,6 +9,7 @@
 | 我想做什么 | 阅读路径 |
 | --- | --- |
 | 运行第一个 GPU Kernel | [安装与快速开始](getting-started.md) → [编程指南](programming-guide.md) |
+| 在 `ruda:0` 上使用 PyTorch | [原生 PyTorch 快速上手](native-pytorch-quickstart.md) → [原生 API](native-pytorch-api.md) |
 | 使用矩阵、稀疏或神经网络算子 | [计算库](libraries/README.md) → [张量与框架](tensor-framework.md) |
 | 训练模型、累积梯度与保存状态 | [训练与状态保存](training.md) |
 | 使用 LoRA 或 NF4 微调本地模型 | [微调与恢复](finetuning.md) |
@@ -17,6 +18,7 @@
 ## 入门
 
 - [安装与快速开始](getting-started.md)：源码环境、后端选择、第一个示例。
+- [原生 PyTorch 快速上手](native-pytorch-quickstart.md)：安装、张量传输、一步 FP32 训练与问题定位。
 - [示例与教程](samples.md)：向量加法、张量、共享内存及半精度用例。
 
 ## 编程指南
@@ -54,11 +56,14 @@
 | --- | --- |
 | ruBLAS | [线性代数与分组矩阵乘](libraries/rublas.md) |
 | ruDNN | [神经网络算子与 MoE](libraries/rudnn.md) |
+| ruTENSOR | [张量收缩、einsum 与置换](libraries/rutensor.md) |
 | ruPRIM | [归约、扫描与索引](libraries/ruprim.md) |
 | ruFFT | [快速傅里叶变换](libraries/rufft.md) |
 | ruRAND | [随机数生成](libraries/rurand.md) |
 | ruSPARSE | [稀疏计算](libraries/rusparse.md) |
 | ruCCL | [集合通信](libraries/ruccl.md) |
+| ruSOLVER | [线性方程与矩阵分解](libraries/rusolver.md) |
+| ruINTEGRATE | [数值积分与初值 ODE](libraries/ruintegrate.md) |
 
 ## 调试与兼容性
 

@@ -9,6 +9,7 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 | Your task | Reading path |
 | --- | --- |
 | Run your first GPU kernel | [Installation and quickstart](getting-started.md) → [Programming guide](programming-guide.md) |
+| Use PyTorch on `ruda:0` | [Native PyTorch quickstart](native-pytorch-quickstart.md) → [Native API](native-pytorch-api.md) |
 | Use matrix, sparse, or neural network operations | [Compute libraries](libraries/README.md) → [Tensors and frameworks](tensor-framework.md) |
 | Train models, accumulate gradients, and save state | [Training and saving state](training.md) |
 | Fine-tune a local model with LoRA or NF4 | [Fine-tuning and recovery](finetuning.md) |
@@ -17,6 +18,7 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 ## Getting started
 
 - [Installation and quickstart](getting-started.md): source setup, backend selection, and your first example.
+- [Native PyTorch quickstart](native-pytorch-quickstart.md): installation, tensor transfers, one FP32 training step, and troubleshooting.
 - [Examples and tutorials](samples.md): vector addition, tensors, shared memory, and half precision.
 
 ## Programming guides
@@ -54,11 +56,14 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 | --- | --- |
 | ruBLAS | [Linear algebra and grouped matrix multiplication](libraries/rublas.md) |
 | ruDNN | [Neural network operations and MoE](libraries/rudnn.md) |
+| ruTENSOR | [Tensor contractions, einsum, and permutations](libraries/rutensor.md) |
 | ruPRIM | [Reductions, scans, and indexing](libraries/ruprim.md) |
 | ruFFT | [Fast Fourier transforms](libraries/rufft.md) |
 | ruRAND | [Random number generation](libraries/rurand.md) |
 | ruSPARSE | [Sparse computation](libraries/rusparse.md) |
 | ruCCL | [Collective communication](libraries/ruccl.md) |
+| ruSOLVER | [Linear systems and matrix factorizations](libraries/rusolver.md) |
+| ruINTEGRATE | [Numerical integration and initial-value ODEs](libraries/ruintegrate.md) |
 
 ## Debugging and compatibility
 

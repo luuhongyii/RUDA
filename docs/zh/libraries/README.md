@@ -17,7 +17,7 @@
 | [ruSPARSE](rusparse.md) | `ruSPARSE` | `rusparse` | 稀疏矩阵格式与运算 |
 | [ruCCL](ruccl.md) | `ruCCL` | `ruccl` | 集合通信与编排 |
 | [ruSOLVER](rusolver.md) | `ruda-solver` | `rusolver` | 实验性 FP64 方程求解/分解、CG；可选 FP32 小矩阵设备求解 |
-| [ruINTEGRATE](ruintegrate.md) | `ruintegrate` | `ruintegrate` | 实验性 CPU 数值积分与非刚性 ODE |
+| [ruINTEGRATE](ruintegrate.md) | `ruintegrate` | `ruintegrate` | 实验性 CPU 有限／无限区间积分、RK45／BDF1 ODE 与事件定位 |
 
 ## 接口层级
 
@@ -30,3 +30,5 @@
 ## 阅读方式
 
 每本库手册分别说明用途、feature、接口、数据契约及支持边界。通用路径应明确选择所需功能，不能假设默认 features 适合所有设备。
+
+SVD、复数／稀疏系统、数值反向传播、分布式 CG、刚性 ODE 和事件定位见[扩展数值科学](science-extended.md)。

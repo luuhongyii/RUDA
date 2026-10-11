@@ -9,6 +9,7 @@
 | 编写 GPU Kernel | `ruda-kernel::dsl` 与设备运行时 |
 | 使用矩阵乘、FFT、归约等运算 | [计算库](libraries/README.md) |
 | 使用张量及框架 | [张量与框架指南](tensor-framework.md) |
+| 在 `ruda:0` 上使用 Python／PyTorch | [原生 PyTorch 快速上手](native-pytorch-quickstart.md) |
 | 训练模型与保存状态 | [训练指南](training.md) |
 | 加载模型并生成文本或处理图片 | [模型推理指南](model-inference.md) |
 | 接入设备后端 | [Driver API](driver-api.md) |

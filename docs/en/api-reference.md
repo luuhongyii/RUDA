@@ -7,6 +7,7 @@
 | Task | First API | Guide |
 | --- | --- | --- |
 | Write a GPU kernel | `ruda`, kernel DSL, runtime client | [Programming guide](programming-guide.md) |
+| Use Python/PyTorch on NVIDIA | `ruda_torch`, `torch.device("ruda:0")` | [PyTorch quickstart](native-pytorch-quickstart.md) and [API reference](native-pytorch-api.md) |
 | Use typed tensors and gradients | `ruda_tensor::api::Tensor`, `Autodiff<B>` | [Tensor recipes](tensor-recipes.md) |
 | Choose a tensor execution target | `Host`, `Cuda`, `Rocm`, `Wgpu`, Router, Remote | [Backend composition](backend-composition.md) |
 | Call a domain operator | ruBLAS, ruDNN, ruPRIM, and other domain crates | [Compute libraries](libraries/README.md) |

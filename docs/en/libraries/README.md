@@ -17,7 +17,7 @@ Compute libraries implement operations, the runtime executes them on devices, an
 | [ruSPARSE](rusparse.md) | `ruSPARSE` | `rusparse` | Sparse matrix formats and operations |
 | [ruCCL](ruccl.md) | `ruCCL` | `ruccl` | Collective communication and orchestration |
 | [ruSOLVER](rusolver.md) | `ruda-solver` | `rusolver` | Experimental FP64 solvers/CG; opt-in small FP32 device solve |
-| [ruINTEGRATE](ruintegrate.md) | `ruintegrate` | `ruintegrate` | Experimental host quadrature and non-stiff ODEs |
+| [ruINTEGRATE](ruintegrate.md) | `ruintegrate` | `ruintegrate` | Experimental host finite/infinite quadrature, RK45/BDF1 ODEs, and events |
 
 ## Interface layers
 
@@ -30,3 +30,5 @@ Operations with the same name at different layers may have different arguments, 
 ## Using the guides
 
 Each library guide covers its purpose, features, interfaces, data contracts, and constraints. Explicitly select the features needed by a general-purpose path rather than assuming defaults suit every device.
+
+For SVD, complex/sparse systems, numerical pullbacks, distributed CG, stiff ODEs, and event location, see [Extended numerical science](science-extended.md).

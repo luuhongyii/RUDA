@@ -9,6 +9,7 @@
 | Write GPU kernels | `ruda-kernel::dsl` and a device runtime |
 | Use matrix multiplication, FFTs, or reductions | [Compute libraries](libraries/README.md) |
 | Work with tensors and frameworks | [Tensors and frameworks](tensor-framework.md) |
+| Use Python/PyTorch on `ruda:0` | [Native PyTorch quickstart](native-pytorch-quickstart.md) |
 | Train models and save state | [Training guide](training.md) |
 | Load models and generate text or process images | [Model inference guide](model-inference.md) |
 | Integrate a device backend | [Driver API](driver-api.md) |

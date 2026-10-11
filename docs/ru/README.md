@@ -51,6 +51,7 @@
 | --- | --- |
 |ruBLAS|[Линейная алгебра и групповое умножение матриц](libraries/rublas.md)|
 |ruDNN|[Операции нейронной сети и MoE](libraries/rudnn.md)|
+|ruTENSOR|[Тензорные свёртки, einsum и перестановки](libraries/rutensor.md)|
 |ruPRIM|[Сокращения, сканирование и индексирование](libraries/ruprim.md)|
 |ruFFT|[Быстрое преобразование Фурье](libraries/rufft.md)|
 |ruRAND|[Генерация случайных чисел](libraries/rurand.md)|

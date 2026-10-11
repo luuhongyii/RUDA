@@ -7,6 +7,7 @@
 | 任务 | 首选 API | 指南 |
 | --- | --- | --- |
 | 编写 GPU Kernel | `ruda`、Kernel DSL、运行时客户端 | [编程指南](programming-guide.md) |
+| 在 NVIDIA 上使用 Python／PyTorch | `ruda_torch`、`torch.device("ruda:0")` | [PyTorch 快速上手](native-pytorch-quickstart.md)与 [API 参考](native-pytorch-api.md) |
 | 使用 typed tensor 与梯度 | `ruda_tensor::api::Tensor`、`Autodiff<B>` | [张量实用示例](tensor-recipes.md) |
 | 选择张量执行目标 | `Host`、`Cuda`、`Rocm`、`Wgpu`、Router、Remote | [后端组合](backend-composition.md) |
 | 调用领域算子 | ruBLAS、ruDNN、ruPRIM 等领域库 | [计算库](libraries/README.md) |
