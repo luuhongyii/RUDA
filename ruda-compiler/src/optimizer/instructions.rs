@@ -1,6 +1,7 @@
 use ruda_core::ir::{
     Arithmetic, AtomicOp, BarrierOps, BinaryOperator, Bitwise, Comparison, CoopMma, Instruction,
-    Metadata, NonSemantic, Operation, Operator, Plane, TmaOps, UnaryOperator, Variable,
+    Metadata, NonSemantic, Operation, OperationReflect, Operator, Plane, TmaOps, UnaryOperator,
+    Variable,
 };
 
 use crate::optimizer::ControlFlow;
@@ -55,7 +56,14 @@ impl Optimizer {
                 visit_read(self, &mut pointer.base);
                 visit_read(self, &mut pointer.index);
             }
-            Operation::Pointer(_) => unreachable!("pointer values are lowered before SSA"),
+            Operation::Pointer(pointer) => {
+                let code = pointer.op_code();
+                let mut args = pointer.args().unwrap();
+                for arg in &mut args {
+                    visit_read(self, arg);
+                }
+                *pointer = ruda_core::ir::PointerOp::from_code_and_args(code, &args).unwrap();
+            }
             Operation::Atomic(atomic) => self.visit_atomic(atomic, out, visit_read),
             Operation::Metadata(meta) => self.visit_meta(meta, visit_read),
             // Sync has no outputs

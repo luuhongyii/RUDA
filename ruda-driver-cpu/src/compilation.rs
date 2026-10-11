@@ -32,7 +32,11 @@ impl Compiler for MlirCompiler {
         addr_type: StorageType,
     ) -> Result<Self::Representation, CompilationError> {
         kernel.validate_typed_memory().map_err(|reason| CompilationError::Validation { reason, backtrace: BackTrace::capture() })?;
-        kernel.body.lower_pointer_values().map_err(|reason| CompilationError::Validation { reason, backtrace: BackTrace::capture() })?;
+        ir::PointerValueLowering::new(&kernel.body)
+            .map_err(|reason| CompilationError::Validation {
+                reason,
+                backtrace: BackTrace::capture(),
+            })?;
         let errors = kernel.body.pop_errors();
         if !errors.is_empty() {
             let mut reason = "Can't compile mlir kernel".to_string();
@@ -49,7 +53,12 @@ impl Compiler for MlirCompiler {
 
         #[cfg(feature = "mlir-dump")]
         dump_scope(&kernel.body, &kernel.options.kernel_name);
-        let opt = ruda_kernel::dsl::lowering::mlir::optimize(&kernel, mode);
+        let mut opt = ruda_kernel::dsl::lowering::mlir::optimize(&kernel, mode);
+        opt.lower_pointer_values()
+            .map_err(|reason| CompilationError::Validation {
+                reason,
+                backtrace: BackTrace::capture(),
+            })?;
 
         let mut shared_memories = SharedMemories::default();
         shared_memories.visit(&opt);

@@ -75,6 +75,11 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
         let ops = opt.program[block].ops.clone();
         for op in ops.borrow().values() {
             match &op.operation {
+                Operation::Pointer(ruda_core::ir::PointerOp::Address(pointer)) => {
+                    if let VariableKind::LocalArray { id, .. } = pointer.base.kind {
+                        track_consts.insert(id, false);
+                    }
+                }
                 Operation::TypedMemory(memory) => {
                     if let VariableKind::LocalArray { id, .. } = memory.pointer().base.kind {
                         track_consts.insert(id, false);

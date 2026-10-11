@@ -181,7 +181,7 @@ impl<D: Dialect, P: super::DialectProcessors> Compiler for CppCompiler<D, P> {
         kernel.validate_typed_memory().map_err(|reason| CompilationError::Validation {
             reason, backtrace: BackTrace::capture(),
         })?;
-        kernel.body.lower_pointer_values().map_err(|reason| CompilationError::Validation {
+        crate::optimizer::lower_optimized_pointer_values(&mut kernel.body, kernel.ruda_dim).map_err(|reason| CompilationError::Validation {
             reason, backtrace: BackTrace::capture(),
         })?;
         let errors = kernel.body.pop_errors();

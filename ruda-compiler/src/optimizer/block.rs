@@ -16,6 +16,7 @@ pub enum BlockUse {
 #[derive(Default, Debug, Clone)]
 pub struct BasicBlock {
     pub(crate) block_use: Vec<BlockUse>,
+    pub(crate) scope_join: Option<super::NodeIndex>,
     /// The phi nodes that are required to be generated at the start of this block.
     pub phi_nodes: Rc<RefCell<Vec<PhiInstruction>>>,
     /// A stable list of operations performed in this block.

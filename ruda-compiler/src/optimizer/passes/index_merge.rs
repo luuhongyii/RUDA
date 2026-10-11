@@ -47,8 +47,17 @@ impl OptimizerPass for CopyTransform {
                 let (write_idx, out, out_index) = writes[*id];
                 let valid = (read_idx..write_idx)
                     .filter_map(|idx| ops.borrow().get(idx).cloned())
-                    .all(|inst| !matches!(inst.operation, Operation::Operator(Operator::NativeStore(_)) | Operation::TypedMemory(ruda_core::ir::TypedMemory::Store { .. }))
-                        && inst.out.is_none_or(|write| write != input && write != out));
+                    .all(|inst| {
+                        !matches!(
+                            inst.operation,
+                            Operation::Operator(Operator::NativeStore(_))
+                                | Operation::TypedMemory(ruda_core::ir::TypedMemory::Store { .. })
+                                | Operation::Pointer(
+                                    ruda_core::ir::PointerOp::Store { .. }
+                                        | ruda_core::ir::PointerOp::Atomic { .. }
+                                )
+                        ) && inst.out.is_none_or(|write| write != input && write != out)
+                    });
                 if !valid {
                     continue;
                 }

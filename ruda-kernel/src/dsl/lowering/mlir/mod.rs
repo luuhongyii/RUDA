@@ -9,6 +9,7 @@ use trigonometries_transform::{HypotTransform, RhypotTransform};
 
 pub fn optimize(kernel: &KernelDefinition, mode: ExecutionMode) -> Optimizer {
     OptimizerBuilder::default()
+            .with_pointer_values()
             .with_transformer(ErfTransform)
             .with_transformer(HypotTransform)
             .with_transformer(RhypotTransform)

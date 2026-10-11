@@ -125,6 +125,18 @@ fn simplify_const_operand(op: &mut Instruction, changes: &AtomicCounter) {
             _ => {}
         },
 
+        Operation::Pointer(ruda_core::ir::PointerOp::Select(select))
+            if select.cond.is_true()
+                || select.cond.is_false()
+                || select.then == select.or_else =>
+        {
+            op.operation = Operation::Copy(if select.cond.is_false() {
+                select.or_else
+            } else {
+                select.then
+            });
+            changes.inc();
+        }
         // Constant length to const value
         Operation::Metadata(Metadata::Length { var }) => match var.kind {
             VariableKind::ConstantArray { length, .. }

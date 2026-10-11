@@ -105,6 +105,7 @@ impl Optimizer {
         let current_block = self.current_block.unwrap();
         let then = self.program.add_node(BasicBlock::default());
         let next = self.program.add_node(BasicBlock::default());
+        self.program[current_block].scope_join = Some(next);
         let mut merge = next;
 
         self.program.add_edge(current_block, then, 0);
@@ -139,6 +140,7 @@ impl Optimizer {
         let then = self.program.add_node(BasicBlock::default());
         let or_else = self.program.add_node(BasicBlock::default());
         let next = self.program.add_node(BasicBlock::default());
+        self.program[current_block].scope_join = Some(next);
         let mut merge = next;
 
         self.program.add_edge(current_block, then, 0);
@@ -180,6 +182,7 @@ impl Optimizer {
     pub(crate) fn parse_switch(&mut self, switch: Switch) {
         let current_block = self.current_block.unwrap();
         let next = self.program.add_node(BasicBlock::default());
+        self.program[current_block].scope_join = Some(next);
 
         let branches = switch
             .cases
@@ -278,7 +281,9 @@ impl Optimizer {
     }
 
     fn parse_for_loop(&mut self, range_loop: RangeLoop) {
-        let step = range_loop.step.unwrap_or(1.into());
+        let step = range_loop
+            .step
+            .unwrap_or_else(|| range_loop.i.ty.constant(ConstantValue::Int(1)));
 
         let i_id = match range_loop.i.kind {
             VariableKind::LocalMut { id, .. } => id,
@@ -441,6 +446,7 @@ impl Optimizer {
         new_block.control_flow.swap(&self.block(block).control_flow);
         new_block.ops.borrow_mut().extend(after);
         let new_block = self.program.graph.add_node(new_block);
+        self.program[new_block].scope_join = self.program[block].scope_join.take();
 
         self.program.add_edge(block, new_block, 0);
         for successor in successors {

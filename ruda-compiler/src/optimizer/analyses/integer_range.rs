@@ -4,7 +4,7 @@ use std::{
 };
 
 use ruda_core::ir::{
-    Arithmetic, Builtin, ConstantValue, ElemType, Id, Operation, Type, Variable, VariableKind,
+    Arithmetic, Builtin, ConstantValue, Id, Operation, Type, Variable, VariableKind,
 };
 
 use crate::optimizer::{Optimizer, VarId};
@@ -179,7 +179,7 @@ pub(crate) fn var_id(var: &Variable) -> Option<(Id, u16)> {
 }
 
 fn is_uint(ty: Type) -> bool {
-    matches!(ty.elem_type(), ElemType::UInt(_))
+    ty.is_unsigned_int()
 }
 
 mod range_ops {

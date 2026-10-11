@@ -51,7 +51,7 @@ impl Emitter {
         address: StorageType,
     ) -> Result<PtxKernel> {
         kernel.validate_typed_memory().map_err(invalid)?;
-        kernel.body.lower_pointer_values().map_err(invalid)?;
+        crate::optimizer::lower_optimized_pointer_values(&mut kernel.body, kernel.ruda_dim).map_err(invalid)?;
         let errors = kernel.body.pop_errors();
         if !errors.is_empty() {
             return Err(invalid(errors.join("\n")));

@@ -63,6 +63,69 @@ fn test_typed_pointer_spaces_permissions_offsets_and_selection_cpu() {
     assert_eq!(f32::from_bytes(&bytes), &[3.0, 4.0, 9.0, 6.0]);
 }
 
+#[ruda_kernel::dsl::prelude::ruda(launch)]
+fn pointer_value_storage_alias_kernel(output: &mut ruda_kernel::dsl::prelude::Array<u32>) {
+    let mut local = ruda_kernel::dsl::prelude::Array::<u32>::new(1usize);
+    local[0] = 3;
+    let pointer = local
+        .to_slice_mut()
+        .typed::<ruda_kernel::dsl::prelude::Local>()
+        .ptr(0)
+        .value();
+    let before = pointer.load();
+    pointer.store(7);
+    let after = pointer.load();
+    output[0] = before + after + local[0];
+}
+
+#[test]
+fn test_pointer_value_storage_alias_cpu() {
+    use ruda_kernel::dsl::prelude::*;
+    let client = TestRuntime::client(&Default::default());
+    let output = client.empty(core::mem::size_of::<u32>());
+    unsafe {
+        pointer_value_storage_alias_kernel::launch::<TestRuntime>(
+            &client,
+            RudaCount::new_single(),
+            RudaDim::new_1d(1),
+            ArrayArg::from_raw_parts(output.clone(), 1),
+        );
+    }
+    assert_eq!(u32::from_bytes(&client.read_one_unchecked(output)), &[17]);
+}
+
+#[test]
+fn test_pointer_value_missing_origin_is_a_compile_error_cpu() {
+    use ruda_core::{ir::*, kernel::KernelDefinition, launch::ExecutionMode};
+    use ruda_kernel::dsl::Compiler;
+
+    let mut scope = Scope::root(false);
+    let ty = Type::scalar(ElemType::UInt(UIntKind::U32));
+    let pointer = *scope.create_local(PointerType {
+        pointee: ty,
+        address_space: AddressSpace::Global,
+        access: PointerAccess::ReadOnly,
+    }.value_type());
+    let out = *scope.create_local(ty);
+    scope.register(Instruction::new(PointerOp::Load { pointer, checked: true }, out));
+    let kernel = KernelDefinition {
+        buffers: vec![],
+        tensor_maps: vec![],
+        scalars: vec![],
+        ruda_dim: ruda_core::launch::RudaDim::new_1d(1),
+        body: scope,
+        options: Default::default(),
+    };
+    let result = crate::compilation::MlirCompiler::default().compile(
+        kernel,
+        &Default::default(),
+        ExecutionMode::Unchecked,
+        StorageType::Scalar(ElemType::UInt(UIntKind::U64)),
+    );
+    assert!(matches!(result, Err(ruda::runtime::compiler::CompilationError::Validation { reason, .. })
+        if reason.contains("pointer has no storage origin")));
+}
+
 use ruda_kernel::dsl as kernel_dsl;
 use ruda_kernel::dsl::prelude::*;
 

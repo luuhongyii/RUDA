@@ -85,6 +85,17 @@ mod atomic_code {
 
 impl OperationReflect for PointerOp {
     type OpCode = PointerOpCode;
+    fn is_pure(&self) -> bool {
+        matches!(
+            self,
+            Self::Address(_)
+                | Self::Offset(_)
+                | Self::ReadOnly(_)
+                | Self::Select(_)
+                | Self::NativeAddress(_)
+                | Self::FromNative { .. }
+        )
+    }
     fn op_code(&self) -> Self::OpCode {
         match self {
             Self::Address(p) => PointerOpCode::Address(p.ty, p.checked, p.unroll_factor),
@@ -283,7 +294,8 @@ struct Handle {
     native: Option<Variable>,
 }
 
-struct PointerLowering {
+/// Lower pointer values to the logical storage ABI, either before or after SSA.
+pub struct PointerValueLowering {
     origins: Vec<Origin>,
     reachable: HashMap<Variable, Vec<usize>>,
     handles: HashMap<Variable, Handle>,
@@ -318,8 +330,9 @@ fn walk(
     Ok(())
 }
 
-impl PointerLowering {
-    fn new(scope: &Scope) -> Result<Self, String> {
+impl PointerValueLowering {
+    /// Validate pointer definitions and collect their reachable storage origins.
+    pub fn new(scope: &Scope) -> Result<Self, String> {
         let index_ty = Type::new(
             scope
                 .resolve_type::<usize>()
@@ -431,6 +444,9 @@ impl PointerLowering {
                     VariableKind::LocalConst { .. } => VariableKind::LocalConst {
                         id: scope.allocator.new_local_index(),
                     },
+                    VariableKind::Versioned { .. } => VariableKind::LocalConst {
+                        id: scope.allocator.new_local_index(),
+                    },
                     _ => panic!("pointer value must be local"),
                 };
                 Variable::new(kind, ty)
@@ -450,6 +466,14 @@ impl PointerLowering {
                 native,
             }
         })
+    }
+
+    /// Return the storage selector, element offset, and optional native address for a value.
+    pub fn components(&mut self, scope: &Scope, var: Variable) -> Vec<Variable> {
+        let handle = self.handle(scope, var);
+        let mut components = vec![handle.origin, handle.index];
+        components.extend(handle.native);
+        components
     }
 
     fn cast(scope: &mut Scope, input: Variable, ty: Type) -> Variable {
@@ -620,7 +644,8 @@ impl PointerLowering {
         Ok(())
     }
 
-    fn lower_scope(&mut self, scope: &mut Scope) -> Result<(), String> {
+    /// Replace pointer operations recursively using the collected storage origins.
+    pub fn lower_scope(&mut self, scope: &mut Scope) -> Result<(), String> {
         let original = core::mem::take(&mut scope.instructions);
         scope.locals.retain(|var| !var.ty.is_pointer());
         for inst in original {
@@ -829,7 +854,7 @@ impl Scope {
         if !present {
             return Ok(());
         }
-        let mut lowering = PointerLowering::new(self)?;
+        let mut lowering = PointerValueLowering::new(self)?;
         lowering.lower_scope(self)?;
         // Remove only replaced pointer declarations from the allocator's mutable pool.
         for var in self.allocator.take_variables() {

@@ -146,6 +146,11 @@ impl OptimizerPass for EliminateDeadBlocks {
         let post_order = opt.analysis::<PostOrder>().forward();
         for node in opt.node_ids() {
             if !post_order.contains(&node) {
+                for block in opt.node_ids() {
+                    if opt.program[block].scope_join == Some(node) {
+                        opt.program[block].scope_join = None;
+                    }
+                }
                 opt.program.remove_node(node);
                 changes.inc();
             }
@@ -232,6 +237,7 @@ fn merge_blocks(opt: &mut Optimizer) -> bool {
             new_block.ops.borrow_mut().extend(b_ops);
             new_block.ops.borrow_mut().extend(s_ops);
             *new_block.control_flow.borrow_mut() = successor.control_flow.borrow().clone();
+            new_block.scope_join = successor.scope_join;
             new_block.block_use.extend(block.block_use);
             new_block.block_use.extend(successor.block_use);
 
@@ -299,6 +305,9 @@ pub fn update_references(opt: &mut Optimizer, from: NodeIndex, to: NodeIndex) {
     update(&mut opt.ret);
 
     for node in opt.node_ids() {
+        if let Some(join) = opt.program[node].scope_join.as_mut() {
+            update(join);
+        }
         for phi in opt.program[node].phi_nodes.borrow_mut().iter_mut() {
             for entry in phi.entries.iter_mut() {
                 update(&mut entry.block);

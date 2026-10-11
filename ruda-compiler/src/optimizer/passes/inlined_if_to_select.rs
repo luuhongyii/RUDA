@@ -1,6 +1,6 @@
 use std::mem::take;
 
-use ruda_core::ir::{Instruction, Operator, Select};
+use ruda_core::ir::{Instruction, Operation, Operator, PointerOp, Select};
 use petgraph::{graph::NodeIndex, visit::EdgeRef};
 
 use crate::optimizer::{AtomicCounter, ControlFlow, Optimizer, passes::update_references};
@@ -46,14 +46,17 @@ impl OptimizerPass for EmptyBranchToSelect {
                                 let then = phi.entries.iter().find(|it| it.block == then).unwrap();
                                 let or_else =
                                     phi.entries.iter().find(|it| it.block == or_else).unwrap();
-                                Instruction::new(
-                                    Operator::Select(Select {
-                                        cond,
-                                        then: then.value,
-                                        or_else: or_else.value,
-                                    }),
-                                    phi.out,
-                                )
+                                let select = Select {
+                                    cond,
+                                    then: then.value,
+                                    or_else: or_else.value,
+                                };
+                                let operation: Operation = if phi.out.ty.is_pointer() {
+                                    PointerOp::Select(select).into()
+                                } else {
+                                    Operator::Select(select).into()
+                                };
+                                Instruction::new(operation, phi.out)
                             })
                             .collect::<Vec<Instruction>>();
                         selects.extend(
@@ -64,6 +67,7 @@ impl OptimizerPass for EmptyBranchToSelect {
                         opt.program[block].ops.borrow_mut().extend(selects);
                         let merge_successors = opt.successors(merge);
                         let merge_control = opt.program[merge].control_flow.borrow().clone();
+                        let scope_join = opt.program[merge].scope_join;
 
                         let edges_to_remove = opt
                             .program
@@ -83,6 +87,7 @@ impl OptimizerPass for EmptyBranchToSelect {
                             opt.program.add_edge(block, merge_successor, 0);
                         }
                         *opt.program[block].control_flow.borrow_mut() = merge_control;
+                        opt.program[block].scope_join = scope_join;
                         opt.invalidate_structure();
                         update_references(opt, merge, block);
                         return true;
