@@ -162,6 +162,21 @@ pub struct Problem {
     /// False when a reliable driver/build identity cannot be established.
     pub persistent: bool,
 }
+#[derive(Clone, Copy)]
+pub(super) struct ProblemView<'a> {
+    pub(super) scope: Scope,
+    pub(super) operation: &'a str,
+    pub(super) environment: &'a str,
+    pub(super) workload: &'a str,
+    pub(super) execution_context: &'a str,
+    pub(super) persistent: bool,
+}
+impl<'a> From<&'a Problem> for ProblemView<'a> {
+    fn from(problem: &'a Problem) -> Self {
+        Self { scope: problem.scope, operation: &problem.operation, environment: &problem.environment,
+            workload: &problem.workload, execution_context: &problem.execution_context, persistent: problem.persistent }
+    }
+}
 /// Stable candidate identity and its declared eligibility/scratch requirement.
 #[derive(Debug, Clone)]
 pub struct Candidate {
@@ -274,28 +289,36 @@ fn append_field(out: &mut String, part: &str) {
     out.push_str(part);
 }
 
-fn append_fields(out: &mut String, parts: &[&str]) {
+struct ByteCounter(usize);
+impl fmt::Write for ByteCounter {
+    fn write_str(&mut self, text: &str) -> fmt::Result { self.0 += text.len(); Ok(()) }
+}
+
+fn append_candidate(out: &mut String, candidate: CandidateView<'_>) {
     use std::fmt::Write;
-    let length = parts.iter().map(|part| {
-        part.len() + 1 + part.len().checked_ilog10().map_or(1, |digits| digits as usize + 1)
+    let mut tag_length = ByteCounter(0);
+    let _ = write!(tag_length, "{:?}/{}", candidate.workspace_bytes, candidate.eligible);
+    let length = [candidate.name.len(), candidate.revision.len(), tag_length.0].into_iter().map(|length| {
+        length + 1 + length.checked_ilog10().map_or(1, |digits| digits as usize + 1)
     }).sum::<usize>();
     let _ = write!(out, "{length}:");
-    for part in parts { append_field(out, part); }
+    append_field(out, candidate.name);
+    append_field(out, candidate.revision);
+    let _ = write!(out, "{}:{:?}/{}", tag_length.0, candidate.workspace_bytes, candidate.eligible);
 }
 /// Encode the full workload, ordered candidate manifest, reference and numerical policy.
 /// This returns identity text, not a cryptographic hash or proof of correctness.
 pub fn cache_key(problem: &Problem, candidates: &[Candidate], reference: usize, policy: &StackPolicy) -> String {
-    cache_key_candidates(problem, candidates, reference, policy)
+    cache_key_candidates(problem.into(), candidates, reference, policy)
 }
 
-pub(super) fn cache_key_candidates<C: CandidateSource>(problem: &Problem, candidates: &[C], reference: usize, policy: &StackPolicy) -> String {
+pub(super) fn cache_key_candidates<C: CandidateSource>(problem: ProblemView<'_>, candidates: &[C], reference: usize, policy: &StackPolicy) -> String {
     let mut manifest = String::new();
     for c in candidates {
-        let c = c.view();
-        append_fields(&mut manifest, &[c.name, c.revision, &std::format!("{:?}/{}", c.workspace_bytes, c.eligible)]);
+        append_candidate(&mut manifest, c.view());
     }
-    fields(&["ruda-stack-autotune-v1", &std::format!("{:?}", problem.scope), &problem.operation, &problem.environment, &problem.workload,
-        &problem.execution_context, &reference.to_string(), &manifest,
+    fields(&["ruda-stack-autotune-v1", &std::format!("{:?}", problem.scope), problem.operation, problem.environment, problem.workload,
+        problem.execution_context, &reference.to_string(), &manifest,
         &policy.accuracy_key()])
 }
 /// Sort positive finite ratios in place and return their median.

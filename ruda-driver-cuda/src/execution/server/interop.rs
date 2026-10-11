@@ -46,6 +46,31 @@ fn ready(value:CUresult)->Result<u64,ServerError> {
     if value==CUresult::CUDA_ERROR_NOT_READY { Ok(0) } else { status(value)?;Ok(1) }
 }
 impl CudaServer {
+    pub(crate) fn interop_native_scope<T, F>(&mut self, id: u64, operation: F)
+        -> Result<T, ServerError>
+    where
+        F: FnOnce(crate::interop::NativeScope) -> Result<T, String>,
+    {
+        self.set_current_checked()?;
+        let stream = self.interop_stream(id)?;
+        status(unsafe { cuStreamSynchronize(stream) })?;
+        let scope = crate::interop::NativeScope {
+            context: self.ctx.context as usize,
+            stream: stream as usize,
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(scope)));
+        // Drain even on a callback error/panic before releasing callback-owned
+        // host data. Report both failures when CUDA also reports an error.
+        let sync = status(unsafe { cuStreamSynchronize(stream) });
+        match (result, sync) {
+            (Ok(Ok(value)), Ok(())) => Ok(value),
+            (Ok(Err(reason)), Ok(())) => Err(error(&reason)),
+            (Ok(Ok(_)), Err(cuda)) => Err(cuda),
+            (Ok(Err(reason)), Err(cuda)) => Err(error(&format!("{reason}; drain: {cuda:?}"))),
+            (Err(_), sync) => Err(error(&format!("external CUDA callback panicked; drain: {sync:?}"))),
+        }
+    }
+
     fn interop_stream(&mut self,id:u64)->Result<CUstream,ServerError> {
         let stream_id=self.interop.stream(id)?;
         let mut command=self.command_no_inputs(stream_id,StreamErrorMode { ignore:false,flush:true })?;

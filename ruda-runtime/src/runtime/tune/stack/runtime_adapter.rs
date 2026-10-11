@@ -1,5 +1,5 @@
 use super::*;
-use super::policy::CandidateView;
+use super::policy::{CandidateView, ProblemView};
 use crate::runtime::{backend::Runtime, client::ComputeClient, tune::{AutotuneKey, AutotuneOutput, TunableSet, TuneInputs, AutotuneError}};
 use std::{any::type_name, path::PathBuf, string::{String, ToString}, sync::{Arc, OnceLock}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}, vec::Vec};
 
@@ -35,14 +35,17 @@ pub struct RuntimeEnvironment {
 /// Deployment tags must be set before first use; live mutation is not supported.
 /// Missing identity yields session-only caching rather than a fabricated driver version.
 pub fn runtime_environment<R: Runtime>(client: &ComputeClient<R>) -> RuntimeEnvironment {
+    runtime_environment_shared(client).as_ref().clone()
+}
+fn runtime_environment_shared<R: Runtime>(client: &ComputeClient<R>) -> Arc<RuntimeEnvironment> {
     use std::{any::TypeId, collections::BTreeMap, sync::RwLock};
     type Key = (TypeId, u16, u16, u64);
-    static ENVIRONMENTS: OnceLock<RwLock<BTreeMap<Key, RuntimeEnvironment>>> = OnceLock::new();
+    static ENVIRONMENTS: OnceLock<RwLock<BTreeMap<Key, Arc<RuntimeEnvironment>>>> = OnceLock::new();
     let id = client.device_id();
     let key = (TypeId::of::<R>(), id.type_id, id.index_id, client.properties_fingerprint());
     let cache = ENVIRONMENTS.get_or_init(|| RwLock::new(BTreeMap::new()));
     if let Some(env) = cache.read().unwrap_or_else(|p| p.into_inner()).get(&key).cloned() { return env; }
-    let env = probe_environment(client);
+    let env = Arc::new(probe_environment(client));
     let mut cache = cache.write().unwrap_or_else(|p| p.into_inner());
     // Device/runtime metadata is immutable after initialization. Keep this memo bounded.
     if cache.len() < 256 { cache.insert(key, env.clone()); }
@@ -150,10 +153,12 @@ pub fn try_execute_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: Autot
     let reference = set.stack_reference().ok_or_else(|| autotune_error(name, "no explicit reference/workload signature was registered"))?;
     if reference >= set.len() { return Err(autotune_error(name, "reference index out of range")); }
     let key = set.generate_key(&input);
-    let env = runtime_environment(client);
-    let problem = Problem { scope: if name.contains("fusion") { Scope::Graph } else { Scope::Operator }, operation: fields(&[name, device_id, set.stack_checksum_ref()]), environment: env.fingerprint,
-        workload: set.stack_workload(&input).ok_or_else(|| autotune_error(name, "no exact workload signature"))?,
-        execution_context: env.execution_context, persistent: env.persistent };
+    let env = runtime_environment_shared(client);
+    let scope = if name.contains("fusion") { Scope::Graph } else { Scope::Operator };
+    let operation = fields(&[name, device_id, set.stack_checksum_ref()]);
+    let workload = set.stack_workload(&input).ok_or_else(|| autotune_error(name, "no exact workload signature"))?;
+    let problem = ProblemView { scope, operation: &operation, environment: &env.fingerprint,
+        workload: &workload, execution_context: &env.execution_context, persistent: env.persistent };
     // Enumerate EVERY eligible priority group. Group order remains a useful bounded-search
     // heuristic but a first valid group no longer terminates the search.
     let mut indices = std::vec![reference]; let mut plan = set.plan(&key);
@@ -166,7 +171,7 @@ pub fn try_execute_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: Autot
     // Cache hits must retain normal asynchronous execution. TrialRunner fences before every
     // validation/measurement; do NOT synchronize ordinary requests just to read this cache.
     let mut trials = RuntimeTrials { client: client.clone(), set: &set, key: &key, input: &input, indices: &indices, timing: tuner.policy().timing };
-    let decision = tuner.select_candidates(&problem, &candidates, 0, &mut trials).map_err(|e| autotune_error(name, &e.to_string()))?;
+    let decision = tuner.select_candidates(problem, &candidates, 0, &mut trials).map_err(|e| autotune_error(name, &e.to_string()))?;
     let output = set.fastest(indices[decision.index]).execute(input);
     if output.is_err() { tuner.invalidate(&decision, true); }
     output
