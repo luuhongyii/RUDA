@@ -213,12 +213,18 @@ impl SystemInfo {
             }
         }
         if use_cuda && matches!(self.os, Os::Linux) {
-            build.define("RUDA_TCH_NCCL", None);
+            build.define("RUDA_TCH_CUDA_PEER", None);
             let cuda_root = env_var_rerun("CUDA_HOME").or_else(|_| env_var_rerun("CUDA_PATH"))
                 .map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/usr/local/cuda"));
             build.include(cuda_root.join("include"));
+            println!("cargo:rustc-link-search=native={}", cuda_root.join("lib64").display());
         }
         build.compile("ruda-tch-distributed");
+        if use_cuda && matches!(self.os, Os::Linux) {
+            println!("cargo:rustc-link-search=native={}", self.libtorch_lib_dir.display());
+            println!("cargo:rustc-link-lib=c10_cuda");
+            println!("cargo:rustc-link-lib=cudart");
+        }
     }
 }
 

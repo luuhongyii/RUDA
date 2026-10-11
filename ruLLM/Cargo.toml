@@ -16,7 +16,8 @@ cann = ["dep:ruda-driver-cann", "rublas/cann", "rudnn/cann"]
 amd = ["dep:ruda-driver-hip", "ruda-tensor/hip", "ruda-tensor-device/autotune"]
 nvidia = ["ruda-tensor-device/cuda", "ruda-tensor-device/autotune", "dep:ruda-driver-cuda"]
 nvidia-ptx = ["nvidia", "ruda-driver-cuda/direct-ptx"]
-serving = ["dep:axum", "dep:tokio", "dep:async-stream", "dep:minijinja", "dep:minijinja-contrib"]
+serving = ["dep:axum", "dep:tokio", "dep:async-stream", "dep:minijinja", "dep:minijinja-contrib", "dep:base64", "dep:reqwest"]
+structured-output = ["serving", "dep:anyhow", "dep:llguidance", "dep:toktrie", "dep:toktrie_hf_tokenizers"]
 libtorch = ["dep:ruda-tensor-tch", "dep:tch"]
 tensor-parallel = ["ruda-tensor/distributed", "ruda-tensor-device/distributed", "ruda-tensor-tch?/distributed"]
 expert-parallel = ["tensor-parallel"]
@@ -48,6 +49,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"]
 async-stream = { version = "0.3", optional = true }
 minijinja = { version = "2", features = ["json", "builtins"], optional = true }
 minijinja-contrib = { version = "2", features = ["pycompat"], optional = true }
+base64 = { version = "0.22.1", optional = true }
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
+anyhow = { version = "1", optional = true }
+llguidance = { version = "=1.2.0", default-features = false, features = ["lark"], optional = true }
+toktrie = { version = "=1.4.0", optional = true }
+toktrie_hf_tokenizers = { version = "=1.2.0", optional = true }
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 libjpeg-turbo-rs = "=0.8.0"
 tokenizers = { version = "0.22.2", default-features = false, features = ["onig"] }
