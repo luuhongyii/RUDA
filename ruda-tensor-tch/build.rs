@@ -199,6 +199,27 @@ impl SystemInfo {
             }
         };
     }
+
+    fn make_distributed(&self, use_cuda: bool) {
+        let mut build = cc::Build::new();
+        build.cpp(true).pic(true).warnings(false)
+            .includes(&self.libtorch_include_dirs)
+            .file("src/distributed.cpp");
+        match self.os {
+            Os::Windows => { build.flag("/std:c++17"); }
+            Os::Linux | Os::Macos => {
+                build.flag("-std=c++17")
+                    .flag(format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi));
+            }
+        }
+        if use_cuda && matches!(self.os, Os::Linux) {
+            build.define("RUDA_TCH_NCCL", None);
+            let cuda_root = env_var_rerun("CUDA_HOME").or_else(|_| env_var_rerun("CUDA_PATH"))
+                .map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/usr/local/cuda"));
+            build.include(cuda_root.join("include"));
+        }
+        build.compile("ruda-tch-distributed");
+    }
 }
 
 fn check_out_dir() -> Option<PathBuf> {
@@ -221,9 +242,21 @@ fn main() {
             si_lib.join("libtorch_hip.so").exists() || si_lib.join("torch_hip.dll").exists();
 
         system_info.make(use_cuda, use_hip);
+        if env::var_os("CARGO_FEATURE_DISTRIBUTED").is_some() {
+            system_info.make_distributed(use_cuda);
+        }
         gpu_found = use_cuda || use_hip;
     } else {
         SystemInfo::make_cpu();
+        if env::var_os("CARGO_FEATURE_DISTRIBUTED").is_some() {
+            let mut build = cc::Build::new();
+            build.cpp(true).file("src/distributed.cpp");
+            build.flag(if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") { "/std:c++17" } else { "-std=c++17" });
+            build.compile("ruda-tch-distributed");
+        }
+    }
+    if env::var_os("CARGO_FEATURE_DISTRIBUTED").is_some() {
+        println!("cargo:rerun-if-changed=src/distributed.cpp");
     }
     let check_file = PathBuf::from(out_dir).join("tch_gpu_check.rs");
     if gpu_found {

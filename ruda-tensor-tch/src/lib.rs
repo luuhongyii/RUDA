@@ -8,6 +8,8 @@ mod backend;
 mod element;
 mod ops;
 mod tensor;
+#[cfg(feature = "distributed")]
+pub mod distributed;
 
 pub use backend::*;
 pub use element::*;

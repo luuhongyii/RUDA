@@ -83,8 +83,11 @@ impl<E: TchElement> FloatTensorOps<Self> for LibTorch<E> {
                 TensorData::new(values, shape)
             }
             tch::Kind::BFloat16 => {
-                let values = Vec::<bf16>::try_from(&tensor).unwrap();
-                TensorData::new(values, shape)
+                let numel = tensor.tensor.numel();
+                let mut bytes = vec![0u8; numel * 2];
+                tensor.tensor.f_copy_data_u8(&mut bytes, numel)
+                    .map_err(|error| ExecutionError::Generic { reason: error.to_string() })?;
+                TensorData::from_bytes_vec(bytes, shape, DType::BF16)
             }
             _ => panic!("Not a valid float kind"),
         })
@@ -576,5 +579,32 @@ impl<E: TchElement> FloatTensorOps<Self> for LibTorch<E> {
 
     fn float_is_inf(tensor: FloatTensor<Self>, _out_dtype: BoolDType) -> BoolTensor<Self> {
         TchTensor::new(tensor.tensor.isinf())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bf16_readback_preserves_original_bits_and_logical_views() {
+        type B = LibTorch<bf16>;
+        let bits = [0x0000, 0x8000, 0x3f80, 0x3f81, 0x0001, 0x7f80, 0xff80, 0x7fc1];
+        let original = TensorData::new(bits.map(bf16::from_bits).to_vec(), [2, 4]);
+        let tensor = B::float_from_data(original.clone(), &LibTorchDevice::Cpu);
+        let restored = ruda_tensor::read_sync(B::float_into_data(tensor.clone())).unwrap();
+        assert_eq!(restored.dtype, DType::BF16);
+        assert_eq!(restored.shape, original.shape);
+        assert_eq!(restored.bytes, original.bytes);
+
+        let view = B::float_swap_dims(tensor, 0, 1);
+        let restored = ruda_tensor::read_sync(B::float_into_data(view)).unwrap();
+        let expected = TensorData::new(
+            [bits[0], bits[4], bits[1], bits[5], bits[2], bits[6], bits[3], bits[7]]
+                .map(bf16::from_bits).to_vec(), [4, 2],
+        );
+        assert_eq!(restored.dtype, DType::BF16);
+        assert_eq!(restored.shape, expected.shape);
+        assert_eq!(restored.bytes, expected.bytes);
     }
 }
