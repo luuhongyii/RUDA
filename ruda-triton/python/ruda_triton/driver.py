@@ -10,6 +10,8 @@ Two device modes:
 * ``ruda`` (``RUDA_TRITON_DEVICE=ruda``): tensors live on the RUDA PrivateUse1 device
   (``ruda_torch``). Kernels run on the native stream of RUDA's current stream; RUDA work
   queued on that stream is flushed first, so Triton kernels are ordered with RUDA kernels.
+* ``gx1`` (``RUDA_TRITON_DEVICE=gx1``): kernels are compiled to GX-ISA and run on the GX1
+  functional model; tensors are CPU tensors, copied to the model around every launch.
 """
 from __future__ import annotations
 
@@ -36,8 +38,8 @@ CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES = 8
 
 def device_mode() -> str:
     mode = os.environ.get("RUDA_TRITON_DEVICE", "cuda")
-    if mode not in ("cuda", "ruda"):
-        raise RuntimeError(f"RUDA_TRITON_DEVICE must be 'cuda' or 'ruda', not {mode!r}")
+    if mode not in ("cuda", "ruda", "gx1"):
+        raise RuntimeError(f"RUDA_TRITON_DEVICE must be 'cuda', 'ruda' or 'gx1', not {mode!r}")
     return mode
 
 
@@ -184,9 +186,101 @@ class RudaLauncher:
             launch_exit_hook(launch_metadata)
 
 
+def _scalar_bits(value, ty: str) -> int:
+    if ty in ("f32", "fp32"):
+        return struct.unpack("<I", struct.pack("<f", value))[0]
+    if ty in ("f16", "fp16"):
+        return struct.unpack("<H", struct.pack("<e", value))[0]
+    if ty in ("bf16", ):
+        bits = struct.unpack("<I", struct.pack("<f", value))[0]
+        return ((bits + 0x7fff + ((bits >> 16) & 1)) >> 16) & 0xffff
+    if ty in ("f64", "fp64"):
+        raise NotImplementedError("GX-ISA gap: f64 kernel arguments")
+    return int(value) & 0xFFFF_FFFF_FFFF_FFFF
+
+
+class GxUtils:
+
+    def load_binary(self, name, kernel, shared, device):
+        from . import gx1
+        source = kernel.decode() if isinstance(kernel, bytes) else kernel
+        handle, info = gx1.compile_kernel(source)
+        return None, handle, info["registers"], info["spilled_values"], 1024
+
+    def unload_module(self, module):
+        pass
+
+    def get_device_properties(self, device):
+        return {"max_shared_mem": 128 * 1024, "multiprocessor_count": 1, "sm_clock_rate": 0, "mem_clock_rate": 0,
+                "mem_bus_width": 0, "warpSize": 32}
+
+
+class GxLauncher:
+    """Copies the storage of every tensor argument to the functional model, launches, and copies
+    the storages back."""
+
+    def __init__(self, src, metadata):
+        signature = list(src.signature.values())
+        kinds = iter(tuple(k) for k in metadata.ruda_arg_kinds)
+        self.plan = [None if t == "constexpr" else next(kinds) for t in signature]
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+        from . import gx1
+        if launch_enter_hook is not None:
+            launch_enter_hook(launch_metadata)
+        storages, pointers, scalars = {}, [], []
+        try:
+            for plan, arg in zip(self.plan, args):
+                if plan is None:
+                    continue
+                kind, ty = plan
+                if kind != "ptr":
+                    scalars.append(_scalar_bits(arg, ty))
+                    continue
+                storage = arg.untyped_storage()
+                base, nbytes = storage.data_ptr(), storage.nbytes()
+                if base not in storages:
+                    address = gx1.alloc(nbytes)
+                    storages[base] = (address, nbytes)
+                    gx1.write(address, base, nbytes)
+                pointers.append(storages[base][0] + arg.data_ptr() - base)
+            gx1.launch(function, (gridX, gridY, gridZ), pointers, scalars)
+            for base, (address, nbytes) in storages.items():
+                gx1.read(address, base, nbytes)
+        finally:
+            for address, _ in storages.values():
+                gx1.free(address)
+        if launch_exit_hook is not None:
+            launch_exit_hook(launch_metadata)
+
+
+class _GxDeviceInterface:
+
+    @staticmethod
+    def synchronize(*args, **kwargs):
+        pass
+
+    @staticmethod
+    def current_device():
+        return 0
+
+    @staticmethod
+    def device_count():
+        return 1
+
+
 class RudaDriver(GPUDriver):
 
     def __init__(self):
+        if device_mode() == "gx1":
+            self.utils = GxUtils()
+            self.launcher_cls = GxLauncher
+            self.get_current_device = lambda: 0
+            self.set_current_device = lambda device: None
+            self.get_current_stream = lambda device=None: 0
+            self.get_device_capability = lambda device=0: (0, 0)
+            return
         self.utils = RudaUtils()
         self.launcher_cls = RudaLauncher
         super().__init__()
@@ -206,17 +300,23 @@ class RudaDriver(GPUDriver):
         return major.value, minor.value
 
     def get_current_target(self):
+        if device_mode() == "gx1":
+            return GPUTarget(BACKEND, "gx1", 32)
         major, minor = self.get_device_capability(self.get_current_device())
         return GPUTarget(BACKEND, major * 10 + minor, 32)
 
     def get_active_torch_device(self):
         import torch
+        if device_mode() == "gx1":
+            return torch.device("cpu")
         if device_mode() == "ruda":
             _ruda_torch()
             return torch.device("ruda", 0)
         return torch.device("cuda", self.get_current_device())
 
     def get_device_interface(self):
+        if device_mode() == "gx1":
+            return _GxDeviceInterface
         if device_mode() == "ruda":
             return _ruda_torch()
         import torch
@@ -226,7 +326,7 @@ class RudaDriver(GPUDriver):
     def is_active():
         if os.environ.get("TRITON_DEFAULT_BACKEND") != BACKEND:
             return False
-        if device_mode() == "ruda":
+        if device_mode() in ("ruda", "gx1"):
             return True
         torch = sys.modules.get("torch")
         if torch is None:

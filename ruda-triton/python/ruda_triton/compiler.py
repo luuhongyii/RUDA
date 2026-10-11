@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional, Tuple
 from triton._C.libtriton import ir, passes
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 
+from . import gx1
 from .lower import lower
 
 BACKEND = "ruda"
@@ -214,6 +215,12 @@ def takes_over_cuda() -> bool:
     return os.environ.get("TRITON_DEFAULT_BACKEND") == BACKEND and not _PROBING_OFFICIAL
 
 
+def takes_over_cpu() -> bool:
+    """On the GX1 functional model, tensors are CPU tensors, so Triton kernels Inductor compiles for
+    the "cpu" target (``cpu_backend="triton"``) run on GX1."""
+    return takes_over_cuda() and os.environ.get("RUDA_TRITON_DEVICE") == gx1.TARGET
+
+
 def _yield_cuda_target():
     try:
         from triton.backends.nvidia.compiler import CUDABackend
@@ -237,17 +244,21 @@ class RudaBackend(BaseBackend):
 
     @staticmethod
     def supports_target(target: GPUTarget):
-        return target.backend == BACKEND or (target.backend == "cuda" and takes_over_cuda())
+        return target.backend == BACKEND or (target.backend == "cuda" and takes_over_cuda()) or (
+            target.backend == "cpu" and takes_over_cpu())
 
     def __init__(self, target: GPUTarget) -> None:
+        if target.backend == "cpu":
+            target = GPUTarget(BACKEND, gx1.TARGET, 32)
         super().__init__(target)
-        self.binary_ext = "ptx"
+        self.gx = target.arch == gx1.TARGET
+        self.binary_ext = "gxsimt" if self.gx else "ptx"
 
     def get_target_name(self, options) -> str:
         return f"{BACKEND}:{self.target.arch}"
 
     def parse_options(self, opts) -> Any:
-        args = {"arch": f"sm{self.target.arch}"}
+        args = {"arch": gx1.TARGET if self.gx else f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in RudaOptions.__dataclass_fields__ if k in opts and opts[k] is not None})
         args["debug"] = False
         args["sanitize_overflow"] = False
@@ -289,8 +300,8 @@ class RudaBackend(BaseBackend):
     def make_simt(self, mod, metadata, opt):
         ttir = mod.str_nodebug()
         layouts = official_reduce_layouts(ttir, opt.num_warps, opt.num_stages, self.target.arch) \
-            if "tt.reduce" in ttir else None
-        kernel, arg_kinds = lower(ttir, opt.num_warps, opt.enable_fp_fusion, layouts)
+            if "tt.reduce" in ttir and not self.gx else None
+        kernel, arg_kinds = lower(ttir, opt.num_warps, opt.enable_fp_fusion, layouts, gx=self.gx)
         externs = kernel.pop("externs")
         if externs:
             entries = tuple(sorted((name, *sig) for name, sig in externs.items()))
@@ -317,16 +328,33 @@ class RudaBackend(BaseBackend):
         metadata["profile_scratch_align"] = 1
         return compiled["ptx"]
 
+    def make_gx(self, src, metadata, opt):
+        """Compiles the SIMT kernel to GX-ISA once to validate it; the binary stays SIMT JSON,
+        recompiled by the driver when the kernel is loaded."""
+        _, info = gx1.compile_kernel(src)
+        metadata["shared"] = info["shared"]
+        metadata["ruda_threads"] = info["threads"]
+        metadata["ruda_gx1"] = info
+        metadata["global_scratch_size"] = 0
+        metadata["global_scratch_align"] = 1
+        metadata["profile_scratch_size"] = 0
+        metadata["profile_scratch_align"] = 1
+        return src
+
     def add_stages(self, stages, options, language=Language.TRITON):
         if language != Language.TRITON:
             raise NotImplementedError("the Ruda backend compiles Triton (not Gluon) kernels")
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["simt"] = lambda src, metadata: self.make_simt(src, metadata, options)
-        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options)
+        if self.gx:
+            stages["gxsimt"] = lambda src, metadata: self.make_gx(src, metadata, options)
+        else:
+            stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):
         from . import __version__
         here = Path(__file__).parent
         sources = "".join(_file_hash(str(here / f)) for f in ("lower.py", "ttir.py", "compiler.py"))
-        return f"ruda-{__version__}-{_file_hash(compiler_binary())}-{hashlib.sha256(sources.encode()).hexdigest()}-{self.target.arch}"
+        tool = gx1.library_path() if self.gx else compiler_binary()
+        return f"ruda-{__version__}-{_file_hash(tool)}-{hashlib.sha256(sources.encode()).hexdigest()}-{self.target.arch}"
