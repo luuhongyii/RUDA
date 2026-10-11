@@ -75,4 +75,3 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 - [Contributing](CONTRIBUTING.md): reporting issues and development conventions.
 
 For a first project, follow the quickstart, programming guide, and relevant library guide. Consult the compiler and API references when developing backends or kernels.
-

@@ -69,4 +69,3 @@ Von Ihrem ersten GPU-Kernel bis hin zu Rechenbibliotheken, Tensortraining und lo
 - [Beitrag leisten](CONTRIBUTING.md): Probleme und Entwicklungskonventionen melden.
 
 Befolgen Sie für ein erstes Projekt die Schnellstartanleitung, die Programmieranleitung und die entsprechende Bibliotheksanleitung. Konsultieren Sie bei der Entwicklung von Backends oder Kernels die Compiler- und API-Referenzen.
-

@@ -196,6 +196,31 @@ See the [ruCCL guide](libraries/ruccl.md) for transport entry points. [rust-asce
 
 API reference: [Optimizers](../../ruda-optim/src/optim/mod.rs), [Training records](../../ruda-optim/src/training.rs).
 
+### Muon and Muon + AdamW parameter groups
+
+Use `MuonConfig` for complete, nonempty two-dimensional hidden weight matrices. `MuonAdamWConfig::new().init(&model, muon_parameters)` selects Muon parameters by explicit `ParamId` values and routes the remainder to AdamW. Do not select embeddings or output heads merely because they are matrices; biases and normalization parameters also belong outside the Muon group.
+
+Obtain gradients with `GradientsParams::from_grads(loss.backward(), &model)`, then call `try_step_with_lrs(muon_lr, adamw_lr, model, gradients)` and retain the returned model. The rates are independent. With `Optimizer::step(lr, ...)`, Muon uses `lr` and AdamW uses `lr * adamw_lr_ratio`, whose default is `0.015`. Select `MuonMomentumMode::Ema`, `with_stable_normalization(true)` and `MuonMatrixLayout::InputOutput` explicitly; stable normalization requires FP32 parameters, gradients and momentum.
+
+Save model and optimizer state together and preserve the original `ParamId` values, grouping and configuration on restore; `try_load_record` rejects incompatible state. The caller unscales and checks finite gradients before updates and coordinates skip decisions across replicas. See [Muon configuration](../../ruda-optim/src/optim/muon/mod.rs) and [grouped optimizer](../../ruda-optim/src/optim/muon/grouped.rs). Run the [complete Host training example](../../ruda-optim/examples/muon_training.rs):
+
+```bash
+cargo run --release --locked -p ruda-optim --example muon-training -- 20
+```
+
+### Fused AdamW and gradient checks/group clipping
+
+These are explicitly invoked low-level `RudaTensor<R>` interfaces. They do not automatically replace the model optimizer above or the PyTorch optimizer below.
+
+| `ruda-optim` feature | Interface and use |
+| --- | --- |
+| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../ruda-optim/src/fused_adamw/device.rs): supply parameters, gradients, optional momentum state, `AdamWOptions` and `StepControl`. Parameters/moments are FP32; gradients support F32/F16/BF16. Inputs require contiguous layouts and the same device/queue; outputs are separate parameter/state buffers. |
+| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../ruda-optim/src/fused_adamw/guard_device.rs): supply an `AdamWEntry` group and `GradientGuardOptions`. After FP32 unscaling, check NaN/Inf, compute one L2 norm for the selected single-device/single-queue group, and clip updates with a common coefficient. |
+
+`StepControl::gradient_scale` is a finite positive loss scale, shared throughout an accumulation window; `skip_update` explicitly skips updates. `max_norm=None` disables clipping but retains finite checks. `NonFinitePolicy::Skip` skips parameters, decay and step advancement for the whole group; `Error` returns before submitting updates. This norm is not a distributed cross-rank global norm.
+
+Statistics wait for compact readback, but parameter updates remain asynchronous. Confirm successful device completion before accepting parameter/momentum outputs or saving state. These interfaces do not manage dynamic loss scaling, and the gradient-check path does not support graph capture.
+
 ## Native PyTorch training on `ruda:0`
 
 This is separate from the Rust `Autodiff<Cuda<...>>` examples above. Prepare matching Rust and C++ components from the same source, built locally or from a compatible precompiled bundle: base ABI 10, training API 4, router API 1, paged-backward API 2 and graph API 3. See the [native PyTorch guide](../../ruda-torch/README.md) and [API contracts](native-pytorch-api.md).

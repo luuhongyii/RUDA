@@ -196,6 +196,31 @@ fn restore_training(
 
 接口参考：[优化器](../../ruda-optim/src/optim/mod.rs)、[训练记录](../../ruda-optim/src/training.rs)。
 
+### Muon 与 Muon + AdamW 参数分组
+
+`MuonConfig` 用于完整、非空的二维隐藏层权重矩阵。使用 `MuonAdamWConfig::new().init(&model, muon_parameters)` 按明确的 `ParamId` 选择 Muon 参数，其余参数交给 AdamW；不要仅按二维形状选择 embedding 或输出 head，bias 和归一化参数也不属于 Muon 组。
+
+用 `GradientsParams::from_grads(loss.backward(), &model)` 取得梯度，再调用 `try_step_with_lrs(muon_lr, adamw_lr, model, gradients)`，接收返回的新模型。两个学习率独立；使用 `Optimizer::step(lr, ...)` 时，Muon 使用 `lr`，AdamW 使用 `lr * adamw_lr_ratio`，默认比例为 `0.015`。`MuonMomentumMode::Ema`、`with_stable_normalization(true)` 和 `MuonMatrixLayout::InputOutput` 均需显式选择；稳定范数选项要求 FP32 参数、梯度和动量。
+
+保存模型与优化器状态，恢复时保留原 `ParamId`、分组和配置；`try_load_record` 拒绝不兼容状态。调用方负责更新前反缩放、检查非有限梯度，以及在各副本间统一跳步决定。接口见 [Muon 配置](../../ruda-optim/src/optim/muon/mod.rs)和[分组优化器](../../ruda-optim/src/optim/muon/grouped.rs)。[完整 Host 训练示例](../../ruda-optim/examples/muon_training.rs)可直接运行：
+
+```bash
+cargo run --release --locked -p ruda-optim --example muon-training -- 20
+```
+
+### 融合 AdamW 与梯度检测／全组裁剪
+
+以下为显式调用的底层 `RudaTensor<R>` 接口，不自动替换上面的模型优化器或下面的 PyTorch 优化器。
+
+| `ruda-optim` feature | 接口与用法 |
+| --- | --- |
+| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../ruda-optim/src/fused_adamw/device.rs)：传入参数、梯度、可选动量状态、`AdamWOptions` 和 `StepControl`；参数／动量为 FP32，梯度支持 F32/F16/BF16，要求连续布局、相同设备与执行队列，返回独立的参数和状态输出。 |
+| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../ruda-optim/src/fused_adamw/guard_device.rs)：传入 `AdamWEntry` 参数组及 `GradientGuardOptions`，在 FP32 反缩放后检查 NaN/Inf，对所选单设备／单队列参数组计算一个 L2 范数，并使用共同系数裁剪后更新。 |
+
+`StepControl::gradient_scale` 接收有限正 loss scale；整个累积窗口使用同一 scale，`skip_update` 显式控制跳步。`max_norm=None` 不裁剪但仍检测非有限值；`NonFinitePolicy::Skip` 跳过整组的参数、权重衰减和步数更新，`Error` 在提交更新前返回错误。该范数不是跨 rank 的分布式全局范数。
+
+梯度统计会等待紧凑数据读回，参数更新仍为异步；确认设备完成成功后再接收参数／动量输出或保存状态。这些接口不自动管理动态 loss scale，梯度检测路径不支持 graph capture。
+
 ## 在 `ruda:0` 上进行原生 PyTorch 训练
 
 这条路径与上面的 Rust `Autodiff<Cuda<...>>` 示例分开。准备同一源码的匹配 Rust／C++ 组件，可自行构建或使用兼容预编译包：基础 ABI 10、training API 4、router API 1、paged-backward API 2、graph API 3。安装见[原生 PyTorch 指南](../../ruda-torch/README.md)，参数契约见 [API 参考](native-pytorch-api.md)。

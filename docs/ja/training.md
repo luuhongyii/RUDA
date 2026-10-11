@@ -146,6 +146,31 @@ fn restore_training(
 
 API 参照: [オプティマイザー](../../ruda-optim/src/optim/mod.rs)、[トレーニング レコード](../../ruda-optim/src/training.rs)。
 
+### Muon と Muon + AdamW のパラメータグループ
+
+`MuonConfig` は完全な、空でない二次元の隠れ層重み行列に使用します。`MuonAdamWConfig::new().init(&model, muon_parameters)` に明示的な `ParamId` を渡し、選択したパラメータを Muon、残りを AdamW に割り当てます。行列という理由だけで embedding や出力 head を選ばず、bias と正規化パラメータも Muon グループから除外します。
+
+`GradientsParams::from_grads(loss.backward(), &model)` で勾配を取得し、`try_step_with_lrs(muon_lr, adamw_lr, model, gradients)` の戻り値を新しいモデルとして保持します。学習率は独立です。`Optimizer::step(lr, ...)` では Muon が `lr`、AdamW が `lr * adamw_lr_ratio` を使い、比率の既定値は `0.015` です。`MuonMomentumMode::Ema`、`with_stable_normalization(true)`、`MuonMatrixLayout::InputOutput` は明示的に選択し、安定したノルム計算には FP32 のパラメータ・勾配・モメンタムが必要です。
+
+モデルとオプティマイザー状態を一緒に保存し、復元時に元の `ParamId`、グループ、設定を維持します。`try_load_record` は非互換状態を拒否します。更新前の逆スケーリング、非有限勾配の検査、レプリカ間のスキップ判断の一致は呼び出し側が担当します。[Muon 設定](../../ruda-optim/src/optim/muon/mod.rs)と[グループ化 API](../../ruda-optim/src/optim/muon/grouped.rs)、[完全な Host 学習例](../../ruda-optim/examples/muon_training.rs)を参照してください。
+
+```bash
+cargo run --release --locked -p ruda-optim --example muon-training -- 20
+```
+
+### 融合 AdamW と勾配検査／グループクリッピング
+
+以下は明示的に呼び出す低水準 `RudaTensor<R>` API です。上記のモデル用、または下記の PyTorch オプティマイザーを自動置換しません。
+
+| `ruda-optim` feature | API と使用方法 |
+| --- | --- |
+| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../ruda-optim/src/fused_adamw/device.rs) にパラメータ、勾配、任意のモメンタム状態、`AdamWOptions`、`StepControl` を渡します。パラメータ／モメンタムは FP32、勾配は F32/F16/BF16。連続配置と同一デバイス／キューが必要で、独立したパラメータ／状態バッファを返します。 |
+| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../ruda-optim/src/fused_adamw/guard_device.rs) に `AdamWEntry` グループと `GradientGuardOptions` を渡します。FP32 逆スケーリング後に NaN/Inf を検査し、単一デバイス／キューの選択グループ全体の L2 ノルムから共通係数でクリッピングして更新します。 |
+
+`StepControl::gradient_scale` は有限の正の loss scale で、蓄積窓全体で同じ値を使います。`skip_update` は明示的な更新スキップです。`max_norm=None` はクリッピングだけを無効化します。`NonFinitePolicy::Skip` はグループ全体のパラメータ・減衰・ステップ更新をスキップし、`Error` は更新送信前にエラーを返します。このノルムは rank 間の分散グローバルノルムではありません。
+
+統計取得は小さなデータの読戻しを待ちますが、パラメータ更新は非同期です。正常なデバイス完了を確認してから出力を採用・保存します。動的 loss scale は管理せず、勾配検査経路は graph capture に対応しません。
+
 ## `ruda:0` 上のネイティブ PyTorch 学習
 
 上記の Rust `Autodiff<Cuda<...>>` とは別の経路です。同じソースの Rust ライブラリと C++ 拡張、または互換性のあるコンパイル済み bundle を使います。基本 ABI 10、training API 4、router API 1、paged-backward API 2、graph API 3 を使用します。[ネイティブ PyTorch ガイド](../../ruda-torch/README.md)と [API 契約](native-pytorch-api.md)を参照してください。
