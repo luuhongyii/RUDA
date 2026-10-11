@@ -4,7 +4,7 @@ use ruda_communication::{
     util::os_shutdown_signal,
     websocket::{WebSocket, WsServer},
 };
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, net::SocketAddr, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 use ruda_tensor::tensor::Device;
@@ -75,16 +75,33 @@ where
             }
         };
 
-        let mut receiver = session_manager.register_responder(id).await;
+        let Some(mut receiver) = session_manager.register_responder(id).await else {
+            log::error!("Session {id} already has a responder");
+            return;
+        };
 
         log::info!("Response handler connection active");
 
         while let Some(mut callback) = receiver.recv().await {
-            let response = callback.recv().await.unwrap();
-            let bytes = rmp_serde::to_vec(&response).unwrap();
+            let Some(response) = callback.recv().await else {
+                log::info!("Processor dropped a pending response for session {id}");
+                break;
+            };
+            let bytes = match rmp_serde::to_vec(&response) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    log::error!("Can't serialize response for session {id}: {err:?}");
+                    break;
+                }
+            };
 
-            socket.send(Message::new(bytes.into())).await.unwrap();
+            if let Err(err) = socket.send(Message::new(bytes.into())).await {
+                log::info!("Response stream error for session {id}: {err:?}");
+                break;
+            }
         }
+        // The responder going away leaves the request side unable to deliver results.
+        session_manager.close(Some(id)).await;
     }
 
     async fn handle_socket_request(
@@ -116,35 +133,34 @@ where
                 }
             };
 
+            // A connection may only close the session it initialized.
             if let Task::Close(id) = task {
-                session_id = Some(id);
+                if session_id != Some(id) {
+                    log::warn!("Rejecting close of session {id} from connection of {session_id:?}");
+                }
                 break;
             }
 
             let (stream, connection_id, task) =
                 match session_manager.stream(&mut session_id, task).await {
-                    Some(val) => val,
-                    None => {
+                    Ok(Some(val)) => val,
+                    Ok(None) => {
                         log::info!("Ops session activated {session_id:?}");
                         continue;
                     }
+                    Err(err) => {
+                        log::warn!("Invalid request for session {session_id:?}: {err:?}");
+                        break;
+                    }
                 };
 
-            match task {
-                ComputeTask::RegisterOperation(op) => {
-                    stream.register_operation(op).await;
-                }
-                ComputeTask::RegisterTensor(id, data) => {
-                    stream.register_tensor(id, data).await;
-                }
-                ComputeTask::ReadTensor(tensor) => {
-                    stream.read_tensor(connection_id, tensor).await;
-                }
-                ComputeTask::SyncBackend => {
-                    stream.sync(connection_id).await;
-                }
+            let result = match task {
+                ComputeTask::RegisterOperation(op) => stream.register_operation(op).await,
+                ComputeTask::RegisterTensor(id, data) => stream.register_tensor(id, data).await,
+                ComputeTask::ReadTensor(tensor) => stream.read_tensor(connection_id, tensor).await,
+                ComputeTask::SyncBackend => stream.sync(connection_id).await,
                 ComputeTask::RegisterTensorRemote(tensor, new_id) => {
-                    stream.register_tensor_remote(tensor, new_id).await;
+                    stream.register_tensor_remote(tensor, new_id).await
                 }
                 ComputeTask::ExposeTensorRemote {
                     tensor,
@@ -153,15 +169,17 @@ where
                 } => {
                     stream
                         .expose_tensor_remote(tensor, count, transfer_id)
-                        .await;
+                        .await
                 }
-                ComputeTask::Seed(seed) => {
-                    stream.seed(seed).await;
-                }
+                ComputeTask::Seed(seed) => stream.seed(seed).await,
                 ComputeTask::DTypeUsage(dtype) => stream.dtype_usage(connection_id, dtype).await,
                 ComputeTask::RegisterGraph(graph) => stream.register_graph(connection_id, graph).await,
                 ComputeTask::ExecuteGraph(graph, bindings) => stream.execute_graph(connection_id, graph, bindings).await,
                 ComputeTask::RemoveGraph(graph) => stream.remove_graph(connection_id, graph).await,
+            };
+            if result.is_err() {
+                log::warn!("Stream of session {session_id:?} stopped, closing.");
+                break;
             }
         }
 
@@ -170,14 +188,27 @@ where
     }
 }
 
-/// Start the server on the given port and [device](Device).
+/// Start the server on the given loopback port and [device](Device).
 pub async fn start_websocket_async<B: BackendIr>(device: Device<B>, port: u16) {
-    let server = WsServer::new(port);
+    start_websocket_on_async::<B>(device, SocketAddr::from(([127, 0, 0, 1], port))).await;
+}
+
+/// Start the server on an explicit address, e.g. `0.0.0.0:3000` to accept other hosts.
+///
+/// The transport has no authentication or TLS; only expose it on trusted networks.
+pub async fn start_websocket_on_async<B: BackendIr>(device: Device<B>, address: SocketAddr) {
+    let server = WsServer::with_address(address);
     RemoteServer::<B, WebSocket>::start(device, server).await;
 }
 
 #[tokio::main]
-/// Start the server on the given port and [device](Device).
+/// Start the server on the given loopback port and [device](Device).
 pub async fn start_websocket<B: BackendIr>(device: Device<B>, port: u16) {
     start_websocket_async::<B>(device, port).await;
+}
+
+#[tokio::main]
+/// Start the server on an explicit address and [device](Device).
+pub async fn start_websocket_on<B: BackendIr>(device: Device<B>, address: SocketAddr) {
+    start_websocket_on_async::<B>(device, address).await;
 }

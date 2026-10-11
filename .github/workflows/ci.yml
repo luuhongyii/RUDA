@@ -91,6 +91,7 @@ jobs:
             key: compiler
             command: |
               RUDA_PTX_TEST_OUTPUT="$RUNNER_TEMP/ptx" cargo test --locked -p ruda-core -p ruda-compiler --lib --features ruda-core/tensor-host-storage,ruda-core/compilation-cache
+              cargo check --locked -p ruda-compiler --no-default-features --features spirv --lib
               python3 -m pip install --quiet --target "$RUNNER_TEMP/ptx-tools" nvidia-cuda-nvcc-cu12==12.6.85
               count=0
               for source in "$RUNNER_TEMP"/ptx/training_math_*.ptx; do
@@ -118,6 +119,9 @@ jobs:
               cargo test --locked -p ruda-model --lib full_axis_topk
               cargo test --locked -p ruda-autodiff --lib ops::qtensor::tests::transaction_readback
               cargo test --locked -p ruda-autodiff --lib ops::cross_tests
+          - name: Remote tensor server tests
+            key: remote
+            command: cargo test --locked -p ruda-tensor-remote --lib
           - name: ruLLM host regression tests
             key: rullm-host
             command: |

@@ -11,8 +11,18 @@ on:
         default: '8.0'
         description: Match the actual GPU and driver; this is not auto-detection
   pull_request:
+    # Host guards read sources from every crate listed here; keep in sync with tools/gpu_validation.
     paths:
       - 'ruda-driver-cuda/**'
+      - 'ruda-driver-hip/**'
+      - 'ruda-kernel/**'
+      - 'ruda-kernel-macros/**'
+      - 'ruda-compiler/**'
+      - 'ruda-communication/**'
+      - 'ruda-torch/**'
+      - 'ruBLAS/**'
+      - 'ruDNN/**'
+      - 'ruLLM/**'
       - 'tools/gpu_validation/**'
       - '.github/workflows/native-graph-v21.yml'
 permissions:
