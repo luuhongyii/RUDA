@@ -23,6 +23,9 @@ Thumbs.db
 /docs/internal/
 /docs/hardware/
 /docs/archive/
+/docs/zh/native-gpu-v*.md
+/docs/zh/native-graph-v*.md
+/docs/zh/validation-v*.md
 /rtl/
 /fpga/
 /asic/

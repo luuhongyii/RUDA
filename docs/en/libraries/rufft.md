@@ -30,8 +30,6 @@ implementation limits, **not** verified support or performance guarantees.
 Kernel correctness, driver compilation and speed still require real GPU
 acceptance with `tools/gpu_validation/validate_v16.py`.
 
-See `docs/zh/native-gpu-v16.md` for patch scope and validation boundaries.
-
 
 [Compute libraries](README.md) · [Tensor framework](../tensor-framework.md) · [中文](../../zh/libraries/rufft.md) | [日本語](../../ja/libraries/rufft.md) | [Deutsch](../../de/libraries/rufft.md) | [Русский](../../ru/libraries/rufft.md)
 
