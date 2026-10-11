@@ -322,7 +322,7 @@ def load_tensor_parallel_state_dict(model, state, group, *, strict=True):
 
 
 class GradientOverlap:
-    """Ordered asynchronous NCCL/Gloo buckets with post-accumulation hooks."""
+    """Ordered asynchronous buckets with post-accumulation hooks."""
     def __init__(self, group, *, global_weight, normalized, bucket_bytes):
         if group._schema is None:
             raise RuntimeError('initialize replicas before starting gradient overlap')
@@ -363,7 +363,10 @@ class GradientOverlap:
                       if p.grad is None else p.grad.detach().float().reshape(-1) for p in bucket]
             work = torch.cat(pieces)
             alias = self.group._alias(work)
-            request = dist.all_reduce(alias, group=self.group.group, async_op=True)
+            if getattr(self.group, '_ruccl', None) is not None:
+                request = self.group._ruccl.sum_async(alias)
+            else:
+                request = dist.all_reduce(alias, group=self.group.group, async_op=True)
             self.works.append((request, work, alias, bucket))
             self.next_bucket += 1
 
