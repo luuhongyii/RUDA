@@ -50,13 +50,13 @@ default-features = false
 
 [dependencies.ruda-tensor-rocm]
 path = "../ruda-tensor-rocm"
-version = "0.21.60"
+version = "0.21.61"
 optional = true
 default-features = false
 
 [dependencies.ruda-tensor-router]
 path = "../ruda-tensor-router"
-version = "0.21.53"
+version = "0.21.54"
 optional = true
 default-features = false
 
@@ -69,7 +69,7 @@ default-features = false
 
 [dependencies.ruda-tensor-wgpu]
 path = "../ruda-tensor-wgpu"
-version = "0.21.60"
+version = "0.21.61"
 optional = true
 default-features = false
 
@@ -93,7 +93,7 @@ optional = true
 optional = true
 default-features = false
 path = "../ruda-tensor-device"
-version = "0.21.61"
+version = "0.21.62"
 features = [ "cuda",]
 
 [dependencies.ruda-fusion]
@@ -101,11 +101,11 @@ features = [ "std", "tracing",]
 optional = true
 default-features = false
 path = "../ruda-fusion"
-version = "0.21.60"
+version = "0.21.61"
 
 [dependencies.ruda-kernel]
 path = "../ruda-kernel"
-version = "0.1.37"
+version = "0.1.38"
 default-features = false
 optional = true
 features = [ "frontend",]

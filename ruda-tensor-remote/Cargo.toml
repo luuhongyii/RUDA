@@ -88,7 +88,7 @@ optional = true
 
 [dependencies.ruda-tensor]
 path = "../ruda-tensor"
-version = "0.21.61"
+version = "0.21.62"
 default-features = false
 features = [ "graph", "std", "serde",]
 
@@ -106,19 +106,19 @@ features = [ "std",]
 
 [dependencies.ruda-test-runtime]
 path = "../ruda-test-runtime"
-version = "0.1.88"
+version = "0.1.89"
 default-features = false
 optional = true
 
 [dependencies.ruda-tensor-router]
 path = "../ruda-tensor-router"
-version = "0.21.53"
+version = "0.21.54"
 default-features = false
 features = [ "default",]
 
 [dependencies.ruda-communication]
 path = "../ruda-communication"
-version = "0.21.58"
+version = "0.21.59"
 default-features = false
 features = [ "data-service", "websocket",]
 
