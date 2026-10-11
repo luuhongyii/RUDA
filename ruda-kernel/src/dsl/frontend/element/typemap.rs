@@ -589,7 +589,7 @@ impl<Marker: 'static> num_traits::Float for DynamicScalar<Marker> {
 
     fn round(self) -> Self {
         match self.val {
-            ConstantValue::Float(val) => Self::from_f64(val.round()),
+            ConstantValue::Float(val) => Self::from_f64(val.round_ties_even()),
             _ => self,
         }
     }

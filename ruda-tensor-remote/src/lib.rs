@@ -65,8 +65,8 @@ mod tests {
             3010,
         ));
 
-        let remote_device_1 = super::RemoteDevice::new("ws://localhost:3000");
-        let remote_device_2 = super::RemoteDevice::new("ws://localhost:3010");
+        let remote_device_1 = super::RemoteDevice::new("ws://127.0.0.1:3000");
+        let remote_device_2 = super::RemoteDevice::new("ws://127.0.0.1:3010");
 
         // Some random input
         let input_shape = [1, 28, 28];
@@ -86,6 +86,45 @@ mod tests {
         let input = input.to_device(&remote_device_1);
         let numbers: Vec<f32> = input.to_data().to_vec().unwrap();
         assert_eq!(numbers, numbers_expected);
+
+        rt.shutdown_background();
+    }
+
+    /// Two independent clients both number their tensors from zero; the server must keep them
+    /// apart instead of letting the second registration replace the first.
+    #[test]
+    pub fn test_independent_clients_do_not_share_tensors() {
+        use crate::{RemoteClient, RunnerClient, shared::RemoteProtocol};
+        use ruda_communication::Protocol;
+        use ruda_tensor::TensorData;
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.spawn(crate::server::start_websocket_async::<Host>(
+            Default::default(),
+            3020,
+        ));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        type Client = <RemoteProtocol as Protocol>::Client;
+        let device = super::RemoteDevice::new("ws://127.0.0.1:3020");
+        let client_a = RemoteClient::init::<Client>(device.clone());
+        let client_b = RemoteClient::init::<Client>(device);
+
+        let a = client_a.register_tensor_data(TensorData::new(vec![1.0f32, 2.0], [2]));
+        let b = client_b.register_tensor_data(TensorData::new(vec![9.0f32, 8.0], [2]));
+        let a2 = client_a.register_tensor_data(TensorData::new(vec![3.0f32], [1]));
+
+        let read = |client: &RemoteClient, tensor: ruda_tensor_router::RouterTensor<RemoteClient>| {
+            let data = rt.block_on(client.read_tensor_async(tensor.into_ir())).unwrap();
+            data.to_vec::<f32>().unwrap()
+        };
+        assert_eq!(read(&client_b, b), vec![9.0, 8.0]);
+        assert_eq!(read(&client_a, a), vec![1.0, 2.0]);
+        assert_eq!(read(&client_a, a2), vec![3.0]);
 
         rt.shutdown_background();
     }

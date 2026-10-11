@@ -108,9 +108,9 @@ fn main() {
 }
 ```
 
-先执行 `cargo run --bin server`，再在第二个终端执行 `cargo run --bin client`。便捷服务端绑定的是 `0.0.0.0:3000`，而非仅回环地址；内置传输没有配置认证或 TLS。上面的客户端 URL 用于同机连接。
+先执行 `cargo run --bin server`，再在第二个终端执行 `cargo run --bin client`。便捷服务端绑定的是 `127.0.0.1:3000`，只接受同机客户端。需要接受其他主机连接时，改用 `start_websocket_on::<Host>(HostDevice, "0.0.0.0:3000".parse().unwrap())`；内置传输没有配置认证或 TLS，只应在可信网络中对外开放。每个客户端连接拥有独立会话：一个客户端注册的张量和计算图对其他客户端不可见，并在该客户端断开时释放。
 
-`start_websocket` 自带 Tokio runtime，并阻塞至服务端退出。已有异步 runtime 时使用 `start_websocket_async::<B>(device, port).await`。服务端后端必须实现 `BackendIr`；切换服务端后端也需要对应依赖与硬件。远程张量执行和 ruCCL 分布式集合通信不是同一接口。
+`start_websocket` 自带 Tokio runtime，并阻塞至服务端退出。已有异步 runtime 时使用 `start_websocket_async::<B>(device, port).await` 或 `start_websocket_on_async::<B>(device, address).await`。服务端后端必须实现 `BackendIr`；切换服务端后端也需要对应依赖与硬件。远程张量执行和 ruCCL 分布式集合通信不是同一接口。
 
 ## 包装层与职责边界
 

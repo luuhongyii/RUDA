@@ -108,9 +108,9 @@ fn main() {
 }
 ```
 
-Run `cargo run --bin server`, then run `cargo run --bin client` in a second terminal. The convenience server binds `0.0.0.0:3000`, not only loopback; its built-in transport does not configure authentication or TLS. The client URL above is for a same-machine connection.
+Run `cargo run --bin server`, then run `cargo run --bin client` in a second terminal. The convenience server binds `127.0.0.1:3000`, so only same-machine clients can connect. To accept other hosts, call `start_websocket_on::<Host>(HostDevice, "0.0.0.0:3000".parse().unwrap())` instead; the built-in transport does not configure authentication or TLS, so only expose it on trusted networks. Each client connection gets its own session: tensors and graphs registered by one client are not visible to another, and they are released when that client disconnects.
 
-`start_websocket` owns its Tokio runtime and blocks until the server stops. Inside an existing async runtime, use `start_websocket_async::<B>(device, port).await`. The server backend must implement `BackendIr`; replacing the server's backend also requires its dependencies and hardware. Remote execution is distinct from ruCCL distributed collectives.
+`start_websocket` owns its Tokio runtime and blocks until the server stops. Inside an existing async runtime, use `start_websocket_async::<B>(device, port).await` or `start_websocket_on_async::<B>(device, address).await`. The server backend must implement `BackendIr`; replacing the server's backend also requires its dependencies and hardware. Remote execution is distinct from ruCCL distributed collectives.
 
 ## Choosing wrappers and boundaries
 

@@ -1,6 +1,7 @@
 """Host math/layout/source contracts; never claim these execute Rust/PTX."""
 from pathlib import Path
 import importlib.util
+import re
 import numpy as np
 import pytest
 import torch
@@ -91,15 +92,25 @@ def test_default_and_strict_capability_policy():
     text=(ROOT/'ruBLAS/src/tensor_grouped/mod.rs').read_text()
     wrapper=text.split('pub unsafe fn grouped_matmul_nt_backward_segmented<R')[1].split('/// Opt-in')[0]
     assert 'GroupedStrategy::Scalar' in wrapper
-    before_alloc=text.split('let dinput=empty_device_contiguous_dtype')[0]
-    assert 'strategy == GroupedStrategy::TensorCore && !cooperative' in before_alloc
+    selected=text.split('pub unsafe fn grouped_matmul_nt_backward_segmented_selected<R')[1]
+    # Scalar never takes the cooperative path; an unavailable explicit TensorCore request errors
+    # before the full-size gradient buffers are allocated.
+    assert 'strategy != GroupedStrategy::Scalar' in selected.split('let cooperative')[1].split(';')[0]
+    full_alloc='Shape::from([m,k]),input.dtype'
+    assert full_alloc in selected
+    assert 'strategy == GroupedStrategy::TensorCore && !cooperative' in selected.split(full_alloc)[0]
     assert 'props.plane_size_min == 32 && props.plane_size_max == 32' in text
     assert 'matmul.cmma.contains(&cfg)' in text
-    assert 'DType::F32);' in text
+    # Weight gradients are FP32 for every input dtype, including the empty-expert case.
+    assert 'Shape::from([e,n,k]),DType::F32)' in selected
+    assert 'Shape::from([0,n,k]),DType::F32)' in selected
 
 def test_expert_chain_reuses_public_strategy():
     text=(ROOT/'ruDNN/src/moe/experts.rs').read_text()
-    assert text.count('grouped_matmul_nt_backward_segmented_with_strategy(')==3
+    calls=re.findall(r'grouped_matmul_nt_backward_segmented_selected\(([^;]*?GroupedGradientSelection)',text,re.S)
+    # down, gate and up projections all forward the caller's strategy.
+    assert len(calls)==3
+    assert all(re.search(r'\bstrategy\s*,\s*GroupedGradientSelection$',call) for call in calls)
     assert 'self.backward_with_strategy(grad_output, GroupedStrategy::Scalar)' in text
     assert 'let activated=gate_raw.copy()' not in text
     assert 'kernels::experts::swiglu_out::launch' in text

@@ -4,7 +4,7 @@ use ruda_communication::{
     util::os_shutdown_signal,
     websocket::{WebSocket, WsServer},
 };
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, net::SocketAddr, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 use ruda_tensor::tensor::Device;
@@ -92,7 +92,10 @@ where
                 _ = socket.recv() => break,
                 response = callback.recv() => response,
             };
-            let Some(response) = response else { break };
+            let Some(response) = response else {
+                log::info!("Processor dropped a pending response for session {id}");
+                break;
+            };
             let bytes = match rmp_serde::to_vec(&response) {
                 Ok(bytes) => bytes,
                 Err(err) => {
@@ -106,6 +109,7 @@ where
             }
         }
         drop(receiver);
+        // The responder going away leaves the request side unable to deliver results.
         session_manager.close(Some(id)).await;
     }
 
@@ -138,6 +142,7 @@ where
                 }
             };
 
+            // A connection may only close the session it initialized.
             if let Task::Close(id) = task {
                 if session_id != Some(id) {
                     log::warn!("Rejecting close of session {id} from connection of {session_id:?}");
@@ -192,16 +197,29 @@ where
     }
 }
 
-/// Start the server on the given port and [device](Device).
+/// Start the server on the given loopback port and [device](Device).
 pub async fn start_websocket_async<B: BackendIr>(device: Device<B>, port: u16) {
-    let server = WsServer::new(port);
+    start_websocket_on_async::<B>(device, SocketAddr::from(([127, 0, 0, 1], port))).await;
+}
+
+/// Start the server on an explicit address, e.g. `0.0.0.0:3000` to accept other hosts.
+///
+/// The transport has no authentication or TLS; only expose it on trusted networks.
+pub async fn start_websocket_on_async<B: BackendIr>(device: Device<B>, address: SocketAddr) {
+    let server = WsServer::with_address(address);
     RemoteServer::<B, WebSocket>::start(device, server).await;
 }
 
 #[tokio::main]
-/// Start the server on the given port and [device](Device).
+/// Start the server on the given loopback port and [device](Device).
 pub async fn start_websocket<B: BackendIr>(device: Device<B>, port: u16) {
     start_websocket_async::<B>(device, port).await;
+}
+
+#[tokio::main]
+/// Start the server on an explicit address and [device](Device).
+pub async fn start_websocket_on<B: BackendIr>(device: Device<B>, address: SocketAddr) {
+    start_websocket_on_async::<B>(device, address).await;
 }
 
 #[cfg(test)]

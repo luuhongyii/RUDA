@@ -19,7 +19,9 @@ def test_noop_does_not_call_native_update():
     # v19 preflights all nodes and commits only selected changed positions.
     assert s.index('plan_batch(')<s.index('for position in changed')
     assert s.index('for position in changed')<s.index('prepared.push((position, descriptor))')
-    assert s.index('if prepared.is_empty() && !replay { return Ok(()); }')<s.index('self.ctx.unsafe_set_current')
+    # command() binds the device context, so a no-op batch must return before it.
+    assert s.index('if prepared.is_empty() && !replay { return Ok(()); }')<s.index('self.command(')
+    assert 'unsafe_set_current' not in s
     assert s.index('for (position, descriptor) in prepared')<s.index('command.write_pinned_to_existing')
     assert s.index('for (position, descriptor) in prepared')<s.index('set_scalar_constants')
     assert 'if replay { entry.native.launch' in s

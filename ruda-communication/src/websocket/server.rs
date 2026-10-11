@@ -16,7 +16,7 @@ use futures::StreamExt;
 
 #[derive(Clone, Debug)]
 pub struct WsServer {
-    port: u16,
+    address: SocketAddr,
     router: Router<()>,
 }
 
@@ -25,11 +25,24 @@ pub struct WsServerChannel {
 }
 
 impl WsServer {
+    /// Listen on the loopback interface only.
     pub fn new(port: u16) -> Self {
+        Self::with_address(SocketAddr::from(([127, 0, 0, 1], port)))
+    }
+
+    /// Listen on an explicit address, e.g. `0.0.0.0:<port>` to accept other hosts.
+    ///
+    /// The transport has no authentication or TLS; only expose it on trusted networks.
+    pub fn with_address(address: SocketAddr) -> Self {
         Self {
-            port,
+            address,
             router: Router::new(),
         }
+    }
+
+    /// Listen on every interface.
+    pub fn all_interfaces(port: u16) -> Self {
+        Self::with_address(SocketAddr::from(([0, 0, 0, 0], port)))
     }
 }
 
@@ -43,7 +56,7 @@ impl ProtocolServer for WsServer {
     {
         init_logging();
 
-        let address = format!("0.0.0.0:{}", self.port);
+        let address = self.address;
         log::info!("Starting server {address}");
 
         let listener = tokio::net::TcpListener::bind(address).await?;

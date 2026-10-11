@@ -59,7 +59,7 @@ pub mod glcompute {
 
     impl<T: SpirvTarget> TargetExtensions<T> for GLCompute {
         fn round(b: &mut SpirvCompiler<T>, ty: Word, input: Word, out: Word) {
-            glsl(b, ty, out, GlslStd450Op::Round, &[input]);
+            glsl(b, ty, out, GlslStd450Op::RoundEven, &[input]);
         }
 
         fn f_abs(b: &mut SpirvCompiler<T>, ty: Word, input: Word, out: Word) {
