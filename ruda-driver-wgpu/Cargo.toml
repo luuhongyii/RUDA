@@ -180,7 +180,7 @@ features = [ "runtime", "runtime-channel-mutex",]
 
 [dependencies.ruda-kernel]
 path = "../ruda-kernel"
-version = "0.1.36"
+version = "0.1.37"
 default-features = false
 features = [ "frontend", "lowering-wgsl",]
 
