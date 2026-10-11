@@ -62,7 +62,7 @@ Do not mutate saved inputs/weights before backward. `create_graph=True` is rejec
 
 `GradScaler(init_scale=65536., growth_factor=2., backoff_factor=0.5, growth_interval=2000, min_scale=2**-24, max_scale=2**24)` is RUDA's scaler, not `torch.amp.GradScaler`. Its scale bounds are positive, growth factor greater than one, backoff in `(0,1)` and interval a positive integer. Use `scale(loss).backward()`, `step(optimizer)`, `update()` on one optimizer cycle; the loss must contain one FP32 element on RUDA. `step` accepts RUDA AdamW, Muon or MuonAdamW without a closure or extra arguments. There is no `unscale_()` or multi-optimizer cycle. `get_scale()` reads the current scale; snapshot scaler state only between completed cycles.
 
-For Python Muon parameter grouping, Newton–Schulz options and checkpoint rules, see the [architecture and Python Muon guide](architecture-training.md#python-muon-and-explicit-adamw-exclusions) and [optimizer definitions](../../ruda-torch/python/ruda_torch/optim.py). The separate [Rust Muon guide](muon.md) describes Rust tensor optimizers. Do not interpret a local shard update as full-matrix Muon.
+For Python Muon parameter grouping, Newton–Schulz options and checkpoint rules, see the [architecture and Python Muon guide](architecture-training.md#python-muon-and-explicit-adamw-exclusions) and [optimizer definitions](../../ruda-torch/python/ruda_torch/optim.py). Do not interpret a local shard update as full-matrix Muon.
 
 ## Streams and events
 

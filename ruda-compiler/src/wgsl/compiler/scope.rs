@@ -46,6 +46,10 @@ impl<P: WgslLowering> WgslCompiler<P> {
         out: Option<ruda::Variable>,
         scope: &mut ruda::Scope,
     ) {
+        if let ruda::Operation::TypedMemory(memory) = &operation {
+            let lowered = memory.lower(out).expect("valid typed memory instruction");
+            return self.compile_operation(instructions, lowered.operation, lowered.out, scope);
+        }
         match operation {
             ruda::Operation::Copy(variable) => instructions.push(wgsl::Instruction::Assign {
                 input: self.compile_variable(variable),
@@ -71,6 +75,8 @@ impl<P: WgslLowering> WgslCompiler<P> {
                 self.compile_comment(instructions, content)
             }
             ruda::Operation::NonSemantic(_) => {}
+            ruda::Operation::TypedMemory(_) => unreachable!(),
+            ruda::Operation::Pointer(_) => unreachable!("pointer values are lowered before WGSL emission"),
             ruda::Operation::Barrier(_) => {
                 panic!("Barrier isn't supported on wgpu.")
             }

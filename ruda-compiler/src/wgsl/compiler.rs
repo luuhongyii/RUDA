@@ -59,11 +59,17 @@ impl<P: WgslLowering> ruda_core::compiler::Compiler for WgslCompiler<P> {
 
     fn compile(
         &mut self,
-        shader: kernel::KernelDefinition,
+        mut shader: kernel::KernelDefinition,
         compilation_options: &Self::CompilationOptions,
         mode: ExecutionMode,
         address_type: StorageType,
     ) -> Result<Self::Representation, CompilationError> {
+        shader.validate_typed_memory().map_err(|reason| CompilationError::Validation {
+            reason, backtrace: BackTrace::capture(),
+        })?;
+        shader.body.lower_pointer_values().map_err(|reason| CompilationError::Validation {
+            reason, backtrace: BackTrace::capture(),
+        })?;
         self.compilation_options = *compilation_options;
         self.compile_shader(shader, mode, address_type)
     }

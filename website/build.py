@@ -148,6 +148,7 @@ class Site:
         menu = f'<button class="menu-button" aria-expanded="false" aria-controls="sidebar" data-menu>{t["menu"]} <span aria-hidden="true">☰</span></button>' if sidebar else ""
         return f'''<!doctype html>
 <html lang="{t['html']}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><style>html,body{{background:#101312;color-scheme:dark}}</style>
 <title>{esc(title)} · RUDA</title><meta name="description" content="{esc(description)}"><meta name="theme-color" content="#101312">
 <link rel="canonical" href="{ORIGIN}{route}"><meta property="og:title" content="{esc(title)} · RUDA"><meta property="og:description" content="{esc(description)}"><meta property="og:type" content="website"><meta property="og:url" content="{ORIGIN}{route}">
 <link rel="icon" href="{self.url('assets/favicon.svg')}" type="image/svg+xml"><link rel="stylesheet" href="{self.url('assets/site.css')}"><link rel="stylesheet" href="{self.url('assets/highlight.css')}">

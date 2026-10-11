@@ -22,6 +22,7 @@ pub mod metadata;
 pub mod minifloat;
 pub mod numeric;
 pub mod plane;
+pub mod pointer_value;
 pub mod properties;
 pub mod saturating;
 pub mod sequence;
@@ -135,6 +136,7 @@ macro_rules! testgen_uint {
 #[macro_export]
 macro_rules! testgen_untyped {
     () => {
+        ruda_kernel::dsl::testgen_pointer_value!();
         ruda_kernel::dsl::testgen_launch_untyped!();
 
         ruda_kernel::dsl::testgen_cmma!();

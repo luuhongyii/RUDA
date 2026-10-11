@@ -23,6 +23,13 @@ Thumbs.db
 /docs/internal/
 /docs/hardware/
 /docs/archive/
+/docs/zh/native-gpu-v*.md
+/docs/zh/native-graph-v*.md
+/docs/zh/validation-v*.md
+/docs/*/gradient-guard.md
+/docs/*/fused-adamw.md
+/docs/*/muon.md
+/docs/*/libraries/solver-kernel-optimization.md
 /rtl/
 /fpga/
 /asic/

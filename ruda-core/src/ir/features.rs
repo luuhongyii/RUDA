@@ -205,6 +205,7 @@ impl Features {
                 self.types.storage.contains_key(&storage_type)
             }
             Type::Semantic(semantic_type) => self.types.semantic.contains(&semantic_type),
+            Type::Pointer(pointer) => self.supports_type(pointer.pointee()),
         }
     }
 

@@ -31,6 +31,8 @@ impl Compiler for MlirCompiler {
         mode: ExecutionMode, // TODO support this by adding array bound checking
         addr_type: StorageType,
     ) -> Result<Self::Representation, CompilationError> {
+        kernel.validate_typed_memory().map_err(|reason| CompilationError::Validation { reason, backtrace: BackTrace::capture() })?;
+        kernel.body.lower_pointer_values().map_err(|reason| CompilationError::Validation { reason, backtrace: BackTrace::capture() })?;
         let errors = kernel.body.pop_errors();
         if !errors.is_empty() {
             let mut reason = "Can't compile mlir kernel".to_string();

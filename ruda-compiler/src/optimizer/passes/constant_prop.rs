@@ -62,9 +62,10 @@ impl OptimizerPass for ConstOperandSimplify {
                             op.operation = Operation::Copy(bin_op.lhs);
                             changes.inc();
                         }
-                        // x % 1 == 0, 0 % x == 0
+                        // x % 1 == 0, 0 % x == 0 (integers only)
                         Arithmetic::Modulo(bin_op)
-                            if bin_op.rhs.is_constant(1) || bin_op.lhs.is_constant(0) =>
+                            if bin_op.lhs.ty.is_int()
+                                && (bin_op.rhs.is_constant(1) || bin_op.lhs.is_constant(0)) =>
                         {
                             op.operation = Operation::Copy(op.ty().constant(ConstantValue::Int(0)));
                             changes.inc();
@@ -617,5 +618,66 @@ fn try_const_eval_operator(op: &mut Operator, out_ty: Option<Type>) -> Option<Co
         | Operator::UncheckedIndexAssign(_)
         | Operator::Reinterpret(_)
         | Operator::Select(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod modulo_tests {
+    use super::*;
+    use crate::optimizer::BasicBlock;
+    use ruda_core::ir::{BinaryOperator, ElemType, FloatKind, IntKind, UIntKind};
+
+    fn optimize_modulo(lhs: Variable, rhs: Variable) -> Operation {
+        let mut opt = Optimizer::default();
+        let block = opt.program.add_node(BasicBlock::default());
+        let out = Variable::new(VariableKind::LocalConst { id: 0 }, lhs.ty);
+        opt.program[block].ops.borrow_mut().push(Instruction::new(
+            Arithmetic::Modulo(BinaryOperator { lhs, rhs }), out,
+        ));
+        ConstOperandSimplify.apply_post_ssa(&mut opt, AtomicCounter::default());
+        ConstEval.apply_post_ssa(&mut opt, AtomicCounter::default());
+        let operation = opt.program[block].ops.borrow()[0].operation.clone();
+        operation
+    }
+
+    #[test]
+    fn float_modulo_keeps_fractional_and_special_values() {
+        for kind in [FloatKind::F32, FloatKind::F64] {
+            let ty = Type::scalar(ElemType::Float(kind));
+            for (lhs, rhs) in [(1.5, 1.0), (-1.5, 1.0), (-0.0, 1.0),
+                (0.0, 0.0), (0.0, f64::NAN), (f64::INFINITY, 1.0)] {
+                let Operation::Copy(value) = optimize_modulo(
+                    Variable::constant(ConstantValue::Float(lhs), ty),
+                    Variable::constant(ConstantValue::Float(rhs), ty),
+                ) else { panic!("constant modulo was not evaluated") };
+                let Some(ConstantValue::Float(actual)) = value.as_const() else {
+                    panic!("float modulo produced a non-float constant")
+                };
+                let expected = lhs % rhs;
+                assert!((expected.is_nan() && actual.is_nan())
+                    || actual.to_bits() == expected.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_float_modulo_by_one_is_not_zero() {
+        let ty = Type::scalar(ElemType::Float(FloatKind::F32));
+        assert!(matches!(optimize_modulo(
+            Variable::new(VariableKind::LocalConst { id: 1 }, ty),
+            Variable::constant(ConstantValue::Float(1.0), ty),
+        ), Operation::Arithmetic(Arithmetic::Modulo(_))));
+    }
+
+    #[test]
+    fn integer_modulo_by_one_still_simplifies() {
+        for ty in [Type::scalar(ElemType::Int(IntKind::I32)),
+            Type::scalar(ElemType::UInt(UIntKind::U32))] {
+            let Operation::Copy(value) = optimize_modulo(
+                Variable::new(VariableKind::LocalConst { id: 1 }, ty),
+                ty.constant(ConstantValue::Int(1)),
+            ) else { panic!("integer modulo was not simplified") };
+            assert!(value.is_constant(0));
+        }
     }
 }

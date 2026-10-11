@@ -82,6 +82,19 @@ impl<B: BackendIr> Runner<B> {
         }
     }
 
+    /// Create a runner on the same device with its own, empty tensor and graph context.
+    ///
+    /// Unlike [`Clone`], which shares the context, the forked runner cannot observe or replace
+    /// tensors registered through `self`, even when both use the same [`TensorId`] values.
+    pub fn fork(&self) -> Self {
+        let mut runner = self.clone();
+        runner.context = Arc::new(Mutex::new(RunnerContext {
+            handles: HandleContainer::new(),
+            graphs: BTreeMap::new(),
+        }));
+        runner
+    }
+
     /// Create a runner forwarding collectives to a native distributed backend.
     /// Normal runners do not gain a hidden host-staged fallback.
     #[cfg(feature = "distributed")]

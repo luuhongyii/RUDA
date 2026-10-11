@@ -1,7 +1,7 @@
 [package]
 name = "ruda-compiler"
 readme = "README.md"
-version = "0.1.12"
+version = "0.1.14"
 edition.workspace = true
 description = "Ruda compiler frontends and target backends."
 license-file = "../LICENSE"
@@ -12,7 +12,7 @@ ascend = ["dep:ruda-core", "ruda-core/ir", "ruda-core/compiler-std"]
 ptx = ["optimizer-std", "ruda-core/argument-layout", "ruda-core/ir", "ruda-core/compiler-std", "dep:half"]
 spirv = ["optimizer-default", "ruda-core/argument-layout", "ruda-core/ir-default", "dep:half", "dep:serde", "dep:hashbrown", "dep:bitflags", "dep:rspirv", "dep:spirv"]
 mlir = ["optimizer-std", "ruda-core/argument-layout", "dep:melior"]
-mlir-dump = ["mlir"]
+mlir-dump = ["mlir", "dep:mlir-sys"]
 wgsl = ["dep:ruda-core", "ruda-core/argument-layout", "dep:half"]
 default = ["ptx", "cpp-default"]
 optimizer = [ "dep:ruda-core", "ruda-core/compiler", "dep:float-ord", "dep:log", "dep:num", "dep:petgraph", "dep:smallvec", "dep:stable-vec", "dep:type-map",]
@@ -33,7 +33,7 @@ unsafe_code = "deny"
 
 [dependencies.ruda-core]
 path = "../ruda-core"
-version = "0.1.6"
+version = "0.1.8"
 default-features = false
 optional = true
 
@@ -88,6 +88,10 @@ optional = true
 [dependencies.itertools]
 version = "0.14.0"
 default-features = false
+optional = true
+
+[dependencies.mlir-sys]
+version = "=0.5.0"
 optional = true
 
 [dependencies.melior]

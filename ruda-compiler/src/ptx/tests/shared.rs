@@ -23,6 +23,52 @@ fn shared_kernel(address: UIntKind) -> KernelDefinition {
 }
 
 #[test]
+fn typed_pointer_shared_codegen_matches_legacy() {
+    for address in [UIntKind::U32, UIntKind::U64] {
+        for mode in [ExecutionMode::Checked, ExecutionMode::Unchecked] {
+            let legacy = shared_kernel(address);
+            let mut typed = legacy.clone();
+            for instruction in &mut typed.body.instructions {
+                let (base, index, store) = match &instruction.operation {
+                    Operation::Operator(Operator::Index(op)) => (op.list, op.index, None),
+                    Operation::Operator(Operator::IndexAssign(op)) => {
+                        (instruction.out(), op.index, Some(op.value))
+                    }
+                    _ => continue,
+                };
+                let pointer = TypedPointer {
+                    base,
+                    index,
+                    ty: PointerType {
+                        pointee: base.ty,
+                        address_space: if matches!(base.kind, VariableKind::SharedArray { .. }) {
+                            AddressSpace::Shared
+                        } else {
+                            AddressSpace::Global
+                        },
+                        access: if store.is_some() {
+                            PointerAccess::ReadWrite
+                        } else {
+                            PointerAccess::ReadOnly
+                        },
+                    },
+                    checked: true,
+                    unroll_factor: 1,
+                };
+                instruction.operation = Operation::TypedMemory(match store {
+                    Some(value) => TypedMemory::Store { pointer, value },
+                    None => TypedMemory::Load(pointer),
+                });
+            }
+            let typed = compile(typed, mode, address).unwrap();
+            let legacy = compile(legacy, mode, address).unwrap();
+            assert_eq!(typed.source, legacy.source);
+            assert_eq!(typed.shared_memory_bytes, legacy.shared_memory_bytes);
+        }
+    }
+}
+
+#[test]
 fn shared_liveness_reuses_freed_storage_in_both_address_modes() {
     for address in [UIntKind::U32, UIntKind::U64] {
         let result = compile(shared_kernel(address), ExecutionMode::Checked, address).unwrap();

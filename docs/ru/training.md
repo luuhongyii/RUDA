@@ -146,6 +146,31 @@ fn restore_training(
 
 API Ссылка: [Оптимизаторы](../../ruda-optim/src/optim/mod.rs), [Записи обучения](../../ruda-optim/src/training.rs).
 
+### Muon и группы параметров Muon + AdamW
+
+`MuonConfig` применяется к полным непустым двумерным матрицам весов скрытых слоёв. `MuonAdamWConfig::new().init(&model, muon_parameters)` выбирает параметры Muon по явным значениям `ParamId`, остальные обновляет AdamW. Не выбирайте embedding и выходной head только по двумерной форме; bias и параметры нормализации также не входят в группу Muon.
+
+Получите градиенты через `GradientsParams::from_grads(loss.backward(), &model)`, вызовите `try_step_with_lrs(muon_lr, adamw_lr, model, gradients)` и сохраните возвращённую модель. Скорости обучения независимы. При `Optimizer::step(lr, ...)` Muon использует `lr`, AdamW — `lr * adamw_lr_ratio`; значение отношения по умолчанию — `0.015`. `MuonMomentumMode::Ema`, `with_stable_normalization(true)` и `MuonMatrixLayout::InputOutput` выбираются явно. Стабильная нормализация требует FP32 для параметров, градиентов и momentum.
+
+Сохраняйте модель и оптимизатор вместе, при восстановлении сохраняйте исходные `ParamId`, группы и конфигурацию. `try_load_record` отклоняет несовместимое состояние. Обратное масштабирование, проверка конечности градиентов и согласование пропуска шага между репликами выполняются вызывающим кодом. См. [конфигурацию Muon](../../ruda-optim/src/optim/muon/mod.rs), [групповой оптимизатор](../../ruda-optim/src/optim/muon/grouped.rs) и [полный пример обучения на Host](../../ruda-optim/examples/muon_training.rs).
+
+```bash
+cargo run --release --locked -p ruda-optim --example muon-training -- 20
+```
+
+### Fused AdamW и проверка/групповое ограничение градиентов
+
+Эти явно вызываемые низкоуровневые API используют `RudaTensor<R>` и не заменяют автоматически оптимизатор модели выше или оптимизатор PyTorch ниже.
+
+| Feature `ruda-optim` | Интерфейс и применение |
+| --- | --- |
+| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../ruda-optim/src/fused_adamw/device.rs) принимает параметры, градиенты, необязательное состояние momentum, `AdamWOptions` и `StepControl`. Параметры/momentum — FP32, градиенты — F32/F16/BF16. Нужны непрерывное размещение и одинаковые устройство/очередь; результаты имеют отдельные буферы параметров и состояния. |
+| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../ruda-optim/src/fused_adamw/guard_device.rs) принимает группу `AdamWEntry` и `GradientGuardOptions`. После обратного масштабирования в FP32 проверяет NaN/Inf, вычисляет одну L2-норму выбранной группы на одном устройстве/очереди и ограничивает обновления общим коэффициентом. |
+
+`StepControl::gradient_scale` — конечный положительный loss scale, одинаковый во всём окне накопления; `skip_update` явно пропускает обновления. `max_norm=None` отключает только ограничение нормы. `NonFinitePolicy::Skip` пропускает обновление параметров, decay и счётчика шагов всей группы; `Error` возвращает ошибку до отправки обновлений. Эта норма не является распределённой глобальной нормой между rank.
+
+Статистика ожидает чтения компактных данных, но обновления параметров остаются асинхронными. Принимайте и сохраняйте результаты только после успешного завершения на устройстве. Динамический loss scale не управляется; путь проверки градиентов не поддерживает graph capture.
+
 ## Нативное обучение PyTorch на `ruda:0`
 
 Этот путь отделён от примеров Rust `Autodiff<Cuda<...>>` выше. Используйте библиотеку Rust и расширение C++ из одного исходного состояния либо совместимый готовый bundle: базовый ABI 10, training API 4, router API 1, paged-backward API 2, graph API 3. См. [руководство PyTorch](../../ruda-torch/README.md) и [контракты API](native-pytorch-api.md).

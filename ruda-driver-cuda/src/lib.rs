@@ -74,6 +74,11 @@ mod tests {
 
     pub use half::{bf16, f16};
 
+    #[test]
+    fn test_pointer_value_native_roundtrip() {
+        ruda_kernel::dsl::runtime_tests::pointer_value::test_native::<TestRuntime>();
+    }
+
     ruda_kernel::dsl::testgen_all!(f32: [f16, bf16, f32, f64], i32: [i8, i16, i32, i64], u32: [u8, u16, u32, u64]);
     ruda_kernel::library::testgen!();
     ruda_kernel::library::testgen_tensor_identity!([f16, bf16, f32, u32]);

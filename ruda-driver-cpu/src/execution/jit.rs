@@ -47,6 +47,7 @@ impl MlirEngine {
         shared_memories: SharedMemories,
         addr_type: StorageType,
     ) -> Self {
+        kernel.validate_typed_memory().expect("valid typed memory kernel");
         let registry = DialectRegistry::new();
         register_all_dialects(&registry);
         register_all_passes();

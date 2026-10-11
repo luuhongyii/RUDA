@@ -12,6 +12,7 @@ use crate::spirv::{
 
 impl<T: SpirvTarget> SpirvCompiler<T> {
     pub fn compile_operation(&mut self, inst: Instruction) {
+        let inst = inst.lower_typed_memory().expect("valid typed memory instruction");
         // Setting source loc for non-semantic ops is pointless, they don't show up in a profiler/debugger.
         if !matches!(inst.operation, Operation::NonSemantic(_)) {
             self.set_source_loc(&inst.source_loc);
@@ -38,6 +39,8 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             }
             Operation::Bitwise(operator) => self.compile_bitwise(operator, inst.out, uniform),
             Operation::Operator(operator) => self.compile_operator(operator, inst.out, uniform),
+            Operation::TypedMemory(_) => unreachable!(),
+            Operation::Pointer(_) => unreachable!("pointer values are lowered before SPIR-V emission"),
             Operation::Atomic(atomic) => self.compile_atomic(atomic, inst.out, inst.modes),
             Operation::Branch(_) => unreachable!("Branches shouldn't exist in optimized IR"),
             Operation::Metadata(meta) => self.compile_meta(meta, inst.out, uniform),

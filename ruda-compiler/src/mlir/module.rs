@@ -51,21 +51,15 @@ impl<'a> Module<'a> {
         pass_manager.enable_verifier(true);
         #[cfg(feature = "mlir-dump")]
         if let Ok(dir) = std::env::var("RUDA_DEBUG_MLIR") {
-            use std::path::PathBuf;
-            use melior::{
-                ir::operation::OperationPrintingFlags, pass::PassIrPrintingOptions,
-            };
+            use melior::{ir::operation::OperationPrintingFlags, StringRef};
 
             let dir = dir.to_string() + "/" + &self.name;
-            pass_manager.enable_ir_printing(&PassIrPrintingOptions {
-                before_all: true,
-                after_all: true,
-                module_scope: true,
-                on_change: true,
-                on_failure: true,
-                flags: OperationPrintingFlags::new(),
-                tree_printing_path: PathBuf::from(dir),
-            });
+            unsafe {
+                mlir_sys::mlirPassManagerEnableIRPrinting(
+                    pass_manager.to_raw(), true, true, true, true, true,
+                    OperationPrintingFlags::new().to_raw(), StringRef::new(&dir).to_raw(),
+                );
+            }
         }
         pass_manager.add_pass(pass::transform::create_canonicalizer());
         pass_manager.add_pass(pass::conversion::create_math_to_libm());

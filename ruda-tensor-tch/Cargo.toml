@@ -13,7 +13,7 @@ path = "src/bin/mps.rs"
 [package]
 edition = "2024"
 name = "ruda-tensor-tch"
-version = "0.21.72"
+version = "0.21.73"
 authors = [ "nathanielsimard <nathaniel.simard.42@gmail.com>",]
 build = "build.rs"
 autolib = false
@@ -57,30 +57,30 @@ version = "0.22.0"
 [dependencies.ruccl]
 package = "ruCCL"
 path = "../ruCCL"
-version = "0.21.65"
+version = "0.21.68"
 default-features = false
 features = ["native"]
 optional = true
 
 [dependencies.ruda-tensor]
 path = "../ruda-tensor"
-version = "0.21.59"
+version = "0.21.61"
 default-features = false
 
 [dependencies.ruda-core]
 path = "../ruda-core"
-version = "0.1.6"
+version = "0.1.8"
 default-features = false
 features = [ "serde", "shared-bytes", "tensor-data", "id",]
 
 [dependencies.ruda-tensor-config]
 path = "../ruda-tensor-config"
-version = "0.21.4"
+version = "0.21.6"
 default-features = false
 
 [dependencies.ruda-test-runtime]
 path = "../ruda-test-runtime"
-version = "0.1.85"
+version = "0.1.88"
 default-features = false
 optional = true
 

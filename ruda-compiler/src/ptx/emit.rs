@@ -50,6 +50,8 @@ impl Emitter {
         mode: ExecutionMode,
         address: StorageType,
     ) -> Result<PtxKernel> {
+        kernel.validate_typed_memory().map_err(invalid)?;
+        kernel.body.lower_pointer_values().map_err(invalid)?;
         let errors = kernel.body.pop_errors();
         if !errors.is_empty() {
             return Err(invalid(errors.join("\n")));

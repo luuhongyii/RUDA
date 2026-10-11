@@ -6,6 +6,7 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
         instructions: &mut Vec<Instruction<D>>,
         instruction: gpu::Instruction,
     ) {
+        let instruction = instruction.lower_typed_memory().expect("valid typed memory instruction");
         self.update_debug_loc(instructions, &instruction);
         let out = instruction.out;
         match instruction.operation {
@@ -21,6 +22,8 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
             gpu::Operation::Comparison(op) => self.compile_comparison(op, out, instructions),
             gpu::Operation::Bitwise(op) => self.compile_bitwise(op, out, instructions),
             gpu::Operation::Operator(op) => self.compile_operator(op, out, instructions),
+            gpu::Operation::TypedMemory(_) => unreachable!(),
+            gpu::Operation::Pointer(_) => unreachable!("pointer values are lowered before C++ emission"),
             gpu::Operation::Atomic(op) => self.compile_atomic(op, out, instructions),
             gpu::Operation::Metadata(op) => instructions.push(self.compile_metadata(op, out)),
             gpu::Operation::Branch(val) => self.compile_branch(instructions, val),

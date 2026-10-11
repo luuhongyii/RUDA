@@ -55,4 +55,4 @@ stream capture, automatic model graph extraction, or a concurrency guarantee.
 
 `dependencies()`, `edge_count()`, and `to_dot()` expose the fixed structure without
 printing device addresses or scalar contents. See `examples/native_graph_dag.rs`
-and `docs/zh/native-gpu-v20.md` for contracts, limits, and strict acceptance commands.
+for contracts, limits, and strict acceptance commands.
