@@ -20,7 +20,7 @@ REPO = "https://github.com/shuqi2077/RUDA"
 ORIGIN = "https://shuqi2077.github.io"
 COPY = json.loads((WEB / "content.json").read_text(encoding="utf-8"))
 GUIDES = ["README", "getting-started", "programming-guide", "tensor-framework", "tensor-recipes",
-          "backend-composition", "data-and-storage", "training",
+          "backend-composition", "data-and-storage", "training", "distributed-guide", "ascend-guide",
           "model-inference", "samples", "fused-adamw", "gradient-guard", "muon"]
 REFERENCE = ["api-reference", "compiler-guide", "ptx", "runtime-api", "driver-api", "compatibility", "debugging"]
 PROJECT = ["project", "CONTRIBUTING"]

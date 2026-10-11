@@ -19,7 +19,7 @@ pub(super) fn tensor(view: &View) -> RudaTensor<CudaRuntime> {
         CudaDevice::default(), dtype(view.dtype))
 }
 
-fn check_indices(indices: &View, bound: usize) {
+pub(super) fn check_indices(indices: &View, bound: usize, allow_negative: bool) {
     assert!(indices.dtype == 4 || indices.dtype == 5);
     if indices.len == 0 { return; }
     // Strict validation is the default and preserves deterministic PyTorch-style
@@ -38,8 +38,9 @@ fn check_indices(indices: &View, bound: usize) {
         convert(indices, &widened);
         &widened
     } else { indices };
+    let lower_bound = if allow_negative { -i64::try_from(bound).expect("index bound overflow") } else { 0 };
     let negative = ruprim::elementwise::comparison::lower_elem(
-        tensor(indices), InputScalar::new(0i64, DType::I64), DType::U32);
+        tensor(indices), InputScalar::new(lower_bound, DType::I64), DType::U32);
     let too_large = ruprim::elementwise::comparison::greater_equal_elem(
         tensor(indices), InputScalar::new(i64::try_from(bound).expect("index bound overflow"), DType::I64), DType::U32);
     let invalid = arithmetic::bitwise_or(negative, too_large);
@@ -97,7 +98,7 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
         102..=106 => {
             let axis = scalar as usize;
             let bound = if op <= 103 { a.shape[axis] } else { out.shape[axis] };
-            check_indices(b, bound);
+            check_indices(b, bound, false);
             match op {
                 102 => ruprim::indexing::gather(axis, tensor(a), tensor(b)),
                 103 => ruprim::indexing::select(tensor(a), axis, tensor(b)),

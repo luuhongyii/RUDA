@@ -26,11 +26,13 @@
 - [后端选择与组合](backend-composition.md)：CUDA／ROCm／WGPU 选择、本地路由与远程执行。
 - [数据管线与模型存储](data-and-storage.md)：样本组批、权重保存与检查点格式导入。
 - [训练与状态保存](training.md)：训练步、梯度累积、学习率调度、保存与恢复。
+- [集合通信与训练接入](distributed-guide.md)：peer 注册、显式 rank 所有权、张量适配与梯度同步。
 - [模型加载与推理](model-inference.md)：ruLLM、文本与图片输入、采样、AWQ 和连续批处理。
 
 ## 编译与底层执行
 
 - [编译器指南](compiler-guide.md)：Rust Kernel 前端、IR、CUDA C++／NVRTC 和直接 PTX。
+- [昇腾编译器与 CANN 执行](ascend-guide.md)：Map／行程序、构建物生成、绑定布局与 session 生命周期。
 - [PTX 后端参考](ptx.md)：目标配置、编译产物、支持边界与错误行为。
 
 ## API 参考

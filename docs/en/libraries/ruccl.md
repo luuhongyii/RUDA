@@ -29,6 +29,8 @@ Participants must agree on device counts, use unique peer IDs, and call matching
 
 For multinode execution, configure node counts, global and local addresses, and data-service ports together.
 
+The registered service's global-node path implements AllReduce, but its global `reduce` and `broadcast` methods are not implemented. Local API availability does not imply multi-node support for those calls. For the distinctions between registered peers, explicit rank communicators, and in-process collectives, see [Collective communication and training integration](../distributed-guide.md).
+
 ## 4. Errors and lifecycle
 
 `CollectiveError` covers duplicate or missing registrations, shape mismatches, inconsistent reduction operations or roots, and invalid broadcast sender counts.

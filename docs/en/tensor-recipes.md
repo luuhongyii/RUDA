@@ -109,6 +109,12 @@ Transpose and slicing change logical layout. Do not pass their storage to a low-
 
 The example differentiates the mean of four squares, so its gradient is `2*x/4`. Model parameters, optimizer state, gradient accumulation, and checkpoint restoration are covered in [Training and saving state](training.md).
 
+## Quantization and gradients
+
+Quantized storage and quantization-aware training are different operations. The current autodiff quantization implementation accepts untracked inputs; `quantize` rejects tracked input tensors or tracked scale tensors, and `quantize_dynamic` rejects tracked input tensors. Adding `Autodiff` does not supply the missing quantization gradient rule.
+
+`dequantize` creates an autodiff tensor from the inner backend result; it does not reconnect a gradient path through an earlier quantization operation. Keep this distinction when using quantized inference weights alongside floating-point training. See [quantized autodiff operations](../../ruda-autodiff/src/ops/qtensor.rs).
+
 ## API entry points
 
 - [Tensor creation, shape, slicing, and transfers](../../ruda-tensor/src/api/base.rs).

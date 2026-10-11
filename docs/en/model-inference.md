@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Training](training.md) · [中文](../zh/model-inference.md) | [日本語](../ja/model-inference.md) | [Deutsch](../de/model-inference.md) | [Русский](../ru/model-inference.md)
 
-ruLLM provides model loading, tokenization, cached autoregressive generation, and request scheduling. Its Cargo package is `ruLLM`; its Rust import name is `rullm`.
+ruLLM provides model loading, tokenization, cached autoregressive generation, and request scheduling. Its Cargo package is `ruda-llm`; its Rust import name is `rullm`.
 
 ## Prepare a local model
 
@@ -65,7 +65,7 @@ For an application directory alongside the `RUDA` source directory, use these de
 
 ```toml
 [dependencies]
-rullm = { package = "ruLLM", path = "../RUDA/ruLLM", features = ["nvidia"] }
+rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
 ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
 ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"

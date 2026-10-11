@@ -4,7 +4,7 @@
 
 [ドキュメント](README.md) · [トレーニング](training.md) · [中文](../zh/model-inference.md)
 
-ruLLM は、モデルの読み込み、トークン化、キャッシュされた自己回帰生成、およびリクエストのスケジューリングを提供します。 Cargo パッケージは `ruLLM` です。 Rust インポート名は `rullm` です。
+ruLLM は、モデルの読み込み、トークン化、キャッシュされた自己回帰生成、およびリクエストのスケジューリングを提供します。 Cargo パッケージは `ruda-llm` です。 Rust インポート名は `rullm` です。
 
 ## ローカルモデルの準備
 
@@ -67,7 +67,7 @@ cargo run --release --locked -p ruda-llm --features nvidia-ptx --example qwen35_
 
 ```toml
 [dependencies]
-rullm = { package = "ruLLM", path = "../RUDA/ruLLM", features = ["nvidia"] }
+rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
 ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
 ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"

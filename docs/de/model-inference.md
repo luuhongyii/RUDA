@@ -4,7 +4,7 @@
 
 [Dokumentation](README.md) · [Schulung](training.md) · [中文](../zh/model-inference.md)
 
-ruLLM bietet Modellladen, Tokenisierung, zwischengespeicherte autoregressive Generierung und Anforderungsplanung. Sein Cargo-Paket ist `ruLLM`; Sein Rust-Importname ist `rullm`.
+ruLLM bietet Modellladen, Tokenisierung, zwischengespeicherte autoregressive Generierung und Anforderungsplanung. Sein Cargo-Paket ist `ruda-llm`; Sein Rust-Importname ist `rullm`.
 
 ## Bereiten Sie ein lokales Modell vor
 
@@ -67,7 +67,7 @@ Für ein Anwendungsverzeichnis neben dem Quellverzeichnis `RUDA` verwenden Sie d
 
 ```toml
 [dependencies]
-rullm = { package = "ruLLM", path = "../RUDA/ruLLM", features = ["nvidia"] }
+rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
 ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
 ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"

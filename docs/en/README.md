@@ -26,11 +26,13 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 - [Backend selection and composition](backend-composition.md): CUDA/ROCm/WGPU selection, local routing, and remote execution.
 - [Data pipelines and model storage](data-and-storage.md): batching samples, saving weights, and importing checkpoint formats.
 - [Training and saving state](training.md): training steps, gradient accumulation, learning-rate scheduling, saving, and restoring.
+- [Collective communication and training integration](distributed-guide.md): peer registration, explicit rank ownership, tensor adapters, and gradient synchronization.
 - [Model loading and inference](model-inference.md): ruLLM, text and image inputs, sampling, AWQ, and continuous batching.
 
 ## Compilation and execution
 
 - [Compiler guide](compiler-guide.md): the Rust kernel frontend, IR, CUDA C++/NVRTC, and direct PTX.
+- [Ascend compiler and CANN execution](ascend-guide.md): map/row programs, artifact construction, binding layouts, and session lifecycle.
 - [PTX backend reference](ptx.md): target configuration, compilation output, constraints, and errors.
 
 ## API references
