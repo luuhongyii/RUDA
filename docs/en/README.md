@@ -35,11 +35,13 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 - [LoRA and NF4 fine-tuning](finetuning.md): exact target selection, streamed weights, causal supervision, token-weighted accumulation, adapters and restart checkpoints.
 - [General PyTorch model compiler](model-compiler.md): AOT forward/backward, native partitions, options and cache ownership.
 - [Fixed-address PyTorch subgraphs](static-pytorch-graphs.md): explicit GraphOp plans, output lifetime, scratch reuse and first-order training.
+- [Collective communication and training integration](distributed-guide.md): peer registration, explicit rank ownership, tensor adapters, and gradient synchronization.
 - [Model loading and inference](model-inference.md): ruLLM, text and image inputs, sampling, AWQ, and continuous batching.
 
 ## Compilation and execution
 
 - [Compiler guide](compiler-guide.md): the Rust kernel frontend, IR, CUDA C++/NVRTC, and direct PTX.
+- [Ascend compiler and CANN execution](ascend-guide.md): map/row programs, artifact construction, binding layouts, and session lifecycle.
 - [PTX backend reference](ptx.md): target configuration, compilation output, constraints, and errors.
 - [Shared stack autotuning](stack-autotuning.md): participating operators, offline calibration, timing, cache identity and policy parameters.
 

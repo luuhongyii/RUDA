@@ -35,11 +35,13 @@
 - [LoRA 与 NF4 微调](finetuning.md)：准确目标选择、流式权重、因果监督、token 加权累积、适配器与断点恢复。
 - [通用 PyTorch 模型编译](model-compiler.md)：AOT 前向／反向、原生分段、配置及缓存所有权。
 - [固定地址 PyTorch 子图](static-pytorch-graphs.md)：显式 GraphOp、输出生命周期、工作区复用与一阶训练。
+- [集合通信与训练接入](distributed-guide.md)：peer 注册、显式 rank 所有权、张量适配与梯度同步。
 - [模型加载与推理](model-inference.md)：ruLLM、文本与图片输入、采样、AWQ 和连续批处理。
 
 ## 编译与底层执行
 
 - [编译器指南](compiler-guide.md)：Rust Kernel 前端、IR、CUDA C++／NVRTC 和直接 PTX。
+- [昇腾编译器与 CANN 执行](ascend-guide.md)：Map／行程序、构建物生成、绑定布局与 session 生命周期。
 - [PTX 后端参考](ptx.md)：目标配置、编译产物、支持边界与错误行为。
 - [全栈自动调优](stack-autotuning.md)：已接入算子、离线校准、计时、缓存身份与策略参数。
 

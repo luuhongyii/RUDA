@@ -31,6 +31,8 @@ ruCCL 包含面向张量 Backend 的集合操作、rank 核心与进程内实现
 
 涉及多节点时，节点数量、全局地址、本地地址及数据服务端口等参数需成组配置。
 
+注册服务的 global-node 路径实现了 AllReduce，但其全局 `reduce` 和 `broadcast` 方法未实现。本地 API 可用不代表这两种调用支持多节点。注册 peer、显式 rank 通信器和进程内集合通信的区别见[集合通信与训练接入](../distributed-guide.md)。
+
 ## 4. 错误与生命周期
 
 接口返回 `CollectiveError`，包含注册重复／缺失、shape 不一致、归约操作不一致、root 不一致和广播发送方数量错误等情况。

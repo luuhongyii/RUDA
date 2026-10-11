@@ -20,7 +20,7 @@ REPO = "https://github.com/shuqi2077/RUDA"
 ORIGIN = "https://shuqi2077.github.io"
 COPY = json.loads((WEB / "content.json").read_text(encoding="utf-8"))
 GUIDES = ["README", "getting-started", "native-pytorch-quickstart", "programming-guide", "tensor-framework", "tensor-recipes",
-          "backend-composition", "data-and-storage", "training", "distributed-training", "parallel-and-data",
+          "backend-composition", "data-and-storage", "training", "distributed-training", "distributed-guide", "ascend-guide", "parallel-and-data",
           "architecture-training", "finetuning", "model-compiler", "static-pytorch-graphs",
           "model-inference", "samples", "stack-autotuning", "fused-adamw", "gradient-guard", "muon"]
 REFERENCE = ["api-reference", "rust-api", "python-api-signatures", "native-pytorch", "native-pytorch-api", "compiler-guide", "ptx", "runtime-api", "driver-api", "compatibility", "debugging"]

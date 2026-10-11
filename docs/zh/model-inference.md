@@ -2,7 +2,7 @@
 
 [文档首页](README.md) · [训练](training.md) · [English](../en/model-inference.md) | [日本語](../ja/model-inference.md) | [Deutsch](../de/model-inference.md) | [Русский](../ru/model-inference.md)
 
-ruLLM 提供模型加载、分词、带缓存的自回归生成和请求调度。Cargo package 名为 `ruLLM`，Rust 导入名为 `rullm`。
+ruLLM 提供模型加载、分词、带缓存的自回归生成和请求调度。Cargo package 名为 `ruda-llm`，Rust 导入名为 `rullm`。
 
 ## 准备本地模型
 
@@ -65,7 +65,7 @@ cargo run --release --locked -p ruda-llm --features nvidia-ptx --example qwen35_
 
 ```toml
 [dependencies]
-rullm = { package = "ruLLM", path = "../RUDA/ruLLM", features = ["nvidia"] }
+rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
 ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
 ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"

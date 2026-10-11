@@ -27,6 +27,19 @@ def _mixed_mm_fake(a, b):
     return a.new_empty((a.shape[0], b.shape[1]), dtype=torch.float32)
 
 
+@torch.library.custom_op('ruda::mm_fp32', mutates_args=())
+def mm_fp32(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    from . import _C
+    output = left.new_empty((left.shape[0], right.shape[1]), dtype=torch.float32)
+    _C.execute(7, left, right, output, 0.)
+    return output
+
+
+@mm_fp32.register_fake
+def _mm_fp32_fake(left, right):
+    return left.new_empty((left.shape[0], right.shape[1]), dtype=torch.float32)
+
+
 @torch.library.custom_op('ruda::nf4_matmul', mutates_args=())
 def nf4_matmul(input: torch.Tensor, packed: torch.Tensor, scales: torch.Tensor,
                table: torch.Tensor, columns: int, width: int, block: int,

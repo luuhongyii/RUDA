@@ -14,6 +14,47 @@ fn offset<F: Numeric>(tensor: &Tensor<F>, position: usize) -> usize {
 }
 
 #[ruda(launch)]
+pub fn advanced_index_offsets(
+    source: &Tensor<u8>, index: &Tensor<i64>, addresses: &mut Tensor<i64>,
+    size: i64, stride_bytes: i64, #[comptime] first: bool,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < addresses.len() {
+        let mut value = index[offset(index, pos)];
+        if value < 0i64 { value += size; }
+        let mut address = 0i64;
+        if comptime!(first) {
+            let width = source.shape(source.rank() - 1);
+            address = i64::cast_from(offset(source, pos * width));
+        } else {
+            address = addresses[pos];
+        }
+        addresses[pos] = address + value * stride_bytes;
+    }
+}
+
+#[ruda(launch)]
+pub fn advanced_index_copy(source: &Tensor<u8>, addresses: &Tensor<i64>, out: &mut Tensor<u8>) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        let width = out.shape(out.rank() - 1);
+        let address = usize::cast_from(addresses[pos / width]) + pos % width;
+        out[offset(out, pos)] = source[address];
+    }
+}
+
+#[ruda(launch)]
+pub fn arange_scalar<O: Numeric + RudaElement, A: Numeric + RudaElement>(
+    out: &mut Tensor<O>, start: A, step: A,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        let increment = step * A::cast_from(pos);
+        out[offset(out, pos)] = O::cast_from(start + increment);
+    }
+}
+
+#[ruda(launch)]
 pub fn convert<I: Numeric + RudaElement, O: Numeric + RudaElement>(a: &Tensor<I>, out: &mut Tensor<O>) {
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() {

@@ -75,7 +75,7 @@ def pack_nf4(weight, *, block_size=64, chunk_blocks=1024):
 
 def _decode(packed, scales, table, begin, rows, width, block_size, dtype):
     if packed.device.type == 'ruda':
-        from . import _C, _nf4_available
+        from . import _nf4_available
         if not _nf4_available:
             raise RuntimeError('RUDA NF4 API 1 required; rebuild Rust and C++ libraries')
         return torch.ops.ruda.nf4_decode(packed, scales, table, begin, rows, width, block_size, _FLOATS.index(dtype))

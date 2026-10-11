@@ -22,6 +22,8 @@ mod softmax;
 mod normalization;
 mod primitives;
 mod spatial;
+mod factories;
+mod indexing;
 
 thread_local! { static ERROR: RefCell<CString> = RefCell::new(CString::default()); }
 static LAUNCHES: AtomicU64 = AtomicU64::new(0);
