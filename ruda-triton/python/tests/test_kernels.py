@@ -124,8 +124,8 @@ def while_kernel(x_ptr, out_ptr, limit):
     tl.store(out_ptr + 1, steps)
 
 
-DEV = "cuda"
-
+GX1 = os.environ.get("RUDA_TRITON_DEVICE") == "gx1"
+DEV = "cpu" if GX1 else "cuda"
 
 @pytest.mark.parametrize("dtype,precision", [(torch.float32, "ieee"), (torch.float32, "tf32"), (torch.bfloat16, "ieee"),
                                              (torch.float16, "ieee")])

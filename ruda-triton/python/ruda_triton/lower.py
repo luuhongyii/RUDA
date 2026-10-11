@@ -71,6 +71,8 @@ class Emitter:
     elem_index: list = field(default_factory=list)
     externs: dict = field(default_factory=dict)
     contract: bool = False
+    # GX1 target: no inline PTX or libdevice; every operation stays a generic SIMT statement.
+    gx: bool = False
 
     def __post_init__(self):
         self.stack.append([])
@@ -97,7 +99,7 @@ class Emitter:
 
     def bin(self, op: str, a: dict, b: dict, ty: str | None = None) -> dict:
         ty = ty or self.ty_of(a)
-        if self.contract and op in ("add", "sub", "mul") and ty in ("f32", "f64"):
+        if self.contract and not self.gx and op in ("add", "sub", "mul") and ty in ("f32", "f64"):
             # LLVM emits contractable float ops without `.rn`, letting ptxas form FMAs.
             return self.asm(f"{op}.{ty} $0, $1, $2;", ty, a, b, registers=False)
         out = self.local(ty)
@@ -241,11 +243,12 @@ class Emitter:
 
 
 class Lowering:
-    def __init__(self, func: Func, num_warps: int, fp_fusion: bool = True, reduce_layouts: list | None = None):
+    def __init__(self, func: Func, num_warps: int, fp_fusion: bool = True, reduce_layouts: list | None = None,
+                 gx: bool = False):
         self.func = func
         self.reduce_layouts = reduce_layouts
         self.reduce_count = 0
-        self.e = Emitter(threads=num_warps * 32, contract=fp_fusion)
+        self.e = Emitter(threads=num_warps * 32, contract=fp_fusion, gx=gx)
         self.env: dict[str, Val] = {}
         self.num_ptrs = 0
         self.scalar_types: list[str] = []
@@ -603,6 +606,10 @@ class Lowering:
 
         def fn(xs):
             p, o = xs
+            if e.gx:
+                out = e.local(e.ty_of(p))
+                e.emit({"k": "ptradd", "out": out["l"], "p": p, "o": o, "scale": size})
+                return out
             o64 = e.cast(o, "i64")
             if size != 1:
                 o64 = e.bin("mul", o64, const(size, "i64"))
@@ -1519,7 +1526,11 @@ def _native(op: str, f32=None, f64=None):
 
     def lower_one(e: Emitter, xs, t, s, p):
         impl = {"f32": f32, "f64": f64}.get(t)
-        if impl is None:
+        if e.gx and op == "exp2":
+            return e.un("exp", e.bin("mul", xs[0], const(LN2, t)))
+        if e.gx and op == "log2":
+            return e.bin("mul", e.un("log", xs[0]), const(LOG2E, t))
+        if impl is None or e.gx:
             return e.un(op, xs[0])
         if callable(impl):
             return impl(e, xs[0])
@@ -1537,7 +1548,8 @@ ARITH = {
     "subf": lambda e, xs, t, s, p: e.bin("sub", *xs),
     "muli": lambda e, xs, t, s, p: e.bin("mul", *xs),
     "mulf": lambda e, xs, t, s, p: e.bin("mul", *xs),
-    "divf": lambda e, xs, t, s, p: e.asm("div.full.f32 $0, $1, $2;", t, *xs) if t == "f32" else e.bin("div", *xs),
+    "divf": lambda e, xs, t, s, p: e.asm("div.full.f32 $0, $1, $2;", t, *xs) if t == "f32" and not e.gx
+    else e.bin("div", *xs),
     "divsi": lambda e, xs, t, s, p: e.bin("div", *xs),
     "divui": lambda e, xs, t, s, p: _unsigned(e, "div", xs, t),
     "remsi": lambda e, xs, t, s, p: e.bin("rem", *xs),
@@ -1592,7 +1604,7 @@ ARITH = {
     "absi": lambda e, xs, t, s, p: e.un("abs", xs[0]),
     "fma": lambda e, xs, t, s, p: _fma(e, xs),
     "powf": lambda e, xs, t, s, p: e.libdevice({"f32": "__nv_powf", "f64": "__nv_pow"}[t], t, *xs)
-    if t in ("f32", "f64") else e.bin("pow", *xs),
+    if t in ("f32", "f64") and not e.gx else e.bin("pow", *xs),
 }
 
 
@@ -1615,7 +1627,11 @@ _EXTERN_BINARY = {"fmul_rn": "mul", "dmul_rn": "mul", "fadd_rn": "add", "dadd_rn
 
 def extern_function(symbol: str):
     if symbol.startswith("__nv_"):
-        return lambda e, xs, t: e.libdevice(symbol, t, *xs)
+        def call(e, xs, t):
+            if e.gx:
+                return extern_function(symbol[len("__nv_"):])(e, xs, t)
+            return e.libdevice(symbol, t, *xs)
+        return call
     name = symbol
     if name in _EXTERN_BINARY:
         return lambda e, xs, t, op=_EXTERN_BINARY[name]: e.bin(op, xs[0], xs[1])
@@ -1637,9 +1653,9 @@ def extern_function(symbol: str):
 
 
 def lower(ttir_text: str, num_warps: int, fp_fusion: bool = True,
-          reduce_layouts: list | None = None) -> tuple[dict, list]:
+          reduce_layouts: list | None = None, gx: bool = False) -> tuple[dict, list]:
     func = parse_module(ttir_text)
-    lowering = Lowering(func, num_warps, fp_fusion, reduce_layouts)
+    lowering = Lowering(func, num_warps, fp_fusion, reduce_layouts, gx)
     kernel = lowering.run()
     kernel["externs"] = lowering.e.externs
     return kernel, lowering.arg_kinds
