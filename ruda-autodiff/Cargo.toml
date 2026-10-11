@@ -76,7 +76,7 @@ features = ["tensor"]
 
 [dependencies.ruda-tensor-config]
 path = "../ruda-tensor-config"
-version = "0.21.5"
+version = "0.21.6"
 default-features = false
 
 [dependencies.derive-new]
