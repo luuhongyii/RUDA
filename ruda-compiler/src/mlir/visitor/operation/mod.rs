@@ -8,10 +8,11 @@ pub(super) mod synchronization;
 use ruda_core::ir::{
     BarrierLevel, BarrierOps, NonSemantic, OpaqueType, Operation, StorageType, Synchronization,
 };
-use tracel_llvm::mlir_rs::{
+use melior::{
     dialect::{llvm, ods::llvm as llvm_ods},
     ir::{
-        attribute::{FlatSymbolRefAttribute, TypeAttribute},
+        attribute::{ArrayAttribute, DenseI32ArrayAttribute, FlatSymbolRefAttribute, TypeAttribute},
+        Identifier, operation::OperationBuilder,
         r#type::IntegerType,
     },
 };
@@ -46,14 +47,17 @@ impl<'a> Visitor<'a> {
                 let argument_type = [llvm::r#type::pointer(self.context, 0)];
                 let func_type =
                     TypeAttribute::new(llvm::r#type::function(integer_type, &argument_type, true));
-                let call = llvm::call(
-                    self.context,
-                    FlatSymbolRefAttribute::new(self.context, "printf"),
-                    Some(func_type),
-                    &callee,
-                    &[integer_type],
-                    self.location,
-                );
+                let call = OperationBuilder::new("llvm.call", self.location)
+                    .add_operands(&callee)
+                    .add_results(&[integer_type])
+                    .add_attributes(&[
+                        (Identifier::new(self.context, "callee"), FlatSymbolRefAttribute::new(self.context, "printf").into()),
+                        (Identifier::new(self.context, "var_callee_type"), func_type.into()),
+                        (Identifier::new(self.context, "operandSegmentSizes"), DenseI32ArrayAttribute::new(self.context, &[callee.len() as i32, 0]).into()),
+                        (Identifier::new(self.context, "op_bundle_sizes"), DenseI32ArrayAttribute::new(self.context, &[]).into()),
+                        (Identifier::new(self.context, "op_bundle_tags"), ArrayAttribute::new(self.context, &[]).into()),
+                    ])
+                    .build().expect("valid printf call");
                 self.block.append_operation(call);
             }
             // These operation are not needed in MLIR

@@ -1,5 +1,5 @@
 use ruda_core::ir::{IndexAssignOperator, IndexOperator, Operator, StorageType, VariableKind};
-use tracel_llvm::mlir_rs::{
+use melior::{
     dialect::{
         arith, index, memref,
         ods::{self, llvm, vector},
@@ -49,7 +49,7 @@ impl<'a> Visitor<'a> {
                         out_memref,
                         &[out_index],
                         self.location,
-                    ));
+                    ).into());
                 } else {
                     let value = self.append_operation_with_result(memref::load(
                         memref,
@@ -234,7 +234,7 @@ impl<'a> Visitor<'a> {
             ));
             vector::store(self.context, splat, memref, &[indices], self.location)
         };
-        self.block.append_operation(operation);
+        self.block.append_operation(operation.into());
     }
 
     pub(crate) fn visit_cast(&mut self, to_cast: Variable, out: Variable) {

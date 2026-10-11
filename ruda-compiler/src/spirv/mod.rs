@@ -17,6 +17,7 @@ mod cmma;
 mod compiler;
 mod debug;
 mod extensions;
+mod extended;
 mod globals;
 mod instruction;
 mod item;

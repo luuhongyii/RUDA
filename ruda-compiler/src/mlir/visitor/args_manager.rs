@@ -5,7 +5,7 @@ use ruda_core::{
     ir::{Builtin, ElemType, StorageType, UIntKind},
     kernel::{KernelDefinition, ScalarKernelArg},
 };
-use tracel_llvm::mlir_rs::{
+use melior::{
     dialect::{arith, memref},
     ir::{
         Block, BlockRef, Location, Region,

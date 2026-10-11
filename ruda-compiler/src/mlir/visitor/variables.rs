@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ruda_core::ir::{self, Builtin, ConstantValue, FloatKind, VariableKind};
-use tracel_llvm::mlir_rs::{
+use melior::{
     dialect::{
         index, memref,
         ods::{arith, vector},

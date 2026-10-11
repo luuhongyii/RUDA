@@ -105,6 +105,29 @@ jobs:
           restore-keys: |
             publish-${{ runner.os }}-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-${{ needs.plan.outputs.revision }}-
             publish-${{ runner.os }}-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
+      - name: Check LLVM requirement for publication batch
+        id: llvm
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, '.github/scripts')
+          import publish
+          packages, graph = publish.workspace()
+          batch = publish.missing(packages, publish.ordered(graph))[:publish.BATCH_SIZE]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"required={'true' if 'ruda-driver-cpu' in batch else 'false'}\n")
+          PY
+      - name: Install upstream LLVM and MLIR 20
+        if: steps.llvm.outputs.required == 'true'
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/ruda-llvm.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/ruda-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main' | sudo tee /etc/apt/sources.list.d/ruda-llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends llvm-20-dev libmlir-20-dev mlir-20-tools libclang-20-dev libpolly-20-dev libzstd-dev zlib1g-dev pkg-config
+          echo 'MLIR_SYS_200_PREFIX=/usr/lib/llvm-20' >> "$GITHUB_ENV"
+          echo 'TABLEGEN_200_PREFIX=/usr/lib/llvm-20' >> "$GITHUB_ENV"
+          echo 'LIBCLANG_PATH=/usr/lib/llvm-20/lib' >> "$GITHUB_ENV"
+          echo 'LD_LIBRARY_PATH=/usr/lib/llvm-20/lib' >> "$GITHUB_ENV"
       - name: Publish next five versions in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

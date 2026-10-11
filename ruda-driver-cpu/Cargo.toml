@@ -91,9 +91,9 @@ default-features = false
 [dependencies.sysinfo]
 version = "0.38.0"
 
-[dependencies.tracel-llvm]
-version = "20.1.4-6"
-features = ["mlir-helpers"]
+[dependencies.melior]
+version = "=0.25.0"
+features = ["helpers"]
 
 [dev-dependencies.paste]
 version = "1"

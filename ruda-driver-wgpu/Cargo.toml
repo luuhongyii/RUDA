@@ -45,7 +45,6 @@ spirv = [
     "ruda-compiler/spirv",
     "ruda-kernel/lowering-spirv",
     "ash",
-    "tracel-ash",
     "ruda-core/compilation-cache",
     "ruda-core/hash",
 ]
@@ -107,10 +106,6 @@ default-features = false
 
 [dependencies.sanitize-filename]
 version = "0.6"
-optional = true
-
-[dependencies.tracel-ash]
-version = "0.39"
 optional = true
 
 [dependencies.tracing]

@@ -1,3 +1,4 @@
+use alloc::{vec, vec::Vec};
 use crate::dsl::{
     define_scalar, define_size,
     ir::{

@@ -1,6 +1,7 @@
 use std::{ffi::CStr, ptr::null_mut};
 
-use tracel_ash::vk::*;
+use ash::vk::*;
+use super::extensions::*;
 use wgpu::{Features, hal::vulkan};
 
 #[derive(Default, Debug)]
@@ -136,7 +137,7 @@ impl<'a> ExtendedFeatures<'a> {
         &'a mut self,
         mut info: DeviceCreateInfo<'a>,
     ) -> DeviceCreateInfo<'a> {
-        fn push_opt<'a, T: Extends<DeviceCreateInfo<'a>> + TaggedStructure<'a>>(
+        fn push_opt<'a, T: ExtendsDeviceCreateInfo + TaggedStructure + 'a>(
             mut info: DeviceCreateInfo<'a>,
             feat: &'a mut Option<T>,
         ) -> DeviceCreateInfo<'a> {
@@ -180,12 +181,12 @@ impl<'a> ExtendedFeatures<'a> {
     fn fill_features(&mut self, ash: &ash::Instance, adapter: &vulkan::Adapter) {
         let mut features = PhysicalDeviceFeatures2::default();
 
-        fn push_opt<'a, 'b: 'a, T: Extends<PhysicalDeviceFeatures2<'a>> + TaggedStructure<'b>>(
+        fn push_opt<'a, T: ExtendsPhysicalDeviceFeatures2 + TaggedStructure + 'a>(
             mut features: PhysicalDeviceFeatures2<'a>,
             feat: &'a mut Option<T>,
         ) -> PhysicalDeviceFeatures2<'a> {
             if let Some(feat) = feat {
-                features = features.push(feat);
+                features = features.push_next(feat);
             }
             features
         }
@@ -219,14 +220,8 @@ impl<'a> ExtendedFeatures<'a> {
         features = push_opt(features, &mut self.nv_atomic_float_vector);
 
         unsafe {
-            // convert to ash version, they represent the same type so this is safe
-            let features =
-                &mut *<*mut _>::cast::<ash::vk::PhysicalDeviceFeatures2<'_>>(&mut features);
-            ash.get_physical_device_features2(adapter.raw_physical_device(), features);
-            self.core = core::mem::transmute::<
-                ash::vk::PhysicalDeviceFeatures,
-                tracel_ash::vk::PhysicalDeviceFeatures,
-            >(features.features);
+            ash.get_physical_device_features2(adapter.raw_physical_device(), &mut features);
+            self.core = features.features;
         }
 
         self.zero_pointers();
@@ -277,12 +272,12 @@ impl<'a> ExtendedFeatures<'a> {
     }
 }
 
-trait InfoExt<'a>: Sized + TaggedStructure<'a> + 'a {
-    fn push_or_update<T: Extends<Self> + TaggedStructure<'a>>(self, feat: &'a mut T) -> Self;
+trait InfoExt<'a>: Sized + TaggedStructure + 'a {
+    fn push_or_update<T: ExtendsDeviceCreateInfo + TaggedStructure + 'a>(self, feat: &'a mut T) -> Self;
 }
 
 impl<'a> InfoExt<'a> for DeviceCreateInfo<'a> {
-    fn push_or_update<T: Extends<Self> + TaggedStructure<'a>>(mut self, feat: &'a mut T) -> Self {
+    fn push_or_update<T: ExtendsDeviceCreateInfo + TaggedStructure + 'a>(mut self, feat: &'a mut T) -> Self {
         let this = &mut self as *mut DeviceCreateInfo<'a>;
         let mut this = unsafe { &mut *this.cast::<BaseOutStructure<'a>>() };
         while !this.p_next.is_null() {
@@ -298,6 +293,6 @@ impl<'a> InfoExt<'a> for DeviceCreateInfo<'a> {
             this = structure;
         }
 
-        self.push(feat)
+        self.push_next(feat)
     }
 }

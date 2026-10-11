@@ -1,5 +1,5 @@
 use ruda_core::ir::{self, ConstantValue, VariableKind};
-use tracel_llvm::mlir_rs::{
+use melior::{
     Context,
     dialect::{arith, ods::vector},
     ir::{

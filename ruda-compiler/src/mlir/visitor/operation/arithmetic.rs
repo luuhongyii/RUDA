@@ -1,5 +1,5 @@
 use ruda_core::ir::{self, Arithmetic};
-use tracel_llvm::mlir_rs::{
+use melior::{
     dialect::{
         arith::{self},
         llvm,

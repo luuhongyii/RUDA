@@ -1,6 +1,6 @@
 use ruda_core::{ir::StorageType, kernel::KernelDefinition};
 use crate::optimizer::Optimizer;
-use tracel_llvm::mlir_rs::{
+use melior::{
     Context, ExecutionEngine,
     ir::{Location, operation::OperationLike},
     pass::{self, PassManager},
@@ -9,7 +9,7 @@ use tracel_llvm::mlir_rs::{
 use super::{shared_memories::SharedMemories, visitor::Visitor};
 
 pub struct Module<'a> {
-    module: tracel_llvm::mlir_rs::ir::Module<'a>,
+    module: melior::ir::Module<'a>,
     #[allow(unused)]
     name: String,
     location: Location<'a>,
@@ -19,7 +19,7 @@ pub struct Module<'a> {
 impl<'a> Module<'a> {
     pub fn new(context: &'a Context, name: String) -> Self {
         let location = Location::unknown(context);
-        let module = tracel_llvm::mlir_rs::ir::Module::new(location);
+        let module = melior::ir::Module::new(location);
         Self {
             module,
             context,
@@ -52,7 +52,7 @@ impl<'a> Module<'a> {
         #[cfg(feature = "mlir-dump")]
         if let Ok(dir) = std::env::var("RUDA_DEBUG_MLIR") {
             use std::path::PathBuf;
-            use tracel_llvm::mlir_rs::{
+            use melior::{
                 ir::operation::OperationPrintingFlags, pass::PassIrPrintingOptions,
             };
 
@@ -103,7 +103,7 @@ impl<'a> Module<'a> {
 
 #[cfg(test)]
 mod tests {
-    use tracel_llvm::mlir_rs::{
+    use melior::{
         Context,
         dialect::{arith, func, index, memref, scf},
         ir::{
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn it_lowers_scf_if_memref_result_through_cf_to_llvm() {
         register_all_passes();
-        let registry = tracel_llvm::mlir_rs::dialect::DialectRegistry::new();
+        let registry = melior::dialect::DialectRegistry::new();
         register_all_dialects(&registry);
 
         let context = Context::new();

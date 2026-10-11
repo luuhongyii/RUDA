@@ -1,5 +1,5 @@
 use alloc::{vec, vec::Vec};
-use ruda_core::ir::Visibility;
+use ruda_core::kernel::Visibility;
 use ruda::runtime::server::KernelArguments;
 use ruda_compiler::cpp::shared::MslComputeKernel;
 

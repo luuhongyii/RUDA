@@ -2,7 +2,7 @@ use ruda_core::ir::{
     AddressType, DeviceProperties, ElemType, FloatKind, IntKind, OpaqueType, StorageType, UIntKind,
     features::TypeUsage,
 };
-use tracel_llvm::mlir_rs::{
+use melior::{
     dialect::index,
     ir::{ValueLike, r#type::IntegerType},
 };

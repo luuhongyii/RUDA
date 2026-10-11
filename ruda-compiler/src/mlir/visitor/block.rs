@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 use crate::optimizer::{ControlFlow, NodeIndex};
-use tracel_llvm::mlir_rs::{
+use melior::{
     dialect::{cf, ods::llvm},
     ir::{Block, BlockLike, BlockRef, RegionLike},
 };
@@ -157,7 +157,7 @@ impl<'a> Visitor<'a> {
                 this_block.append_operation(cf::br(&self.last_block, &[], self.location));
             }
             ControlFlow::Unreachable => {
-                this_block.append_operation(llvm::unreachable(self.context, self.location));
+                this_block.append_operation(llvm::unreachable(self.context, self.location).into());
             }
             ControlFlow::None => {
                 let destination = opt.successors(block_id)[0];

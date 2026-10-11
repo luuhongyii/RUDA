@@ -1,4 +1,4 @@
-use tracel_llvm::mlir_rs::{
+use melior::{
     Context,
     dialect::{
         func,
@@ -16,7 +16,7 @@ use tracel_llvm::mlir_rs::{
 
 pub fn add_external_function_to_module<'a>(
     context: &'a Context,
-    module: &tracel_llvm::mlir_rs::ir::Module<'a>,
+    module: &melior::ir::Module<'a>,
 ) {
     let integer_type = IntegerType::new(context, 32).into();
     let func_type = TypeAttribute::new(llvm::r#type::function(

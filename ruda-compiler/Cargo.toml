@@ -10,8 +10,8 @@ repository = "https://github.com/shuqi2077/RUDA"
 [features]
 ascend = ["dep:ruda-core", "ruda-core/ir", "ruda-core/compiler-std"]
 ptx = ["optimizer-std", "ruda-core/argument-layout", "ruda-core/ir", "ruda-core/compiler-std", "dep:half"]
-spirv = ["optimizer-default", "ruda-core/argument-layout", "ruda-core/ir-default", "dep:half", "dep:serde", "dep:hashbrown", "dep:bitflags", "dep:rspirv"]
-mlir = ["optimizer-std", "ruda-core/argument-layout", "dep:tracel-llvm", "dep:tracel-llvm-bundler"]
+spirv = ["optimizer-default", "ruda-core/argument-layout", "ruda-core/ir-default", "dep:half", "dep:serde", "dep:hashbrown", "dep:bitflags", "dep:rspirv", "dep:spirv"]
+mlir = ["optimizer-std", "ruda-core/argument-layout", "dep:melior"]
 mlir-dump = ["mlir"]
 wgsl = ["dep:ruda-core", "ruda-core/argument-layout", "dep:half"]
 default = ["ptx", "cpp-default"]
@@ -90,18 +90,17 @@ version = "0.14.0"
 default-features = false
 optional = true
 
-[dependencies.tracel-llvm]
-version = "20.1.4-6"
-features = [ "mlir-helpers",]
-optional = true
-
-[build-dependencies.tracel-llvm-bundler]
-version = "20.1.4-6"
+[dependencies.melior]
+version = "=0.25.0"
+features = ["helpers"]
 optional = true
 
 [dependencies.rspirv]
-version = "0.12.1"
-package = "tracel-rspirv"
+version = "=0.13.0"
+optional = true
+
+[dependencies.spirv]
+version = "=0.4.0"
 features = ["serialize", "deserialize"]
 optional = true
 

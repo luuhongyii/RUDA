@@ -6,7 +6,7 @@ CPU execution backend for Ruda kernels using the MLIR compilation path. This is 
 
 - `CpuDevice` and `CpuRuntime` provide the device and runtime entry points.
 - `compilation`, `execution`, and `memory` implement CPU kernel preparation and execution.
-- The backend depends on `tracel-llvm` and the compiler's `mlir` feature; its LLVM/MLIR toolchain is required for builds.
+- The backend depends on upstream `melior` and the compiler's `mlir` feature; LLVM/MLIR 20 development libraries are required for builds. Set `MLIR_SYS_200_PREFIX` and `TABLEGEN_200_PREFIX` to the LLVM installation prefix when it is not on `PATH`.
 
 ## Usage
 

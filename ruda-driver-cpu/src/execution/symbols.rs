@@ -1,4 +1,4 @@
-use tracel_llvm::mlir_rs::ExecutionEngine;
+use melior::ExecutionEngine;
 
 use crate::execution::compute_task::sync_ruda;
 

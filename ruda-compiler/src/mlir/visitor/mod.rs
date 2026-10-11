@@ -4,6 +4,7 @@ pub(super) mod elem;
 pub(super) mod instruction;
 pub(super) mod item;
 pub(super) mod operation;
+mod block_ops;
 pub(super) mod prelude;
 pub(super) mod variables;
 
@@ -15,7 +16,7 @@ use ruda_core::{
     kernel::KernelDefinition,
 };
 use crate::optimizer::{NodeIndex, Optimizer};
-use tracel_llvm::mlir_rs::{
+use melior::{
     Context,
     dialect::{
         func,
@@ -132,7 +133,7 @@ impl<'a> Visitor<'a> {
             StringAttribute::new(self.context, &key),
             linkage(self.context, Linkage::Internal),
             self.location,
-        ));
+        ).into());
         key
     }
 
@@ -141,7 +142,7 @@ impl<'a> Visitor<'a> {
         operation: impl Into<Operation<'a>>,
     ) -> Value<'a, 'a> {
         self.block
-            .append_operation(operation)
+            .append_operation(operation.into())
             .result(0)
             .unwrap()
             .into()
@@ -151,7 +152,7 @@ impl<'a> Visitor<'a> {
         context: &'a Context,
         location: Location<'a>,
         kernel: &'b KernelDefinition,
-        module: &tracel_llvm::mlir_rs::ir::Module<'a>,
+        module: &melior::ir::Module<'a>,
         opt: &Optimizer,
         shared_memories: &SharedMemories,
         addr_type: StorageType,
@@ -217,7 +218,7 @@ impl<'a> Visitor<'a> {
 
     pub(self) fn insert_builtin_loop(
         block: BlockRef<'a, 'a>,
-        module: &tracel_llvm::mlir_rs::ir::Module<'a>,
+        module: &melior::ir::Module<'a>,
         opt: &Optimizer,
         context: &'a Context,
         location: Location<'a>,

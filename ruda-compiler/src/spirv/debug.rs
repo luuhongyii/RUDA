@@ -20,10 +20,8 @@ use std::borrow::Cow;
 
 use ruda_core::ir::{self as core, RudaFnSource, Id, SourceLoc, Variable};
 use hashbrown::HashMap;
-use rspirv::spirv::{DebugInfoFlags, FunctionControl, Word};
-use rspirv::sr::{
-    nonsemantic_debugprintf::DebugPrintfBuilder, nonsemantic_shader_debuginfo_100::DebugInfoBuilder,
-};
+use rspirv::spirv::{FunctionControl, Word};
+use super::extended;
 
 use crate::spirv::{SpirvCompiler, SpirvTarget};
 
@@ -69,10 +67,67 @@ struct Definitions {
 }
 
 impl<T: SpirvTarget> SpirvCompiler<T> {
+    fn debug_type_function(&mut self, flags: u32, return_type: Word, parameters: impl IntoIterator<Item = Word>) -> Word {
+        let flags = self.const_u32(flags);
+        extended::global(&mut self.builder, 8, [flags, return_type].into_iter().chain(parameters), None)
+    }
+
+    fn debug_source(&mut self, file: &str, text: Option<&str>) -> Word {
+        let file = extended::string(&mut self.builder, file);
+        let text = text.map(|text| extended::string(&mut self.builder, text));
+        extended::global(&mut self.builder, 35, std::iter::once(file).chain(text), None)
+    }
+
+    fn shader_debug_compilation_unit_id(&mut self, id: Option<Word>, version: Word, dwarf: Word, source: Word, language: Word) -> Word {
+        extended::global(&mut self.builder, 1, [version, dwarf, source, language], id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn debug_function(&mut self, name: &str, ty: Word, source: Word, line: u32, column: u32,
+        parent: Word, linkage: &str, flags: u32, scope_line: u32, declaration: Option<Word>) -> Word {
+        let name = extended::string(&mut self.builder, name);
+        let linkage = extended::string(&mut self.builder, linkage);
+        let line = self.const_u32(line);
+        let column = self.const_u32(column);
+        let flags = self.const_u32(flags);
+        let scope_line = self.const_u32(scope_line);
+        extended::global(&mut self.builder, 20,
+            [name, ty, source, line, column, parent, linkage, flags, scope_line].into_iter().chain(declaration), None)
+    }
+
+    fn debug_entry_point(&mut self, entry: Word, unit: Word, signature: &str, arguments: &str) {
+        let signature = extended::string(&mut self.builder, signature);
+        let arguments = extended::string(&mut self.builder, arguments);
+        extended::global(&mut self.builder, 107, [entry, unit, signature, arguments], None);
+    }
+
+    fn debug_inlined_at(&mut self, line: u32, scope: Word, inlined: Option<Word>) -> Word {
+        let line = self.const_u32(line);
+        extended::global(&mut self.builder, 25, [line, scope].into_iter().chain(inlined), None)
+    }
+
+    fn debug_scope(&mut self, scope: Word, inlined: Option<Word>) -> Result<(), rspirv::dr::Error> {
+        extended::local(&mut self.builder, "NonSemantic.Shader.DebugInfo.100", 23,
+            std::iter::once(scope).chain(inlined))
+    }
+
+    fn debug_function_definition(&mut self, function: Word, definition: Word) -> Result<(), rspirv::dr::Error> {
+        extended::local(&mut self.builder, "NonSemantic.Shader.DebugInfo.100", 101, [function, definition])
+    }
+
+    fn debug_line(&mut self, source: Word, line_start: u32, line_end: u32, column_start: u32, column_end: u32) -> Result<(), rspirv::dr::Error> {
+        let line_start = self.const_u32(line_start);
+        let line_end = self.const_u32(line_end);
+        let column_start = self.const_u32(column_start);
+        let column_end = self.const_u32(column_end);
+        extended::local(&mut self.builder, "NonSemantic.Shader.DebugInfo.100", 103,
+            [source, line_start, line_end, column_start, column_end])
+    }
+
     pub fn init_debug(&mut self) {
         if self.debug_enabled() {
             let return_ty = self.type_void();
-            let function_ty = self.debug_type_function(DebugInfoFlags::NONE, return_ty, []);
+            let function_ty = self.debug_type_function(0, return_ty, []);
             let entry_loc = self.opt.root_scope.debug.entry_loc.clone().unwrap();
 
             self.debug_info = Some(DebugInfo {
@@ -93,7 +148,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             );
         } else if self.debug_symbols {
             let return_ty = self.type_void();
-            let function_ty = self.debug_type_function(DebugInfoFlags::NONE, return_ty, []);
+            let function_ty = self.debug_type_function(0, return_ty, []);
             self.debug_info = Some(DebugInfo {
                 function_ty,
                 stack: Default::default(),
@@ -216,7 +271,9 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
                     self.read(&var)
                 })
                 .collect::<Vec<_>>();
-            DebugPrintfBuilder::debug_printf(&mut self.builder, format_string, args).unwrap();
+            let format = self.builder.string(format_string);
+            extended::local(&mut self.builder, "NonSemantic.DebugPrintf", 1,
+                std::iter::once(format).chain(args)).unwrap();
             return;
         }
         if self.debug_enabled() {
@@ -299,7 +356,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             function.col,
             function.source.compilation_unit,
             name,
-            DebugInfoFlags::NONE,
+            0,
             function.line,
             None,
         );

@@ -11,7 +11,7 @@ use std::{
 
 use ruda_compiler::mlir::module::Module;
 use ruda_kernel::dsl::{ir::StorageType, prelude::KernelDefinition};
-use tracel_llvm::mlir_rs::{
+use melior::{
     Context, ExecutionEngine,
     dialect::DialectRegistry,
     utility::{register_all_dialects, register_all_llvm_translations, register_all_passes},
@@ -21,6 +21,9 @@ pub struct MlirKernel {
     execution_engine: ExecutionEngine,
     pub shared_memories: SharedMemories,
 }
+
+unsafe impl Send for MlirKernel {}
+unsafe impl Sync for MlirKernel {}
 
 #[derive(Clone)]
 pub struct MlirEngine(pub Arc<MlirKernel>);

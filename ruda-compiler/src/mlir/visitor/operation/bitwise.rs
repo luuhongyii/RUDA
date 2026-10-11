@@ -1,5 +1,5 @@
 use ruda_core::ir::{Bitwise, ElemType, IntKind, UIntKind};
-use tracel_llvm::mlir_rs::{
+use melior::{
     dialect::arith::{self, CmpiPredicate},
     dialect::llvm,
     ir::r#type::IntegerType,

@@ -9,7 +9,7 @@ use ruda_core::ir::{DeviceProperties, Type, features::*};
 use ruda::runtime::compiler::CompilationError;
 use ruda_compiler::spirv::{GLCompute, SpirvCompiler, SpirvKernel};
 use features::ExtendedFeatures;
-use tracel_ash::{
+use ash::{
     khr::cooperative_matrix,
     vk::{ComponentTypeKHR, DeviceCreateInfo, DeviceQueueCreateInfo, ScopeKHR, TRUE},
 };
@@ -24,6 +24,8 @@ use wgpu::{
 use crate::{AutoCompiler, WgpuServer};
 
 mod features;
+mod extensions;
+use extensions::{BFLOAT16_KHR, FLOAT8_E4M3_EXT, FLOAT8_E5M2_EXT};
 
 pub type VkSpirvCompiler = SpirvCompiler<GLCompute>;
 
@@ -119,9 +121,9 @@ fn request_device(
     let pre_info = DeviceCreateInfo::default()
         .queue_create_infos(&family_infos)
         .enabled_extension_names(&str_pointers);
-    let mut info = phys_features.add_to_device_create(pre_info.into());
+    let mut info = phys_features.add_to_device_create(pre_info);
     info = info.enabled_features(&supported_feat);
-    info = extended_feat.add_to_device_create(info.into()).into();
+    info = extended_feat.add_to_device_create(info);
 
     let vk_device = unsafe {
         ash.raw_instance()
@@ -442,17 +444,9 @@ fn register_types(props: &mut DeviceProperties, ext_feat: &ExtendedFeatures<'_>)
 
 fn register_cmma(ash: &InstanceShared, adapter: &vulkan::Adapter, props: &mut DeviceProperties) {
     let cmma = cooperative_matrix::Instance::new(ash.entry(), ash.raw_instance());
-    let num_elems = unsafe {
-        cmma.get_physical_device_cooperative_matrix_properties_len(
-            adapter.raw_physical_device().into(),
-        )
-        .unwrap()
-    };
-    let mut properties = vec![Default::default(); num_elems];
-    unsafe {
+    let properties = unsafe {
         cmma.get_physical_device_cooperative_matrix_properties(
-            adapter.raw_physical_device().into(),
-            &mut properties,
+            adapter.raw_physical_device(),
         )
         .unwrap()
     };
@@ -489,10 +483,10 @@ fn register_cmma(ash: &InstanceShared, adapter: &vulkan::Adapter, props: &mut De
 
 fn convert_type(vk_ty: ComponentTypeKHR) -> Option<ElemType> {
     let ty = match vk_ty {
-        ComponentTypeKHR::FLOAT8_E4M3_EXT => ElemType::Float(FloatKind::E4M3),
-        ComponentTypeKHR::FLOAT8_E5M2_EXT => ElemType::Float(FloatKind::E5M2),
+        FLOAT8_E4M3_EXT => ElemType::Float(FloatKind::E4M3),
+        FLOAT8_E5M2_EXT => ElemType::Float(FloatKind::E5M2),
         ComponentTypeKHR::FLOAT16 => ElemType::Float(FloatKind::F16),
-        ComponentTypeKHR::BFLOAT16 => ElemType::Float(FloatKind::BF16),
+        BFLOAT16_KHR => ElemType::Float(FloatKind::BF16),
         ComponentTypeKHR::FLOAT32 => ElemType::Float(FloatKind::F32),
         ComponentTypeKHR::FLOAT64 => ElemType::Float(FloatKind::F64),
         ComponentTypeKHR::SINT8 => ElemType::Int(IntKind::I8),

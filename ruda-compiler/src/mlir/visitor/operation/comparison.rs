@@ -1,5 +1,5 @@
 use ruda_core::ir::Comparison;
-use tracel_llvm::mlir_rs::dialect::arith::{self, CmpfPredicate, CmpiPredicate};
+use melior::dialect::arith::{self, CmpfPredicate, CmpiPredicate};
 
 use crate::mlir::visitor::prelude::*;
 
