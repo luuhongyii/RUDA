@@ -35,6 +35,14 @@ def const(value, ty: str) -> dict:
     return {"c": str(int(value)), "t": ty}
 
 
+def official_registers(layout: dict, axis: int, R: int) -> list[tuple[int, int]]:
+    """(rep, element) pairs one thread holds along ``axis``, in register order."""
+    s, t, w = layout["spt"][axis], layout["tpw"][axis], layout["wpc"][axis]
+    tile = s * t * w
+    reps = max(1, -(-R // tile))
+    return [(rep, j) for rep in range(reps) for j in range(s) if rep * tile + j < R]
+
+
 def simt_type(t: Type) -> str:
     return "u64" if t.elem == "ptr" else t.elem
 
@@ -61,6 +69,8 @@ class Emitter:
     shared: list = field(default_factory=list)
     shared_pool: dict = field(default_factory=dict)
     elem_index: list = field(default_factory=list)
+    externs: dict = field(default_factory=dict)
+    contract: bool = False
 
     def __post_init__(self):
         self.stack.append([])
@@ -86,13 +96,39 @@ class Emitter:
         self.stmts.append(stmt)
 
     def bin(self, op: str, a: dict, b: dict, ty: str | None = None) -> dict:
-        out = self.local(ty or self.ty_of(a))
+        ty = ty or self.ty_of(a)
+        if self.contract and op in ("add", "sub", "mul") and ty in ("f32", "f64"):
+            # LLVM emits contractable float ops without `.rn`, letting ptxas form FMAs.
+            return self.asm(f"{op}.{ty} $0, $1, $2;", ty, a, b, registers=False)
+        out = self.local(ty)
         self.emit({"k": "bin", "op": op, "out": out["l"], "a": a, "b": b})
         return out
 
     def un(self, op: str, a: dict, ty: str | None = None) -> dict:
         out = self.local(ty or self.ty_of(a))
         self.emit({"k": "un", "op": op, "out": out["l"], "a": a})
+        return out
+
+    def asm(self, code: str, ty: str, *args: dict, registers: bool = True) -> dict:
+        if registers:
+            # LLVM materializes constant operands of NVVM intrinsics in registers.
+            args = tuple(self.copy(a) if "c" in a else a for a in args)
+        out = self.local(ty)
+        self.emit({"k": "asm", "code": code, "out": out["l"], "args": list(args)})
+        return out
+
+    def libdevice(self, symbol: str, ty: str, *args: dict) -> dict:
+        """Calls ``symbol`` from libdevice; the ``.func`` bodies are attached by the compiler."""
+        arg_tys = tuple(self.ty_of(a) for a in args)
+        name = f"ruda_{symbol.lstrip('_')}"
+        self.externs[name] = (symbol, ty, arg_tys)
+        lines = ["{", f".param .b{BYTES[ty] * 8} rp;"]
+        for i, t in enumerate(arg_tys):
+            lines += [f".param .b{BYTES[t] * 8} p{i};", f"st.param.b{BYTES[t] * 8} [p{i}], ${i + 1};"]
+        lines += [f"call.uni (rp), {name}, ({', '.join(f'p{i}' for i in range(len(args)))});",
+                  f"ld.param.b{BYTES[ty] * 8} $0, [rp];", "}"]
+        out = self.local(ty)
+        self.emit({"k": "asm", "code": "\n".join(lines), "out": out["l"], "args": list(args), "extern": name})
         return out
 
     def cmp(self, op: str, a: dict, b: dict) -> dict:
@@ -205,9 +241,11 @@ class Emitter:
 
 
 class Lowering:
-    def __init__(self, func: Func, num_warps: int, fp_fusion: bool = True):
+    def __init__(self, func: Func, num_warps: int, fp_fusion: bool = True, reduce_layouts: list | None = None):
         self.func = func
-        self.e = Emitter(threads=num_warps * 32)
+        self.reduce_layouts = reduce_layouts
+        self.reduce_count = 0
+        self.e = Emitter(threads=num_warps * 32, contract=fp_fusion)
         self.env: dict[str, Val] = {}
         self.num_ptrs = 0
         self.scalar_types: list[str] = []
@@ -402,7 +440,7 @@ class Lowering:
         self.blocks.append(self._next_block)
         try:
             for op in block.ops:
-                if op.name in ("scf.yield", "tt.reduce.return", "tt.scan.return"):
+                if op.name in ("scf.yield", "scf.condition", "tt.reduce.return", "tt.scan.return"):
                     return [self.get(n) for n in op.operands]
                 if op.name == "tt.return":
                     return None
@@ -433,7 +471,7 @@ class Lowering:
 
     # Constants, ranges, ids --------------------------------------------------------------
     def op_arith_constant(self, op: Op):
-        (ty,) = op.result_types()
+        (ty,) = op.result_types() or [Type(None, "i1")]
         text = op.body.strip()
         if text.startswith("dense<"):
             inner = text[len("dense<"):text.rindex(">")]
@@ -655,16 +693,40 @@ class Lowering:
                 return idx
             return e.bin("add", idx, e.bin("mul", r, const(inner, "i32")))
 
+        layout = None
+        if self.reduce_layouts is not None and self.reduce_count < len(self.reduce_layouts):
+            layout = self.reduce_layouts[self.reduce_count]
+            if layout is not None and tuple(layout["shape"]) != tuple(shape):
+                layout = None
+        self.reduce_count += 1
+        factors = self.reduce_mul_factors(op) if layout is not None else None
+        staged = inputs
+        if factors is not None and 2 <= len(official_registers(layout, axis, R)) <= 256 and all(
+                self.get(n).is_tensor and tuple(self.get(n).ty.shape) == tuple(shape) for n in factors):
+            # LLVM contracts the producing fmul into the first adds of the per-thread tree.
+            staged = [self.materialize(self.get(n)) for n in factors]
+        else:
+            factors = None
+
         # Stage inputs in shared memory.
         e.barrier()
         arrays = []
-        for i, v in enumerate(inputs):
-            arr = e.shared_array(tys[i], P_in, i)
+        for i, v in enumerate(staged):
+            arr = e.shared_array(simt_type(v.ty), P_in, i)
             arrays.append(arr)
             for s in range(self.nslots(v.ty)):
                 e.if_(e.valid(P_in, s), lambda arr=arr, s=s, v=v: e.shst(arr, e.index(s), v.slots[s]))
         e.barrier()
         shload = e.shld
+
+        if layout is not None:
+            results = self.reduce_official(layout, axis, R, P_out, arrays, tys, combine, src_index,
+                                           fused=factors is not None)
+            if results is not None:
+                outs = [Val(ty, slots=results[i]) if ty.is_tensor else Val(ty, scalar=results[i][0])
+                        for i, ty in enumerate(out_tys)]
+                self.bind(op, outs)
+                return
 
         def strided_reduce(o: dict, first: dict, stride: int) -> list[dict]:
             """acc = reduce over r = first, first+stride, ... < R."""
@@ -730,7 +792,412 @@ class Lowering:
                 outs.append(Val(ty, scalar=results[i][0]))
         self.bind(op, outs)
 
+    def reduce_mul_factors(self, op: Op) -> list[str] | None:
+        """Factors (x, y) when a float add-reduce consumes ``x * y`` from the same block."""
+        if not self.fp_fusion or len(op.operands) != 1:
+            return None
+        region = op.regions[0]
+        body = [o for o in region.ops if o.name != "tt.reduce.return"]
+        args = {a for a, _ in region.args}
+        if len(body) != 1 or body[0].name != "arith.addf" or set(body[0].operands) != args or len(args) != 2:
+            return None
+        found = self.muls.get(op.operands[0])
+        if not found or found[1] != self.blocks[-1]:
+            return None
+        x, y = found[0].operands[:2]
+        if x in self.negs or y in self.negs:
+            return None
+        return [x, y]
+
+    def reduce_official(self, layout: dict, axis: int, R: int, P_out: int, arrays: list[int], tys: list[str],
+                        combine: Callable, src_index: Callable, fused: bool = False) -> list[list[dict]] | None:
+        """Reduce staged inputs in the order of Triton's NVIDIA lowering for a blocked layout: each
+        thread tree-reduces its registers pairwise, then lanes and then warps combine with xor
+        butterflies (lane/warp ``i`` takes ``combine(own, partner i + k)`` for k = n/2 .. 1).
+        ``fused``: ``arrays`` hold the factors of a product; tree adds of a product become FMAs."""
+        e = self.e
+        s, t, w = layout["spt"][axis], layout["tpw"][axis], layout["wpc"][axis]
+        t_u = min(t, max(1, -(-R // s)))
+        w_u = min(w, max(1, -(-R // (s * t))))
+        tile = s * t * w
+        regs = official_registers(layout, axis, R)
+        if len(regs) > 256:
+            return None
+        V = t_u * w_u
+        N = e.threads
+        n = len(arrays)
+        tys = tys[:1] if fused else tys
+        parts = [e.shared_array(ty, P_out * V, n + i) for i, ty in enumerate(tys)]
+        tid = e.cast({"b": "tid"}, "i32")
+
+        def tree_combine(a, b):
+            if not fused:
+                return combine(a, b)
+            if a[0] == "mul":
+                return ("val", _fma(e, [a[1], a[2], e.bin("mul", b[1], b[2]) if b[0] == "mul" else b[1]]))
+            if b[0] == "mul":
+                return ("val", _fma(e, [b[1], b[2], a[1]]))
+            return ("val", e.bin("add", a[1], b[1]))
+
+        def per_thread(item):
+            o = e.bin("div", item, const(V, "i32")) if V > 1 else item
+            v = e.bin("rem", item, const(V, "i32")) if V > 1 else const(0, "i32")
+            wi = e.bin("div", v, const(t_u, "i32")) if t_u > 1 else v
+            li = e.bin("rem", v, const(t_u, "i32")) if t_u > 1 else const(0, "i32")
+            base = e.bin("add", e.bin("mul", wi, const(s * t, "i32")), e.bin("mul", li, const(s, "i32")))
+            vals = []
+            for rep, j in regs:
+                pos = e.bin("add", base, const(rep * tile + j, "i32"))
+                idx = src_index(o, pos)
+                if fused:
+                    vals.append(("mul", e.shld(arrays[0], tys[0], idx), e.shld(arrays[1], tys[0], idx)))
+                else:
+                    vals.append([e.shld(a, ty, idx) for a, ty in zip(arrays, tys)])
+            while len(vals) > 1:
+                nxt = [tree_combine(vals[i], vals[i + 1]) for i in range(0, len(vals) - 1, 2)]
+                if len(vals) % 2:
+                    nxt.append(vals[-1])
+                vals = nxt
+            for p, x in zip(parts, [vals[0][1]] if fused else vals[0]):
+                e.shst(p, item, x)
+
+        self.counted_loop(tid, const(P_out * V, "i32"), per_thread, N)
+        e.barrier()
+
+        def butterfly(groups: int, k: int, stride: int):
+            def level(item):
+                o = e.bin("div", item, const(groups * k, "i32"))
+                rem = e.bin("rem", item, const(groups * k, "i32"))
+                g = e.bin("div", rem, const(k, "i32"))
+                i = e.bin("rem", rem, const(k, "i32"))
+                lo = e.bin("add", e.bin("mul", o, const(V, "i32")),
+                           e.bin("add", e.bin("mul", g, const(t_u, "i32")), e.bin("mul", i, const(stride, "i32"))))
+                hi = e.bin("add", lo, const(k * stride, "i32"))
+                res = combine([e.shld(p, ty, lo) for p, ty in zip(parts, tys)],
+                              [e.shld(p, ty, hi) for p, ty in zip(parts, tys)])
+                for p, r in zip(parts, res):
+                    e.shst(p, lo, r)
+
+            self.counted_loop(tid, const(P_out * groups * k, "i32"), level, N)
+            e.barrier()
+
+        k = t_u // 2
+        while k >= 1:
+            butterfly(w_u, k, 1)
+            k //= 2
+        k = w_u // 2
+        while k >= 1:
+            butterfly(1, k, t_u)
+            k //= 2
+        results = [[] for _ in parts]
+        for slot in range(e.slots_for(P_out)):
+            o = self.safe_index(P_out, slot) if P_out > 1 else const(0, "i32")
+            idx = e.bin("mul", o, const(V, "i32")) if V > 1 else o
+            for i, (p, ty) in enumerate(zip(parts, tys)):
+                results[i].append(e.shld(p, ty, idx))
+        e.barrier()
+        return results
+
+    def counted_loop(self, start: dict, end: dict, body: Callable[[dict], None], step: int = 1):
+        """Runtime loop ``for i in range(start, end, step): body(i)`` over i32 values."""
+        e = self.e
+        i = e.copy(start)
+        e.block()
+        e.if_(e.cmp("ge", i, end), lambda: e.emit({"k": "brk"}))
+        body(i)
+        e.mov(i, e.bin("add", i, const(step, "i32")))
+        e.emit({"k": "loop", "body": e.end()})
+
+    def stage(self, vals: list[Val], first_slot: int) -> list[tuple[int, str]]:
+        """Write every element of each tensor to its own shared array, indexed by element."""
+        e = self.e
+        arrays = []
+        e.barrier()
+        for i, v in enumerate(vals):
+            v = self.materialize(v)
+            ty = simt_type(v.ty)
+            arr = e.shared_array(ty, v.ty.numel, first_slot + i)
+            arrays.append((arr, ty))
+            for s in range(self.nslots(v.ty)):
+                e.if_(e.valid(v.ty.numel, s), lambda arr=arr, s=s, v=v: e.shst(arr, e.index(s), v.slots[s]))
+        e.barrier()
+        return arrays
+
+    def safe_index(self, numel: int, s: int) -> dict:
+        e = self.e
+        if numel >= e.threads:
+            return e.index(s)
+        return e.sel(e.valid(numel, s), e.index(s), const(0, "i32"))
+
+    # Matrix multiply ---------------------------------------------------------------------
+    def op_tt_dot(self, op: Op):
+        a, b, c = (self.get(n) for n in op.operands[:3])
+        (out_ty,) = op.result_types()
+        e = self.e
+        shape = out_ty.shape
+        M, N = shape[-2], shape[-1]
+        K = a.ty.shape[-1]
+        acc_ty = simt_type(out_ty)
+        precision = (op.attr("inputPrecision") or "ieee").strip()
+        tf32 = precision == "tf32" and a.ty.elem == "f32" and b.ty.elem == "f32"
+        integer = acc_ty not in FLOATS
+        (sa, ta), (sb, tb) = self.stage([a, b], 0)
+
+        def operand(x: dict) -> dict:
+            if tf32:
+                bits = e.bitcast(x, "u32")
+                bits = e.bin("and", e.bin("add", bits, const(0x1000, "u32")), const(0xFFFFE000, "u32"))
+                x = e.bitcast(bits, "f32")
+            return e.cast(x, acc_ty)
+
+        def per_slot(s):
+            idx = self.safe_index(out_ty.numel, s)
+            row = e.bin("div", idx, const(N, "i32"))
+            col = e.bin("rem", idx, const(N, "i32"))
+            a_base = e.bin("mul", row, const(K, "i32"))
+            b_base = col
+            if len(shape) == 3:
+                batch = e.bin("div", idx, const(M * N, "i32"))
+                b_base = e.bin("add", e.bin("mul", batch, const(K * N, "i32")), col)
+            acc = e.copy(e.cast(self.slot(self.materialize(c), s), acc_ty))
+
+            def step(k):
+                x = operand(e.shld(sa, ta, e.bin("add", a_base, k)))
+                y = operand(e.shld(sb, tb, e.bin("add", b_base, e.bin("mul", k, const(N, "i32")))))
+                e.mov(acc, e.bin("add", e.bin("mul", x, y), acc) if integer else _fma(e, [x, y, acc]))
+
+            self.counted_loop(const(0, "i32"), const(K, "i32"), step)
+            return acc
+
+        self.bind(op, [self.make(out_ty, per_slot)])
+
+    # Atomics -----------------------------------------------------------------------------
+    ATOMIC_RMW = {"add": ("add", False), "fadd": ("add", False), "and": ("and", False), "or": ("or", False),
+                  "xor": ("xor", False), "max": ("max", False), "min": ("min", False), "umax": ("max", True),
+                  "umin": ("min", True), "exch": ("xchg", False), "xchg": ("xchg", False)}
+
+    def _atomic(self, op: Op, out_ty: Type, ptr: Val, values: list[Val], mask: Val | None,
+                emit: Callable[[dict, list[dict], str], dict], unsigned: bool = False):
+        """Per-element atomic; a scalar atomic runs once per program and its result is broadcast."""
+        e = self.e
+        elem = simt_type(out_ty)
+        aty = UNSIGNED.get(elem, elem) if unsigned else elem
+
+        def run(p, xs):
+            address = e.bitcast(p, "atomic_" + aty)
+            return e.bitcast(emit(address, [e.bitcast(x, aty) for x in xs], aty), elem)
+
+        if not ptr.is_tensor:
+            out = e.local(elem)
+            e.mov(out, const(0, elem))
+            first = e.cmp("eq", {"b": "tid"}, const(0, "u32"))
+            cond = first if mask is None else e.bin("and", first, mask.scalar)
+            arr = e.shared_array(elem, 1, 0)
+            e.barrier()
+            e.if_(cond, lambda: (e.mov(out, run(ptr.scalar, [v.scalar for v in values])),
+                                 e.shst(arr, const(0, "i32"), out)))
+            e.barrier()
+            result = e.shld(arr, elem, const(0, "i32"))
+            if mask is not None:
+                result = e.sel(mask.scalar, result, const(0, elem))
+            self.bind(op, [Val(out_ty, scalar=result)])
+            return
+
+        def per_slot(s):
+            cond = e.valid(out_ty.numel, s)
+            if mask is not None:
+                m = self.slot(mask, s)
+                cond = m if "c" in cond and cond["c"] == "1" else e.bin("and", cond, m)
+            out = e.local(elem)
+            e.mov(out, const(0, elem))
+            e.if_(cond, lambda: e.mov(out, run(self.slot(ptr, s), [self.slot(v, s) for v in values])))
+            return out
+
+        self.bind(op, [self.make(out_ty, per_slot)])
+
+    def op_tt_atomic_rmw(self, op: Op):
+        kind = op.body.strip().split(",")[0].strip()
+        if kind not in self.ATOMIC_RMW:
+            raise LoweringError(f"unsupported atomic_rmw kind {kind}")
+        name, unsigned = self.ATOMIC_RMW[kind]
+        names = op.operands
+        ptr, val = self.get(names[0]), self.get(names[1])
+        mask = self.get(names[2]) if len(names) > 2 else None
+        (out_ty,) = op.result_types()
+        e = self.e
+
+        def emit(address, xs, aty):
+            out = e.local(aty)
+            e.emit({"k": "atom", "op": name, "out": out["l"], "ptr": address, "val": xs[0]})
+            return out
+
+        self._atomic(op, out_ty, ptr, [val], mask, emit, unsigned)
+
+    def op_tt_atomic_cas(self, op: Op):
+        ptr, cmp, val = (self.get(n) for n in op.operands[:3])
+        (out_ty,) = op.result_types()
+        e = self.e
+
+        def emit(address, xs, aty):
+            out = e.local(aty)
+            e.emit({"k": "cas", "out": out["l"], "ptr": address, "cmp": xs[0], "val": xs[1]})
+            return out
+
+        self._atomic(op, out_ty, ptr, [cmp, val], None, emit)
+
+    # Scan --------------------------------------------------------------------------------
+    def op_tt_scan(self, op: Op):
+        """Chunked scan: each line is split into G chunks scanned sequentially, then every chunk
+        is offset by the combined totals of the chunks before it."""
+        inputs = [self.materialize(self.get(n)) for n in op.operands]
+        axis = int(op.attr("axis"))
+        reverse = (op.attr("reverse") or "false").strip() == "true"
+        region = op.regions[0]
+        out_tys = op.result_types()
+        e = self.e
+        shape = inputs[0].ty.shape
+        R = shape[axis]
+        inner = 1
+        for d in shape[axis + 1:]:
+            inner *= d
+        P = inputs[0].ty.numel
+        L = P // R
+        T = e.threads
+        G = max(1, min(T // L, R)) if L < T else 1
+        C = -(-R // G)
+        G = -(-R // C)
+        n = len(inputs)
+        src = self.stage(inputs, 0)
+        tys = [t for _, t in src]
+        outs = [e.shared_array(t, P, n + i) for i, t in enumerate(tys)]
+        totals = [e.shared_array(t, L * G, 2 * n + i) for i, t in enumerate(tys)]
+
+        def combine(acc, new):
+            args = [Val(v.ty.scalar(), scalar=x) for v, x in zip(inputs * 2, acc + new)]
+            return [r.scalar for r in self.block(region, args)]
+
+        def index(line, r):
+            pos = e.bin("sub", const(R - 1, "i32"), r) if reverse else r
+            if inner == 1:
+                return e.bin("add", e.bin("mul", line, const(R, "i32")), pos)
+            outer = e.bin("div", line, const(inner, "i32"))
+            within = e.bin("rem", line, const(inner, "i32"))
+            base = e.bin("add", e.bin("mul", outer, const(R * inner, "i32")), within)
+            return e.bin("add", base, e.bin("mul", pos, const(inner, "i32")))
+
+        def chunk(w):
+            line = e.bin("div", w, const(G, "i32")) if G > 1 else w
+            g = e.bin("rem", w, const(G, "i32")) if G > 1 else const(0, "i32")
+            r0 = e.bin("mul", g, const(C, "i32"))
+            r1 = e.bin("min", e.bin("add", r0, const(C, "i32")), const(R, "i32"))
+            return line, g, r0, r1
+
+        def phase1(w):
+            line, _, r0, r1 = chunk(w)
+            i0 = index(line, r0)
+            acc = [e.copy(e.shld(a, t, i0)) for (a, t) in src]
+            for o, x in zip(outs, acc):
+                e.shst(o, i0, x)
+
+            def step(r):
+                i = index(line, r)
+                res = combine(acc, [e.shld(a, t, i) for (a, t) in src])
+                for a_, r_, o in zip(acc, res, outs):
+                    e.mov(a_, r_)
+                    e.shst(o, i, a_)
+
+            self.counted_loop(e.bin("add", r0, const(1, "i32")), r1, step)
+            for tot, x in zip(totals, acc):
+                e.shst(tot, w, x)
+
+        tid = e.cast({"b": "tid"}, "i32")
+        self.counted_loop(tid, const(L * G, "i32"), phase1, T)
+        e.barrier()
+        if G > 1:
+            def phase2(w):
+                line, g, r0, r1 = chunk(w)
+
+                def offset():
+                    first = e.bin("mul", line, const(G, "i32"))
+                    prefix = [e.copy(e.shld(tot, t, first)) for tot, t in zip(totals, tys)]
+
+                    def more(j):
+                        res = combine(prefix, [e.shld(tot, t, e.bin("add", first, j)) for tot, t in zip(totals, tys)])
+                        for p_, r_ in zip(prefix, res):
+                            e.mov(p_, r_)
+
+                    self.counted_loop(const(1, "i32"), g, more)
+
+                    def apply(r):
+                        i = index(line, r)
+                        res = combine(prefix, [e.shld(o, t, i) for o, t in zip(outs, tys)])
+                        for o, r_ in zip(outs, res):
+                            e.shst(o, i, r_)
+
+                    self.counted_loop(r0, r1, apply)
+
+                e.if_(e.cmp("gt", g, const(0, "i32")), offset)
+
+            self.counted_loop(tid, const(L * G, "i32"), phase2, T)
+            e.barrier()
+        results = []
+        for (o, t), ty in zip(zip(outs, tys), out_tys):
+            results.append(self.make(ty, lambda s, o=o, t=t, ty=ty: e.shld(o, t, self.safe_index(ty.numel, s))))
+        e.barrier()
+        self.bind(op, results)
+
     # Control flow ------------------------------------------------------------------------
+    def op_scf_while(self, op: Op):
+        import re
+        m = re.match(r"\((.*)\)", op.body.strip())
+        pairs = [tuple(x.strip() for x in p.split("=")) for p in split_top(m.group(1))] if m and m.group(1) else []
+        out_tys = op.result_types()
+        e = self.e
+
+        def fresh(ty: Type) -> Val:
+            if ty.is_tensor:
+                return Val(ty, slots=[e.local(simt_type(ty)) for _ in range(self.nslots(ty))])
+            return Val(ty, scalar=e.local(simt_type(ty)))
+
+        def assign(dst: Val, src: Val):
+            if dst.is_tensor:
+                for s, d in enumerate(dst.slots):
+                    e.mov(d, self.slot(src, s))
+            else:
+                e.mov(dst.scalar, src.scalar)
+
+        carriers = []
+        for _, init in pairs:
+            v = self.get(init)
+            c = fresh(v.ty)
+            assign(c, v)
+            carriers.append(c)
+        results = [fresh(ty) for ty in out_tys]
+        before, after = op.regions[0], op.regions[1]
+        e.block()
+        self.new_bb()
+        names = [n for n, _ in before.args] or [p[0] for p in pairs]
+        for name, c in zip(names, carriers):
+            self.rank[name] = self.unmovable_rank()
+            self.env[name] = c
+        cond_vals = self.block(before) or []
+        cond, vals = cond_vals[0], cond_vals[1:]
+        snapshot = [Val(v.ty, slots=[e.copy(self.slot(v, s)) for s in range(self.nslots(v.ty))]) if v.is_tensor
+                    else Val(v.ty, scalar=e.copy(v.scalar)) for v in vals]
+        for r, v in zip(results, snapshot):
+            assign(r, v)
+        e.if_(e.un("not", cond.scalar), lambda: e.emit({"k": "brk"}))
+        yielded = self.block(after, snapshot) or []
+        temps = [Val(y.ty, slots=[e.copy(self.slot(y, s)) for s in range(self.nslots(y.ty))]) if y.is_tensor
+                 else Val(y.ty, scalar=e.copy(y.scalar)) for y in yielded]
+        for c, t in zip(carriers, temps):
+            assign(c, t)
+        e.emit({"k": "loop", "body": e.end()})
+        self.new_bb()
+        for name in op.results:
+            self.rank[name] = self.unmovable_rank()
+        self.bind(op, results)
+
     def op_scf_for(self, op: Op):
         import re
         m = re.match(r"(%\S+)\s*=\s*(%\S+)\s+to\s+(%\S+)\s+step\s+(%\S+)(?:\s+iter_args\((.*?)\)\s*(?:->|$))?", op.body.strip())
@@ -899,6 +1366,17 @@ class Lowering:
         e = self.e
         self.bind(op, [self.elementwise(out_ty, inputs, lambda xs: fn(e, xs, simt_type(out_ty)))])
 
+    def op_tt_precise_sqrt(self, op: Op):
+        (out_ty,) = op.result_types()
+        e = self.e
+        self.bind(op, [self.elementwise(out_ty, [self.get(op.operands[0])], lambda xs: e.un("sqrt", xs[0]))])
+
+    def op_tt_precise_divf(self, op: Op):
+        (out_ty,) = op.result_types()
+        e = self.e
+        inputs = [self.get(n) for n in op.operands[:2]]
+        self.bind(op, [self.elementwise(out_ty, inputs, lambda xs: e.bin("div", xs[0], xs[1]))])
+
     def op_tt_bitcast(self, op: Op):
         (out_ty,) = op.result_types()
         inputs = [self.get(op.operands[0])]
@@ -1032,6 +1510,25 @@ def _fptoui(e: Emitter, xs, elem, src, pred):
 
 
 LN2 = math.log(2.0)
+LOG2E = 1.0 / LN2
+
+
+def _native(op: str, f32=None, f64=None):
+    """Matches the official NVIDIA lowering: f32/f64 use the given PTX instruction, libdevice
+    symbol (``__nv_*``) or callable; other types use the generic RUDA operation."""
+
+    def lower_one(e: Emitter, xs, t, s, p):
+        impl = {"f32": f32, "f64": f64}.get(t)
+        if impl is None:
+            return e.un(op, xs[0])
+        if callable(impl):
+            return impl(e, xs[0])
+        if impl.startswith("__nv_"):
+            return e.libdevice(impl, t, xs[0])
+        return e.asm(f"{impl} $0, $1;", t, xs[0])
+
+    return lower_one
+
 
 ARITH = {
     "addi": lambda e, xs, t, s, p: e.bin("add", *xs),
@@ -1040,7 +1537,7 @@ ARITH = {
     "subf": lambda e, xs, t, s, p: e.bin("sub", *xs),
     "muli": lambda e, xs, t, s, p: e.bin("mul", *xs),
     "mulf": lambda e, xs, t, s, p: e.bin("mul", *xs),
-    "divf": lambda e, xs, t, s, p: e.bin("div", *xs),
+    "divf": lambda e, xs, t, s, p: e.asm("div.full.f32 $0, $1, $2;", t, *xs) if t == "f32" else e.bin("div", *xs),
     "divsi": lambda e, xs, t, s, p: e.bin("div", *xs),
     "divui": lambda e, xs, t, s, p: _unsigned(e, "div", xs, t),
     "remsi": lambda e, xs, t, s, p: e.bin("rem", *xs),
@@ -1075,17 +1572,18 @@ ARITH = {
     "fptoui": _fptoui,
     "bitcast": lambda e, xs, t, s, p: e.bitcast(xs[0], t),
     "index_cast": lambda e, xs, t, s, p: e.cast(xs[0], t),
-    "exp": lambda e, xs, t, s, p: e.un("exp", xs[0]),
-    "exp2": lambda e, xs, t, s, p: e.un("exp", e.bin("mul", xs[0], const(LN2, t))),
-    "log": lambda e, xs, t, s, p: e.un("log", xs[0]),
-    "log2": lambda e, xs, t, s, p: e.bin("mul", e.un("log", xs[0]), const(1.0 / LN2, t)),
-    "log1p": lambda e, xs, t, s, p: e.un("log1p", xs[0]),
-    "sqrt": lambda e, xs, t, s, p: e.un("sqrt", xs[0]),
-    "rsqrt": lambda e, xs, t, s, p: e.un("rsqrt", xs[0]),
-    "sin": lambda e, xs, t, s, p: e.un("sin", xs[0]),
-    "cos": lambda e, xs, t, s, p: e.un("cos", xs[0]),
-    "tanh": lambda e, xs, t, s, p: e.un("tanh", xs[0]),
-    "erf": lambda e, xs, t, s, p: e.un("erf", xs[0]),
+    "exp": _native("exp", f32=lambda e, x: e.asm("ex2.approx.f32 $0, $1;", "f32", e.bin("mul", x, const(LOG2E, "f32"))),
+                   f64="__nv_exp"),
+    "exp2": _native("exp2", f32="ex2.approx.ftz.f32", f64="__nv_exp2"),
+    "log": _native("log", f32="__nv_logf", f64="__nv_log"),
+    "log2": _native("log2", f32="__nv_log2f", f64="__nv_log2"),
+    "log1p": _native("log1p", f32="__nv_log1pf", f64="__nv_log1p"),
+    "sqrt": _native("sqrt", f32="sqrt.approx.ftz.f32"),
+    "rsqrt": _native("rsqrt", f32="rsqrt.approx.ftz.f32", f64="__nv_rsqrt"),
+    "sin": _native("sin", f32="__nv_sinf", f64="__nv_sin"),
+    "cos": _native("cos", f32="__nv_cosf", f64="__nv_cos"),
+    "tanh": _native("tanh", f32="__nv_tanhf", f64="__nv_tanh"),
+    "erf": _native("erf", f32="__nv_erff", f64="__nv_erf"),
     "floor": lambda e, xs, t, s, p: e.un("floor", xs[0]),
     "ceil": lambda e, xs, t, s, p: e.un("ceil", xs[0]),
     "trunc": lambda e, xs, t, s, p: e.un("trunc", xs[0]),
@@ -1093,7 +1591,8 @@ ARITH = {
     "absf": lambda e, xs, t, s, p: e.un("abs", xs[0]),
     "absi": lambda e, xs, t, s, p: e.un("abs", xs[0]),
     "fma": lambda e, xs, t, s, p: _fma(e, xs),
-    "powf": lambda e, xs, t, s, p: e.bin("pow", *xs),
+    "powf": lambda e, xs, t, s, p: e.libdevice({"f32": "__nv_powf", "f64": "__nv_pow"}[t], t, *xs)
+    if t in ("f32", "f64") else e.bin("pow", *xs),
 }
 
 
@@ -1115,7 +1614,9 @@ _EXTERN_BINARY = {"fmul_rn": "mul", "dmul_rn": "mul", "fadd_rn": "add", "dadd_rn
 
 
 def extern_function(symbol: str):
-    name = symbol[len("__nv_"):] if symbol.startswith("__nv_") else symbol
+    if symbol.startswith("__nv_"):
+        return lambda e, xs, t: e.libdevice(symbol, t, *xs)
+    name = symbol
     if name in _EXTERN_BINARY:
         return lambda e, xs, t, op=_EXTERN_BINARY[name]: e.bin(op, xs[0], xs[1])
     candidates = [name, name[:-1] if name.endswith("f") else name]
@@ -1135,8 +1636,10 @@ def extern_function(symbol: str):
     raise LoweringError(f"unsupported extern function {symbol}")
 
 
-def lower(ttir_text: str, num_warps: int, fp_fusion: bool = True) -> tuple[dict, list]:
+def lower(ttir_text: str, num_warps: int, fp_fusion: bool = True,
+          reduce_layouts: list | None = None) -> tuple[dict, list]:
     func = parse_module(ttir_text)
-    lowering = Lowering(func, num_warps, fp_fusion)
+    lowering = Lowering(func, num_warps, fp_fusion, reduce_layouts)
     kernel = lowering.run()
+    kernel["externs"] = lowering.e.externs
     return kernel, lowering.arg_kinds

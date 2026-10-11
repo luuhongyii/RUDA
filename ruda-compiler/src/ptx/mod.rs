@@ -11,6 +11,7 @@ mod native_memory;
 mod matrix;
 mod diagnostics;
 mod printf;
+mod inline_asm;
 mod validation;
 mod control_flow;
 mod cluster;

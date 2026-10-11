@@ -31,6 +31,7 @@ pub unsafe extern "C" fn ruda_torch_stream(op:u32,stream:u64,object:u64,flags:u3
             9=>interop::command(device,StreamCommand::EventDestroy(object)).expect("event destroy failed"),
             10=>interop::command(device,StreamCommand::Elapsed {start:stream,end:object}).expect("event elapsed time failed"),
             11=>{device_sync();0},
+            13=>interop::command(device,StreamCommand::NativeStream(stream)).expect("native stream query failed"),
             12=>{
                 let allocation=object as *const Allocation;
                 assert!(!allocation.is_null());

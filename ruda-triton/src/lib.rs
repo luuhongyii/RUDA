@@ -57,6 +57,11 @@ pub enum Stmt {
     Mov { out: u32, a: Operand },
     Ld { out: u32, ptr: Operand },
     St { ptr: Operand, val: Operand },
+    /// `ptr` is an `atomic_*` local holding a reinterpreted address.
+    Atom { op: String, out: u32, ptr: Operand, val: Operand },
+    Cas { out: u32, ptr: Operand, cmp: Operand, val: Operand },
+    /// Inline PTX: `$0` is `out`, `$1..` are `args`; `module` is emitted once at module scope.
+    Asm { code: String, #[serde(default)] module: String, out: u32, args: Vec<Operand> },
     Shld { out: u32, sh: usize, idx: Operand },
     Shst { sh: usize, idx: Operand, val: Operand },
     Bar,
@@ -81,6 +86,9 @@ pub struct Compiled {
 }
 
 pub fn parse_type(name: &str) -> Result<Type, String> {
+    if let Some(inner) = name.strip_prefix("atomic_") {
+        return Ok(Type::new(StorageType::Atomic(parse_type(inner)?.elem_type())));
+    }
     let elem = match name {
         "f16" => ElemType::Float(FloatKind::F16),
         "bf16" => ElemType::Float(FloatKind::BF16),
@@ -265,6 +273,34 @@ impl Builder {
             Stmt::St { ptr, val } => {
                 let store = BinaryOperator { lhs: self.operand(ptr)?, rhs: self.operand(val)? };
                 scope.instructions.push(Instruction::no_out(Operator::NativeStore(store)));
+            }
+            Stmt::Atom { op, out, ptr, val } => {
+                let out = self.local(*out)?;
+                let bin = BinaryOperator { lhs: self.operand(ptr)?, rhs: self.operand(val)? };
+                let atomic = match op.as_str() {
+                    "add" => AtomicOp::Add(bin),
+                    "max" => AtomicOp::Max(bin),
+                    "min" => AtomicOp::Min(bin),
+                    "and" => AtomicOp::And(bin),
+                    "or" => AtomicOp::Or(bin),
+                    "xor" => AtomicOp::Xor(bin),
+                    "xchg" => AtomicOp::Swap(bin),
+                    other => return Err(format!("unknown atomic op {other}")),
+                };
+                push(scope, Operation::Atomic(atomic), out);
+            }
+            Stmt::Cas { out, ptr, cmp, val } => {
+                let out = self.local(*out)?;
+                let cas = CompareAndSwapOperator { input: self.operand(ptr)?, cmp: self.operand(cmp)?, val: self.operand(val)? };
+                push(scope, Operation::Atomic(AtomicOp::CompareAndSwap(cas)), out);
+            }
+            Stmt::Asm { code, module, out, args } => {
+                let mut vars = vec![self.local(*out)?];
+                for arg in args {
+                    vars.push(self.operand(arg)?);
+                }
+                let format_string = format!("\u{1}{code}\u{1}{module}");
+                scope.instructions.push(Instruction::no_out(NonSemantic::Print { format_string, args: vars }));
             }
             Stmt::Shld { out, sh, idx } => {
                 let out = self.local(*out)?;

@@ -129,6 +129,11 @@ impl Emitter {
             Operation::Barrier(operation) => self.barrier(operation, instruction.out),
             Operation::Tma(operation) => self.tma(operation, instruction.out),
             Operation::NonSemantic(ruda_core::ir::NonSemantic::EnterDebugScope | ruda_core::ir::NonSemantic::ExitDebugScope) => Ok(()),
+            Operation::NonSemantic(ruda_core::ir::NonSemantic::Print { format_string, args })
+                if format_string.starts_with(super::inline_asm::INLINE_ASM_MARKER) =>
+            {
+                self.inline_asm(&format_string, &args)
+            }
             Operation::NonSemantic(ruda_core::ir::NonSemantic::Print { format_string, args }) => {
                 self.printf(&format_string, &args)
             }

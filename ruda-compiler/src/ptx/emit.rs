@@ -14,6 +14,8 @@ pub(super) struct Emitter {
     pub registers: HashMap<Variable, String>,
     pub vector_registers: HashMap<Variable, Vec<String>>,
     pub atomic_pointers: HashMap<Variable, String>,
+    /// Atomic pointer registers built from raw addresses; their atomics are `acq_rel.gpu`.
+    pub native_atomic_pointers: std::collections::HashSet<String>,
     pub matrix_fragments: HashMap<Variable, Vec<String>>,
     pub local_arrays: HashMap<u32, Variable>,
     pub constant_arrays: HashMap<u32, (Variable, Vec<Variable>)>,
@@ -111,6 +113,7 @@ impl Emitter {
             registers: HashMap::new(),
             vector_registers: HashMap::new(),
             atomic_pointers: HashMap::new(),
+            native_atomic_pointers: Default::default(),
             matrix_fragments: HashMap::new(),
             local_arrays: HashMap::new(),
             constant_arrays: HashMap::new(),

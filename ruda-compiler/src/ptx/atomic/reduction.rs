@@ -46,8 +46,17 @@ impl Emitter {
             _ => ty.suffix(),
         };
         let modifier = if ty.half() && operation == "add" { ".noftz" } else { "" };
-        self.line(format!("atom.{operation}{modifier}.{suffix} {destination}, [{pointer}], {value};"));
+        let semantics = self.atomic_semantics(pointer);
+        self.line(format!("atom{semantics}.{operation}{modifier}.{suffix} {destination}, [{pointer}], {value};"));
         Ok(())
+    }
+
+    pub(super) fn atomic_semantics(&self, pointer: &str) -> &'static str {
+        if self.native_atomic_pointers.contains(pointer) && self.target.sm >= 70 && self.target.version >= (6, 3) {
+            ".acq_rel.gpu"
+        } else {
+            ""
+        }
     }
 
     fn atomic_half_update(&mut self, ty: Scalar, add: bool, pointer: &str, value: &str, destination: &str) -> Result<()> {

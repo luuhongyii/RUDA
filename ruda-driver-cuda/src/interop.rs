@@ -10,9 +10,12 @@ pub enum StreamCommand {
     Record { stream:u64, event:u64, timing:bool },
     Wait { stream:u64, event:u64 }, EventQuery(u64), EventSynchronize(u64),
     EventDestroy(u64), Elapsed { start:u64, end:u64 }, DeviceSynchronize,
+    /// Flush RUDA work queued on the stream and return its `CUstream`, so foreign
+    /// kernels launched on it are ordered after that work.
+    NativeStream(u64),
 }
 
-/// Results are stream/event IDs, bools (0/1), or f32 elapsed milliseconds bits.
+/// Results are stream/event IDs, bools (0/1), f32 elapsed milliseconds bits, or a `CUstream`.
 pub fn command(device:DeviceId, command:StreamCommand)->Result<u64,ServerError> {
     DeviceHandle::<CudaServer>::new(device).submit_blocking(move |s|s.interop_command(command))
         .map_err(|e|ServerError::Generic { reason:format!("interop device queue failed: {e:?}"),backtrace:BackTrace::capture() })?

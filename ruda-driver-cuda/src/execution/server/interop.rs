@@ -115,6 +115,7 @@ impl CudaServer {
                     .map_err(|e|error(&format!("GPU interop error: {:?}",e.0)))?;
                 Ok(ms.to_bits() as u64)
             }
+            StreamCommand::NativeStream(id)=>Ok(self.interop_stream(id)? as usize as u64),
             StreamCommand::DeviceSynchronize=>{
                 // Report deferred RUDA launch errors as well as driver errors.
                 for id in 0..self.interop.next_stream { self.interop_stream(id)?; }

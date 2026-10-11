@@ -31,6 +31,16 @@ impl Emitter {
                 let checked = matches!(&instruction.operation, Operation::Operator(Operator::Index(_)));
                 self.atomic_index(op.list, op.index, output()?, checked)?;
             }
+            Operation::Operator(Operator::Reinterpret(op)) if instruction.out.is_some_and(is_atomic) => {
+                let out = output()?;
+                if Scalar::of(op.input.ty)? != Scalar::U64 {
+                    return Err(invalid("native atomic pointer must be reinterpreted from a u64 address"));
+                }
+                let address = self.value(op.input)?;
+                let destination = self.atomic_pointer_destination(out)?;
+                self.line(format!("mov.u64 {destination}, {address};"));
+                self.native_atomic_pointers.insert(destination);
+            }
             Operation::Copy(input) if is_atomic(*input) => {
                 let out = output()?;
                 if out.ty != input.ty { return Err(invalid("atomic pointer copy type mismatch")); }
@@ -89,7 +99,8 @@ impl Emitter {
                 if ty.narrow() {
                     return self.atomic_integer_compare_exchange(ty, &pointer, &compare, &value, &destination);
                 }
-                self.line(format!("atom.cas.{} {destination}, [{pointer}], {compare}, {value};", ty.bits()));
+                let semantics = self.atomic_semantics(&pointer);
+                self.line(format!("atom{semantics}.cas.{} {destination}, [{pointer}], {compare}, {value};", ty.bits()));
                 Ok(())
             }
             AtomicOp::Swap(op) | AtomicOp::Add(op) | AtomicOp::Sub(op) |

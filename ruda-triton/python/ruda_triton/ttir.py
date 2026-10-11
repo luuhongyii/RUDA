@@ -175,7 +175,7 @@ def _parse_block(lines: list[str], pos: int) -> tuple[Block, int]:
     block = Block()
     while pos < len(lines):
         line = lines[pos].strip()
-        if line == "}" or line.startswith("})") or line.startswith("} else"):
+        if line == "}" or line.startswith("})") or line.startswith("} else") or line.startswith("} do"):
             return block, pos
         if line.startswith("^bb"):
             m = re.match(r"\^bb\d+\((.*)\):", line)
@@ -205,7 +205,8 @@ def _parse_op(lines: list[str], pos: int) -> tuple[Op, int]:
         name = rest[1:name_end]
         rest = rest[name_end + 1:]
     else:
-        name, _, rest = rest.partition(" ")
+        nm = re.match(r"([\w.]+)\s*", rest)
+        name, rest = nm.group(1), rest[nm.end():]
     if not line.endswith("{"):
         body, tail = split_tail_type(_STRING.sub('""', rest))
         return Op(name, results, body, tail, strings=strings), pos + 1
@@ -219,7 +220,7 @@ def _parse_op(lines: list[str], pos: int) -> tuple[Op, int]:
     tail = ""
     while True:
         closing = lines[pos].strip()
-        if closing.startswith("} else"):
+        if closing.startswith("} else") or closing.startswith("} do"):
             region, pos = _parse_block(lines, pos + 1)
             regions.append(region)
             continue

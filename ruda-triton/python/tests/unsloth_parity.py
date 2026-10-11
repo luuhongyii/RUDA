@@ -111,7 +111,9 @@ def run(mode, outdir):
             torch.cuda.synchronize()
             status[case.__name__] = "ok"
         except Exception as error:  # report every case, do not stop at the first failure
-            status[case.__name__] = f"{type(error).__name__}: {str(error).splitlines()[0][:300]}"
+            import traceback
+            traceback.print_exc()
+            status[case.__name__] = f"{type(error).__name__}: {(str(error).splitlines() or [''])[0][:300]}"
         print(f"[{mode}] {case.__name__}: {status[case.__name__]} ({time.time() - start:.1f}s)", flush=True)
     torch.save({"results": {k: v.cpu() for k, v in results.items()}, "status": status, "backend": backend},
                os.path.join(outdir, f"{mode}.pt"))

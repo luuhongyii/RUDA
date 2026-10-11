@@ -1,27 +1,56 @@
 """Triton driver for the Ruda backend.
 
-Kernels are PTX produced by Ruda's direct PTX compiler and are loaded and launched through the
-CUDA driver API on the device that owns the PyTorch tensors.
+Kernels are PTX produced by Ruda's direct PTX compiler, loaded through the CUDA driver API and
+launched by a small compiled C launcher.
+
+Two device modes:
+
+* ``cuda`` (default): tensors are ``torch.cuda`` tensors and kernels run on PyTorch's current
+  CUDA stream.
+* ``ruda`` (``RUDA_TRITON_DEVICE=ruda``): tensors live on the RUDA PrivateUse1 device
+  (``ruda_torch``). Kernels run on the native stream of RUDA's current stream; RUDA work
+  queued on that stream is flushed first, so Triton kernels are ordered with RUDA kernels.
 """
 from __future__ import annotations
 
 import ctypes
+import functools
 import os
 import struct
 import sys
+from pathlib import Path
 
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
-from .compiler import BACKEND
+BACKEND = "ruda"
 
-_SCALAR_FORMATS = {"i1": "?", "i8": "b", "i16": "h", "i32": "i", "i64": "q", "u8": "B", "u16": "H", "u32": "I",
-                   "u64": "Q", "f16": "e", "f32": "f", "f64": "d"}
+_SCALAR_CODES = {"i1": "?", "i8": "b", "i16": "h", "i32": "i", "i64": "q", "u1": "?", "u8": "B", "u16": "H",
+                 "u32": "I", "u64": "Q", "f16": "e", "bf16": "E", "f32": "f", "f64": "d"}
 
 CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK = 0
 CU_FUNC_ATTRIBUTE_NUM_REGS = 4
 CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES = 3
 CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES = 8
+
+
+def device_mode() -> str:
+    mode = os.environ.get("RUDA_TRITON_DEVICE", "cuda")
+    if mode not in ("cuda", "ruda"):
+        raise RuntimeError(f"RUDA_TRITON_DEVICE must be 'cuda' or 'ruda', not {mode!r}")
+    return mode
+
+
+@functools.lru_cache(None)
+def _ruda_torch():
+    import ruda_torch
+    return ruda_torch
+
+
+def ruda_native_stream() -> int:
+    """`CUstream` of RUDA's current stream, after flushing RUDA work queued on it."""
+    c = _ruda_torch()._C
+    return c.stream_command(13, c.stream_command(0))
 
 
 class CudaApi:
@@ -49,6 +78,17 @@ class CudaApi:
         self.check(self.lib.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev), "cuDevicePrimaryCtxRetain")
         self.check(self.lib.cuCtxSetCurrent(ctx), "cuCtxSetCurrent")
 
+    @property
+    def launch_kernel_address(self) -> int:
+        return ctypes.cast(self.lib.cuLaunchKernel, ctypes.c_void_p).value
+
+
+@functools.lru_cache(None)
+def _launcher_module():
+    from triton.runtime.build import compile_module_from_src
+    src = (Path(__file__).parent / "launcher.c").read_text()
+    return compile_module_from_src(src, "ruda_launcher")
+
 
 class RudaUtils:
 
@@ -62,6 +102,8 @@ class RudaUtils:
 
     def load_binary(self, name, kernel, shared, device):
         cuda = self.cuda
+        if device_mode() == "ruda":
+            _ruda_torch()
         cuda.ensure_context(device)
         image = kernel if isinstance(kernel, bytes) else kernel.encode()
         if not image.endswith(b"\0"):
@@ -93,77 +135,51 @@ class RudaUtils:
             self.cuda.lib.cuModuleUnload(ctypes.c_void_p(module))
 
     def get_device_properties(self, device):
-        import torch
-        props = torch.cuda.get_device_properties(device)
+        cuda = self.cuda
+        cuda.ensure_context(device)
+        dev = ctypes.c_int()
+        cuda.check(cuda.lib.cuDeviceGet(ctypes.byref(dev), device), "cuDeviceGet")
+
+        def attribute(code):
+            value = ctypes.c_int()
+            cuda.check(cuda.lib.cuDeviceGetAttribute(ctypes.byref(value), code, dev), "cuDeviceGetAttribute")
+            return value.value
+
         return {
-            "max_shared_mem": getattr(props, "shared_memory_per_block_optin", 48 * 1024),
-            "multiprocessor_count": props.multi_processor_count,
-            "sm_clock_rate": 0,
-            "mem_clock_rate": 0,
-            "mem_bus_width": 0,
+            "max_shared_mem": attribute(97),  # MAX_SHARED_MEMORY_PER_BLOCK_OPTIN
+            "multiprocessor_count": attribute(16),
+            "sm_clock_rate": attribute(13),
+            "mem_clock_rate": attribute(36),
+            "mem_bus_width": attribute(37),
             "warpSize": 32,
         }
-
-
-def _pointer(arg) -> int:
-    if arg is None:
-        return 0
-    if isinstance(arg, int):
-        return arg
-    if hasattr(arg, "data_ptr"):
-        return arg.data_ptr()
-    raise TypeError(f"cannot pass {type(arg).__name__} as a pointer argument")
 
 
 class RudaLauncher:
 
     def __init__(self, src, metadata):
-        constants = src.constants if hasattr(src, "constants") else dict()
         signature = list(src.signature.values())
         if any(isinstance(t, tuple) for t in signature):
             raise NotImplementedError("tuple kernel arguments")
-        self.runtime_args = [i for i, t in enumerate(signature) if t != "constexpr"]
-        self.arg_kinds = [tuple(k) for k in metadata.ruda_arg_kinds]
-        if len(self.runtime_args) != len(self.arg_kinds):
-            raise RuntimeError(f"signature has {len(self.runtime_args)} runtime arguments, kernel has "
-                               f"{len(self.arg_kinds)}")
+        kinds = [tuple(k) for k in metadata.ruda_arg_kinds]
+        runtime = [t for t in signature if t != "constexpr"]
+        if len(runtime) != len(kinds):
+            raise RuntimeError(f"signature has {len(runtime)} runtime arguments, kernel has {len(kinds)}")
+        codes = iter("p" if kind == "ptr" else _SCALAR_CODES[ty] for kind, ty in kinds)
+        self.spec = "".join("c" if t == "constexpr" else next(codes) for t in signature).encode()
+        self.offsets = struct.pack(f"<{len(metadata.ruda_scalar_offsets)}i", *metadata.ruda_scalar_offsets)
         self.threads = metadata.ruda_threads
         self.shared = metadata.shared
         self.info_size = metadata.ruda_info_size
-        self.scalar_offsets = metadata.ruda_scalar_offsets
-        self.num_ptrs = sum(1 for k, _ in self.arg_kinds if k == "ptr")
-        self.cuda = CudaApi()
+        self.launch_kernel = CudaApi().launch_kernel_address
+        self.launch = _launcher_module().launch
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
-        if gridX * gridY * gridZ == 0:
-            return
         if launch_enter_hook is not None:
             launch_enter_hook(launch_metadata)
-        ptrs = []
-        info = bytearray(self.info_size)
-        scalar = 0
-        for index, (kind, ty) in zip(self.runtime_args, self.arg_kinds):
-            arg = args[index]
-            if kind == "ptr":
-                ptrs.append(ctypes.c_uint64(_pointer(arg)))
-            else:
-                if ty == "bf16":
-                    raw = struct.pack("<f", float(arg))[2:]
-                    info[self.scalar_offsets[scalar]:self.scalar_offsets[scalar] + 2] = raw
-                else:
-                    value = bool(arg) if ty == "i1" else (float(arg) if ty.startswith("f") else int(arg))
-                    struct.pack_into("<" + _SCALAR_FORMATS[ty], info, self.scalar_offsets[scalar], value)
-                scalar += 1
-        params = [ctypes.cast(ctypes.byref(p), ctypes.c_void_p) for p in ptrs]
-        info_buffer = None
-        if self.info_size:
-            info_buffer = (ctypes.c_char * self.info_size).from_buffer(info)
-            params.append(ctypes.cast(info_buffer, ctypes.c_void_p))
-        array = (ctypes.c_void_p * max(1, len(params)))(*params)
-        self.cuda.check(
-            self.cuda.lib.cuLaunchKernel(ctypes.c_void_p(function), gridX, gridY, gridZ, self.threads, 1, 1,
-                                         self.shared, ctypes.c_void_p(stream), array, None), "cuLaunchKernel")
+        self.launch(self.launch_kernel, function, gridX, gridY, gridZ, self.threads, self.shared, stream, self.spec,
+                    self.offsets, self.info_size, args)
         if launch_exit_hook is not None:
             launch_exit_hook(launch_metadata)
 
@@ -174,6 +190,20 @@ class RudaDriver(GPUDriver):
         self.utils = RudaUtils()
         self.launcher_cls = RudaLauncher
         super().__init__()
+        if device_mode() == "ruda":
+            self.get_current_device = lambda: 0
+            self.set_current_device = lambda device: None
+            self.get_current_stream = lambda device=None: ruda_native_stream()
+            self.get_device_capability = self._capability
+
+    def _capability(self, device=0):
+        cuda = self.utils.cuda
+        cuda.ensure_context(device)
+        dev, major, minor = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
+        cuda.check(cuda.lib.cuDeviceGet(ctypes.byref(dev), device), "cuDeviceGet")
+        cuda.check(cuda.lib.cuDeviceGetAttribute(ctypes.byref(major), 75, dev), "cuDeviceGetAttribute")
+        cuda.check(cuda.lib.cuDeviceGetAttribute(ctypes.byref(minor), 76, dev), "cuDeviceGetAttribute")
+        return major.value, minor.value
 
     def get_current_target(self):
         major, minor = self.get_device_capability(self.get_current_device())
@@ -181,9 +211,14 @@ class RudaDriver(GPUDriver):
 
     def get_active_torch_device(self):
         import torch
+        if device_mode() == "ruda":
+            _ruda_torch()
+            return torch.device("ruda", 0)
         return torch.device("cuda", self.get_current_device())
 
     def get_device_interface(self):
+        if device_mode() == "ruda":
+            return _ruda_torch()
         import torch
         return torch.cuda
 
@@ -191,6 +226,8 @@ class RudaDriver(GPUDriver):
     def is_active():
         if os.environ.get("TRITON_DEFAULT_BACKEND") != BACKEND:
             return False
+        if device_mode() == "ruda":
+            return True
         torch = sys.modules.get("torch")
         if torch is None:
             import torch
@@ -207,7 +244,7 @@ class RudaDriver(GPUDriver):
 
     def get_empty_cache_for_benchmark(self):
         import torch
-        return torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int, device="cuda")
+        return torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int, device=self.get_active_torch_device())
 
     def clear_cache(self, cache):
         cache.zero_()
