@@ -70,4 +70,3 @@ Von Ihrem ersten GPU-Kernel bis hin zu Rechenbibliotheken, Tensortraining und lo
 
 Befolgen Sie für ein erstes Projekt die Schnellstartanleitung, die Programmieranleitung und die entsprechende Bibliotheksanleitung. Konsultieren Sie bei der Entwicklung von Backends oder Kernels die Compiler- und API-Referenzen.
 
-- [Muon und explizite Muon + AdamW-Gruppen (experimentell)](muon.md)

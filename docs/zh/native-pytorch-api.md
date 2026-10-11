@@ -62,7 +62,7 @@ Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、trai
 
 `GradScaler(init_scale=65536., growth_factor=2., backoff_factor=0.5, growth_interval=2000, min_scale=2**-24, max_scale=2**24)` 为 RUDA scaler，不是 `torch.amp.GradScaler`。尺度边界为正，growth factor 大于一，backoff 在 `(0,1)`，interval 为正整数。同一优化器周期依次执行 `scale(loss).backward()`、`step(optimizer)`、`update()`；loss 须为 RUDA 上的单元素 FP32。`step` 接受 RUDA AdamW、Muon、MuonAdamW，不接受 closure 或额外参数。没有 `unscale_()` 或多优化器周期；`get_scale()` 读取当前值，scaler 状态仅在完整周期之间存档。
 
-Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python Muon 指南](architecture-training.md)和[优化器定义](../../ruda-torch/python/ruda_torch/optim.py)；独立的 [Rust Muon 指南](muon.md)介绍 Rust 张量优化器。不能将局部分片更新当成完整矩阵 Muon。
+Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python Muon 指南](architecture-training.md)和[优化器定义](../../ruda-torch/python/ruda_torch/optim.py)。不能将局部分片更新当成完整矩阵 Muon。
 
 ## 流与事件
 
