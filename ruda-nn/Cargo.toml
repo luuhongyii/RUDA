@@ -93,7 +93,7 @@ optional = true
 optional = true
 default-features = false
 path = "../ruda-tensor-device"
-version = "0.21.61"
+version = "0.21.62"
 features = [ "cuda",]
 
 [dependencies.ruda-fusion]
