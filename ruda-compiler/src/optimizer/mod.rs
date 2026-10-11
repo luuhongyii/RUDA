@@ -60,6 +60,9 @@ mod gvn;
 mod instructions;
 mod passes;
 mod phi_frontiers;
+mod pointer_values;
+mod scope_export;
+pub use scope_export::lower_optimized_pointer_values;
 mod transformers;
 mod version;
 
@@ -174,6 +177,26 @@ impl Default for Optimizer {
 }
 
 impl Optimizer {
+    /// Optimize first-class pointer values without lowering their types before SSA.
+    pub fn new_pointer_values(
+        expand: Scope,
+        ruda_dim: RudaDim,
+        transformers: Vec<Rc<dyn IrTransformer>>,
+        processors: Vec<Box<dyn Processor>>,
+    ) -> Self {
+        core::PointerValueLowering::new(&expand).expect("valid pointer values before SSA");
+        let mut opt = Self {
+            root_scope: expand.clone(),
+            ruda_dim,
+            allocator: expand.allocator.clone(),
+            transformers,
+            processors: Rc::new(processors),
+            ..Default::default()
+        };
+        opt.run_opt();
+        opt
+    }
+
     /// Create a new optimizer with the scope, `RudaDim` and execution mode passed into the compiler.
     /// Parses the scope and runs several optimization and analysis loops.
     pub fn new(

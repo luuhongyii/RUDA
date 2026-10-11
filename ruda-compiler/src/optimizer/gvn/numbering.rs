@@ -122,7 +122,10 @@ impl ValueTable {
             Operation::Operator(Operator::NativeStore(_)) => Err(None),
             Operation::TypedMemory(ir::TypedMemory::Store { .. }) => Err(None),
             Operation::TypedMemory(ir::TypedMemory::Load(_)) => Err(value_of_var(&inst.out())),
-            Operation::Pointer(_) => unreachable!("pointer values are lowered before GVN"),
+            Operation::Pointer(pointer) if pointer.is_pure() => {
+                self.create_expr_simple_op(pointer, inst.out())
+            }
+            Operation::Pointer(_) => Err(inst.out.and_then(|out| value_of_var(&out))),
             Operation::Operator(operator) => self.create_expr_operator(operator, inst.out()),
             Operation::Metadata(metadata) => self.create_expr_meta(metadata, inst.out()),
             Operation::Plane(_) | Operation::Atomic(_) => Err(value_of_var(&inst.out())),

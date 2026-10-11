@@ -144,7 +144,7 @@ impl<T: SpirvTarget> Compiler for SpirvCompiler<T> {
         value.validate_typed_memory().map_err(|reason| CompilationError::Validation {
             reason, backtrace: BackTrace::capture(),
         })?;
-        value.body.lower_pointer_values().map_err(|reason| CompilationError::Validation {
+        crate::optimizer::lower_optimized_pointer_values(&mut value.body, value.ruda_dim).map_err(|reason| CompilationError::Validation {
             reason, backtrace: BackTrace::capture(),
         })?;
         let errors = value.body.pop_errors();

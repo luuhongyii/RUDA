@@ -117,6 +117,10 @@ fn check_op(
     changes: &AtomicCounter,
 ) -> Option<()> {
     let mut op = ops.borrow()[idx].clone();
+    if matches!(&op.operation, Operation::Pointer(pointer) if !ruda_core::ir::OperationReflect::is_pure(pointer))
+    {
+        return None;
+    }
     let out = op.out?;
     let mut is_mut = false;
     opt.visit_operation(&mut op.operation, &mut Some(out), |_, var| {

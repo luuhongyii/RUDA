@@ -8,9 +8,16 @@ use std::rc::Rc;
 pub struct OptimizerBuilder {
     transformers: Vec<Rc<dyn IrTransformer>>,
     processors: Vec<Box<dyn Processor>>,
+    pointer_values: bool,
 }
 
 impl OptimizerBuilder {
+    /// Keep pointer types and operations through SSA and scalar optimization.
+    pub fn with_pointer_values(mut self) -> Self {
+        self.pointer_values = true;
+        self
+    }
+
     /// Add an IR transformer to the optimizer
     pub fn with_transformer(mut self, transformer: impl IrTransformer + 'static) -> Self {
         self.transformers.push(Rc::new(transformer));
@@ -24,7 +31,11 @@ impl OptimizerBuilder {
 
     /// Build and run optimizer on the scope
     pub fn optimize(self, expand: Scope, ruda_dim: RudaDim) -> Optimizer {
-        Optimizer::new(expand, ruda_dim, self.transformers, self.processors)
+        if self.pointer_values {
+            Optimizer::new_pointer_values(expand, ruda_dim, self.transformers, self.processors)
+        } else {
+            Optimizer::new(expand, ruda_dim, self.transformers, self.processors)
+        }
     }
 }
 

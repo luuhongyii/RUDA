@@ -67,7 +67,7 @@ impl<P: WgslLowering> ruda_core::compiler::Compiler for WgslCompiler<P> {
         shader.validate_typed_memory().map_err(|reason| CompilationError::Validation {
             reason, backtrace: BackTrace::capture(),
         })?;
-        shader.body.lower_pointer_values().map_err(|reason| CompilationError::Validation {
+        crate::optimizer::lower_optimized_pointer_values(&mut shader.body, shader.ruda_dim).map_err(|reason| CompilationError::Validation {
             reason, backtrace: BackTrace::capture(),
         })?;
         self.compilation_options = *compilation_options;

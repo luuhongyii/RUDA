@@ -38,9 +38,16 @@ interface does not establish GPU alias, lifetime, or race-freedom proofs.
 Calling `.value()` on a `Ptr` produces `ValuePtr<E, S, A>`, represented by a
 distinct pointer type in IR. These values support assignment, branch results,
 loop-carried offsets, helper-function parameters and returns, and the same
-load/store/selection/permission-downgrade operations. Before the existing SSA
-pass, bound-storage pointer values are lowered to storage selectors and element
-offsets; non-atomic accesses retain the address-space and permission descriptors.
+load/store/selection/permission-downgrade operations. CPU and GPU paths preserve pointer
+types and phi nodes through SSA and scalar optimization, then lower them to storage
+selectors and element offsets at the backend boundary. CUDA/HIP/Metal C++, direct PTX,
+WGSL and SPIR-V export optimized pointer SSA as structured scopes before this lowering.
+Non-atomic accesses retain the address-space and
+permission descriptors. Low-level optimizer users can opt in with
+`OptimizerBuilder::with_pointer_values()` and call `Optimizer::lower_pointer_values()`
+at the CPU/MLIR emission boundary, or use `lower_optimized_pointer_values()` for
+structured GPU emission. The pre-SSA `Scope::lower_pointer_values()` compatibility
+path remains available.
 `ValuePtr<E, GlobalSpace, A>` can also be a kernel argument, using `ArrayArg` and
 the existing buffer-binding ABI, including allocation offsets and inplace aliases.
 
