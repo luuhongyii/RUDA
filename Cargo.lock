@@ -5280,7 +5280,7 @@ dependencies = [
 
 [[package]]
 name = "ruDNN"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "derive-new",
@@ -5301,7 +5301,7 @@ dependencies = [
 
 [[package]]
 name = "ruDNN-host"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "gemm",
@@ -5315,7 +5315,7 @@ dependencies = [
 
 [[package]]
 name = "ruFFT-host"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "half",
@@ -5328,7 +5328,7 @@ dependencies = [
 
 [[package]]
 name = "ruPRIM"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "half",
  "num-traits",
@@ -5344,7 +5344,7 @@ dependencies = [
 
 [[package]]
 name = "ruPRIM-host"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "aligned-vec",
  "bytemuck",
@@ -5358,7 +5358,7 @@ dependencies = [
 
 [[package]]
 name = "ruRAND"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "half",
  "num-traits",
@@ -5372,7 +5372,7 @@ dependencies = [
 
 [[package]]
 name = "ruRAND-host"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "half",
  "ruda-core",
@@ -5380,7 +5380,7 @@ dependencies = [
 
 [[package]]
 name = "ruSPARSE"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "ruda-core",
  "ruda-driver-cuda",
@@ -5390,7 +5390,7 @@ dependencies = [
 
 [[package]]
 name = "ruTENSOR"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "ruda-core",
  "ruda-driver-cann",
@@ -5399,7 +5399,7 @@ dependencies = [
 
 [[package]]
 name = "rublas"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "half",
@@ -5416,7 +5416,7 @@ dependencies = [
 
 [[package]]
 name = "rublas-host"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "gemm",
@@ -5614,7 +5614,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-cann"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "libloading 0.8.9",
  "ruda-compiler",
@@ -5624,7 +5624,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-cpu"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "derive-new",
@@ -5644,7 +5644,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-cuda"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "cudarc",
@@ -5664,7 +5664,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-hip"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "derive-new",
@@ -5684,7 +5684,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-wgpu"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "ash",
  "async-channel",
@@ -5719,7 +5719,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-fft"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "num-complex",
  "realfft",
@@ -5830,7 +5830,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-llm"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "chacha20",
  "half",
@@ -5998,7 +5998,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-solver"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "ruCCL",
  "ruSPARSE",
@@ -6254,7 +6254,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-test-runtime"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "ruda-driver-cpu",
  "ruda-driver-cuda",
@@ -6265,7 +6265,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-test-utils"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "bytemuck",
  "half",
@@ -6305,7 +6305,7 @@ dependencies = [
 
 [[package]]
 name = "ruintegrate"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "ruda-solver",
 ]
