@@ -47,6 +47,15 @@ pub struct TunableSet<K: AutotuneKey, F: TuneInputs, Output: 'static> {
     stack_workload: Option<Arc<dyn for<'a> Fn(&F::At<'a>) -> String + Send + Sync>>,
     checksum: Once<String>,
     stack_manifest: Once<String>,
+    #[cfg(std_io)]
+    stack_plan_cache: Option<spin::Mutex<alloc::collections::VecDeque<(K, String, Arc<StaticStackPlan>)>>>,
+}
+
+#[cfg(std_io)]
+pub(crate) struct StaticStackPlan {
+    pub(crate) indices: Vec<usize>,
+    pub(crate) candidates: Vec<super::stack::Candidate>,
+    pub(crate) key: String,
 }
 
 impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
@@ -71,6 +80,8 @@ impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
             stack_workload: None,
             checksum: Once::new(),
             stack_manifest: Once::new(),
+            #[cfg(std_io)]
+            stack_plan_cache: None,
         }
     }
 
@@ -85,11 +96,41 @@ impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
         self.stack_revision = revision.into();
         self.stack_workload = Some(Arc::new(workload));
         self.stack_manifest = Once::new();
+        #[cfg(std_io)]
+        if let Some(cache) = &self.stack_plan_cache { cache.lock().clear(); }
         self
     }
     pub fn stack_reference(&self) -> Option<usize> { self.stack_reference }
     pub fn stack_workload<'a>(&self, inputs: &F::At<'a>) -> Option<String> {
         self.stack_workload.as_ref().map(|f| f(inputs))
+    }
+
+    /// Cache plan metadata when priorities depend only on the generated key and immutable set.
+    /// This does not cache a winner or bypass normal selection, validation or expiration.
+    pub fn with_static_stack_plan(mut self) -> Self {
+        #[cfg(std_io)]
+        { self.stack_plan_cache = Some(spin::Mutex::new(Default::default())); }
+        self
+    }
+
+    #[cfg(std_io)]
+    pub(crate) fn static_stack_plan_enabled(&self) -> bool { self.stack_plan_cache.is_some() }
+
+    #[cfg(std_io)]
+    pub(crate) fn cached_stack_plan(&self, key: &K, identity: &str) -> Option<Arc<StaticStackPlan>> {
+        self.stack_plan_cache.as_ref()?.lock().iter()
+            .find(|(stored_key, stored_identity, _)| stored_key == key && stored_identity == identity)
+            .map(|(_, _, plan)| plan.clone())
+    }
+
+    #[cfg(std_io)]
+    pub(crate) fn cache_stack_plan(&self, key: K, identity: String, plan: Arc<StaticStackPlan>) {
+        if let Some(cache) = &self.stack_plan_cache {
+            let mut cache = cache.lock();
+            if cache.iter().any(|(stored_key, stored_identity, _)| stored_key == &key && stored_identity == &identity) { return; }
+            if cache.len() == 32 { cache.pop_front(); }
+            cache.push_back((key, identity, plan));
+        }
     }
 
     /// Shorthand for [`new`](Self::new) with a [`CloneInputGenerator`]: benchmarks run
@@ -103,6 +144,8 @@ impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
         self.tunables.push(tunable);
         self.checksum = Once::new();
         self.stack_manifest = Once::new();
+        #[cfg(std_io)]
+        if let Some(cache) = &self.stack_plan_cache { cache.lock().clear(); }
         self
     }
 
@@ -183,3 +226,42 @@ pub trait AutotuneKey:
 }
 
 impl AutotuneKey for String {}
+
+#[cfg(all(test, std_io))]
+mod static_plan_tests {
+    use super::*;
+    fn set() -> TunableSet<String, String, String> {
+        TunableSet::new_cloning_inputs(|value: &String| value.clone())
+            .with_static_stack_plan()
+    }
+    fn plan() -> Arc<StaticStackPlan> {
+        Arc::new(StaticStackPlan { indices: alloc::vec![0],
+            candidates: alloc::vec![super::super::stack::Candidate::new("reference")], key: "full-key".into() })
+    }
+    #[test]
+    fn cache_requires_exact_generated_key_and_full_identity() {
+        let set = set();
+        let plan = plan();
+        set.cache_stack_plan("shape".into(), "device/offset/stride".into(), plan.clone());
+        assert!(Arc::ptr_eq(&set.cached_stack_plan(&"shape".into(), "device/offset/stride").unwrap(), &plan));
+        assert!(set.cached_stack_plan(&"other-shape".into(), "device/offset/stride").is_none());
+        assert!(set.cached_stack_plan(&"shape".into(), "other-device/offset/stride").is_none());
+    }
+    #[test]
+    fn cache_is_bounded_and_duplicate_insert_does_not_evict() {
+        let set = set();
+        for index in 0..32 { set.cache_stack_plan(alloc::format!("{index}"), "binding".into(), plan()); }
+        set.cache_stack_plan("0".into(), "binding".into(), plan());
+        assert!(set.cached_stack_plan(&"0".into(), "binding").is_some());
+        set.cache_stack_plan("32".into(), "binding".into(), plan());
+        assert!(set.cached_stack_plan(&"0".into(), "binding").is_none());
+        assert!(set.cached_stack_plan(&"1".into(), "binding").is_some());
+    }
+    #[test]
+    fn changing_stack_contract_invalidates_plan_metadata() {
+        let set = set();
+        set.cache_stack_plan("shape".into(), "binding".into(), plan());
+        let set = set.with_stack_tuning(0, "new-revision", |value: &String| value.clone());
+        assert!(set.cached_stack_plan(&"shape".into(), "binding").is_none());
+    }
+}

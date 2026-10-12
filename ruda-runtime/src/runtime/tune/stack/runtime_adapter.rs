@@ -159,6 +159,34 @@ pub fn try_execute_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: Autot
     let workload = set.stack_workload(&input).ok_or_else(|| autotune_error(name, "no exact workload signature"))?;
     let problem = ProblemView { scope, operation: &operation, environment: &env.fingerprint,
         workload: &workload, execution_context: &env.execution_context, persistent: env.persistent };
+    if set.static_stack_plan_enabled() {
+        let identity = fields(&[&std::format!("{:?}", problem.scope), problem.operation,
+            problem.environment, problem.workload, problem.execution_context,
+            if problem.persistent { "persistent" } else { "session" }]);
+        let plan = if let Some(plan) = set.cached_stack_plan(&key, &identity) { plan } else {
+            let mut indices = std::vec![reference];
+            let mut sequence = set.plan(&key);
+            let mut included = std::vec![false; set.len()];
+            included[reference] = true;
+            loop {
+                let batch = sequence.next(None);
+                if batch.is_empty() { break; }
+                for index in batch { if !included[index] { indices.push(index); included[index] = true; } }
+            }
+            let candidates: Vec<_> = indices.iter().map(|&index| Candidate::new(set.fastest(index).name.clone())).collect();
+            let prepared_key = tuner.prepare_key(problem, &candidates, 0).map_err(|error| autotune_error(name, &error.to_string()))?;
+            let plan = Arc::new(crate::runtime::tune::operation::StaticStackPlan { indices, candidates, key: prepared_key });
+            set.cache_stack_plan(key.clone(), identity, plan.clone());
+            plan
+        };
+        let mut trials = RuntimeTrials { client: client.clone(), set: &set, key: &key,
+            input: &input, indices: &plan.indices, timing: tuner.policy().timing };
+        let decision = tuner.select_prepared_candidates(problem, &plan.candidates, 0, &plan.key, &mut trials)
+            .map_err(|error| autotune_error(name, &error.to_string()))?;
+        let output = set.fastest(plan.indices[decision.index]).execute(input);
+        if output.is_err() { tuner.invalidate(&decision, true); }
+        return output;
+    }
     // Enumerate EVERY eligible priority group. Group order remains a useful bounded-search
     // heuristic but a first valid group no longer terminates the search.
     let mut indices = std::vec![reference]; let mut plan = set.plan(&key);
