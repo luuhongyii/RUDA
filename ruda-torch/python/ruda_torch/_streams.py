@@ -9,9 +9,17 @@ from . import _C
 
 class Stream:
     def __init__(self, *, priority=0, _id=None):
-        if priority != 0:
-            raise ValueError("RUDA supports only priority=0")
-        self.stream_id = _C.stream_command(1) if _id is None else int(_id)
+        if not isinstance(priority, int) or not -(1 << 31) <= priority < (1 << 31):
+            raise ValueError("priority must be a signed 32-bit integer")
+        if priority != 0 and _id is None:
+            # Old native op 1 ignored flags. Negotiate with the additive range
+            # command first so an old library cannot silently create priority 0.
+            _C.stream_command(15)
+        self.stream_id = _C.stream_command(1,0,0,priority & 0xffffffff) if _id is None else int(_id)
+    @property
+    def priority(self):
+        bits = _C.stream_command(14,self.stream_id)
+        return bits - (1 << 32) if bits & (1 << 31) else bits
     def query(self):
         return bool(_C.stream_command(3,self.stream_id))
     def synchronize(self):
@@ -59,6 +67,11 @@ def current_stream(device=None):
 def default_stream(device=None):
     _device(device)
     return Stream(_id=0)
+def get_stream_priority_range():
+    bits = _C.stream_command(15)
+    def signed(value):
+        return value - (1 << 32) if value & (1 << 31) else value
+    return signed(bits & 0xffffffff), signed(bits >> 32)
 def _device(value):
     if value is not None and str(value) not in ("0","ruda","ruda:0"):
         raise ValueError("RUDA currently exposes only ruda:0")

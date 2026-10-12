@@ -127,11 +127,14 @@ class Guard final : public c10::impl::DeviceGuardImplInterface {
   c10::Stream getStream(c10::Device device) const override {validate(device);return make_stream(stream_command(0));}
   c10::Stream getDefaultStream(c10::Device device) const override {validate(device);return make_stream(0);}
   c10::Stream getNewStream(c10::Device device,int priority=0) const override {
-    validate(device);TORCH_CHECK(priority==0,"RUDA priority streams are not supported");
-    return make_stream(stream_command(1));
+    validate(device);
+    // Native ABI 10 previously ignored op 1 flags. The additive query must
+    // succeed before any nonzero priority request reaches that old command.
+    if(priority!=0)stream_command(15);
+    return make_stream(stream_command(1,0,0,static_cast<uint32_t>(priority)));
   }
   c10::Stream getStreamFromGlobalPool(c10::Device device,bool high=false) const override {
-    TORCH_CHECK(!high,"RUDA high-priority streams are not supported");return getNewStream(device);
+    return getNewStream(device,high ? -1 : 0);
   }
   c10::Stream exchangeStream(c10::Stream value) const override {check_stream(value);return make_stream(stream_command(2,value.id()));}
   c10::DeviceIndex deviceCount() const noexcept override {return 1;}
@@ -201,6 +204,7 @@ struct Argument {
 #include "nf4.inc"
 #include "sequence_training.inc"
 #include "random.inc"
+#include "dense_attention.inc"
 
 class PagedPlanBridge {
   void* plan_=nullptr;
@@ -507,6 +511,7 @@ TORCH_LIBRARY_IMPL(aten, AutocastPrivateUse1, m) {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  #include "dense_attention_bindings.inc"
   m.attr("abi_version") = 10;
   m.def("_cuda_alias", [](const at::Tensor& tensor, int64_t device_index) {
     validate(tensor.device());

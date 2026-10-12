@@ -20,7 +20,7 @@ pub unsafe extern "C" fn ruda_torch_stream(op:u32,stream:u64,object:u64,flags:u3
         let device=client().device_id();
         let value=match op {
             0=>current(),
-            1=>interop::command(device,StreamCommand::Create).expect("stream creation failed"),
+            1=>interop::command(device,if flags==0 {StreamCommand::Create} else {StreamCommand::CreatePriority(flags as i32)}).expect("stream creation failed"),
             2=>{interop::command(device,StreamCommand::Validate(stream)).expect("invalid stream");CURRENT.replace(stream)},
             3=>interop::command(device,StreamCommand::Query(stream)).expect("stream query failed"),
             4=>interop::command(device,StreamCommand::Synchronize(stream)).expect("stream synchronize failed"),
@@ -32,6 +32,8 @@ pub unsafe extern "C" fn ruda_torch_stream(op:u32,stream:u64,object:u64,flags:u3
             10=>interop::command(device,StreamCommand::Elapsed {start:stream,end:object}).expect("event elapsed time failed"),
             11=>{device_sync();0},
             13=>interop::command(device,StreamCommand::NativeStream(stream)).expect("native stream query failed"),
+            14=>interop::command(device,StreamCommand::Priority(stream)).expect("native stream priority query failed"),
+            15=>interop::command(device,StreamCommand::PriorityRange).expect("native stream priority range query failed"),
             12=>{
                 let allocation=object as *const Allocation;
                 assert!(!allocation.is_null());

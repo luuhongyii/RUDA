@@ -42,6 +42,12 @@ where
 #[derive(Clone,Copy,Debug)]
 pub enum StreamCommand {
     Create, Validate(u64), Query(u64), Synchronize(u64),
+    /// Create a native CUDA priority stream, retaining CUDA's range clamping.
+    CreatePriority(i32),
+    /// Return the actual native signed stream priority as U32 bits.
+    Priority(u64),
+    /// CUDA (least priority, greatest priority) packed as two signed U32 values.
+    PriorityRange,
     Record { stream:u64, event:u64, timing:bool },
     Wait { stream:u64, event:u64 }, EventQuery(u64), EventSynchronize(u64),
     EventDestroy(u64), Elapsed { start:u64, end:u64 }, DeviceSynchronize,

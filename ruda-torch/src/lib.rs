@@ -9,6 +9,7 @@ mod streams;
 mod graph_contract;
 mod static_graph;
 mod paged;
+mod dense_attention;
 mod kernels;
 mod training;
 mod router;

@@ -79,16 +79,30 @@ impl CudaServer {
     pub(crate) fn interop_command(&mut self,command:StreamCommand)->Result<u64,ServerError> {
         self.ctx.unsafe_set_current().map_err(|e|error(&format!("GPU context error: {e:?}")))?;
         match command {
-            StreamCommand::Create=>{
+            StreamCommand::Create | StreamCommand::CreatePriority(_)=>{
                 if self.interop.next_stream>=self.interop.stream_capacity {
                     return Err(error("native stream pool exhausted; increase streaming.max_streams (no ID aliasing)"));
                 }
                 let id=self.interop.next_stream;
+                if let StreamCommand::CreatePriority(priority) = command {
+                    let initialized = self.streams.try_initialize_with(&StreamId {value:id},
+                        |backend| backend.create_stream_with_priority(priority))?;
+                    if !initialized { return Err(error("priority stream slot is already in use; no pending stream is replaced")); }
+                }
                 self.interop.next_stream+=1;
                 self.interop_stream(id)?;
                 Ok(id)
             }
             StreamCommand::Validate(id)=>{self.interop.stream(id)?;Ok(id)}
+            StreamCommand::Priority(id)=>{
+                let stream=self.interop_stream(id)?; let mut priority=0i32;
+                status(unsafe{cuStreamGetPriority(stream,&mut priority)})?;Ok(priority as u32 as u64)
+            }
+            StreamCommand::PriorityRange=>{
+                let mut least=0i32;let mut greatest=0i32;
+                status(unsafe{cuCtxGetStreamPriorityRange(&mut least,&mut greatest)})?;
+                Ok((least as u32 as u64) | ((greatest as u32 as u64)<<32))
+            }
             StreamCommand::Query(id)=>{let stream=self.interop_stream(id)?;ready(unsafe{cuStreamQuery(stream)})}
             StreamCommand::Synchronize(id)=>{let stream=self.interop_stream(id)?;status(unsafe{cuStreamSynchronize(stream)})?;Ok(0)}
             StreamCommand::Record {stream,event,timing}=>{

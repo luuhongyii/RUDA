@@ -195,8 +195,19 @@ fn cholesky_solve_batched_inner<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>
 
 #[allow(unsafe_code)] // Generated checked kernel launch boundary only.
 mod advanced_kernel;
+
+#[allow(unsafe_code)]
+mod blocked;
+pub use blocked::cholesky_solve_blocked;
 mod advanced;
 pub use advanced::*;
+
+#[allow(unsafe_code)]
+mod large;
+pub use large::{LargeSolverOptions, lu_solve_blocked, qr_blocked};
+#[allow(unsafe_code)]
+mod jacobi;
+pub use jacobi::{DeviceJacobiOptions, DeviceSvdResult, symmetric_eigen_device, svd_device};
 
 #[cfg(feature = "warp-solvers")]
 #[allow(unsafe_code)] // Generated checked launch boundary; no manual unsafe code.

@@ -165,7 +165,7 @@ from . import _ops
 from .random import register_random_ops
 register_random_ops()
 
-from ._streams import Stream, Event, stream, current_stream, default_stream, record_stream
+from ._streams import Stream, Event, stream, current_stream, default_stream, record_stream, get_stream_priority_range
 from ._paged import PagedAttentionPlan
 
 # Additive extension API: the old eager tensor ABI still loads without it.
@@ -270,6 +270,8 @@ from .finetuning import (LoRALinear, NF4Linear, inject_lora, quantize_nf4,
 from .causal_finetuning import (chunked_lm_cross_entropy, SFTCollator, CausalLMFinetuner,
                                SFTTrainer, load_hf_nf4_model, activation_checkpoint_modules)
 from .distributed_training import ReplicaGroup
+if torch.distributed.is_available():
+    from .process_group import ProcessGroupRuCCL, register_ruccl_backend
 from .parallel_training import (ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding,
     TensorParallelMLP, TensorParallelAttention,
     tensor_parallelize, tensor_parallel_state_dict, load_tensor_parallel_state_dict,

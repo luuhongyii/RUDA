@@ -52,6 +52,48 @@ impl EventStreamBackend for CudaStreamBackend {
         )
         .expect("Can create a new stream.");
 
+        self.wrap_stream(stream)
+    }
+
+    fn flush(stream: &mut Self::Stream) -> Self::Event {
+        Fence::new(stream.sys)
+    }
+
+    fn wait_event(stream: &mut Self::Stream, event: Self::Event) {
+        event.wait_async(stream.sys);
+    }
+
+    fn wait_event_sync(event: Self::Event) -> Result<(), ServerError> {
+        event.wait_sync()
+    }
+
+    fn handle_cursor(stream: &Self::Stream, binding: &Binding) -> u64 {
+        stream
+            .memory_management_gpu
+            .get_cursor(binding.memory.clone())
+            .unwrap()
+    }
+
+    fn is_healthy(stream: &Self::Stream) -> bool {
+        stream.errors.is_empty()
+    }
+}
+
+impl CudaStreamBackend {
+    /// Create a real CUDA nonblocking priority stream. CUDA performs native
+    /// clamping to its device priority range, as with CUDA stream APIs.
+    pub(crate) fn create_stream_with_priority(&self, priority: i32) -> Result<Stream, ServerError> {
+        let mut stream = std::ptr::null_mut();
+        let status = unsafe { cudarc::driver::sys::cuStreamCreateWithPriority(
+            &mut stream, cudarc::driver::sys::CUstream_flags::CU_STREAM_NON_BLOCKING as u32, priority) };
+        if status != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
+            return Err(ServerError::Generic { reason: format!("CUDA priority stream creation failed: {status:?}"),
+                backtrace: ruda_core::backtrace::BackTrace::capture() });
+        }
+        Ok(self.wrap_stream(stream))
+    }
+
+    fn wrap_stream(&self, stream: cudarc::driver::sys::CUstream) -> Stream {
         let storage = GpuStorage::new(self.mem_alignment, stream);
         let memory_management_gpu = MemoryManagement::from_configuration(
             storage,
@@ -84,28 +126,5 @@ impl EventStreamBackend for CudaStreamBackend {
             errors: Vec::new(),
             drop_queue: Default::default(),
         }
-    }
-
-    fn flush(stream: &mut Self::Stream) -> Self::Event {
-        Fence::new(stream.sys)
-    }
-
-    fn wait_event(stream: &mut Self::Stream, event: Self::Event) {
-        event.wait_async(stream.sys);
-    }
-
-    fn wait_event_sync(event: Self::Event) -> Result<(), ServerError> {
-        event.wait_sync()
-    }
-
-    fn handle_cursor(stream: &Self::Stream, binding: &Binding) -> u64 {
-        stream
-            .memory_management_gpu
-            .get_cursor(binding.memory.clone())
-            .unwrap()
-    }
-
-    fn is_healthy(stream: &Self::Stream) -> bool {
-        stream.errors.is_empty()
     }
 }

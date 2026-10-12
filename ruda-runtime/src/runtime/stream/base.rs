@@ -50,6 +50,20 @@ impl<F: StreamFactory> StreamPool<F> {
         unsafe { self.get_mut_index(index) }
     }
 
+    /// Initialize an unused regular slot with a backend-specific stream. This
+    /// does not modulo-map IDs or replace a stream that may have pending work.
+    /// Returns false for an occupied slot or an ID outside the regular pool.
+    pub fn try_initialize_with<E>(
+        &mut self, stream_id: &StreamId,
+        initialize: impl FnOnce(&mut F) -> Result<F::Stream, E>,
+    ) -> Result<bool, E> {
+        let Ok(index) = usize::try_from(stream_id.value) else { return Ok(false); };
+        if index >= self.max_streams || self.streams[index].is_some() { return Ok(false); }
+        let stream = initialize(&mut self.factory)?;
+        self.streams[index] = Some(stream);
+        Ok(true)
+    }
+
     /// Retrieves a mutable reference to a stream at the specified index, initializing it if needed.
     ///
     /// # Safety

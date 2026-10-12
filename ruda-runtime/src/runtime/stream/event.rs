@@ -187,6 +187,18 @@ impl<'a, B: EventStreamBackend> Drop for ResolvedStreams<'a, B> {
 }
 
 impl<B: EventStreamBackend> MultiStream<B> {
+    /// Initialize an unused physical stream without discarding synchronization
+    /// state or replacing a stream used by existing allocations.
+    pub fn try_initialize_with<E>(
+        &mut self, stream_id: &StreamId,
+        initialize: impl FnOnce(&B) -> Result<B::Stream, E>,
+    ) -> Result<bool, E> {
+        self.streams.try_initialize_with(stream_id, |factory| {
+            Ok(StreamWrapper { stream: initialize(&factory.backend)?,
+                cursor: 0, last_synced: Default::default() })
+        })
+    }
+
     /// Creates an empty multi-stream.
     pub fn new(logger: Arc<ServerLogger>, backend: B, max_streams: u8) -> Self {
         let wrapper = EventStreamBackendWrapper { backend };

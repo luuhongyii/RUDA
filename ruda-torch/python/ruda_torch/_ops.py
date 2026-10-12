@@ -69,6 +69,14 @@ def mul(a, b):
 def mul_(a, b):
     return _binary(2, a, b, inplace=True)
 
+
+def mul_out(a, b, *, out):
+    if a.device.type == 'cpu' and a.ndim == 0:
+        a, b = b, a.item()
+    elif isinstance(b, torch.Tensor) and b.device.type == 'cpu' and b.ndim == 0:
+        b = b.item()
+    return _math_out(mul(a, b), out)
+
 def _division_op(rounding_mode):
     if rounding_mode is None:
         return 8
@@ -1141,6 +1149,7 @@ for name, function in {
     "logical_not_": lambda a: _logical(88, a, inplace=True),
     "add.Tensor": add, "add.Scalar": add, "add_.Tensor": add_, "add_.Scalar": add_,
     "mul.Tensor": mul, "mul.Scalar": mul, "mul_.Tensor": mul_, "mul_.Scalar": mul_,
+    "mul.out": mul_out,
     "addcmul": addcmul, "addcmul_": addcmul_, "addcdiv": addcdiv, "addcdiv_": addcdiv_,
     "lerp.Scalar": lerp, "lerp.Tensor": lerp,
     "lerp_.Scalar": lambda a, end, weight: lerp(a, end, weight, inplace=True),
@@ -1155,6 +1164,7 @@ for name, function in {
     "neg_": lambda a: neg(a, inplace=True),
     "mm": mm, "addmm": addmm, "bmm": bmm,
     "mv": mv, "dot": dot, "outer": outer, "cat": cat, "stack": stack,
+    "cat.out": lambda tensors, dim=0, *, out: _math_out(cat(tensors, dim), out),
     "ger": outer, "vdot": dot,
     "addmv": addmv, "addbmm": addbmm, "baddbmm": baddbmm,
     "constant_pad_nd": constant_pad_nd,
