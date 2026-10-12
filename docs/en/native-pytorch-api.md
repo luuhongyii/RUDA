@@ -32,9 +32,78 @@ Source: [random generator and registration](../../ruda-torch/python/ruda_torch/r
 
 Import `ruda_torch` before creating tensors on `ruda:0`. Another PrivateUse1 backend cannot already be registered in the process. `is_available()` reports the initialized integration, not a complete inventory of GPU instruction support. `device_count()` is 1 and `current_device()` is 0. `synchronize(device=None)` accepts the native device only and waits for completion. `execution_stats()` returns cumulative native launch, transfer and selected-library counters; it is not a timer or an autotuning result.
 
-Rust/C++ components require base ABI 10. Optional features negotiate their own versions: graph 3, training 4, router 1, sequence 1, NF4 decode 1 and NF4 matmul 1. Paged backward accepts native API 1 or 2 with a compatible bridge; ordered backward requires 2. A base-ABI match alone does not provide every optional feature. Use the matching [source build or precompiled bundle](../../ruda-torch/README.md#build-and-install).
+Rust/C++ components require base ABI 10. Optional features negotiate their own versions: graph 3, training 4, router 1, sequence 1, NF4 decode 1, NF4 matmul 1, scientific 1, BLAS 1, linalg 1 and FFT 1. Paged backward accepts native API 1 or 2 with a compatible bridge; ordered backward requires 2. A base-ABI match alone does not provide every optional feature. Use the matching [source build or precompiled bundle](../../ruda-torch/README.md#build-and-install).
 
 The eager native backend does not install a generic CPU fallback. Unsupported operators, unavailable capabilities and device errors propagate. CUDA tensors and RUDA tensors are different allocations and are not interchangeable merely because they use the same GPU.
+
+## Scientific operations
+
+These operations use native RUDA GPU kernels, not a CPU numerical fallback or NVIDIA library ABI wrappers. FP64 and complex storage are provided by scientific API 1. Dtype support is per operation: it does not extend all random, attention, training or graph operators. Basic FP64/complex arithmetic, reductions, matrix multiplication, indexing and real/complex view conversion are available; FP64 `erf` requires `RUDA_CUDA_COMPILER=nvrtc` and is not supported by direct PTX.
+
+### BLAS
+
+| Public function | Input and operation contract |
+| --- | --- |
+| `ruda_torch.gemm(a, b, c=None, *, alpha=1, beta=0, transpose_a=False, transpose_b=False, conjugate_a=False, conjugate_b=False, f32_math="strict", strategy="auto")` | FP32/FP64/complex64/complex128, matching dtype/device; leading matrix batches broadcast. Computes `alpha*op(a)@op(b)+beta*c`. Transpose and conjugate flags are independent. C has exact output shape; nonzero beta requires C. `f32_math` accepts `strict`/`tf32`; strategies are `auto`/`scalar`. Complex execution uses scalar GPU accumulation. |
+| `ruda_torch.fused_gemm(a, b, bias, *, activation="none", strategy="auto", out_dtype=None)` | Matching FP16/BF16 `[M,K]`, `[K,N]` inputs and bias `[N]`. Bias/output may use input dtype or FP32. Activation is `none`, `relu` or tanh-formula `gelu`; one output rounding follows the fused epilogue. Strategies: `auto`, `scalar`, `tensor_core`. |
+| `ruda_torch.grouped_gemm(x, weights, row_experts, *, strategy="auto")` | Matching FP32/FP16/BF16 `[M,K]` and `[E,N,K]`, int32/int64 IDs `[M]` in arbitrary row order. Output `[M,N]`; negative/out-of-range IDs are padding with zero output and gradient contribution. Strategies: `auto`, `scalar`, `tensor_core`. |
+| `ruda_torch.triangular_solve(a, b, *, left=True, upper=True, transpose=False, unit_diagonal=False, alpha=1.0)` | Real FP32/FP64, square triangular A and matrix B, broadcast batches. Solves `op(A)X=alpha*B` or `X op(A)=alpha*B`. The opposite triangle and a unit diagonal are not read; zero nonunit pivots follow IEEE division semantics. Returns X, not the legacy PyTorch tuple. |
+
+These four public BLAS functions provide first-order autograd and reject higher-order backward. Explicit `tensor_core` requires supported hardware and layouts; unsupported setup raises rather than silently switching strategy. Native operations retain their U32 element/stride indexing limits. Standard `mm`, `bmm` and `addmm` also dispatch FP64/complex tensors through BLAS.
+
+### Linear algebra
+
+Import installs the backend kernels used by the following standard PyTorch APIs on real FP32/FP64 RUDA tensors. Public composite operators retain PyTorch's own autograd formulas.
+
+| Family | Public PyTorch entry points |
+| --- | --- |
+| LU and reusable solves | `torch.linalg.solve`, `solve_ex`, `lu_factor`, `lu_factor_ex`, `lu_solve`, `torch.lu_solve`, `torch.lu_unpack` |
+| Cholesky | `torch.linalg.cholesky`, `cholesky_ex`, `torch.cholesky_solve`, `torch.cholesky_inverse` |
+| Triangular systems | `torch.linalg.solve_triangular`, legacy `torch.triangular_solve` |
+| Householder QR | `torch.linalg.qr`, `torch.geqrf`, `torch.ormqr` |
+| Symmetric eigenproblem | `torch.linalg.eigh`, `eigvalsh` |
+| Singular-value decomposition | `torch.linalg.svd`, `svdvals` |
+| Inverse and determinants | `torch.linalg.inv`, `inv_ex`, `det`, `slogdet` |
+| Full-rank least squares | `torch.linalg.lstsq` |
+
+Leading batches broadcast where the operation allows it. Solve vector RHS follows PyTorch's vector-shape rules; LU pivots exposed to PyTorch are one-based int32. `_ex` variants return int32 `info`, with `check_errors` controlling explicit status checking. Status checking may synchronize and read the small status tensor. Standalone LU/Cholesky factorization retains partial factors on failure; do not treat nonzero info as a usable successful factorization.
+
+QR accepts `reduced`, `complete` and `r`; complete QR and `svd(full_matrices=True)` return full orthogonal bases. `geqrf` and QR mode `r` retain PyTorch's unsupported-backward behavior. SVD uses the native Jacobi implementation with `driver=None`; named NVIDIA drivers such as `gesvd`/`gesvda` are rejected. Least squares uses Householder QR for tall systems or QR of the transpose for wide minimum-norm systems, requires full rank, and accepts only `driver=None`/`gels`; it does not substitute normal equations or a rank-revealing driver. Complex solver inputs are not supported.
+
+### FFT and explicit plans
+
+Standard `torch.fft` APIs dispatch to RUDA without replacing the global Python functions. The same functions are available in `ruda_torch.fft`:
+
+| Dimensionality | Functions |
+| --- | --- |
+| 1D | `fft`, `ifft`, `rfft`, `irfft`, `hfft`, `ihfft` |
+| 2D | `fft2`, `ifft2`, `rfft2`, `irfft2`, `hfft2`, `ihfft2` |
+| nD | `fftn`, `ifftn`, `rfftn`, `irfftn`, `hfftn`, `ihfftn` |
+| Layout/frequencies | `fftshift`, `ifftshift`, `fftfreq`, `rfftfreq` |
+
+Transforms use FP32/FP64 and complex64/complex128 storage; integer input converts to the selected FP32/FP64 default dtype. FP16/BF16/complex32 are rejected, not silently promoted. Frequencies use FP32/FP64. `n`/`s` crop or zero-pad the transformed dimensions; the final transform axis is the compressed Hermitian axis. Supply the original odd length when expanding compressed input with the `irfft`/`hfft` families. `norm=None`/`backward` normalizes the inverse, `forward` normalizes the forward, and `ortho` uses square-root normalization. Exact non-power-of-two lengths use Bluestein convolution rather than rounding the transform length or executing a CPU DFT.
+
+Transform `out=` variants resize/copy the result but reject autograd when a participating input/output requires gradients. Non-`out` transforms provide native adjoint backward, including higher-order linear gradients. Plans are explicit, queue-bound owners, not an unbounded global cache:
+
+```python
+import torch
+import ruda_torch as r
+
+a = torch.tensor([[4., 1.], [1., 3.]], dtype=torch.float64).to('ruda:0')
+b = torch.ones((2, 1), dtype=a.dtype, device=a.device)
+x = torch.linalg.solve(a, b)
+product = r.gemm(a, a)
+signal = torch.arange(7, dtype=torch.float64, device='ruda:0')
+with r.fft.FFTPlan(signal, kind='rfft', s=(7,), dim=(0,), norm='ortho') as plan:
+    spectrum = plan.execute(signal)
+    retained = plan.retained_bytes
+    plan.clear_workspace()
+restored = torch.fft.irfft(spectrum, n=7, norm='ortho')
+```
+
+`FFTPlan(input, *, kind='fft', s=None, dim=None, norm=None)` accepts `fft`, `ifft`, `rfft`, `irfft`, `hfft` and `ihfft` kinds. Input shape/dtype/device and transform axes/lengths are fixed; signal values may change. `execute(input, *, out=None)` uses the retained plan, `retained_bytes` reports owned storage, `clear_workspace()` releases lazy scratch, and `close()` releases the plan. Context-manager exit calls `close()`.
+
+Sources: [BLAS](../../ruda-torch/python/ruda_torch/blas.py), [linalg registration](../../ruda-torch/python/ruda_torch/linalg.py), [FFT](../../ruda-torch/python/ruda_torch/fft.py), [scientific storage/operations](../../ruda-torch/src/scientific.rs). Native Rust contracts: [ruBLAS](libraries/rublas.md), [ruSOLVER](libraries/rusolver.md), [ruFFT](libraries/rufft.md).
 
 ## Normalization and gated activation
 
@@ -68,7 +137,7 @@ For Python Muon parameter grouping, Newton–Schulz options and checkpoint rules
 
 | API | Execution/lifetime contract |
 | --- | --- |
-| `Stream(priority=0)` | Only priority zero is supported. Reuse streams; the underlying stream pool is bounded. |
+| `Stream(priority=0)` | Signed int32 priority; nonzero requests negotiate native support and use the driver-supported range. `get_stream_priority_range()` queries that range and `Stream.priority` reads the effective priority. Reuse the bounded stream pool. |
 | `current_stream(device=None)`, `default_stream(device=None)` | Native device only; the default stream has ID zero. |
 | `stream(s)` | Context manager that restores the previous stream on exit. |
 | `Stream.wait_stream(other)`, `wait_event(event)` | Insert device-side ordering; do not replace them with host readiness queries. |

@@ -2,7 +2,21 @@
 
 [计算库](README.md) · [张量框架](../tensor-framework.md) · [English](../../en/libraries/rufft.md) | [日本語](../../ja/libraries/rufft.md) | [Deutsch](../../de/libraries/rufft.md) | [Русский](../../ru/libraries/rufft.md)
 
-ruFFT 在设备上计算实数信号的 FFT 和逆变换。使用 `rufft::tensor` 接口可由库分配输出；已有设备绑定时使用底层 `rfft_launch`、`irfft_launch`。
+ruFFT 在设备上计算实数及实／虚部分离的复数 FFT 和逆变换。使用 `rufft::tensor` 接口可由库分配输出；已有设备绑定时使用底层 `rfft_launch`、`irfft_launch`。
+
+## 多轴 FP32／FP64 与复数 plan
+
+`tensor` feature 还提供 `rufft::multidim::{NdFftPlan, NdFftKind, FftNormalization}`。`NdFftPlan::new(like, axes, lengths, kind, norm)` 接受非标量、未量化 FP32／FP64 设备张量、按顺序排列的不重复轴及正数真实变换长度。实／虚部采用精度一致的独立张量；实数变换压缩最后一个所列轴。支持有效正步幅输入，输出连续。
+
+Kind 为 `ComplexForward`、`ComplexInverse`、`RealForward`、`RealInverse`；归一化为 `None`、`Backward`、`Forward`、`Ortho`。Lengths 对相应输入维度截取或补零，非二次幂长度保留 Bluestein 卷积。`execute_complex`、`forward_real`、`inverse_real` 执行对应 plan；便捷包装包括 `fft2`、`fft3`、`rfft2`、`rfft3`，FP64 使用 `double::DoubleFftPlan`。
+
+Plan 持有缓冲区／表，绑定构建时的队列、dtype 与输入 shape。`retained_bytes()` 报告持有存储，`clear_lazy_workspace()` 释放 lazy scratch；返回输出不与 plan scratch 别名。保留 U32 索引、底层分配及变换长度限制，不改变旧张量 `rfft`／`irfft` 的二次幂行为。
+
+[PyTorch FFT 接口](../native-pytorch-api.md#科学计算算子) 使用标准交错 complex64／complex128，提供 1D／2D／nD 的六类复数／实数／Hermitian 变换、shift、频率、原生 adjoint 梯度及显式 `ruda_torch.fft.FFTPlan` 生命周期。FP16／BF16／complex32 明确拒绝，不悄悄改变 dtype，不安装全局 monkeypatch 或无界 plan 缓存。
+
+F32 单轴真实长度入口为 `rufft::tensor::{rfft_exact, irfft_exact}`；逆变换还原奇数长度时应明确提供 N。`RealFftPlan` 复用 chirp 表与 scratch；单轴接口仍仅支持 F32，不能据多轴 plan 的 FP64 支持推断其 dtype 已扩展。
+
+源码：[多轴 plan](../../../ruFFT/src/multidim.rs)、[FP64 plan](../../../ruFFT/src/double.rs)、[频谱布局 kernel](../../../ruFFT/src/spectral_layout.rs)、[Python FFT](../../../ruda-torch/python/ruda_torch/fft.py)。
 
 ## 1. 配置依赖
 

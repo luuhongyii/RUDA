@@ -118,6 +118,7 @@ One repository, multiple crates with clearly defined responsibilities. From doma
 ## Native GPU Inference
 
 - **Operators:** Native PyTorch matrix operations use ruBLAS. Storage-aware FP16/BF16 paths, fused last-axis LayerNorm/RMSNorm, and warp-parallel Softmax/reductions reduce intermediate tensors and separate kernel submissions.
+- **Scientific operations:** FP32/FP64 and complex GEMM, fused and grouped GEMM, real triangular solves, `torch.linalg` factorizations/solves, and the 1D/2D/nD `torch.fft` families use native GPU libraries. See the [scientific API contracts](docs/en/native-pytorch-api.md#scientific-operations) for dtype, driver, gradient and plan-lifetime restrictions.
 - **Paged GQA and MLA:** Public ruDNN kernels read physical KV pages directly for variable-length prefill/decode. `ruda_torch.PagedAttentionPlan` supports `splits=1..32`, FP32 partial-result merging and workspace reuse; the default is `splits=1`. Shared cache writes retain copy-on-write protection.
 - **MoE:** Grouped sigmoid routing and segmented expert matrix multiplication use device-side expert offsets. FP16/BF16 Tensor Core execution is opt-in; the existing expert entry point keeps the scalar GPU strategy by default. Fixed-selection router weights and expert projections also expose first-order training, with FP32 router-weight and expert-weight gradients; see the [ruDNN guide](docs/en/libraries/rudnn.md) and [grouped backward](docs/en/libraries/rublas.md).
 - **Streams and events:** `ruda_torch.Stream`, `Event` and `record_stream` integrate with the native runtime. Dispatch is synchronous by default; set `RUDA_TORCH_ASYNC=1` before the first native submission to opt in to asynchronous dispatch. Explicit synchronization and host readback still wait for completion.
@@ -134,7 +135,7 @@ See [Training and saving state](docs/en/training.md) and the [ruCCL guide](docs/
 
 ## Experimental Numerical Science
 
-`rusolver` adds host real/complex factorizations, SVD, sparse LU, row-partitioned CG and analytic pullbacks; opt-in FP32 batched LU/Cholesky/QR/eigen/CG device paths are separate. `ruintegrate` adds host quadrature, infinite-domain transforms, RK45, stiff BDF1 and event location. First-order host solver graph integration is opt-in via `ruda-autodiff/solver-host`. [Extended scope](https://github.com/shuqi2077/RUDA/blob/main/docs/en/libraries/science-extended.md).
+`rusolver` adds host real/complex factorizations, SVD, sparse LU, row-partitioned CG and analytic pullbacks. Device paths include small FP32 batched solvers and real FP32/FP64 blocked LU/Cholesky, reusable factors, Householder QR, least squares, eigen and SVD operations. `ruintegrate` adds host quadrature, infinite-domain transforms, RK45, stiff BDF1 and event location. First-order host solver graph integration is opt-in via `ruda-autodiff/solver-host`. [Extended scope](https://github.com/shuqi2077/RUDA/blob/main/docs/en/libraries/science-extended.md).
 
 See the guides for convergence and backend restrictions. The packages are workspace members but not default members.
 

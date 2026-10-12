@@ -4,6 +4,45 @@
 
 Constructors and methods defined by RUDA are listed below. Standard inherited PyTorch methods follow their base-class contracts.
 
+## Scientific BLAS and FFT
+
+Contracts and standard `torch.linalg` dispatch: [scientific API](native-pytorch-api.md#scientific-operations).
+
+| Public name / call | Source |
+| --- | --- |
+| `ruda_torch.gemm(a, b, c=None, *, alpha=1, beta=0, transpose_a=False, transpose_b=False, conjugate_a=False, conjugate_b=False, f32_math='strict', strategy='auto')` | [Source](../../ruda-torch/python/ruda_torch/blas.py) |
+| `ruda_torch.fused_gemm(a, b, bias, *, activation='none', strategy='auto', out_dtype=None)` | [Source](../../ruda-torch/python/ruda_torch/blas.py) |
+| `ruda_torch.grouped_gemm(x, weights, row_experts, *, strategy='auto')` | [Source](../../ruda-torch/python/ruda_torch/blas.py) |
+| `ruda_torch.triangular_solve(a, b, *, left=True, upper=True, transpose=False, unit_diagonal=False, alpha=1.0)` | [Source](../../ruda-torch/python/ruda_torch/blas.py) |
+| `ruda_torch.fft.fft(input, n=None, dim=-1, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.ifft(input, n=None, dim=-1, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.rfft(input, n=None, dim=-1, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.irfft(input, n=None, dim=-1, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.hfft(input, n=None, dim=-1, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.ihfft(input, n=None, dim=-1, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.fft2(input, s=None, dim=(-2, -1), norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.ifft2(input, s=None, dim=(-2, -1), norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.rfft2(input, s=None, dim=(-2, -1), norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.irfft2(input, s=None, dim=(-2, -1), norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.hfft2(input, s=None, dim=(-2, -1), norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.ihfft2(input, s=None, dim=(-2, -1), norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.fftn(input, s=None, dim=None, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.ifftn(input, s=None, dim=None, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.rfftn(input, s=None, dim=None, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.irfftn(input, s=None, dim=None, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.hfftn(input, s=None, dim=None, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.ihfftn(input, s=None, dim=None, norm=None, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.fftshift(input, dim=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.ifftshift(input, dim=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.fftfreq(n, d=1.0, *, dtype=None, layout=torch.strided, device=None, requires_grad=False, pin_memory=False, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.rfftfreq(n, d=1.0, *, dtype=None, layout=torch.strided, device=None, requires_grad=False, pin_memory=False, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.FFTPlan(input, *, kind='fft', s=None, dim=None, norm=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.FFTPlan.execute(input, *, out=None)` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.FFTPlan.clear_workspace()` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+| `ruda_torch.fft.FFTPlan.close()` | [Source](../../ruda-torch/python/ruda_torch/fft.py) |
+
+`ruda_torch.fft.FFTPlan.retained_bytes` is a read-only property, not a method.
+
 ## `__init__`
 
 | Public name / call | Source |

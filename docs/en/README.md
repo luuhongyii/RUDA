@@ -52,7 +52,7 @@ From your first GPU kernel to compute libraries, tensor training, and local mode
 - [Full-stack crate and API index](api-reference.md): package names, Rust imports, responsibilities, and source entry points across the workspace.
 - [Runtime API](runtime-api.md): device clients, memory, submission, readback, and synchronization.
 - [Driver API and backends](driver-api.md): backend types, device selection, and runtime integration.
-- [Native PyTorch API](native-pytorch-api.md): device/component versions, shape/dtype contracts, normalization, optimizers, streams, attention, sequence training and quantization.
+- [Native PyTorch API](native-pytorch-api.md): device/component versions, BLAS/linalg/FFT and explicit plans, shape/dtype contracts, normalization, optimizers, streams, attention, sequence training and quantization.
 - [Compute library reference](libraries/README.md): library selection, Cargo features, and entry points.
 
 ## Compute libraries

@@ -1,6 +1,6 @@
 # ruFFT User Guide
 
-## Exact-length device transforms (v16 candidate)
+## Exact-length F32 real transforms
 
 `rufft::tensor::rfft_exact(signal, dim, n)` computes the actual requested
 N-point transform, with `floor(N/2)+1` output bins.
@@ -23,17 +23,27 @@ scratch; `clear_workspace()` releases batched scratch, not the chirp tables.
 Plans pin the client's current execution queue. They do not make the runtime
 graph-capture compatible or enable default asynchronous execution.
 
-Limits: single transform axis, batched positive-stride layouts, F32 only.
+`rfft_exact`/`irfft_exact` limits: single transform axis, batched positive-stride layouts, F32 only.
 Bluestein's `next_power_of_two(2*N-1)` must not exceed 4096*4096; the actual
 allocation must also fit the device and the U32 indexing bound. Bounds are
-implementation limits, **not** verified support or performance guarantees.
-Kernel correctness, driver compilation and speed still require real GPU
-acceptance with `tools/gpu_validation/validate_v16.py`.
+implementation limits, not performance guarantees.
 
 
 [Compute libraries](README.md) · [Tensor framework](../tensor-framework.md) · [中文](../../zh/libraries/rufft.md) | [日本語](../../ja/libraries/rufft.md) | [Deutsch](../../de/libraries/rufft.md) | [Русский](../../ru/libraries/rufft.md)
 
-ruFFT computes real-signal FFTs and inverse transforms on the device. The `rufft::tensor` interface allocates outputs; use `rfft_launch` and `irfft_launch` when managing device bindings directly.
+ruFFT computes real and split-complex FFTs and inverse transforms on the device. The `rufft::tensor` interface allocates outputs; use `rfft_launch` and `irfft_launch` when managing device bindings directly.
+
+## Multi-axis FP32/FP64 and complex plans
+
+Feature `tensor` also exposes `rufft::multidim::{NdFftPlan, NdFftKind, FftNormalization}`. `NdFftPlan::new(like, axes, lengths, kind, norm)` accepts non-scalar unquantized FP32/FP64 device tensors, unique ordered axes and positive exact transform lengths. Real/imaginary components are separate matching-precision tensors; the final listed axis is compressed for real transforms. Valid positive-stride inputs are accepted and outputs are contiguous.
+
+Kinds are `ComplexForward`, `ComplexInverse`, `RealForward`, `RealInverse`. Normalization is `None`, `Backward`, `Forward` or `Ortho`. Lengths crop or zero-pad the corresponding input dimensions; non-power-of-two lengths retain Bluestein convolution. `execute_complex`, `forward_real` and `inverse_real` execute the chosen plan. Convenience wrappers include `fft2`, `fft3`, `rfft2` and `rfft3`; FP64 execution uses `double::DoubleFftPlan`.
+
+Plans own retained buffers/tables and are bound to their construction queue, dtype and input shape. `retained_bytes()` reports owned storage; `clear_lazy_workspace()` releases lazy scratch. Returned outputs do not alias plan scratch. Existing U32 indexing, backing-allocation and transform-length bounds still apply; this does not change the older tensor `rfft`/`irfft` power-of-two behavior.
+
+The [PyTorch FFT interface](../native-pytorch-api.md#scientific-operations) uses standard interleaved complex64/complex128 storage and provides the six complex/real/Hermitian families in 1D/2D/nD, shifts, frequencies, native adjoint gradients and explicit `ruda_torch.fft.FFTPlan` ownership. It rejects FP16/BF16/complex32 rather than silently changing dtype and does not install a global monkeypatch or unbounded plan cache.
+
+Sources: [multi-axis plan](../../../ruFFT/src/multidim.rs), [FP64 plan](../../../ruFFT/src/double.rs), [spectral layout kernels](../../../ruFFT/src/spectral_layout.rs), [Python FFT](../../../ruda-torch/python/ruda_torch/fft.py).
 
 ## 1. Configure dependencies
 

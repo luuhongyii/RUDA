@@ -35,7 +35,27 @@ Tolerances are `max(abs, rel*scale)`; LU uses max-absolute input scale, QR the l
 
 Scaled norms and compensated dot sums mitigate common rounding/overflow issues; unrepresentable intermediate products/results still return errors. CG can report numerical breakdown on extreme scales. It explicitly recomputes the true residual before success and periodically restarts after residual replacement. Check `report.converged()`; hitting the iteration limit is not success. Matvec/preconditioner callbacks must fully overwrite output and preserve a fixed operator throughout the solve.
 
-## Device contract
+## Reusable FP32/FP64 device factorizations
+
+Feature `tensor` exposes real FP32/FP64 GPU operations separately from the synchronous host API. These native interfaces use `[batch,m,n]` matrices and matching `[batch,m,nrhs]` RHS tensors on the same device/queue; PyTorch's bridge expands/broadcasts its higher-rank batches before dispatch.
+
+| Device API | Result/operation |
+| --- | --- |
+| `lu_factor_blocked(a, pivot, options)` | Rectangular LU; `LuFactorResult { packed_lu, pivots, info, submitted_kernels }`. Rust pivots are sequential zero-based row swaps with `P A=L U`. |
+| `lu_solve_factor`, `lu_inverse_factor`, `lu_unpack_factor` | Reuse packed factors; solve accepts transpose. Unpack produces explicit P/L/U. |
+| `cholesky_factor_blocked`, `cholesky_solve_factor`, `cholesky_inverse_factor` | Upper/lower selected-triangle factorization and factor reuse. |
+| `triangular_solve`, `triangular_inverse` | Selected triangle, transpose and unit-diagonal device substitution. |
+| `qr_factor_blocked`, `qr_form_q`, `qr_extract_r`, `qr_apply_q` | Packed Householder reflectors/tau; reduced/full Q, R extraction and Q application. This device QR is not the column-pivoted host `Qr`. |
+| `least_squares_qr` | Full-rank tall least squares or wide minimum-norm solve using QR of the transpose; returns solution, residuals and info, without normal equations. |
+| `determinant_from_lu`, `symmetric_eigen_device`, `svd_device` | Determinant/sign/log magnitude from factors; real Jacobi eigen/SVD device operations. |
+
+Standalone LU/Cholesky factor results retain partial factors on failure and report `info`; their `check_status_sync()` explicitly checks device status. This does not change the older combined Cholesky solver's zeroed failed-output contract below. Native kernels enforce shape, layout, indexing and solver-option bounds and do not provide complex device factorizations.
+
+The [PyTorch linalg backend](../native-pytorch-api.md#scientific-operations) registers standard solve/factorization, QR/eigen/SVD, inverse/determinant and least-squares APIs, with PyTorch's own autograd formulas. PyTorch pivots are converted to one-based int32. Its least-squares driver is only `None`/`gels`; SVD accepts `None` with native Jacobi, not named NVIDIA drivers. Full Q/full SVD bases are explicit, not thin substitutes.
+
+Sources: [factorization](../../../ruSOLVER/src/tensor/factorization.rs), [factor reuse and least squares](../../../ruSOLVER/src/tensor/linear.rs), [Jacobi](../../../ruSOLVER/src/tensor/jacobi.rs), [Python registration](../../../ruda-torch/python/ruda_torch/linalg.py).
+
+## Small batched Cholesky device contract
 
 A `[batch,n,n]`, B `[batch,n,nrhs]`, n=1..32, nrhs=1..8. Same-device/queue, unquantized row-major contiguous FP32 only. One thread processes one matrix sequentially; matrices are independent across the batch. This is NOT a blocked, warp-cooperative, large-matrix performance implementation. Scratch is device memory, not exclusively registers.
 

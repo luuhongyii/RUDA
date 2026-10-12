@@ -52,7 +52,7 @@
 - [全栈 Crate 与 API 索引](api-reference.md)：整个 workspace 的包名、Rust 导入名、职责与源码入口。
 - [Runtime API](runtime-api.md)：设备客户端、内存、提交、回读与同步。
 - [Driver API 与后端](driver-api.md)：后端类型、设备选择和运行时接入。
-- [原生 PyTorch API](native-pytorch-api.md)：设备／组件版本、shape／dtype 契约、归一化、优化器、流、注意力、序列训练与量化。
+- [原生 PyTorch API](native-pytorch-api.md)：设备／组件版本、BLAS／linalg／FFT 与显式 plan、shape／dtype 契约、归一化、优化器、流、注意力、序列训练与量化。
 - [计算库参考](libraries/README.md)：按领域选择库、Cargo feature 与接口入口。
 
 ## 计算库

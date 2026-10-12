@@ -60,7 +60,27 @@ Cholesky 和特征分解检查整个输入的对称性，容差内的差异按�
 
 CG 默认每 32 步重算真实残差 `b-Ax`，在准备报告收敛前也重算；替换残差时重启方向。返回 `MaxIterations` 不表示成功。对正曲率的检查不能证明任意 `LinearOperator` 一定对称正定。矩阵自由算子和预条件器必须在整个求解中保持固定，并完整覆盖输出缓冲区。
 
-## 设备路径
+## 可复用 FP32／FP64 设备分解
+
+`tensor` feature 在同步主机 API 之外提供实数 FP32／FP64 GPU 算子。原生接口使用 `[batch,m,n]` 矩阵及相匹配的 `[batch,m,nrhs]` RHS，要求同设备／执行队列；PyTorch 桥接先扩展／广播高阶 batch，再分发。
+
+| 设备 API | 结果／运算 |
+| --- | --- |
+| `lu_factor_blocked(a, pivot, options)` | 矩形 LU；返回 `LuFactorResult { packed_lu, pivots, info, submitted_kernels }`。Rust pivots 是从 0 开始的逐步行交换，约定 `P A=L U`。 |
+| `lu_solve_factor`、`lu_inverse_factor`、`lu_unpack_factor` | 复用 packed 因子，求解可转置；unpack 构造显式 P／L／U。 |
+| `cholesky_factor_blocked`、`cholesky_solve_factor`、`cholesky_inverse_factor` | 选择上／下三角的分解与因子复用。 |
+| `triangular_solve`、`triangular_inverse` | 设备代入求解，指定三角、转置和单位对角线。 |
+| `qr_factor_blocked`、`qr_form_q`、`qr_extract_r`、`qr_apply_q` | Packed Householder reflectors／tau、薄／完整 Q、提取 R 和应用 Q；设备 QR 不等于带列主元的主机 `Qr`。 |
+| `least_squares_qr` | 满秩高矩阵最小二乘，或对宽矩阵的转置做 QR 求最小范数解；返回 solution、residuals、info，不用正规方程替代。 |
+| `determinant_from_lu`、`symmetric_eigen_device`、`svd_device` | 从因子计算行列式／符号／对数绝对值，以及实数 Jacobi 特征／奇异值分解。 |
+
+独立 LU／Cholesky 因子失败时保留部分因子并返回 `info`，`check_status_sync()` 显式检查设备状态；不改变下文旧 combined Cholesky 求解器失败输出归零的契约。原生 kernel 保留 shape、布局、索引及求解选项限制，不提供复数设备分解。
+
+[PyTorch linalg 后端](../native-pytorch-api.md#科学计算算子) 接入标准求解／分解、QR／特征／SVD、逆矩阵／行列式及最小二乘，并保留 PyTorch 自身 autograd 公式。PyTorch pivots 转换为从 1 开始的 int32。其最小二乘仅接受 `None`／`gels` 驱动，SVD 仅接受使用原生 Jacobi 的 `None`，不冒充 NVIDIA 命名驱动；完整 Q／SVD 基不以薄矩阵替代。
+
+源码：[分解](../../../ruSOLVER/src/tensor/factorization.rs)、[因子复用及最小二乘](../../../ruSOLVER/src/tensor/linear.rs)、[Jacobi](../../../ruSOLVER/src/tensor/jacobi.rs)、[Python 注册](../../../ruda-torch/python/ruda_torch/linalg.py)。
+
+## 小矩阵批量 Cholesky 设备路径
 
 ```bash
 # CUDA toolkit、驱动与 NVIDIA GPU 环境。
@@ -83,7 +103,7 @@ RUDA_CUDA_COMPILER=ptx cargo run --locked -p ruda-solver --features cuda --examp
 
 这是根据公开数学方法独立写出的实现；未复制 LAPACK/cuSOLVER/GSL 源码，不宣称与其实现或数值舍入逐位相同。
 
-- [LAPACK GETRF](https://netlib.org/lapack/explore-html/db/d04/group__getrf_gaea332d65e208d833716b405ea2a1ab69.html)：LU 部分主元的职责；本库不是其 blocked BLAS-3 实现。
+- [LAPACK GETRF](https://netlib.org/lapack/explore-html/db/d04/group__getrf_gaea332d65e208d833716b405ea2a1ab69.html)：LU 部分主元的职责；本节主机 LU 不是其 blocked BLAS-3 实现。
 - [LAPACK QR 列主元](https://www.netlib.org/lapack/lug/node42.html)：QR 与最小二乘；本版明确拒绝秩亏解。
 - [LAPACK POTRF](https://www.netlib.org/lapack/explore-html/d2/d09/group__potrf.html)：对称正定分解。
 - [Templates for Linear Systems](https://www.netlib.org/templates/templates.html)：CG 的适用条件与停止判据。

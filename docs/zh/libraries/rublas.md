@@ -18,6 +18,23 @@ Cargo package 为 `rublas`。通用路径选择所需 feature，并关闭不需�
 
 ## 2. 矩阵乘、向量与 INT4
 
+### GEMM、复数存储与三角方程
+
+`tensor-matmul` feature 还提供以下设备 API：
+
+| API | 契约 |
+| --- | --- |
+| `gemm(lhs, rhs, c, GemmOptions, MatmulStrategy)` | 实数 FP32／FP64 的 `alpha*op(lhs)@op(rhs)+beta*c`，前导 batch 广播，显式转置；C 若提供，必须为输出 shape。默认 alpha 为 1、beta 为 0、FP32 math 为 strict。 |
+| `complex_gemm(ar, ai, br, bi, c, ComplexGemmOptions)` | 实／虚部分离的 FP32 或 FP64 张量，精度／设备一致，支持有效非负步幅。复数 alpha／beta 为 `[real,imag]`，转置与共轭独立；返回 `(real,imag)` 设备张量。 |
+| `triangular_solve(a, b, TriangularSolveOptions)` | 实数 FP32／FP64，支持左／右求解、上／下三角、转置、单位对角线、alpha 和前导 batch 广播。不读取未使用三角及 unit diagonal；非 unit 的零主元保留 IEEE 语义。 |
+| `matmul_bias_activation(a, b, bias, activation, strategy, out_dtype)` | FP16／BF16 GEMM 融合 bias 及 `None`／`Relu`／tanh 公式的 `Gelu`，FP32 累加后一次输出舍入。Bias／输出可为输入 dtype 或 FP32。 |
+
+复数 GEMM 与三角代入使用标量 GPU kernel，不是 Tensor Core kernel，也不在主机做矩阵运算。保留 dtype／设备、shape、步幅 span 与 U32 索引检查。Rust 复数张量采用分离实／虚部；PyTorch 桥接在 GPU 上转换标准交错复数存储。
+
+Python 提供带一阶 autograd 的 `ruda_torch.gemm`、`fused_gemm`、`grouped_gemm`、`triangular_solve`。其 grouped 入口接受任意顺序 int32／int64 专家 ID，不同于下文低层 segmented 的 U32／offset 接口。详见 [PyTorch 科学计算契约](../native-pytorch-api.md#科学计算算子)。
+
+源码：[实数 GEMM](../../../ruBLAS/src/tensor_matmul/gemm.rs)、[复数 GEMM](../../../ruBLAS/src/tensor_matmul/complex.rs)、[三角求解](../../../ruBLAS/src/tensor_matmul/triangular.rs)、[融合 epilogue](../../../ruBLAS/src/tensor_matmul/fused.rs)。
+
 ### 张量矩阵乘
 
 `rublas::tensor_matmul::matmul` 接收 lhs、rhs、可选输出 out、MatmulStrategy 和输出 DType，返回设备张量或 MatmulSetupError。已有输出可通过 out 传入；未传入时由入口创建。

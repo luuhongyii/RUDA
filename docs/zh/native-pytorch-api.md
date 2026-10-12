@@ -32,9 +32,78 @@ torch.testing.assert_close(x.cpu(), first, rtol=0, atol=0)
 
 先导入 `ruda_torch`，再创建 `ruda:0` 张量。同一进程不能已经注册其他 PrivateUse1 后端。`is_available()` 表示集成已初始化，不是 GPU 指令支持的完整清单；`device_count()` 为 1，`current_device()` 为 0。`synchronize(device=None)` 仅接受原生设备并等待完成。`execution_stats()` 返回累计内核、传输及部分库调用计数，不是计时器或 autotune 结果。
 
-Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、training 4、router 1、sequence 1、NF4 decode 1、NF4 matmul 1。Paged backward 接受原生 API 1 或 2 及兼容桥接，ordered backward 要求 2；仅匹配基础 ABI 不表示具备全部扩展。使用匹配的[源码构建或预编译包](../../ruda-torch/README.md#build-and-install)。
+Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、training 4、router 1、sequence 1、NF4 decode 1、NF4 matmul 1、scientific 1、BLAS 1、linalg 1、FFT 1。Paged backward 接受原生 API 1 或 2 及兼容桥接，ordered backward 要求 2；仅匹配基础 ABI 不表示具备全部扩展。使用匹配的[源码构建或预编译包](../../ruda-torch/README.md#build-and-install)。
 
 原生 eager 后端不安装通用 CPU 回退。算子不支持、能力缺失及设备错误直接传播。CUDA 与 RUDA 张量使用不同分配，不能因为在同一 GPU 上就混用。
+
+## 科学计算算子
+
+以下功能使用原生 RUDA GPU kernel，不以 CPU 数值运算回退，也不是 NVIDIA 库的 ABI 包装。scientific API 1 提供 FP64 与复数存储；dtype 支持按算子划分，不代表所有随机、注意力、训练或图算子都支持这些类型。基础 FP64／复数算术、归约、矩阵乘、索引及实数／复数 view 转换可用；FP64 `erf` 要求 `RUDA_CUDA_COMPILER=nvrtc`，直接 PTX 不支持。
+
+### BLAS
+
+| 公开函数 | 输入与运算契约 |
+| --- | --- |
+| `ruda_torch.gemm(a, b, c=None, *, alpha=1, beta=0, transpose_a=False, transpose_b=False, conjugate_a=False, conjugate_b=False, f32_math="strict", strategy="auto")` | FP32／FP64／complex64／complex128，dtype／设备一致，前导矩阵 batch 可广播。计算 `alpha*op(a)@op(b)+beta*c`；转置与共轭独立。C 必须为完整输出 shape，非零 beta 要求 C。`f32_math` 接受 `strict`／`tf32`，策略为 `auto`／`scalar`；复数使用标量 GPU 累加。 |
+| `ruda_torch.fused_gemm(a, b, bias, *, activation="none", strategy="auto", out_dtype=None)` | 相同 FP16／BF16 的 `[M,K]`、`[K,N]` 输入及 bias `[N]`。Bias／输出可为输入 dtype 或 FP32。激活为 `none`、`relu`、tanh 公式的 `gelu`，融合 epilogue 后只做一次输出舍入；策略为 `auto`、`scalar`、`tensor_core`。 |
+| `ruda_torch.grouped_gemm(x, weights, row_experts, *, strategy="auto")` | 相同 FP32／FP16／BF16 的 `[M,K]`、`[E,N,K]`，任意行顺序的 int32／int64 专家 ID `[M]`，输出 `[M,N]`。负数／越界 ID 表示 padding，输出和梯度贡献为零；策略为 `auto`、`scalar`、`tensor_core`。 |
+| `ruda_torch.triangular_solve(a, b, *, left=True, upper=True, transpose=False, unit_diagonal=False, alpha=1.0)` | 实数 FP32／FP64，方形三角 A 与矩阵 B，前导 batch 可广播。求解 `op(A)X=alpha*B` 或 `X op(A)=alpha*B`。不读取另一半三角及 unit diagonal；非 unit 的零主元保留 IEEE 除法语义。只返回 X，不是旧版 PyTorch 的二元组。 |
+
+这四个公开 BLAS 函数提供一阶 autograd，拒绝高阶 backward。显式 `tensor_core` 要求支持的硬件与布局，不能满足时直接报错，不悄悄换策略。原生算子保留 U32 元素／步幅索引限制。标准 `mm`、`bmm`、`addmm` 的 FP64／复数输入也经 BLAS 分发。
+
+### 线性代数
+
+导入后，以下标准 PyTorch API 所需的后端 kernel 自动接入实数 FP32／FP64 RUDA 张量；公共 composite 算子保留 PyTorch 自身的 autograd 公式。
+
+| 算子族 | 公开 PyTorch 入口 |
+| --- | --- |
+| LU 与因子复用求解 | `torch.linalg.solve`、`solve_ex`、`lu_factor`、`lu_factor_ex`、`lu_solve`、`torch.lu_solve`、`torch.lu_unpack` |
+| Cholesky | `torch.linalg.cholesky`、`cholesky_ex`、`torch.cholesky_solve`、`torch.cholesky_inverse` |
+| 三角方程 | `torch.linalg.solve_triangular`、旧式 `torch.triangular_solve` |
+| Householder QR | `torch.linalg.qr`、`torch.geqrf`、`torch.ormqr` |
+| 实对称特征分解 | `torch.linalg.eigh`、`eigvalsh` |
+| 奇异值分解 | `torch.linalg.svd`、`svdvals` |
+| 逆矩阵与行列式 | `torch.linalg.inv`、`inv_ex`、`det`、`slogdet` |
+| 满秩最小二乘 | `torch.linalg.lstsq` |
+
+在算子允许的范围内广播前导 batch；求解的向量 RHS 遵循 PyTorch 的向量 shape 规则。PyTorch LU pivots 为从 1 开始的 int32；`_ex` 变体返回 int32 `info`，`check_errors` 控制显式状态检查，检查可能同步并读取小型状态张量。独立 LU／Cholesky 分解失败时保留部分因子，不能将非零 info 当作成功因子继续使用。
+
+QR 支持 `reduced`、`complete`、`r`；complete QR 与 `svd(full_matrices=True)` 返回完整正交基。`geqrf` 和 QR 的 `r` 模式保留 PyTorch 不支持 backward 的行为。SVD 使用原生 Jacobi，接受 `driver=None`，拒绝 `gesvd`／`gesvda` 等 NVIDIA 命名驱动。最小二乘在高矩阵上使用 Householder QR，在宽矩阵上对转置做 QR 得到最小范数解；要求满秩，仅接受 `driver=None`／`gels`，不替换成正规方程或秩揭示驱动。设备 solver 不支持复数输入。
+
+### FFT 与显式 plan
+
+标准 `torch.fft` 通过后端分发接入 RUDA，不替换全局 Python 函数；同名函数也位于 `ruda_torch.fft`：
+
+| 维度 | 函数 |
+| --- | --- |
+| 1D | `fft`、`ifft`、`rfft`、`irfft`、`hfft`、`ihfft` |
+| 2D | `fft2`、`ifft2`、`rfft2`、`irfft2`、`hfft2`、`ihfft2` |
+| nD | `fftn`、`ifftn`、`rfftn`、`irfftn`、`hfftn`、`ihfftn` |
+| 布局／频率 | `fftshift`、`ifftshift`、`fftfreq`、`rfftfreq` |
+
+变换支持 FP32／FP64 与 complex64／complex128；整数输入转换为所选 FP32／FP64 默认 dtype。FP16／BF16／complex32 明确拒绝，不悄悄提升类型；频率输出为 FP32／FP64。`n`／`s` 对相应变换维度截取或补零，最后一个变换轴是 Hermitian 压缩轴；`irfft`／`hfft` 系列展开压缩输入时，应明确指定原始奇数长度。`norm=None`／`backward` 归一化逆变换，`forward` 归一化正变换，`ortho` 使用平方根归一化。非二次幂长度通过 Bluestein 卷积计算真实请求长度，不将长度改成二次幂，也不执行 CPU DFT。
+
+变换 `out=` 会调整 shape 并复制结果，但在参与输入／输出需要梯度时拒绝 autograd；非 `out` 变换有原生 adjoint backward，并支持高阶线性梯度。Plan 是显式、绑定执行队列的所有者，不建立无界全局缓存：
+
+```python
+import torch
+import ruda_torch as r
+
+a = torch.tensor([[4., 1.], [1., 3.]], dtype=torch.float64).to('ruda:0')
+b = torch.ones((2, 1), dtype=a.dtype, device=a.device)
+x = torch.linalg.solve(a, b)
+product = r.gemm(a, a)
+signal = torch.arange(7, dtype=torch.float64, device='ruda:0')
+with r.fft.FFTPlan(signal, kind='rfft', s=(7,), dim=(0,), norm='ortho') as plan:
+    spectrum = plan.execute(signal)
+    retained = plan.retained_bytes
+    plan.clear_workspace()
+restored = torch.fft.irfft(spectrum, n=7, norm='ortho')
+```
+
+`FFTPlan(input, *, kind='fft', s=None, dim=None, norm=None)` 的 kind 可为 `fft`、`ifft`、`rfft`、`irfft`、`hfft`、`ihfft`。输入 shape／dtype／设备及变换轴／长度固定，信号值可变化。`execute(input, *, out=None)` 复用 plan，`retained_bytes` 报告持有存储，`clear_workspace()` 释放 lazy scratch，`close()` 释放 plan；上下文退出时自动调用 `close()`。
+
+源码：[BLAS](../../ruda-torch/python/ruda_torch/blas.py)、[linalg 注册](../../ruda-torch/python/ruda_torch/linalg.py)、[FFT](../../ruda-torch/python/ruda_torch/fft.py)、[科学计算存储／算子](../../ruda-torch/src/scientific.rs)。原生 Rust 契约见 [ruBLAS](libraries/rublas.md)、[ruSOLVER](libraries/rusolver.md)、[ruFFT](libraries/rufft.md)。
 
 ## 归一化与门控激活
 
@@ -68,7 +137,7 @@ Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python M
 
 | API | 执行／生命周期契约 |
 | --- | --- |
-| `Stream(priority=0)` | 仅支持优先级零，底层流池有界，应复用流。 |
+| `Stream(priority=0)` | 优先级为有符号 int32；非零请求先协商原生支持，再使用驱动范围。`get_stream_priority_range()` 查询范围，`Stream.priority` 返回实际优先级；应复用有界流池。 |
 | `current_stream(device=None)`、`default_stream(device=None)` | 仅原生设备，默认流 ID 为零。 |
 | `stream(s)` | 上下文退出时恢复此前的流。 |
 | `Stream.wait_stream(other)`、`wait_event(event)` | 建立设备侧顺序依赖，不能用主机就绪查询替代。 |

@@ -18,6 +18,23 @@ The Cargo package is `rublas`. Select the required features and disable unnecess
 
 ## 2. Matrix multiplication, vectors, and INT4
 
+### GEMM, complex storage, and triangular systems
+
+Feature `tensor-matmul` also exposes these device APIs:
+
+| API | Contract |
+| --- | --- |
+| `gemm(lhs, rhs, c, GemmOptions, MatmulStrategy)` | Real FP32/FP64 `alpha*op(lhs)@op(rhs)+beta*c`; leading batches broadcast. Transpose flags are explicit; C, when supplied, has output shape. `GemmOptions::default()` uses alpha 1, beta 0 and strict FP32 math. |
+| `complex_gemm(ar, ai, br, bi, c, ComplexGemmOptions)` | Separate real/imaginary FP32 or FP64 tensors; matching precision/device and arbitrary valid nonnegative strides. Complex alpha/beta are `[real,imag]`; transpose and conjugate are independent. Returns `(real,imag)` device tensors. |
+| `triangular_solve(a, b, TriangularSolveOptions)` | Real FP32/FP64; left/right solve, upper/lower triangle, transpose, unit diagonal and alpha. Leading batches broadcast. Does not read the unused triangle or unit diagonal; zero nonunit pivots retain IEEE behavior. |
+| `matmul_bias_activation(a, b, bias, activation, strategy, out_dtype)` | FP16/BF16 GEMM with fused bias and `None`/`Relu`/tanh-formula `Gelu`; FP32 accumulation before one output rounding. Bias/output may use input dtype or FP32. |
+
+Complex GEMM and triangular substitution use scalar GPU kernels, not Tensor Core kernels or host matrix arithmetic. Dtype/device, shape, strided-span and U32 indexing checks apply. Rust complex tensors are split-component; the PyTorch bridge converts standard interleaved complex storage on the GPU.
+
+Python exposes `ruda_torch.gemm`, `fused_gemm`, `grouped_gemm` and `triangular_solve` with first-order autograd. Its grouped entry accepts arbitrary-order int32/int64 expert IDs, unlike the low-level segmented U32/offset interface below. See [PyTorch scientific contracts](../native-pytorch-api.md#scientific-operations).
+
+Sources: [real GEMM](../../../ruBLAS/src/tensor_matmul/gemm.rs), [complex GEMM](../../../ruBLAS/src/tensor_matmul/complex.rs), [triangular solve](../../../ruBLAS/src/tensor_matmul/triangular.rs), [fused epilogue](../../../ruBLAS/src/tensor_matmul/fused.rs).
+
 ### Tensor matrix multiplication
 
 `rublas::tensor_matmul::matmul` takes lhs, rhs, optional output out, MatmulStrategy, and output DType. It returns a device tensor or MatmulSetupError. Pass an existing output through out, or omit it to allocate one.

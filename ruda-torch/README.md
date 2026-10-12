@@ -80,11 +80,17 @@ Import registers `torch.ruda` and the device. Another PrivateUse1 backend cannot
 
 Operator-specific shape, dtype and layout checks still apply. See the [operator registrations](https://github.com/shuqi2077/RUDA/blob/main/ruda-torch/python/ruda_torch/_ops.py) and [native kernels](https://github.com/shuqi2077/RUDA/tree/main/ruda-torch/src).
 
+## Scientific operations
+
+Scientific GPU operations expose `ruda_torch.gemm`, `fused_gemm`, `grouped_gemm` and `triangular_solve`, together with standard `torch.linalg` and `torch.fft` dispatch on RUDA tensors. GEMM and FFT support FP32/FP64 and complex64/complex128; solver operations use real FP32/FP64. The scientific, BLAS, linalg and FFT bridges each negotiate API 1 in addition to base ABI 10; rebuild both native components to use these capabilities.
+
+See the [scientific API reference](../docs/en/native-pytorch-api.md#scientific-operations) ([中文](../docs/zh/native-pytorch-api.md#科学计算算子)) for signatures, driver restrictions, gradients and explicit `ruda_torch.fft.FFTPlan` ownership. These dtype extensions do not extend every random, training or attention operator to FP64/complex storage. FFT does not silently promote FP16/BF16/complex32. FP64 `erf` requires the NVRTC compiler path.
+
 ## Streams, events and asynchronous dispatch
 
 Dispatch is synchronous by default. Set `RUDA_TORCH_ASYNC=1` before the first native submission to enable asynchronous dispatch; this setting is cached for the process. Explicit synchronization, scalar extraction and host readback still wait for completion.
 
-`Stream`, `Event`, `stream`, `current_stream`, `default_stream` and `record_stream` use RUDA's native runtime. Only stream priority 0 and device `ruda:0` are supported. Reuse streams: the pool is bounded by the runtime's `streaming.max_streams` setting.
+`Stream`, `Event`, `stream`, `current_stream`, `default_stream` and `record_stream` use RUDA's native runtime on device `ruda:0`. `get_stream_priority_range()` queries the driver-supported range; `Stream(priority=...)` negotiates priority support before requesting a nonzero priority, and `Stream.priority` reports the effective value. Reuse streams: the pool is bounded by the runtime's `streaming.max_streams` setting.
 
 ```python
 import torch
