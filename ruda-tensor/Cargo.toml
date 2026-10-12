@@ -1,7 +1,7 @@
 [package]
 edition = "2024"
 name = "ruda-tensor"
-version = "0.21.65"
+version = "0.21.66"
 authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
 build = false
 autolib = false
@@ -186,7 +186,7 @@ optional = true
 [dependencies.rudnn]
 package = "ruDNN"
 path = "../ruDNN"
-version = "0.1.92"
+version = "0.1.93"
 default-features = false
 features = ["attention-fallback"]
 
