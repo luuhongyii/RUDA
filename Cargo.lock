@@ -6305,7 +6305,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-tensor-router"
-version = "0.21.56"
+version = "0.21.57"
 dependencies = [
  "hashbrown 0.16.1",
  "log",
