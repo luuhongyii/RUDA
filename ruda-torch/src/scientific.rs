@@ -182,7 +182,7 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f64) {
 
 fn matmul(a:&View,b:&View,out:&View) {
     use rublas::tensor_matmul::{gemm,GemmOptions,MatmulStrategy};
-    let multiply=|a:Tensor,b:Tensor,c:Option<Tensor>,beta:f64| gemm(a,b,c,GemmOptions{beta,..Default::default()},MatmulStrategy::Auto).expect("scientific GEMM failed");
+    let multiply=|a:Tensor,b:Tensor,c:Option<Tensor>,beta:f64| gemm(a,b,c,GemmOptions{beta,..Default::default()},MatmulStrategy::Ruda).expect("scientific GEMM failed");
     if a.dtype>=10 || b.dtype>=10 || out.dtype>=10 {
         let code=if out.dtype==11 {9} else {0};
         let (ar,ai)=parts_as(a,code);let(br,bi)=parts_as(b,code);
@@ -340,27 +340,28 @@ fn signed<F:Float>(magnitude:F,sign:F)->F {
 fn complex_log<F:Float>(x:F,y:F)->(F,F) {
     let mut scale=x.abs();if y.abs()>scale {scale=y.abs();}
     let mut real=scale.ln();
-    if scale!=F::new(0.0) && !scale.is_inf() {
+    if scale!=F::new(0.0) && scale!=F::new(f32::INFINITY) {
         let a=x/scale;let b=y/scale;real+=(a*a+b*b).ln()/F::new(2.0);
     }
     (real,y.atan2(x))
 }
 #[ruda]
 fn complex_sqrt<F:Float>(x:F,y:F)->(F,F) {
-    let z=F::new(0.0);let two=F::new(2.0);let mut r=F::NAN;let mut i=F::NAN;
-    if y.is_inf() {r=F::INFINITY;i=y;}
-    else if x.is_inf() {
-        if x>z {r=x;i=signed(z,y);if y.is_nan() {i=y;}}
-        else {r=z;i=signed(F::INFINITY,y);if y.is_nan() {r=y;}}
+    let z=F::new(0.0f32);let two=F::new(2.0f32);let inf=F::new(f32::INFINITY);
+    let mut r=F::new(f32::NAN);let mut i=F::new(f32::NAN);
+    if y.abs()==inf {r=inf;i=y;}
+    else if x.abs()==inf {
+        if x>z {r=x;i=signed::<F>(z,y);if y!=y {i=y;}}
+        else {r=z;i=signed::<F>(inf,y);if y!=y {r=y;}}
     }
-    else if !x.is_nan() && !y.is_nan() {
+    else if x==x && y==y {
         let ax=x.abs();let ay=y.abs();let mut scale=ax;if ay>scale {scale=ay;}
         if scale==z {r=z;i=y;}
         else {
             let magnitude=(x/scale).hypot(y/scale);
             let t=scale.sqrt()*((magnitude+ax/scale)/two).sqrt();
             if x>=z {r=t;i=(y/t)/two;}
-            else {r=(ay/t)/two;i=signed(t,y);}
+            else {r=(ay/t)/two;i=signed::<F>(t,y);}
         }
     }
     (r,i)
@@ -372,24 +373,24 @@ fn inverse_hyperbolic<F:Float>(x:F,y:F,#[comptime] acosh:bool)->(F,F) {
     let mut xx=ax/scale;let yy=ay/scale;let epsilon=one/scale;
     if comptime!(acosh) {xx=x/scale;}
     let mut ar=F::new(0.0);let mut ai=F::new(0.0);let mut br=F::new(0.0);let mut bi=F::new(0.0);
-    if comptime!(acosh) {let (a,b)=complex_sqrt(xx+epsilon,yy);ar=a;ai=b;let (c,d)=complex_sqrt(xx-epsilon,yy);br=c;bi=d;}
-    else {let (a,b)=complex_sqrt(xx,yy+epsilon);ar=a;ai=b;let (c,d)=complex_sqrt(xx,yy-epsilon);br=c;bi=d;}
+    if comptime!(acosh) {let (a,b)=complex_sqrt::<F>(xx+epsilon,yy);ar=a;ai=b;let (c,d)=complex_sqrt::<F>(xx-epsilon,yy);br=c;bi=d;}
+    else {let (a,b)=complex_sqrt::<F>(xx,yy+epsilon);ar=a;ai=b;let (c,d)=complex_sqrt::<F>(xx,yy-epsilon);br=c;bi=d;}
     let sr=ar*br-ai*bi;let si=ar*bi+ai*br;
-    let (lr,li)=complex_log(xx+sr,yy+si);
-    let mut r=lr+scale.ln();let mut i=signed(li,y);
+    let (lr,li)=complex_log::<F>(xx+sr,yy+si);
+    let mut r=lr+scale.ln();let mut i=signed::<F>(li,y);
     if comptime!(!acosh) {
-        r=signed(r,x);
+        r=signed::<F>(r,x);
         if ax<F::new(0.5) && ay<F::new(0.5) {
             let s=ax*ax+ay*ay-one;
             let t=F::new(2.0).sqrt()*ax/(s.hypot(F::new(2.0)*ax)-s).sqrt();
-            r=signed(t.asinh(),x);i=(y/r.cosh()).asin();
+            r=signed::<F>(t.asinh(),x);i=(y/r.cosh()).asin();
         }
         if y==F::new(0.0) {r=x.asinh();i=y;}
     }
-    if scale.is_inf() {
-        r=F::INFINITY;
+    if scale==F::new(f32::INFINITY) {
+        r=F::new(f32::INFINITY);
         let mut angle=y.atan2(x);
-        if comptime!(!acosh) {angle=y.atan2(ax);r=signed(r,x);}
+        if comptime!(!acosh) {angle=y.atan2(ax);r=signed::<F>(r,x);}
         i=angle;
     }
     (r,i)
@@ -414,9 +415,9 @@ fn pointwise<F:Float+RudaElement>(ar:&kernel_dsl::prelude::Tensor<F>,ai:&kernel_
         else if comptime!(op==3) {if x<z {r=z;}}
         else if comptime!(op==4) {if y<=alpha {r=z;}}
         else if comptime!(op==9) {let magnitude=x.exp();r=magnitude*u.cos();i=magnitude*u.sin();}
-        else if comptime!(op==10) {if comptime!(complex) {let (a,b)=complex_log(x,u);r=a;i=b;}else {r=x.ln();i=z;}}
+        else if comptime!(op==10) {if comptime!(complex) {let (a,b)=complex_log::<F>(x,u);r=a;i=b;}else {r=x.ln();i=z;}}
         else if comptime!(op==11 || op==12) {
-            if comptime!(complex) {let (a,b)=complex_sqrt(x,u);r=a;i=b;
+            if comptime!(complex) {let (a,b)=complex_sqrt::<F>(x,u);r=a;i=b;
                 if comptime!(op==12) {let rr=r;let ii=i;
                     if ii.abs()>rr.abs() {let ratio=rr/ii;let den=ii+rr*ratio;r=ratio/den;i=-one/den;}
                     else {let ratio=ii/rr;let den=rr+ii*ratio;r=one/den;i=-ratio/den;}
@@ -435,22 +436,22 @@ fn pointwise<F:Float+RudaElement>(ar:&kernel_dsl::prelude::Tensor<F>,ai:&kernel_
         else if comptime!(op==25) {r=x.trunc();}
         else if comptime!(op==26) {r=x.round();}
         else if comptime!(op==35) {r=x.log1p();i=z;if comptime!(complex) {
-            let (a,b)=complex_log(one+x,u);r=a;i=b;
+            let (a,b)=complex_log::<F>(one+x,u);r=a;i=b;
             if x.abs()<F::new(0.5) && u.abs()<F::new(0.5) {r=(F::new(2.0)*x+x*x+u*u).log1p()/F::new(2.0);}
         }}
         else if comptime!(op==36) {r=x.sinh();i=z;if comptime!(complex) {r*=u.cos();i=x.cosh()*u.sin();}}
         else if comptime!(op==37) {r=x.cosh();i=z;if comptime!(complex) {r*=u.cos();i=x.sinh()*u.sin();}}
-        else if comptime!(op==38) {r=x.asinh();i=z;if comptime!(complex) {let (a,b)=inverse_hyperbolic(x,u,false);r=a;i=b;}}
-        else if comptime!(op==39) {r=x.acosh();i=z;if comptime!(complex) {let (a,b)=inverse_hyperbolic(x,u,true);r=a;i=b;}}
+        else if comptime!(op==38) {r=x.asinh();i=z;if comptime!(complex) {let (a,b)=inverse_hyperbolic::<F>(x,u,false);r=a;i=b;}}
+        else if comptime!(op==39) {r=x.acosh();i=z;if comptime!(complex) {let (a,b)=inverse_hyperbolic::<F>(x,u,true);r=a;i=b;}}
         else if comptime!(op==40) {r=x.atanh();i=z;if comptime!(complex) {
-            let (lr,_li)=complex_log(one+x,u);let (rr,_ri)=complex_log(one-x,u);
+            let (lr,_li)=complex_log::<F>(one+x,u);let (rr,_ri)=complex_log::<F>(one-x,u);
             r=(lr-rr)/F::new(2.0);i=(u.atan2(one+x)+u.atan2(one-x))/F::new(2.0);
             if x.abs()<F::new(0.5) {
                 let mut scale=u.abs();if scale<one {scale=one;}
                 let a=(one-x)/scale;let b=u/scale;
                 r=(((F::new(4.0)*x/scale)/scale)/(a*a+b*b)).log1p()/F::new(4.0);
             }
-            if x==z {r=x;}if x.is_inf() || u.is_inf() {r=signed(z,x);i=signed(one.atan2(z),u);}
+            if x==z {r=x;}if x.abs()==F::new(f32::INFINITY) || u.abs()==F::new(f32::INFINITY) {r=signed::<F>(z,x);i=signed::<F>(one.atan2(z),u);}
         }}
         else if comptime!(op==49) {
             let start=oldr[address(oldr,p)];let start_i=oldi[address(oldi,p)];
