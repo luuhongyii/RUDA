@@ -1,0 +1,123 @@
+name: Unsafe boundary compilation
+
+on:
+  push:
+    branches: [refactor/unsafe-boundaries-20261012]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  RAYON_NUM_THREADS: '2'
+  RUST_MIN_STACK: '16777216'
+
+jobs:
+  compile:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: Native and autodiff
+            key: unsafe-native
+            cache: v36-native
+            commands: |
+              cargo build --locked -p ruda-torch-native -p ruda-autodiff --features ruda-autodiff/distributed
+              cargo build --locked -p ruda-autodiff --no-default-features
+              cargo check --locked -p ruda --no-default-features --features cuda,hip --lib
+          - name: WGPU and SPIR-V
+            key: unsafe-spirv
+            cache: facade-backends
+            commands: cargo build --locked -p ruda-driver-wgpu --features spirv,spirv-dump
+          - name: CPU and MLIR
+            key: unsafe-mlir
+            cache: unsafe-mlir
+            llvm: true
+            commands: cargo build --locked -p ruda-driver-cpu --features mlir-dump
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Resource preflight
+        run: |
+          nproc
+          free -h
+          df -h .
+          echo 'Workload: 3 groups, at most 2 concurrent; 2 Cargo jobs per runner; no GPU execution.'
+          echo 'Estimate: 2-15 minutes per group from recent CI; cold dependencies can take longer.'
+          echo 'Recovery: rerun failed groups with restored Cargo cache; no mid-rustc/link checkpoint.'
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup override set 1.97.1
+      - name: Restore compilation checkpoint
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.97.1-${{ matrix.key }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-rust-1.97.1-${{ matrix.key }}-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-rust-1.97.1-${{ matrix.cache }}-${{ hashFiles('Cargo.lock') }}-
+      - name: Install LLVM 20
+        if: matrix.llvm
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/ruda-llvm.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/ruda-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main' | sudo tee /etc/apt/sources.list.d/ruda-llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends llvm-20-dev libmlir-20-dev mlir-20-tools libclang-20-dev libpolly-20-dev libzstd-dev zlib1g-dev pkg-config
+          echo MLIR_SYS_200_PREFIX=/usr/lib/llvm-20 >> "$GITHUB_ENV"
+          echo TABLEGEN_200_PREFIX=/usr/lib/llvm-20 >> "$GITHUB_ENV"
+          echo LIBCLANG_PATH=/usr/lib/llvm-20/lib >> "$GITHUB_ENV"
+          echo LD_LIBRARY_PATH=/usr/lib/llvm-20/lib >> "$GITHUB_ENV"
+      - name: Compile
+        env:
+          COMMANDS: ${{ matrix.commands }}
+          RESTORED_CHECKPOINT: ${{ steps.cache.outputs.cache-matched-key }}
+        shell: bash
+        run: |
+          started=$SECONDS
+          completed=0
+          mapfile -t commands < <(printf '%s\n' "$COMMANDS" | sed '/^$/d')
+          for command in "${commands[@]}"; do
+            echo "Stage $((completed + 1))/${#commands[@]}: $command"
+            (
+              while true; do
+                elapsed=$((SECONDS - started))
+                echo "BUILD: completed=$completed/${#commands[@]} elapsed=${elapsed}s checkpoint=${RESTORED_CHECKPOINT:-none}; cache saved after group; GPU=none"
+                echo 'Current CPU activity, running threads, memory/swap:'
+                vmstat 1 2 | tail -n 1
+                ps -C cargo,rustc -o pid,nlwp,pcpu,rss,etime,comm || true
+                free -m
+                sleep 30
+              done
+            ) &
+            monitor=$!
+            trap 'kill "$monitor" 2>/dev/null || true' EXIT
+            bash -e -c "$command"
+            kill "$monitor" 2>/dev/null || true
+            wait "$monitor" 2>/dev/null || true
+            trap - EXIT
+            completed=$((completed + 1))
+            echo "Completed $completed/${#commands[@]} stages in $((SECONDS - started)) seconds"
+          done
+      - name: Save compilation checkpoint
+        if: always() && steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cache.outputs.cache-primary-key }}

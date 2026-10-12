@@ -28,8 +28,8 @@ pub unsafe extern "C" fn ruda_torch_dense_attention(op: u32, descriptors: *const
         assert!(scale.is_finite() && (0.0..=1.0).contains(&dropout_p));
         assert!(!causal || mask_kind == 0);
         assert!(!need_mask || (op == 1 && mask_kind == 2));
-        let ds = unsafe { std::slice::from_raw_parts(descriptors, count) };
-        let xs: Vec<View> = ds.iter().map(|d| unsafe { View::read(d) }).collect();
+        let ds = unsafe { crate::abi::slice(descriptors, count) };
+        let xs: Vec<View> = ds.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         let (q, k, v, mask) = (&xs[0], &xs[1], &xs[2], &xs[3]);
         for x in [q, k, v] { packed(x); assert_eq!(x.shape.len(), 4); assert_eq!(x.dtype, q.dtype); }
         assert!(q.dtype <= 2);

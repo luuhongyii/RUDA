@@ -129,10 +129,10 @@ pub unsafe extern "C" fn ruda_torch_fft(op:u32,ds:*const Descriptor,count:usize,
     ints:*const i64,ni:usize,scalars:*const f64,ns:usize)->i32 {
     checked(||{
         assert!(!ds.is_null() && count>0);
-        let descriptors=unsafe {std::slice::from_raw_parts(ds,count)};
-        let views:Vec<View>=descriptors.iter().map(|d|unsafe {View::read(d)}).collect();
-        let args=if ni==0 {&[][..]} else {assert!(!ints.is_null());unsafe {std::slice::from_raw_parts(ints,ni)}};
-        let floats=if ns==0 {&[][..]} else {assert!(!scalars.is_null());unsafe {std::slice::from_raw_parts(scalars,ns)}};
+        let descriptors=unsafe {crate::abi::slice(ds,count)};
+        let views:Vec<View>=descriptors.iter().map(|d|unsafe {crate::abi::view(d)}).collect();
+        let args=if ni==0 {&[][..]} else {assert!(!ints.is_null());unsafe {crate::abi::slice(ints,ni)}};
+        let floats=if ns==0 {&[][..]} else {assert!(!scalars.is_null());unsafe {crate::abi::slice(scalars,ns)}};
         if op<=5 || (20..=25).contains(&op) {
             assert_eq!(count,2); assert_eq!(ns,0);
             let (norm,axes,lengths)=spec(args,views[0].shape.len());
@@ -188,9 +188,9 @@ pub unsafe extern "C" fn ruda_torch_fft_plan(op:u32,handle:*mut *mut std::ffi::c
         assert!(!handle.is_null());
         if op==0 {
             assert!(unsafe {*handle}.is_null() && count==1 && ni>=3 && !ints.is_null() && !ds.is_null());
-            let args=unsafe {std::slice::from_raw_parts(ints,ni)};
+            let args=unsafe {crate::abi::slice(ints,ni)};
             let kind=u32::try_from(args[0]).expect("negative FFT plan kind"); assert!(kind<=5);
-            let view=unsafe {View::read(&*ds)};
+            let view=unsafe {crate::abi::view(ds)};
             if kind==2 || kind==5 {assert!(view.dtype==0 || view.dtype==9);}
             let (norm,axes,lengths)=spec(&args[1..],view.shape.len());
             let (re,_)=parts(&view);
@@ -206,8 +206,8 @@ pub unsafe extern "C" fn ruda_torch_fft_plan(op:u32,handle:*mut *mut std::ffi::c
             match op {
                 1=>{
                     assert!(count==2 && !ds.is_null());
-                    let args=unsafe {std::slice::from_raw_parts(ds,count)};
-                    let input=unsafe {View::read(&args[0])}; let output=unsafe {View::read(&args[1])};
+                    let args=unsafe {crate::abi::slice(ds,count)};
+                    let input=unsafe {crate::abi::view(&args[0])}; let output=unsafe {crate::abi::view(&args[1])};
                     assert_eq!(input.dtype,saved.dtype);assert_eq!(input.shape,saved.shape);
                     assert_eq!(output.dtype,output_dtype(input.dtype,saved.op));
                     let (re,im)=parts(&input);

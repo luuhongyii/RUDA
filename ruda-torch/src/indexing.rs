@@ -10,18 +10,18 @@ pub unsafe extern "C" fn ruda_torch_advanced_index(
 ) -> i32 {
     checked(|| {
         assert!(!source.is_null() && !output.is_null());
-        let source_desc = unsafe { &*source };
-        let source = unsafe { View::read(source_desc) };
-        let output = unsafe { View::read(&*output) };
+        let source_desc = unsafe { crate::abi::reference(source) };
+        let source = unsafe { crate::abi::view(source_desc) };
+        let output = unsafe { crate::abi::view(output) };
         assert_eq!(source.shape, output.shape);
         assert_eq!(source.dtype, output.dtype);
         if output.len == 0 { return; }
         if count == 0 { convert(&source, &output); return; }
         assert!(!indices.is_null() && !sizes.is_null() && !strides.is_null());
-        let descriptors = unsafe { std::slice::from_raw_parts(indices, count) };
-        let sizes = unsafe { std::slice::from_raw_parts(sizes, count) };
-        let strides = unsafe { std::slice::from_raw_parts(strides, count) };
-        let indices = descriptors.iter().map(|desc| unsafe { View::read(desc) }).collect::<Vec<_>>();
+        let descriptors = unsafe { crate::abi::slice(indices, count) };
+        let sizes = unsafe { crate::abi::slice(sizes, count) };
+        let strides = unsafe { crate::abi::slice(strides, count) };
+        let indices = descriptors.iter().map(|desc| unsafe { crate::abi::view(desc) }).collect::<Vec<_>>();
         let width = element_bytes(source.dtype);
         let mut span = width;
         for (&dim, &stride) in source.shape.iter().zip(&source.strides) {
@@ -38,7 +38,7 @@ pub unsafe extern "C" fn ruda_torch_advanced_index(
                 .expect("advanced index span overflow");
             primitives::check_indices(index, size, true);
         }
-        let allocation = unsafe { &*source_desc.allocation };
+        let allocation = unsafe { crate::abi::reference(source_desc.allocation) };
         assert!(source_desc.offset_bytes.checked_add(span).is_some_and(|n| n <= allocation.bytes),
             "advanced index exceeds source allocation");
         let client = client();

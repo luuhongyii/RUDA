@@ -18,13 +18,10 @@ use crate::library::tensor::{
 /// location.
 #[derive(Clone)]
 pub struct View<E: RudaPrimitive, C: Coordinates, IO: Clone = ReadOnly> {
-    _layout: PhantomData<C>,
-    _ty: PhantomData<(E, IO)>,
+    _layout: PhantomData<fn() -> C>,
+    _ty: PhantomData<fn() -> (E, IO)>,
 }
 
-// `View` is a dummy type so it's always send/sync
-unsafe impl<E: RudaPrimitive, C: Coordinates, IO: Clone> Send for View<E, C, IO> {}
-unsafe impl<E: RudaPrimitive, C: Coordinates, IO: Clone> Sync for View<E, C, IO> {}
 impl<E: RudaPrimitive, C: Coordinates, IO: Clone> Copy for View<E, C, IO> {}
 
 #[derive(Clone)]

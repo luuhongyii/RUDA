@@ -94,7 +94,7 @@ pub trait RudaKernel: KernelMetadata {
 /// Wraps a [`RudaKernel`] to allow it be compiled.
 pub struct KernelTask<C: Compiler, K: RudaKernel> {
     kernel_definition: K,
-    _compiler: PhantomData<C>,
+    _compiler: PhantomData<fn() -> C>,
 }
 
 /// Generic [`RudaTask`] for compiling kernels

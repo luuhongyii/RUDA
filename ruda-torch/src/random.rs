@@ -70,7 +70,7 @@ pub unsafe extern "C" fn ruda_torch_random_fill(descriptor: *const Descriptor, s
         assert!(distribution!=0 || first<=second);
         assert!(distribution!=1 || second>=0.0);
         assert!(distribution!=2 || (0.0..=1.0).contains(&first));
-        let out = unsafe {View::read(&*descriptor)};
+        let out = unsafe {crate::abi::view(descriptor)};
         assert!(out.dtype<=2 && out.len<=u32::MAX as usize);
         let mut stride = 1;
         for d in (0..out.shape.len()).rev() {

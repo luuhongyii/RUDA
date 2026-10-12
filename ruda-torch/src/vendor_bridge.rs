@@ -20,8 +20,8 @@ pub unsafe extern "C" fn ruda_torch_vendor_scope(
         let c = client();
         assert_eq!(stream, streams::current(), "vendor scope requires the selected RUDA stream");
         let views: Vec<_> = if count == 0 { Vec::new() } else {
-            unsafe { std::slice::from_raw_parts(descriptors, count) }
-                .iter().map(|d| unsafe { View::read(d) }).collect()
+            unsafe { crate::abi::slice(descriptors, count) }
+                .iter().map(|d| unsafe { crate::abi::view(d) }).collect()
         };
         let resources: Vec<_> = views.iter().map(|v|
             c.get_resource(v.handle.clone()).expect("vendor allocation dependency failed")

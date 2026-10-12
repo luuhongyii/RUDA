@@ -38,12 +38,10 @@ use super::*;
 pub struct DynamicScalar<Marker: 'static> {
     val: ConstantValue,
     #[debug(ignore)]
-    _ty: PhantomData<Marker>,
+    _ty: PhantomData<fn() -> Marker>,
 }
 
 unsafe impl<Marker: 'static> Zeroable for DynamicScalar<Marker> {}
-unsafe impl<Marker: 'static> Send for DynamicScalar<Marker> {}
-unsafe impl<Marker: 'static> Sync for DynamicScalar<Marker> {}
 
 impl<Marker: 'static> Copy for DynamicScalar<Marker> {}
 impl<Marker: 'static> Clone for DynamicScalar<Marker> {
@@ -69,11 +67,9 @@ impl<Marker: 'static> PartialEq for DynamicScalar<Marker> {
 #[derive(Debug)]
 pub struct DynamicSize<Marker> {
     #[debug(ignore)]
-    _ty: PhantomData<Marker>,
+    _ty: PhantomData<fn() -> Marker>,
 }
 
-unsafe impl<Marker: 'static> Send for DynamicSize<Marker> {}
-unsafe impl<Marker: 'static> Sync for DynamicSize<Marker> {}
 
 impl<Marker: 'static> Copy for DynamicSize<Marker> {}
 impl<Marker: 'static> Clone for DynamicSize<Marker> {

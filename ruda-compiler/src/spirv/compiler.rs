@@ -1,6 +1,6 @@
 use super::SpirvLowering;
 use crate::spirv::{
-    SpirvKernel,
+    SpirvKernel, SpirvOptimizerSnapshot,
     debug::DebugInfo,
     item::Item,
     lookups::LookupTables,
@@ -57,8 +57,6 @@ pub struct SpirvCompiler<Target: SpirvTarget = GLCompute> {
     pub compilation_options: WgpuCompilationOptions,
 }
 
-unsafe impl<T: SpirvTarget> Send for SpirvCompiler<T> {}
-unsafe impl<T: SpirvTarget> Sync for SpirvCompiler<T> {}
 
 impl<T: SpirvTarget> Clone for SpirvCompiler<T> {
     fn clone(&self) -> Self {
@@ -197,7 +195,7 @@ impl<T: SpirvTarget> Compiler for SpirvCompiler<T> {
         Ok(SpirvKernel {
             assembled_module: module.assemble(),
             module: Some(Arc::new(module)),
-            optimizer: Some(Arc::new(optimizer)),
+            optimizer: Some(Arc::new(SpirvOptimizerSnapshot::new(&optimizer))),
             bindings: bindings.iter().map(|it| it.visibility).collect(),
             shared_size,
             uniform_info,

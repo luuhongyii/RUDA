@@ -15,8 +15,8 @@ pub unsafe extern "C" fn ruda_torch_nf4_matmul(
 ) -> i32 {
     checked(|| {
         assert!(!descriptors.is_null() && count == 5 && columns > 0 && width > 0 && block > 0 && block % 2 == 0);
-        let ds = unsafe { std::slice::from_raw_parts(descriptors, count) };
-        let v: Vec<_> = ds.iter().map(|d| unsafe { View::read(d) }).collect();
+        let ds = unsafe { crate::abi::slice(descriptors, count) };
+        let v: Vec<_> = ds.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         let (input, packed, scales, table, out) = (&v[0], &v[1], &v[2], &v[3], &v[4]);
         assert!(input.dtype == 1 || input.dtype == 2);
         assert_eq!((packed.dtype, scales.dtype, table.dtype, table.len), (8, 0, 0, 16));
@@ -59,8 +59,8 @@ pub unsafe extern "C" fn ruda_torch_nf4_decode(
         assert!(!descriptors.is_null());
         assert_eq!(count, 4);
         assert!(block > 0 && block % 2 == 0);
-        let ds = unsafe { std::slice::from_raw_parts(descriptors, count) };
-        let views: Vec<_> = ds.iter().map(|d| unsafe { View::read(d) }).collect();
+        let ds = unsafe { crate::abi::slice(descriptors, count) };
+        let views: Vec<_> = ds.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         let (packed, scales, table, output) = (&views[0], &views[1], &views[2], &views[3]);
         assert_eq!((packed.dtype, scales.dtype, table.dtype), (8, 0, 0));
         assert!(output.dtype <= 2 && output.len > 0);

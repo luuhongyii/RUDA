@@ -137,19 +137,19 @@ pub unsafe extern "C" fn ruda_torch_linalg(
 ) -> i32 {
     checked(|| {
         assert!(count > 0 && !ds.is_null());
-        let ds = unsafe { std::slice::from_raw_parts(ds, count) };
-        let vs: Vec<View> = ds.iter().map(|d| unsafe { View::read(d) }).collect();
+        let ds = unsafe { crate::abi::slice(ds, count) };
+        let vs: Vec<View> = ds.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         let p = if ni == 0 {
             &[][..]
         } else {
             assert!(!ints.is_null());
-            unsafe { std::slice::from_raw_parts(ints, ni) }
+            unsafe { crate::abi::slice(ints, ni) }
         };
         let f = if ns == 0 {
             &[][..]
         } else {
             assert!(!scalars.is_null());
-            unsafe { std::slice::from_raw_parts(scalars, ns) }
+            unsafe { crate::abi::slice(scalars, ns) }
         };
         let flag = |i: usize, default: bool| p.get(i).map_or(default, |&x| x != 0);
         if op == 255 {

@@ -9,12 +9,10 @@ use crate::library::tensor::layout::{Coordinates, Layout, LayoutExpand};
 /// `C` represents the coordinate space of the underlying layout.
 #[derive(Clone)]
 pub struct VirtualLayout<C: Coordinates, S: Coordinates> {
-    _coords: PhantomData<(C, S)>,
+    _coords: PhantomData<fn() -> (C, S)>,
 }
 
 impl<C: Coordinates, S: Coordinates> Copy for VirtualLayout<C, S> {}
-unsafe impl<C: Coordinates, S: Coordinates> Send for VirtualLayout<C, S> {}
-unsafe impl<C: Coordinates, S: Coordinates> Sync for VirtualLayout<C, S> {}
 
 #[derive(Clone)]
 pub struct VirtualLayoutExpand<C: Coordinates, S: Coordinates> {
@@ -158,8 +156,6 @@ impl<L: Layout + 'static> From<L> for VirtualLayout<L::Coordinates, L::SourceCoo
 }
 
 mod launch {
-    use alloc::rc::Rc;
-    use core::cell::RefCell;
 
     use ruda_kernel::dsl::{
         format::DebugRaw,
@@ -169,7 +165,7 @@ mod launch {
     use super::*;
 
     type ExpandFn<C, S> =
-        Rc<RefCell<dyn FnMut(&mut KernelBuilder, bool) -> VirtualLayoutExpand<C, S> + Send>>;
+        Arc<dyn Fn(&mut KernelBuilder, bool) -> VirtualLayoutExpand<C, S> + Send + Sync>;
 
     pub struct VirtualLayoutLaunch<C: Coordinates, S: Coordinates, R: Runtime> {
         _phantom_runtime: core::marker::PhantomData<R>,
@@ -197,7 +193,7 @@ mod launch {
                     };
                     VirtualLayoutCompilationArg::new::<L::CompilationArg>(
                         comp_arg,
-                        Rc::new(RefCell::new(expand)),
+                        Arc::new(expand),
                     )
                 }),
             }
@@ -207,14 +203,11 @@ mod launch {
     #[derive(Clone)]
     pub struct VirtualLayoutCompilationArg<C: Coordinates, S: Coordinates> {
         type_name: String,
-        debug: Rc<dyn core::fmt::Debug>,
+        debug: Arc<dyn core::fmt::Debug + Send + Sync>,
         hash: StableHash,
         expand: ExpandFn<C, S>,
     }
 
-    // SAFETY: The struct is readonly, so `Sync` is safe to implement
-    unsafe impl<C: Coordinates, S: Coordinates> Send for VirtualLayoutCompilationArg<C, S> {}
-    unsafe impl<C: Coordinates, S: Coordinates> Sync for VirtualLayoutCompilationArg<C, S> {}
 
     impl<C: Coordinates, S: Coordinates> VirtualLayoutCompilationArg<C, S> {
         pub fn new<L: CompilationArg + 'static>(arg: L, expand: ExpandFn<C, S>) -> Self {
@@ -223,7 +216,7 @@ mod launch {
             let hash = StableHasher::hash_one(&arg);
             Self {
                 type_name: core::any::type_name::<L>().to_string(),
-                debug: Rc::new(arg),
+                debug: Arc::new(arg),
                 hash,
                 expand,
             }
@@ -268,14 +261,14 @@ mod launch {
             arg: &Self::CompilationArg,
             builder: &mut KernelBuilder,
         ) -> <Self as RudaType>::ExpandType {
-            let mut expand = arg.expand.borrow_mut();
+            let expand = &arg.expand;
             expand(builder, false)
         }
         fn expand_output(
             arg: &Self::CompilationArg,
             builder: &mut KernelBuilder,
         ) -> <Self as RudaType>::ExpandType {
-            let mut expand = arg.expand.borrow_mut();
+            let expand = &arg.expand;
             expand(builder, true)
         }
     }

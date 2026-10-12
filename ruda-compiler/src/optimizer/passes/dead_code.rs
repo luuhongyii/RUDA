@@ -1,9 +1,7 @@
-#![allow(unknown_lints, unnecessary_transmutes)]
-
 use std::{
     cell::RefCell,
     collections::HashSet,
-    mem::{replace, transmute},
+    mem::replace,
     rc::Rc,
 };
 
@@ -117,7 +115,7 @@ impl OptimizerPass for EliminateConstBranches {
                     ..
                 } if value.as_const().is_some() => {
                     let value = match value.as_const().unwrap() {
-                        ConstantValue::Int(val) => unsafe { transmute::<i32, u32>(val as i32) },
+                        ConstantValue::Int(val) => val as i32 as u32,
                         ConstantValue::UInt(val) => val as u32,
                         _ => unreachable!("Switch cases must be integer"),
                     };

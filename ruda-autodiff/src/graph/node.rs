@@ -8,7 +8,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_has_atomic = "64"))]
 use portable_atomic::{AtomicU64, Ordering};
 
-use crate::checkpoint::retro_forward::RetroForward;
+use crate::checkpoint::retro_forward::SharedRetroForward;
 use crate::runtime::AutodiffClientImpl;
 
 use super::Requirement;
@@ -17,19 +17,10 @@ use super::Requirement;
 pub enum ComputingProperty {
     ComputeBound,
     MemoryBound {
-        retro_forward: Arc<dyn RetroForward>,
+        retro_forward: Arc<SharedRetroForward>,
     },
     Ambiguous, // Maybe autotune someday
 }
-
-/// This is safe only because we only call RetroForward on the autodiff server.
-/// Therefore, the trait will never be used by multiple threads at the same time.
-///
-/// TODO: Find a way to avoid cloning the compute property, which will remove the need to add the
-/// Arc, which will make (dyn RetroForward) safely implement Send.
-unsafe impl Send for ComputingProperty {}
-/// unsafe Sync is required because Send is only implemented for Arc<Sync>, not Arc<Send>.
-unsafe impl Sync for ComputingProperty {}
 
 /// A node contains graph metadata and should be used wrapped in an Arc for cheap cloning.
 #[derive(new, Debug)]

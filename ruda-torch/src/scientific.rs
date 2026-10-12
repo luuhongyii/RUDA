@@ -246,10 +246,10 @@ pub unsafe extern "C" fn ruda_torch_scientific(op: u32, descriptors: *const Desc
     checked(|| {
         assert!(!descriptors.is_null());
         assert!(integer_count == 0 || !integers.is_null()); assert!(scalar_count == 0 || !scalars.is_null());
-        let xs: Vec<View> = unsafe { std::slice::from_raw_parts(descriptors,count) }.iter().map(|d| unsafe { View::read(d) }).collect();
+        let xs: Vec<View> = unsafe { crate::abi::slice(descriptors,count) }.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         for x in &xs {indexable(x);}
-        let ints = if integer_count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(integers,integer_count) } };
-        let values = if scalar_count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(scalars,scalar_count) } };
+        let ints = if integer_count == 0 { &[][..] } else { unsafe { crate::abi::slice(integers,integer_count) } };
+        let values = if scalar_count == 0 { &[][..] } else { unsafe { crate::abi::slice(scalars,scalar_count) } };
         match op {
             6 | 98 | 99 | 107 => { assert_eq!(count,2); reduce(&xs[0],&xs[1],op); }
             201 => {

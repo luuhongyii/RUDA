@@ -37,12 +37,32 @@ pub struct SpirvKernel {
     #[serde(skip)]
     pub module: Option<Arc<Module>>,
     #[serde(skip)]
-    pub optimizer: Option<Arc<Optimizer>>,
+    pub optimizer: Option<Arc<SpirvOptimizerSnapshot>>,
 
     pub assembled_module: Vec<u32>,
     pub bindings: Vec<Visibility>,
     pub shared_size: usize,
     pub uniform_info: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpirvOptimizerSnapshot {
+    ir: String,
+    dot: String,
+}
+
+impl SpirvOptimizerSnapshot {
+    fn new(optimizer: &Optimizer) -> Self {
+        Self { ir: optimizer.to_string(), dot: optimizer.dot_viz().to_string() }
+    }
+
+    pub fn dot_viz(&self) -> &str { &self.dot }
+}
+
+impl Display for SpirvOptimizerSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.ir)
+    }
 }
 
 impl Eq for SpirvKernel {}

@@ -51,7 +51,7 @@ impl core::fmt::Debug for CompilationError {
 }
 
 /// Compiles the representation into its own representation that can be formatted into tokens.
-pub trait Compiler: Sync + Send + 'static + Clone + core::fmt::Debug {
+pub trait Compiler: 'static + Clone + core::fmt::Debug {
     /// The representation for the compiled code.
     type Representation: core::fmt::Display;
     /// The compilation options used to configure the compiler

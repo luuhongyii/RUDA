@@ -14,9 +14,9 @@ pub unsafe extern "C" fn ruda_torch_blas(op:u32,ds:*const Descriptor,count:usize
     ints:*const i64,ni:usize,scalars:*const f64,ns:usize)->i32 {
     checked(|| {
         assert!(!ds.is_null() && (ni==0 || !ints.is_null()) && (ns==0 || !scalars.is_null()));
-        let xs=unsafe {std::slice::from_raw_parts(ds,count)}.iter().map(|d|unsafe {View::read(d)}).collect::<Vec<_>>();
-        let ii=if ni==0 {&[][..]}else {unsafe {std::slice::from_raw_parts(ints,ni)}};
-        let ss=if ns==0 {&[][..]}else {unsafe {std::slice::from_raw_parts(scalars,ns)}};
+        let xs=unsafe {crate::abi::slice(ds,count)}.iter().map(|d|unsafe {crate::abi::view(d)}).collect::<Vec<_>>();
+        let ii=if ni==0 {&[][..]}else {unsafe {crate::abi::slice(ints,ni)}};
+        let ss=if ns==0 {&[][..]}else {unsafe {crate::abi::slice(scalars,ns)}};
         for x in &xs {
             assert!(x.len<=u32::MAX as usize && x.shape.iter().all(|&d|d<=u32::MAX as usize),"BLAS U32 indexing limit exceeded");
             if x.len!=0 {assert!(x.shape.iter().zip(&x.strides).try_fold(1usize,|span,(&d,&s)|

@@ -303,11 +303,11 @@ pub unsafe extern "C" fn ruda_torch_training(
             9 => (6,3), 10 => (9,5),
             _ => panic!("unsupported training opcode") };
         assert_eq!((n,ns), expected); assert!(!descriptors.is_null());
-        let descriptors = unsafe { std::slice::from_raw_parts(descriptors,n) };
-        let v: Vec<View> = descriptors.iter().map(|d| unsafe { View::read(d) }).collect();
+        let descriptors = unsafe { crate::abi::slice(descriptors,n) };
+        let v: Vec<View> = descriptors.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         assert!(v.iter().all(|v| v.dtype <= 2 && packed(v)), "training expects contiguous floating storage");
         let s = if ns == 0 { &[] } else {
-            assert!(!scalars.is_null()); unsafe { std::slice::from_raw_parts(scalars,ns) }
+            assert!(!scalars.is_null()); unsafe { crate::abi::slice(scalars,ns) }
         };
         let launches = if op <= 1 {
             match (v[0].dtype, v[1].dtype) {

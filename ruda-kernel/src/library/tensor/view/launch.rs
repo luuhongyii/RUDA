@@ -8,9 +8,8 @@ use crate::library::tensor::{
 };
 
 mod layout {
-    use core::{cell::RefCell, fmt::Debug, hash::Hash};
+    use core::{fmt::Debug, hash::Hash};
 
-    use alloc::rc::Rc;
     use ruda_kernel::dsl::{
         format::DebugRaw,
         hash::{StableHash, StableHasher},
@@ -165,7 +164,7 @@ mod layout {
                 register: Box::new(move |buffer, ty, launcher| {
                     let comp_arg = L::register::<R, B>(layout, buffer, ty, launcher);
                     let comp_arg_2 = comp_arg.clone();
-                    let expand = Rc::new(RefCell::new(
+                    let expand = Arc::new(
                         move |ty: Type, builder: &mut KernelBuilder, is_out: bool| {
                             let expand = match is_out {
                                 true => L::expand_output(&comp_arg_2, ty, builder),
@@ -173,7 +172,7 @@ mod layout {
                             };
                             VirtualLayoutExpand::new(expand)
                         },
-                    ));
+                    );
                     VirtualViewLayoutCompilationArg::new(comp_arg, expand)
                 }),
             }
@@ -190,19 +189,16 @@ mod layout {
     }
 
     type ExpandFn<C, S> =
-        Rc<RefCell<dyn FnMut(Type, &mut KernelBuilder, bool) -> VirtualLayoutExpand<C, S> + Send>>;
+        Arc<dyn Fn(Type, &mut KernelBuilder, bool) -> VirtualLayoutExpand<C, S> + Send + Sync>;
 
     #[derive(Clone)]
     pub struct VirtualViewLayoutCompilationArg<C: Coordinates, S: Coordinates> {
         type_name: String,
-        debug: Rc<dyn core::fmt::Debug>,
+        debug: Arc<dyn core::fmt::Debug + Send + Sync>,
         hash: StableHash,
         expand: ExpandFn<C, S>,
     }
 
-    // SAFETY: The struct is readonly, so `Sync` is safe to implement
-    unsafe impl<C: Coordinates, S: Coordinates> Send for VirtualViewLayoutCompilationArg<C, S> {}
-    unsafe impl<C: Coordinates, S: Coordinates> Sync for VirtualViewLayoutCompilationArg<C, S> {}
 
     impl<C: Coordinates, S: Coordinates> VirtualViewLayoutCompilationArg<C, S> {
         pub fn new<L: CompilationArg + 'static>(arg: L, expand: ExpandFn<C, S>) -> Self {
@@ -211,14 +207,14 @@ mod layout {
             let hash = StableHasher::hash_one(&arg);
             Self {
                 type_name: core::any::type_name::<L>().to_string(),
-                debug: Rc::new(arg),
+                debug: Arc::new(arg),
                 hash,
                 expand,
             }
         }
 
         pub fn expand(&self, ty: Type, builder: &mut KernelBuilder) -> VirtualLayoutExpand<C, S> {
-            let mut expand = self.expand.borrow_mut();
+            let expand = &self.expand;
             (expand)(ty, builder, false)
         }
 
@@ -227,7 +223,7 @@ mod layout {
             ty: Type,
             builder: &mut KernelBuilder,
         ) -> VirtualLayoutExpand<C, S> {
-            let mut expand = self.expand.borrow_mut();
+            let expand = &self.expand;
             (expand)(ty, builder, true)
         }
     }

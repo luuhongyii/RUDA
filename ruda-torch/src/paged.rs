@@ -44,12 +44,12 @@ pub unsafe extern "C" fn ruda_torch_paged(op:u32, plan:*mut *mut NativePlan,
         match op {
             0=>{
                 assert!(unsafe{(*plan).is_null()} && !q.is_null() && !spec.is_null());
-                let spec=unsafe{std::slice::from_raw_parts(spec,6)};
+                let spec=unsafe{crate::abi::slice(spec,6)};
                 assert!(!words.is_null() || word_count==0);
-                let words=if word_count==0 { &[] } else {unsafe{std::slice::from_raw_parts(words,word_count)}};
+                let words=if word_count==0 { &[] } else {unsafe{crate::abi::slice(words,word_count)}};
                 let host=HostPlan::from_packed(spec[0] as usize,spec[1] as usize,
                     spec[2] as usize,spec[3] as usize,spec[4] as usize,words).expect("invalid paged schedule");
-                let like=primitives::tensor(&unsafe{View::read(&*q)});
+                let like=primitives::tensor(&unsafe{crate::abi::view(q)});
                 let splits=spec[5] as usize;
                 assert!((1..=MAX_SPLITS).contains(&splits),"paged split count must be 1..32");
                 let native=Box::new(NativePlan{plan:DevicePlan::upload(host,&like),splits,workspace:Mutex::new(None),ordered:Mutex::new(None)});
@@ -59,13 +59,13 @@ pub unsafe extern "C" fn ruda_torch_paged(op:u32, plan:*mut *mut NativePlan,
                 assert!(!q.is_null() && !k.is_null() && !v.is_null() && !out.is_null());
                 assert!(!unsafe{*plan}.is_null());
                 let plan=unsafe{&**plan};
-                let q=primitives::tensor(&unsafe{View::read(&*q)});
-                let k=primitives::tensor(&unsafe{View::read(&*k)});
-                let v=primitives::tensor(&unsafe{View::read(&*v)});
-                let out=primitives::tensor(&unsafe{View::read(&*out)});
+                let q=primitives::tensor(&unsafe{crate::abi::view(q)});
+                let k=primitives::tensor(&unsafe{crate::abi::view(k)});
+                let v=primitives::tensor(&unsafe{crate::abi::view(v)});
+                let out=primitives::tensor(&unsafe{crate::abi::view(out)});
                 assert_eq!(qp.is_null(),kp.is_null());
                 let position=if qp.is_null(){None}else{
-                    Some((primitives::tensor(&unsafe{View::read(&*qp)}),primitives::tensor(&unsafe{View::read(&*kp)})))
+                    Some((primitives::tensor(&unsafe{crate::abi::view(qp)}),primitives::tensor(&unsafe{crate::abi::view(kp)})))
                 };
                 let position=position.as_ref().map(|(a,b)|(a,b));
                 if plan.splits>1 && q.meta.num_elements()!=0 {
@@ -98,10 +98,10 @@ pub unsafe extern "C" fn ruda_torch_paged(op:u32, plan:*mut *mut NativePlan,
                 assert!(!q.is_null() && !k.is_null() && !v.is_null() && !grad.is_null());
                 assert!(!unsafe{*plan}.is_null());
                 let native=unsafe{&**plan};
-                let q=primitives::tensor(&unsafe{View::read(&*q)});
-                let k=primitives::tensor(&unsafe{View::read(&*k)});
-                let v=primitives::tensor(&unsafe{View::read(&*v)});
-                let grad=primitives::tensor(&unsafe{View::read(&*grad)});
+                let q=primitives::tensor(&unsafe{crate::abi::view(q)});
+                let k=primitives::tensor(&unsafe{crate::abi::view(k)});
+                let v=primitives::tensor(&unsafe{crate::abi::view(v)});
+                let grad=primitives::tensor(&unsafe{crate::abi::view(grad)});
                 assert_eq!(qp.is_null(),kp.is_null());
                 if op==3 {
                     // Preserve the original op=3 ABI contract.
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn ruda_torch_paged(op:u32, plan:*mut *mut NativePlan,
                     else { assert!(!dqp.is_null() && !dkp.is_null()); }
                 }
                 let read_optional=|ptr:*const Descriptor| {
-                    if ptr.is_null() { None } else { Some(primitives::tensor(&unsafe{View::read(&*ptr)})) }
+                    if ptr.is_null() { None } else { Some(primitives::tensor(&unsafe{crate::abi::view(ptr)})) }
                 };
                 let dq=read_optional(dq); let dk=read_optional(dk); let dv=read_optional(dv);
                 let dqp=read_optional(dqp); let dkp=read_optional(dkp);
@@ -141,8 +141,8 @@ pub unsafe extern "C" fn ruda_torch_paged(op:u32, plan:*mut *mut NativePlan,
                         }
                     } else {
                         assert!(dv.is_none());
-                        let qp=primitives::tensor(&unsafe{View::read(&*qp)});
-                        let kp=primitives::tensor(&unsafe{View::read(&*kp)});
+                        let qp=primitives::tensor(&unsafe{crate::abi::view(qp)});
+                        let kp=primitives::tensor(&unsafe{crate::abi::view(kp)});
                         if let Some(guard)=ordered.as_mut() {
                             unsafe{native.plan.mla_backward_ordered_into(&q,&qp,&k,&kp,&grad,
                                 dq.as_ref(),dqp.as_ref(),dk.as_ref(),dkp.as_ref(),scale,causal,guard.as_mut().unwrap())}

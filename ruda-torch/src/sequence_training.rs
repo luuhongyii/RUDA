@@ -45,8 +45,8 @@ pub unsafe extern "C" fn ruda_torch_delta_forward(
 ) -> i32 {
     checked(|| {
         assert!(!descriptors.is_null() && count == 8 && scale.is_finite() && chunk > 0);
-        let ds = unsafe { std::slice::from_raw_parts(descriptors, count) };
-        let v: Vec<_> = ds.iter().map(|d| unsafe { View::read(d) }).collect();
+        let ds = unsafe { crate::abi::slice(descriptors, count) };
+        let v: Vec<_> = ds.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         assert!(v.iter().all(|x| x.dtype == 0));
         let input = rudnn::gated_delta::GatedDeltaInput {
             query: primitives::tensor(&v[0]), key: primitives::tensor(&v[1]),
@@ -67,8 +67,8 @@ pub unsafe extern "C" fn ruda_torch_triangular_solve(
 ) -> i32 {
     checked(|| {
         assert!(!descriptors.is_null() && count == 3);
-        let ds = unsafe { std::slice::from_raw_parts(descriptors, count) };
-        let v: Vec<_> = ds.iter().map(|d| unsafe { View::read(d) }).collect();
+        let ds = unsafe { crate::abi::slice(descriptors, count) };
+        let v: Vec<_> = ds.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         let (a, b, out) = (&v[0], &v[1], &v[2]);
         assert!(a.shape.len() >= 2 && a.dtype <= 2);
         assert_eq!(a.dtype, b.dtype); assert_eq!(a.dtype, out.dtype);

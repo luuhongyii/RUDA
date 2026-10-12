@@ -42,12 +42,7 @@ impl<F: StreamFactory> StreamPool<F> {
         // Calculate the index for the stream ID.
         let index = self.stream_index(stream_id);
 
-        // Use unsafe method to retrieve the stream, assuming the index is valid.
-        //
-        // # Safety
-        //
-        // * The `stream_index` function ensures the index is within bounds.
-        unsafe { self.get_mut_index(index) }
+        self.get_mut_index(index)
     }
 
     /// Initialize an unused regular slot with a backend-specific stream. This
@@ -64,45 +59,15 @@ impl<F: StreamFactory> StreamPool<F> {
         Ok(true)
     }
 
-    /// Retrieves a mutable reference to a stream at the specified index, initializing it if needed.
-    ///
-    /// # Safety
-    ///
-    /// * Caller must ensure the index is valid (less than `max_streams + num_special`).
-    /// * Lifetimes still follow the Rust rules.
-    pub unsafe fn get_mut_index(&mut self, index: usize) -> &mut F::Stream {
-        unsafe {
-            // Access the stream entry without bounds checking for performance.
-            let entry = self.streams.get_unchecked_mut(index);
-            match entry {
-                // If the stream exists, return it.
-                Some(val) => val,
-                // If the stream is None, create a new one using the factory.
-                None => {
-                    let stream = self.factory.create();
-                    // Store the new stream in the vector.
-                    *entry = Some(stream);
-
-                    // Re-access the entry, which is now guaranteed to be Some.
-                    match entry {
-                        Some(val) => val,
-                        // Unreachable because we just set it to Some.
-                        None => unreachable!(),
-                    }
-                }
-            }
-        }
+    /// Retrieves a stream by index, initializing it if needed.
+    pub fn get_mut_index(&mut self, index: usize) -> &mut F::Stream {
+        let entry = &mut self.streams[index];
+        entry.get_or_insert_with(|| self.factory.create())
     }
 
-    /// Retrieves a mutable reference to a special stream at the given index.
-    ///
-    /// # Safety
-    ///
-    /// * Caller must ensure the index corresponds to a valid special stream.
-    /// * Lifetimes still follow the Rust rules.
-    pub unsafe fn get_special(&mut self, index: u8) -> &mut F::Stream {
-        // Calculate the index for the special stream (offset by max_streams).
-        unsafe { self.get_mut_index(self.max_streams + index as usize) }
+    /// Retrieves a special stream by index, initializing it if needed.
+    pub fn get_special(&mut self, index: u8) -> &mut F::Stream {
+        self.get_mut_index(self.max_streams + index as usize)
     }
 
     /// Calculates the index for a given stream ID, mapping it to the pool's capacity.

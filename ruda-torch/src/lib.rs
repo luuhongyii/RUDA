@@ -5,6 +5,7 @@ use ruda_driver_cuda::{CudaDevice, CudaRuntime};
 use ruda_kernel::dsl::prelude::*;
 use std::{cell::RefCell, ffi::CString, panic::AssertUnwindSafe, sync::{OnceLock, atomic::{AtomicU64, Ordering}}};
 
+mod abi;
 mod streams;
 mod graph_contract;
 mod static_graph;
@@ -74,28 +75,6 @@ fn element_bytes(dtype: u32) -> usize {
 }
 
 impl View {
-    // The C++ adapter owns the descriptor arrays and allocation for the entire call.
-    unsafe fn read(desc: &Descriptor) -> Self {
-        assert!(!desc.allocation.is_null());
-        let allocation = unsafe { &*desc.allocation };
-        let (shape, strides) = if desc.rank == 0 {
-            (vec![1], vec![1])
-        } else {
-            assert!(!desc.shape.is_null() && !desc.strides.is_null());
-            unsafe { (std::slice::from_raw_parts(desc.shape, desc.rank).to_vec(),
-                      std::slice::from_raw_parts(desc.strides, desc.rank).to_vec()) }
-        };
-        let len = shape.iter().try_fold(1usize, |a, b| a.checked_mul(*b)).expect("shape overflow");
-        let span = if len == 0 { 0 } else {
-            shape.iter().zip(&strides).try_fold(1usize, |n, (&d, &s)|
-                (d - 1).checked_mul(s).and_then(|v| n.checked_add(v))).expect("stride overflow")
-        };
-        let bytes = element_bytes(desc.dtype);
-        assert_eq!(desc.offset_bytes % bytes, 0);
-        assert!(span.checked_mul(bytes).and_then(|n| n.checked_add(desc.offset_bytes))
-            .is_some_and(|n| n <= allocation.bytes), "tensor exceeds allocation");
-        Self { handle: allocation.handle.clone().offset_start(desc.offset_bytes as u64), shape, strides, len, dtype: desc.dtype }
-    }
     fn arg(&self) -> TensorArg<CudaRuntime> {
         unsafe { TensorArg::from_raw_parts(self.handle.clone(), self.strides.clone().into(), self.shape.clone().into()) }
     }
@@ -194,7 +173,7 @@ pub extern "C" fn ruda_torch_sync() -> i32 { checked(streams::device_sync) }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ruda_torch_fill(out: *const Descriptor, bits: u64) -> i32 {
     checked(|| {
-        let out = unsafe { View::read(&*out) }.byte_view();
+        let out = unsafe { crate::abi::view(out) }.byte_view();
         if out.len == 0 { return; }
         let client = client();
         let count = u32::try_from(out.len.div_ceil(128)).expect("launch grid overflow");
@@ -491,7 +470,7 @@ pub unsafe extern "C" fn ruda_torch_spatial(op: u32, a: *const Descriptor, b: *c
         assert!(!a.is_null() && !b.is_null() && !out.is_null() && !params.is_null());
         assert!(count <= 14);
         let (a, b, out, params) = unsafe {
-            (View::read(&*a), View::read(&*b), View::read(&*out), std::slice::from_raw_parts(params, count))
+            (crate::abi::view(a), crate::abi::view(b), crate::abi::view(out), crate::abi::slice(params, count))
         };
         spatial::launch(op, &a, &b, &out, params);
     })
@@ -504,12 +483,12 @@ pub unsafe extern "C" fn ruda_torch_layer_norm(
 ) -> i32 {
     checked(|| {
         assert!(!input.is_null() && !out.is_null() && !mean.is_null() && !rstd.is_null());
-        let input = unsafe { View::read(&*input) };
-        let weight = (!weight.is_null()).then(|| unsafe { View::read(&*weight) });
-        let bias = (!bias.is_null()).then(|| unsafe { View::read(&*bias) });
-        let out = unsafe { View::read(&*out) };
-        let mean = unsafe { View::read(&*mean) };
-        let rstd = unsafe { View::read(&*rstd) };
+        let input = unsafe { crate::abi::view(input) };
+        let weight = (!weight.is_null()).then(|| unsafe { crate::abi::view(weight) });
+        let bias = (!bias.is_null()).then(|| unsafe { crate::abi::view(bias) });
+        let out = unsafe { crate::abi::view(out) };
+        let mean = unsafe { crate::abi::view(mean) };
+        let rstd = unsafe { crate::abi::view(rstd) };
         normalization::layer_norm(&input, weight.as_ref(), bias.as_ref(), &out, &mean, &rstd, epsilon);
     })
 }
@@ -520,9 +499,9 @@ pub unsafe extern "C" fn ruda_torch_rms_norm(
 ) -> i32 {
     checked(|| {
         assert!(!input.is_null() && !out.is_null());
-        let input = unsafe { View::read(&*input) };
-        let weight = (!weight.is_null()).then(|| unsafe { View::read(&*weight) });
-        let out = unsafe { View::read(&*out) };
+        let input = unsafe { crate::abi::view(input) };
+        let weight = (!weight.is_null()).then(|| unsafe { crate::abi::view(weight) });
+        let out = unsafe { crate::abi::view(out) };
         normalization::rms_norm(&input, weight.as_ref(), &out, epsilon);
     })
 }
@@ -530,7 +509,7 @@ pub unsafe extern "C" fn ruda_torch_rms_norm(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ruda_torch_execute(op: u32, a: *const Descriptor, b: *const Descriptor, out: *const Descriptor, scalar: f32) -> i32 {
     checked(|| {
-        let (a, b, out) = unsafe { (View::read(&*a), View::read(&*b), View::read(&*out)) };
+        let (a, b, out) = unsafe { (crate::abi::view(a), crate::abi::view(b), crate::abi::view(out)) };
         match op {
             0..=4 | 8..=29 | 35..=73 => { assert_eq!(a.shape, out.shape); assert_eq!(b.shape, out.shape); }
             78..=97 | 121..=128 => { assert_eq!(a.shape, out.shape); assert_eq!(b.shape, out.shape); }
@@ -609,7 +588,7 @@ pub unsafe extern "C" fn ruda_torch_addmm(
 ) -> i32 {
     checked(|| {
         let (bias, a, b, out) = unsafe {
-            (View::read(&*bias), View::read(&*a), View::read(&*b), View::read(&*out))
+            (crate::abi::view(bias), crate::abi::view(a), crate::abi::view(b), crate::abi::view(out))
         };
         matmul::addmm(&bias, &a, &b, &out, alpha, beta);
     })
@@ -618,13 +597,13 @@ pub unsafe extern "C" fn ruda_torch_addmm(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ruda_torch_transfer(desc: *const Descriptor, host: *mut u8, upload: bool) -> i32 {
     checked(|| {
-        let view = unsafe { View::read(&*desc) };
+        let view = unsafe { crate::abi::view(desc) };
         if view.len == 0 { return; }
         assert!(!host.is_null());
         let client = client();
         let bytes = view.len.checked_mul(element_bytes(view.dtype)).expect("transfer size overflow");
         if upload {
-            let input = client.create_from_slice(unsafe { std::slice::from_raw_parts(host, bytes) });
+            let input = client.create_from_slice(unsafe { crate::abi::slice(host, bytes) });
             let packed = View::packed(input, view.shape.clone(), view.dtype);
             launch(0, &packed, &packed, &view, 0.0);
             UPLOAD.fetch_add(bytes as u64, Ordering::Relaxed);

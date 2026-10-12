@@ -1,7 +1,11 @@
 use crate::collections::HashMap;
 use crate::graph::NodeId;
 
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
+#[cfg(feature = "std")]
+use parking_lot::Mutex;
+#[cfg(not(feature = "std"))]
+use spin::Mutex;
 use core::fmt::Debug;
 
 use super::state::{BackwardStates, State};
@@ -14,10 +18,25 @@ pub trait RetroForward: Debug + Send + 'static {
     fn forward(&self, states: &mut BackwardStates, out_node: NodeId);
 }
 
+#[derive(Debug)]
+pub struct SharedRetroForward {
+    inner: Mutex<Box<dyn RetroForward>>,
+}
+
+impl SharedRetroForward {
+    pub fn new<R: RetroForward>(retro_forward: R) -> Self {
+        Self { inner: Mutex::new(Box::new(retro_forward)) }
+    }
+
+    fn forward(&self, states: &mut BackwardStates, out_node: NodeId) {
+        self.inner.lock().forward(states, out_node);
+    }
+}
+
 #[derive(new, Debug)]
 /// Links [NodeId]s to their corresponding [RetroForward]
 pub(crate) struct RetroForwards {
-    map: HashMap<NodeId, Arc<dyn RetroForward>>,
+    map: HashMap<NodeId, Arc<SharedRetroForward>>,
 }
 
 impl RetroForwards {

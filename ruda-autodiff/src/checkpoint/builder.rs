@@ -9,7 +9,7 @@ use core::any::Any;
 
 use super::{
     base::{Checkpointer, NodeTree},
-    retro_forward::{RetroForward, RetroForwards},
+    retro_forward::{SharedRetroForward, RetroForwards},
     state::{BackwardStates, State},
 };
 
@@ -29,12 +29,10 @@ pub enum CheckpointingAction {
         /// The node
         node_id: NodeId,
         /// How the node should recompute itself
-        retro_forward: Arc<dyn RetroForward>,
+        retro_forward: Arc<SharedRetroForward>,
     },
 }
 
-// TODO: Remove that when proper client server.
-unsafe impl Send for CheckpointingAction {}
 
 impl CheckpointingAction {
     /// Utility function to access the id of the node of the checkpointing action
@@ -199,7 +197,7 @@ impl CheckpointerBuilder {
     fn insert_checkpoints(
         mut self,
         backward_states_map: &mut HashMap<NodeId, State>,
-        retro_forward_map: &mut HashMap<NodeId, Arc<dyn RetroForward>>,
+        retro_forward_map: &mut HashMap<NodeId, Arc<SharedRetroForward>>,
         n_required_map: HashMap<NodeId, usize>,
     ) {
         let mut actions = HashMap::new();
@@ -273,9 +271,9 @@ impl CheckpointerBuilder {
     fn checkpoint_lazy(
         &self,
         backward_states_map: &mut HashMap<NodeId, State>,
-        retro_forward_map: &mut HashMap<NodeId, Arc<dyn RetroForward>>,
+        retro_forward_map: &mut HashMap<NodeId, Arc<SharedRetroForward>>,
         node_id: NodeId,
-        retro_forward: Arc<dyn RetroForward>,
+        retro_forward: Arc<SharedRetroForward>,
         n_required: usize,
     ) {
         retro_forward_map.insert(node_id, retro_forward);

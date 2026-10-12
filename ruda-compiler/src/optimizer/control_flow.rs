@@ -1,7 +1,3 @@
-#![allow(unknown_lints, unnecessary_transmutes)]
-
-use std::mem::transmute;
-
 use crate::optimizer::{BasicBlock, BlockUse, NodeIndex, Optimizer};
 use ruda_core::ir::{
     Arithmetic, BinaryOperator, Branch, Comparison, ConstantValue, ElemType, If, IfElse,
@@ -199,7 +195,7 @@ impl Optimizer {
                     !is_break
                 };
                 let val = match val.as_const().expect("Switch value must be constant") {
-                    ConstantValue::Int(val) => unsafe { transmute::<i32, u32>(val as i32) },
+                    ConstantValue::Int(val) => val as i32 as u32,
                     ConstantValue::UInt(val) => val as u32,
                     _ => unreachable!("Switch cases must be integer"),
                 };

@@ -7,7 +7,7 @@ pub extern "C" fn ruda_torch_factory_api_version() -> u32 { 1 }
 pub unsafe extern "C" fn ruda_torch_arange(out: *const Descriptor, start: u64, step: u64) -> i32 {
     checked(|| {
         assert!(!out.is_null());
-        let out = unsafe { View::read(&*out) };
+        let out = unsafe { crate::abi::view(out) };
         assert!(out.dtype != 3, "arange does not support bool storage");
         if out.len == 0 { return; }
         let client = client();
@@ -44,10 +44,10 @@ pub unsafe extern "C" fn ruda_torch_normal(
 ) -> i32 {
     checked(|| {
         assert!(!out.is_null() && !seeds.is_null());
-        let out = unsafe { View::read(&*out) };
+        let out = unsafe { crate::abi::view(out) };
         assert!(out.dtype <= 2 && std >= 0.0, "normal requires floating storage and nonnegative std");
         if out.len == 0 { return; }
-        let seeds: [u32; 4] = unsafe { std::slice::from_raw_parts(seeds, 4) }.try_into().unwrap();
+        let seeds: [u32; 4] = unsafe { crate::abi::slice(seeds, 4) }.try_into().unwrap();
         let client = client();
         let tensor = primitives::tensor(&out);
         let dtype = tensor.dtype.into();

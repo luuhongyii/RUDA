@@ -21,8 +21,8 @@ pub unsafe extern "C" fn ruda_torch_router(op: u32, descriptors: *const Descript
             _ => panic!("unknown router scoring policy") };
         let options = RouterWeightOptions { scoring, renormalize, scale };
         options.validate().expect("invalid router options");
-        let descriptors = unsafe { std::slice::from_raw_parts(descriptors, count) };
-        let views: Vec<View> = descriptors.iter().map(|d| unsafe { View::read(d) }).collect();
+        let descriptors = unsafe { crate::abi::slice(descriptors, count) };
+        let views: Vec<View> = descriptors.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         assert!(views[0].dtype <= 2 && matches!(views[1].dtype, 4 | 5));
         let tensors: Vec<_> = views.iter().map(primitives::tensor).collect();
         if op == 0 {

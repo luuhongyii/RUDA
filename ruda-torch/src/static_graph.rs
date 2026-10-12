@@ -132,9 +132,9 @@ pub unsafe extern "C" fn ruda_torch_graph(
             assert!(!descriptors.is_null() && !nodes.is_null(), "null static graph build input");
             assert!((1..=graph_contract::MAX_TENSORS).contains(&tensor_count));
             assert!((1..=graph_contract::MAX_NODES).contains(&node_count));
-            let descriptors=unsafe{std::slice::from_raw_parts(descriptors,tensor_count)};
-            let nodes=unsafe{std::slice::from_raw_parts(nodes,node_count)}.to_vec();
-            let tensors:Vec<View>=descriptors.iter().map(|d| unsafe{View::read(d)}).collect();
+            let descriptors=unsafe{crate::abi::slice(descriptors,tensor_count)};
+            let nodes=unsafe{crate::abi::slice(nodes,node_count)}.to_vec();
+            let tensors:Vec<View>=descriptors.iter().map(|d| unsafe{crate::abi::view(d)}).collect();
             let specs:Vec<_>=tensors.iter().zip(descriptors).map(|(t,d)|TensorSpec{
                 shape:if d.rank==0 {&[]} else {&t.shape},
                 strides:if d.rank==0 {&[]} else {&t.strides},dtype:t.dtype}).collect();

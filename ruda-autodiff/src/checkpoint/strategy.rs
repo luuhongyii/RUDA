@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 
 use super::{
     builder::{ActionType, CheckpointerBuilder},
-    retro_forward::RetroForward,
+    retro_forward::{RetroForward, SharedRetroForward},
 };
 
 /// Strategy for the amount of checkpointing to do during autodiff
@@ -67,7 +67,7 @@ impl CheckpointStrategy for BalancedCheckpointing {
     /// When memory bound, an operation needs to save its RetroForward
     fn compute_property<R: RetroForward>(retro_forward: R) -> ComputingProperty {
         ComputingProperty::MemoryBound {
-            retro_forward: Arc::new(retro_forward),
+            retro_forward: Arc::new(SharedRetroForward::new(retro_forward)),
         }
     }
 
