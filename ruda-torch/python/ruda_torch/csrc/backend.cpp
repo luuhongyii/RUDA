@@ -11,6 +11,8 @@
 #include <ATen/ops/as_strided_native.h>
 #include <ATen/ops/view_native.h>
 #include <ATen/ops/_reshape_alias_native.h>
+#include <ATen/ops/view_as_real_native.h>
+#include <ATen/ops/view_as_complex_native.h>
 #include <c10/core/impl/DeviceGuardImplInterface.h>
 #include <ATen/ops/empty.h>
 #include <ATen/ops/from_blob.h>
@@ -67,6 +69,8 @@ StreamInterop stream_native = nullptr;
 Paged paged_native = nullptr;
 bool paged_backward_selected_ready = false;
 uint32_t paged_backward_api = 0;
+using Scientific = int (*)(uint32_t,const Descriptor*,size_t,const int64_t*,size_t,const double*,size_t);
+Scientific scientific_native = nullptr;
 
 void check(int code) { TORCH_CHECK(code == 0, error_native ? error_native() : "RUDA bridge is not initialized"); }
 void synchronize() { TORCH_CHECK(sync_native, "RUDA bridge is not initialized"); check(sync_native()); }
@@ -84,6 +88,10 @@ uint32_t dtype_code(c10::ScalarType dtype) {
   if (dtype == at::kShort) return 6;
   if (dtype == at::kChar) return 7;
   if (dtype == at::kByte) return 8;
+  if (dtype == at::kDouble || dtype == at::kComplexFloat || dtype == at::kComplexDouble) {
+    TORCH_CHECK(scientific_native,"RUDA scientific storage API 1 requires matching rebuilt native libraries");
+    return dtype==at::kDouble ? 9 : dtype==at::kComplexFloat ? 10 : 11;
+  }
   TORCH_CHECK(false, "RUDA native storage supports float32, float16, bfloat16, bool, int64, int32, int16, int8 and uint8");
 }
 void release(void* handle) {
@@ -187,9 +195,9 @@ class Hooks final : public at::PrivateUse1HooksInterface {
 struct Argument {
   std::vector<size_t> shape, strides;
   Descriptor desc;
-  explicit Argument(const at::Tensor& tensor) {
+  explicit Argument(const at::Tensor& tensor,bool physical=false) {
     validate(tensor.device());
-    TORCH_CHECK(!tensor.is_conj() && !tensor.is_neg(), "RUDA does not support unresolved view bits");
+    TORCH_CHECK(physical || (!tensor.is_conj() && !tensor.is_neg()), "resolve RUDA conjugate/negative view bits before numerical dispatch");
     TORCH_CHECK(tensor.storage().data_ptr().get_deleter() == release, "tensor is not allocated by RUDA");
     for (auto d : tensor.sizes()) { TORCH_CHECK(d >= 0); shape.push_back(d); }
     for (auto d : tensor.strides()) { TORCH_CHECK(d >= 0); strides.push_back(d); }
@@ -197,6 +205,11 @@ struct Argument {
             shape.size(), shape.data(), strides.data(), dtype_code(tensor.scalar_type())};
   }
 };
+
+#include "scientific_bridge.inc"
+#include "blas_bridge.inc"
+#include "linalg_bridge.inc"
+#include "fft_bridge.inc"
 
 #include "indexing.inc"
 #include "training.inc"
@@ -406,6 +419,12 @@ uint64_t scalar_bits(const at::Scalar& value) {
 }
 void fill(at::Tensor out, const at::Scalar& value) {
   at::assert_no_internal_overlap(out);
+  if(out.is_conj() || out.is_neg()) {
+    auto logical=at::empty(out.sizes(),out.options());
+    fill(logical,value);
+    scientific_call(207,{logical,out},{int64_t(out.is_conj()),int64_t(out.is_neg())},{});
+    return;
+  }
   Argument ov(out);
   uint64_t bits = 0;
   switch (ov.desc.dtype) {
@@ -418,6 +437,18 @@ void fill(at::Tensor out, const at::Scalar& value) {
     case 6: bits = scalar_bits<int16_t>(value); break;
     case 7: bits = scalar_bits<int8_t>(value); break;
     case 8: bits = scalar_bits<uint8_t>(value); break;
+    case 9: bits = scalar_bits<double>(value); break;
+    case 10: {
+      auto number=value.toComplexDouble();
+      float pair[2]={float(number.real()),float(number.imag())};
+      std::memcpy(&bits,pair,sizeof(bits));
+      break;
+    }
+    case 11: {
+      auto number=value.toComplexDouble();
+      scientific_fill(out,number.real(),number.imag());
+      return;
+    }
   }
   check(fill_native(&ov.desc, bits));
 }
@@ -426,7 +457,15 @@ at::Tensor copy_from(const at::Tensor& source, const at::Tensor& dest, bool non_
   dtype_code(source.scalar_type());
   dtype_code(dest.scalar_type());
   at::assert_no_internal_overlap(dest);
-  auto input = source.expand(dest.sizes());
+  if(source.is_same(dest))return dest;
+  if(!dest.device().is_cpu() && (dest.is_conj() || dest.is_neg())) {
+    auto logical=at::empty(dest.sizes(),dest.options());
+    copy_from(source,logical,non_blocking);
+    scientific_call(207,{logical,dest},{int64_t(dest.is_conj()),int64_t(dest.is_neg())},{});
+    return dest;
+  }
+  auto resolved=source.device().is_cpu()?source.resolve_conj().resolve_neg():scientific_resolve(source);
+  auto input=resolved.expand(dest.sizes());
   if (source.device().is_cpu()) {
     auto packed = input.contiguous();
     auto staging = source.scalar_type() == dest.scalar_type() ? dest : at::empty(dest.sizes(), dest.options().dtype(source.scalar_type()));
@@ -457,6 +496,7 @@ T read_scalar(const at::Tensor& value) {
 }
 at::Scalar scalar(const at::Tensor& value) {
   TORCH_CHECK(value.numel() == 1);
+  if(value.is_conj() || value.is_neg())return scalar(scientific_resolve(value));
   switch (dtype_code(value.scalar_type())) {
     case 3: return read_scalar<uint8_t>(value) != 0;
     case 4: return read_scalar<int64_t>(value);
@@ -464,6 +504,9 @@ at::Scalar scalar(const at::Tensor& value) {
     case 6: return int64_t(read_scalar<int16_t>(value));
     case 7: return int64_t(read_scalar<int8_t>(value));
     case 8: return int64_t(read_scalar<uint8_t>(value));
+    case 9: return read_scalar<double>(value);
+    case 10: return read_scalar<c10::complex<float>>(value);
+    case 11: return read_scalar<c10::complex<double>>(value);
   }
   auto converted = value.scalar_type() == at::kFloat ? value : value.to(at::kFloat);
   return read_scalar<float>(converted);
@@ -493,6 +536,8 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("copy_", copy_);
   m.impl("_copy_from", copy_from);
   m.impl("_local_scalar_dense", scalar);
+  m.impl("view_as_real",at::native::view_as_real);
+  m.impl("view_as_complex",at::native::view_as_complex);
 }
 TORCH_LIBRARY_IMPL(_, PrivateUse1, m) {
   m.fallback(torch::CppFunction::makeFromBoxedFunction<&unsupported>());
@@ -511,6 +556,10 @@ TORCH_LIBRARY_IMPL(aten, AutocastPrivateUse1, m) {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  #include "scientific_bridge_bindings.inc"
+  #include "blas_bridge_bindings.inc"
+  #include "linalg_bridge_bindings.inc"
+  #include "fft_bridge_bindings.inc"
   #include "dense_attention_bindings.inc"
   m.attr("abi_version") = 10;
   m.def("_cuda_alias", [](const at::Tensor& tensor, int64_t device_index) {

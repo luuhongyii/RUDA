@@ -34,6 +34,16 @@ _C.initialize([ctypes.cast(getattr(_native, "ruda_torch_" + name), ctypes.c_void
                for name in ("alloc", "free", "error", "execute", "transfer", "sync", "fill", "spatial", "addmm", "layer_norm", "rms_norm", "stream", "paged")])
 torch.utils.rename_privateuse1_backend("ruda")
 
+from . import _scientific
+_scientific_available = _scientific.initialize(_native)
+_blas_available = False
+if hasattr(_native, "ruda_torch_blas_api_version") and hasattr(_C, "initialize_blas"):
+    _native.ruda_torch_blas_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_blas_api_version() != 1 or _C.blas_api_version != 1:
+        raise RuntimeError("RUDA BLAS API mismatch; rebuild both native libraries")
+    _C.initialize_blas(ctypes.cast(_native.ruda_torch_blas, ctypes.c_void_p).value)
+    _blas_available = True
+
 _indexing_available = False
 if hasattr(_native, "ruda_torch_indexing_api_version") and hasattr(_C, "initialize_indexing"):
     _native.ruda_torch_indexing_api_version.restype = ctypes.c_uint32
@@ -162,6 +172,15 @@ def execution_stats():
          "paged_backward_ordered_workspace_allocations", "paged_backward_ordered_workspace_bytes_total"))}
 
 from . import _ops
+if _scientific_available:
+    _scientific.register()
+from .blas import gemm, fused_gemm, grouped_gemm, triangular_solve
+from . import fft, linalg
+if hasattr(_native, 'ruda_torch_fft_api_version') and hasattr(_C, 'initialize_fft'):
+    fft.register()
+_linalg_available = linalg.initialize(_native)
+if _linalg_available:
+    linalg.install(_ops._registry)
 from .random import register_random_ops
 register_random_ops()
 

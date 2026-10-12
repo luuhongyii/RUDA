@@ -66,20 +66,21 @@ pub fn cholesky_solve_blocked<R: Runtime>(
         return Ok(result);
     }
     match a.dtype {
-        DType::F32 => submit::<f32, R>(a, b, &mut result, n, nrhs, options),
-        DType::F64 => submit::<f64, R>(a, b, &mut result, n, nrhs, options),
+        DType::F32 => submit::<f32, R>(a, b, &mut result, n, nrhs, options, false),
+        DType::F64 => submit::<f64, R>(a, b, &mut result, n, nrhs, options, false),
         _ => unreachable!(),
     }
     Ok(result)
 }
 
-fn submit<F: Float + RudaElement, R: Runtime>(
+pub(super) fn submit<F: Float + RudaElement, R: Runtime>(
     a: &RudaTensor<R>,
     b: &RudaTensor<R>,
     result: &mut BatchedCholeskyResult<R>,
     n: usize,
     nrhs: usize,
     options: BatchedCholeskyOptions,
+    retain_failed_factor: bool,
 ) {
     let client = &a.client;
     let batch = a.meta.shape()[0];
@@ -142,17 +143,19 @@ fn submit<F: Float + RudaElement, R: Runtime>(
         }
     }
     let count = batch * nrhs;
-    let solve_dim = RudaDim::new(client.properties(), count);
-    solve::launch::<F, R>(
-        client,
-        calculate_ruda_count_elemwise(client, count, solve_dim),
-        solve_dim,
-        result.lower.clone().into_array_arg(),
-        result.solution.clone().into_array_arg(),
-        result.info.clone().into_array_arg(),
-        n as u32,
-        nrhs as u32,
-    );
+    if count > 0 {
+        let solve_dim = RudaDim::new(client.properties(), count);
+        solve::launch::<F, R>(
+            client,
+            calculate_ruda_count_elemwise(client, count, solve_dim),
+            solve_dim,
+            result.lower.clone().into_array_arg(),
+            result.solution.clone().into_array_arg(),
+            result.info.clone().into_array_arg(),
+            n as u32,
+            nrhs as u32,
+        );
+    }
     cleanup::launch::<F, R>(
         client,
         calculate_ruda_count_elemwise(client, batch, dim),
@@ -162,8 +165,9 @@ fn submit<F: Float + RudaElement, R: Runtime>(
         result.info.clone().into_array_arg(),
         n as u32,
         nrhs as u32,
+        retain_failed_factor,
     );
-    result.submitted_kernels += 2;
+    result.submitted_kernels += 1 + usize::from(count > 0);
 }
 
 #[ruda(launch)]
@@ -249,6 +253,7 @@ fn diagonal<F: Float>(
             if nonfinite::<F>(value) {
                 code = -3;
             } else if value <= F::new(0.0) {
+                lower[base + j * n + j] = value;
                 code = (j + 1) as i32;
             } else {
                 let root = value.sqrt();
@@ -369,6 +374,7 @@ fn cleanup<F: Float>(
     info: &mut Array<i32>,
     order: u32,
     rhs: u32,
+    retain_failed_factor: bool,
 ) {
     let sys = ABSOLUTE_POS;
     if sys >= info.len() {
@@ -393,7 +399,7 @@ fn cleanup<F: Float>(
             }
         }
     }
-    if code != 0 {
+    if code != 0 && !retain_failed_factor {
         for i in 0..n * n {
             lower[base + i] = F::new(0.0);
         }

@@ -5,8 +5,11 @@ from torch._prims_common import suggest_memory_format
 from . import _C
 
 _registry = torch.library.Library("aten", "IMPL", "PrivateUse1")
-_dtypes = (torch.float32, torch.float16, torch.bfloat16)
-_storage_dtypes = _dtypes + (torch.bool, torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8)
+_dtypes = (torch.float32, torch.float16, torch.bfloat16, torch.float64)
+_numeric_dtypes = _dtypes + (torch.complex64, torch.complex128)
+_wide_dtypes = (torch.float64, torch.complex64, torch.complex128)
+_integral_dtypes = (torch.bool, torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8)
+_storage_dtypes = _numeric_dtypes + _integral_dtypes
 
 def _out(shape, tensor):
     return torch.empty(shape, device=tensor.device, dtype=tensor.dtype)
@@ -19,7 +22,11 @@ def _apply(op, a, b=None, *, out=None, scalar=0.0):
         out = _out(a.shape, a)
     if out.shape != a.shape:
         raise RuntimeError("RUDA output shape mismatch")
-    _C.execute(op, a, b, out, scalar)
+    if a.dtype in _wide_dtypes or b.dtype in _wide_dtypes or out.dtype in _wide_dtypes:
+        from ._scientific import execute
+        execute(op, a, b, out, scalar)
+    else:
+        _C.execute(op, a, b, out, scalar)
     return out
 
 def _scalar(value, tensor):
@@ -27,7 +34,7 @@ def _scalar(value, tensor):
         if value.device != tensor.device or value.dtype != tensor.dtype:
             raise NotImplementedError("RUDA requires matching GPU devices and tensor dtypes")
         return value
-    result = torch.empty((), device=tensor.device, dtype=torch.float32)
+    result = torch.empty((), device=tensor.device, dtype=tensor.dtype if tensor.dtype in _wide_dtypes else torch.float32)
     return fill_(result, value)
 
 def fill_(tensor, value):
@@ -35,25 +42,35 @@ def fill_(tensor, value):
     return tensor
 
 def _binary(op, a, b, *, scalar=0.0, inplace=False):
-    if op in (1, 2) and (a.dtype not in _dtypes or isinstance(b, torch.Tensor) and b.dtype not in _dtypes):
+    if op in (1, 2) and (a.dtype not in _numeric_dtypes or isinstance(b, torch.Tensor) and b.dtype not in _numeric_dtypes):
         return _integral_arithmetic(op, a, b, alpha=scalar if op == 1 else 1, inplace=inplace)
-    if a.dtype not in _dtypes:
+    if a.dtype not in _numeric_dtypes:
         raise RuntimeError("RUDA arithmetic requires a supported floating dtype")
     dtype = a.dtype
     if isinstance(b, torch.Tensor):
-        if b.device != a.device or b.dtype not in _dtypes:
+        if b.device != a.device or b.dtype not in _numeric_dtypes:
             raise RuntimeError("RUDA arithmetic inputs must use supported floating dtypes on the same device")
         dtype = torch.promote_types(a.dtype, b.dtype)
     else:
-        b = _scalar(b, a)
+        if isinstance(b, complex) and not a.is_complex():
+            dtype = torch.result_type(a, b)
+            b = _typed_value(b, dtype, a.device)
+        else:
+            b = _scalar(b, a)
     left, right = torch.broadcast_tensors(a, b)
     if inplace:
+        if not torch.can_cast(dtype, a.dtype):
+            raise RuntimeError('in-place operation cannot cast the promoted result dtype')
         if a.shape != left.shape:
             raise RuntimeError("RUDA in-place output cannot change shape through broadcasting")
         result = a
     else:
         result = torch.empty(left.shape, device=a.device, dtype=dtype)
-    _C.execute(op, left, right, result, float(scalar))
+    if left.dtype in _wide_dtypes or right.dtype in _wide_dtypes or result.dtype in _wide_dtypes:
+        from ._scientific import execute
+        execute(op, left, right, result, scalar)
+    else:
+        _C.execute(op, left, right, result, float(scalar))
     return result
 
 
@@ -89,6 +106,8 @@ def _division_op(rounding_mode):
 
 
 def div(a, b, *, rounding_mode=None):
+    if rounding_mode is None and (a.dtype in _wide_dtypes or isinstance(b, torch.Tensor) and b.dtype in _wide_dtypes or isinstance(b, complex)):
+        return _binary(8, a, b)
     if rounding_mode in ('floor', 'trunc'):
         return _typed_division(a, b, rounding_mode=rounding_mode)
     if rounding_mode is None and (a.dtype not in _dtypes or isinstance(b, torch.Tensor) and b.dtype not in _dtypes):
@@ -96,6 +115,8 @@ def div(a, b, *, rounding_mode=None):
     return _binary(_division_op(rounding_mode), a, b)
 
 def div_(a, b, *, rounding_mode=None):
+    if rounding_mode is None and (a.dtype in _wide_dtypes or isinstance(b, torch.Tensor) and b.dtype in _wide_dtypes or isinstance(b, complex)):
+        return _binary(8, a, b, inplace=True)
     if rounding_mode in ('floor', 'trunc'):
         return _typed_division(a, b, rounding_mode=rounding_mode, inplace=True)
     if rounding_mode is None and (a.dtype not in _dtypes or isinstance(b, torch.Tensor) and b.dtype not in _dtypes):
@@ -106,6 +127,9 @@ def mm(a, b):
     _scalar(b, a)
     if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[0]:
         raise RuntimeError("RUDA mm requires compatible two-dimensional tensors")
+    if a.dtype in _wide_dtypes:
+        from .blas import aten_matmul
+        return aten_matmul(a,b)
     out = _out((a.shape[0], b.shape[1]), a)
     _C.execute(7, a, b, out, 0.0)
     return out
@@ -113,7 +137,7 @@ def mm(a, b):
 def addmm(bias, a, b, *, beta=1, alpha=1):
     _scalar(b, a)
     _scalar(bias, a)
-    if a.dtype not in _dtypes:
+    if a.dtype not in _numeric_dtypes:
         raise RuntimeError("RUDA addmm requires a supported floating dtype")
     if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[0]:
         raise RuntimeError("RUDA addmm requires compatible two-dimensional tensors")
@@ -121,6 +145,9 @@ def addmm(bias, a, b, *, beta=1, alpha=1):
     # Validate broadcasting even when beta=0, but the device kernel will not
     # read bias values in that case (including NaN or infinity).
     expanded_bias = bias.expand(shape)
+    if a.dtype in _wide_dtypes:
+        from .blas import gemm
+        return gemm(a,b,expanded_bias,alpha=alpha,beta=beta)
     result = _out(shape, a)
     _C.addmm(expanded_bias, a, b, result, float(alpha), float(beta))
     return result
@@ -129,6 +156,9 @@ def bmm(a, b):
     _scalar(b, a)
     if a.ndim != 3 or b.ndim != 3 or a.shape[0] != b.shape[0] or a.shape[2] != b.shape[1]:
         raise RuntimeError("RUDA bmm requires compatible three-dimensional batches")
+    if a.dtype in _wide_dtypes:
+        from .blas import aten_matmul
+        return aten_matmul(a,b)
     out = _out((a.shape[0], a.shape[1], b.shape[2]), a)
     _C.execute(30, a, b, out, 0.0)
     return out
@@ -156,6 +186,9 @@ def softmax_backward(grad, output, dim, input_dtype, *, logarithmic=False):
     return out
 
 def sum_dim(a, dim=None, keepdim=False, *, dtype=None):
+    if a.dtype in _wide_dtypes or dtype in _wide_dtypes:
+        from ._scientific import reduce
+        return reduce(a,dim,keepdim,dtype=dtype)
     if a.dtype not in _dtypes or dtype is not None and dtype not in _dtypes:
         return _primitive_reduce(99, a, dim, keepdim, dtype=dtype)
     if dtype is not None:
@@ -177,6 +210,9 @@ def sum_dim(a, dim=None, keepdim=False, *, dtype=None):
     return out if keepdim else out.view(tuple(d for i, d in enumerate(a.shape) if i not in dimensions))
 
 def mean_dim(a, dim=None, keepdim=False, *, dtype=None):
+    if a.dtype in _wide_dtypes or dtype in _wide_dtypes:
+        from ._scientific import reduce
+        return reduce(a,dim,keepdim,dtype=dtype,mean=True)
     if getattr(_C, "storage_mean_api", 0) != 1:
         raise RuntimeError("RUDA storage-mean API requires the v25 native library; rebuild both sides")
     if dtype is not None:
@@ -213,7 +249,8 @@ def layer_norm(a, normalized_shape, weight=None, bias=None, eps=1e-5):
     # Transformer inference overwhelmingly normalizes the last feature axis.
     # Use one fused native GPU kernel for that common case; keep the existing
     # composition for multi-axis normalization and non-contiguous last axes.
-    if (len(axes) == 1 and axes[0] == a.ndim - 1 and a.is_contiguous() and a.shape[-1] > 0
+    if (a.dtype in (torch.float32, torch.float16, torch.bfloat16)
+            and len(axes) == 1 and axes[0] == a.ndim - 1 and a.is_contiguous() and a.shape[-1] > 0
             and (weight is None or weight.is_contiguous()) and (bias is None or bias.is_contiguous())):
         stats_shape = list(a.shape)
         stats_shape[-1] = 1
@@ -232,7 +269,7 @@ def layer_norm(a, normalized_shape, weight=None, bias=None, eps=1e-5):
         rstd = torch.empty(stats_shape, device=a.device, dtype=a.dtype)
         _C.layer_norm(a, weight, bias, result, mean, rstd, eps)
         return result, mean, rstd
-    if a.dtype != torch.float32:
+    if a.dtype not in (torch.float32, torch.float64):
         result, mean, rstd = layer_norm(a.float(), normalized_shape,
             weight.float() if weight is not None else None, bias.float() if bias is not None else None, eps)
         return result.to(a.dtype), mean, rstd
@@ -252,7 +289,8 @@ def rms_norm(a, normalized_shape, weight=None, eps=None):
     epsilon = torch.finfo(a.dtype).eps if eps is None else float(eps)
     if not math.isfinite(epsilon) or epsilon <= 0:
         raise RuntimeError("RMSNorm epsilon must be finite and positive")
-    if (len(axes) == 1 and axes[0] == a.ndim - 1 and a.is_contiguous() and a.shape[-1] > 0
+    if (a.dtype in (torch.float32, torch.float16, torch.bfloat16)
+            and len(axes) == 1 and axes[0] == a.ndim - 1 and a.is_contiguous() and a.shape[-1] > 0
             and (weight is None or weight.is_contiguous())):
         result = torch.empty_like(a)
         _C.rms_norm(a, weight, result, epsilon)
@@ -294,6 +332,10 @@ def layer_norm_backward(grad, a, normalized_shape, mean, rstd, weight, bias, out
     return dx, dw, db
 
 def pow_scalar(a, exponent):
+    if a.dtype in _wide_dtypes:
+        if isinstance(exponent, int) and not isinstance(exponent, bool):
+            return _apply(96, a, _typed_value(exponent, torch.int64, a.device))
+        return _apply(121,a,_typed_value(exponent,a.dtype,a.device))
     if exponent == 3:
         if a.dtype != torch.float32:
             return pow_scalar(a.float(), exponent).to(a.dtype)
@@ -329,7 +371,7 @@ def pow_tensor(a, exponent):
     if not isinstance(exponent, torch.Tensor) or exponent.device != a.device:
         raise RuntimeError('RUDA tensor power requires an exponent tensor on the base device')
     dtype = torch.result_type(a, exponent)
-    if dtype not in _dtypes:
+    if dtype not in _numeric_dtypes:
         raise RuntimeError('RUDA tensor power requires a supported floating result dtype')
     base = a.to(dtype)
     if exponent.dtype in (torch.int64, torch.int32, torch.int16, torch.int8):
@@ -339,10 +381,10 @@ def pow_tensor(a, exponent):
 
 
 def pow_scalar_base(base, exponent):
-    if not isinstance(base, numbers.Real):
-        raise RuntimeError('RUDA scalar-base power requires a real scalar')
+    if not isinstance(base, numbers.Number):
+        raise RuntimeError('RUDA scalar-base power requires a numeric scalar')
     dtype = torch.result_type(exponent, base)
-    if dtype not in _dtypes:
+    if dtype not in _numeric_dtypes:
         raise RuntimeError('RUDA scalar-base power requires a supported floating result dtype')
     tensor = _typed_value(base, dtype, exponent.device)
     return pow_tensor(tensor, exponent)
@@ -385,8 +427,8 @@ def _typed_division(a, b, *, rounding_mode, inplace=False):
     if rounding_mode == 'floor':
         _require_math()
     left, right, dtype = _primitive_operands(a, b)
-    if dtype == torch.bool:
-        raise RuntimeError('RUDA rounded division is not defined for a bool result')
+    if dtype == torch.bool or dtype in (torch.complex64, torch.complex128):
+        raise RuntimeError('RUDA rounded division is not defined for bool or complex results')
     if dtype in _dtypes:
         op = 122 if rounding_mode == 'floor' else 57
     else:
@@ -400,7 +442,7 @@ def _true_division(a, b, *, inplace=False):
     if inplace:
         _C.check_inplace(a, b if isinstance(b, torch.Tensor) else a)
     left, right, dtype = _primitive_operands(a, b)
-    if dtype not in _dtypes:
+    if dtype not in _numeric_dtypes:
         dtype = torch.get_default_dtype()
         if dtype not in _dtypes:
             raise RuntimeError('RUDA true division does not support the selected default floating dtype')
@@ -418,6 +460,8 @@ def activation_backward(grad, output, *, tanh=False):
     return mul(mul(grad, add(one, output, alpha=-1)), output)
 
 def clone(a, *, memory_format=torch.preserve_format):
+    if a.is_conj() or a.is_neg():
+        return _C.scientific_resolve(a)
     out = torch.empty_like(a, memory_format=memory_format)
     return out.copy_(a)
 
@@ -446,7 +490,7 @@ def log_sigmoid_backward(grad, a, buffer):
 
 def _ternary(op, a, b, c, *, value=1, inplace=False, dtype=None):
     for tensor in (a, b, c):
-        if tensor.device != a.device or tensor.dtype not in _dtypes:
+        if tensor.device != a.device or tensor.dtype not in _numeric_dtypes:
             raise RuntimeError("RUDA ternary inputs must use supported floating dtypes on the same device")
     if dtype is None:
         dtype = torch.promote_types(torch.promote_types(a.dtype, b.dtype), c.dtype)
@@ -454,11 +498,13 @@ def _ternary(op, a, b, c, *, value=1, inplace=False, dtype=None):
     if inplace and a.shape != shape:
         raise RuntimeError("RUDA in-place output cannot change shape through broadcasting")
     if inplace:
+        if not torch.can_cast(dtype, a.dtype):
+            raise RuntimeError('in-place ternary operation cannot cast the result dtype')
         result = a
     else:
         result = torch.empty(shape, device=a.device, dtype=dtype)
         result.copy_(a)
-    _C.execute(op, b.expand(shape), c.expand(shape), result, float(value))
+    _apply(op, b.expand(shape), c.expand(shape), out=result, scalar=value)
     return result
 
 
@@ -551,10 +597,30 @@ def dot(a, b):
     return mm(a.unsqueeze(0), b.unsqueeze(1)).view(())
 
 
+def vdot(a, b):
+    return dot(a.conj() if a.is_complex() else a, b)
+
+
+def absolute(a, *, inplace=False):
+    if a.is_complex():
+        if inplace:
+            raise RuntimeError('in-place abs is not supported for complex tensors')
+        from ._scientific import absolute as complex_absolute
+        return complex_absolute(a)
+    return _apply(21, a, out=a if inplace else None)
+
+
+def sgn(a, *, inplace=False):
+    if a.is_complex():
+        from ._scientific import sign
+        return sign(a, out=a if inplace else None)
+    return _apply(22, a, out=a if inplace else None)
+
+
 def outer(a, b):
     if a.ndim != 1 or b.ndim != 1:
         raise RuntimeError("outer requires one-dimensional tensors")
-    if a.device != b.device or a.dtype not in _dtypes or b.dtype not in _dtypes:
+    if a.device != b.device or a.dtype not in _numeric_dtypes or b.dtype not in _numeric_dtypes:
         raise RuntimeError("RUDA outer requires supported floating tensors on the same device")
     dtype = torch.promote_types(a.dtype, b.dtype)
     return mul(a.to(dtype).unsqueeze(1), b.to(dtype).unsqueeze(0))
@@ -890,7 +956,7 @@ def arange(start, end=None, step=1, *, dtype=None, layout=None, device=None,
         dtype = dtype or (torch.int64 if all(isinstance(v, numbers.Integral)
                                            for v in (start, end, step)) else torch.get_default_dtype())
         out = torch.empty(0, dtype=dtype, device=device or 'ruda')
-    if out.dtype not in _storage_dtypes or out.dtype == torch.bool:
+    if out.dtype not in _storage_dtypes or out.dtype == torch.bool or out.is_complex():
         raise RuntimeError("RUDA arange requires a supported numeric dtype")
     if not all(math.isfinite(v) for v in (start, end, step)):
         raise RuntimeError("arange requires finite bounds and step")
@@ -919,7 +985,7 @@ def arange(start, end=None, step=1, *, dtype=None, layout=None, device=None,
     if out.numel() != length:
         _C.prepare_index_output(out, [length])
     if length:
-        accumulator = torch.int64 if integral else torch.float32
+        accumulator = torch.int64 if integral else torch.float64 if out.dtype == torch.float64 else torch.float32
         first = _typed_value(start, accumulator, out.device)
         increment = _typed_value(step, accumulator, out.device)
         _C.execute(108, first, increment, out, 0.0)
@@ -937,7 +1003,7 @@ def _comparison(op, a, b, *, inplace=False):
     if inplace and left.shape != a.shape:
         raise RuntimeError("in-place comparison cannot change the input shape")
     result = torch.empty(left.shape, dtype=torch.bool, device=a.device)
-    _C.execute(op, left, right, result, 0.0)
+    _apply(op, left, right, out=result)
     if inplace:
         a.copy_(result)
         return a
@@ -971,7 +1037,7 @@ def where(condition, a, b):
     condition, left, right = torch.broadcast_tensors(condition, left, right)
     result = torch.empty(left.shape, dtype=dtype, device=condition.device)
     result.copy_(right)
-    _C.execute(84, condition, left, result, 0.0)
+    _apply(84, condition, left, out=result)
     return result
 
 
@@ -1015,11 +1081,11 @@ def _integral_arithmetic(op, a, b, *, alpha=1, inplace=False):
     if op != 2:
         if isinstance(alpha, bool) and dtype != torch.bool:
             raise RuntimeError("Boolean alpha only supported for Boolean results")
-        if dtype not in _dtypes and not isinstance(alpha, int):
+        if dtype not in _numeric_dtypes and not isinstance(alpha, int):
             raise RuntimeError("For integral input tensors alpha must be integral")
     if inplace and (left.shape != a.shape or not torch.can_cast(dtype, a.dtype)):
         raise RuntimeError("RUDA in-place result cannot change shape or cast to the input dtype")
-    if dtype in _dtypes:
+    if dtype in _numeric_dtypes:
         result = _binary(1 if op == 94 else op, left, right,
                          scalar=-alpha if op == 94 else alpha if op == 1 else 0)
     elif dtype == torch.bool:
@@ -1040,7 +1106,7 @@ def sub(a, b, *, alpha=1, inplace=False):
         raise RuntimeError("Subtraction with a bool operand is not supported")
     if isinstance(alpha, bool):
         raise RuntimeError("Boolean alpha only supported for Boolean results")
-    if a.dtype not in _dtypes or isinstance(b, torch.Tensor) and b.dtype not in _dtypes:
+    if a.dtype not in _numeric_dtypes or isinstance(b, torch.Tensor) and b.dtype not in _numeric_dtypes:
         return _integral_arithmetic(94, a, b, alpha=alpha, inplace=inplace)
     return _binary(1, a, b, scalar=-alpha, inplace=inplace)
 
@@ -1058,7 +1124,7 @@ def bitwise(op, a, b=None, *, inplace=False):
         left, right, dtype = a, a, a.dtype
     else:
         left, right, dtype = _primitive_operands(a, b)
-    if dtype not in _storage_dtypes[3:]:
+    if dtype not in _integral_dtypes:
         raise RuntimeError("RUDA bitwise operations require bool or integral tensors")
     if inplace and (left.shape != a.shape or not torch.can_cast(dtype, a.dtype)):
         raise RuntimeError("RUDA in-place result cannot change shape or cast to the input dtype")
@@ -1075,7 +1141,7 @@ def flip(a, dims):
     result = a
     for dim in dimensions:
         output = _out(a.shape, a)
-        _C.execute(97, result, result, output, float(dim))
+        _apply(97, result, result, out=output, scalar=float(dim))
         result = output
     return result if a.is_contiguous() else torch.empty_like(a, memory_format=torch.preserve_format).copy_(result)
 
@@ -1110,6 +1176,9 @@ def _primitive_reduce(op, a, dim=None, keepdim=False, *, dtype=None):
 
 
 def prod(a, dim=None, keepdim=False, *, dtype=None):
+    if a.dtype in _wide_dtypes or dtype in _wide_dtypes:
+        from ._scientific import reduce
+        return reduce(a,dim,keepdim,dtype=dtype,product=True)
     return _primitive_reduce(98, a, dim, keepdim, dtype=dtype)
 
 
@@ -1120,7 +1189,7 @@ def _boolean_reduce(a, dim=None, keepdim=False, *, every):
 
 def _cumulative(op, a, dim, *, dtype=None):
     axis = _dimension(dim, a.ndim)
-    dtype = dtype or (a.dtype if a.dtype in _dtypes else torch.int64)
+    dtype = dtype or (a.dtype if a.dtype in _numeric_dtypes else torch.int64)
     if dtype not in _storage_dtypes or dtype == torch.bool:
         raise NotImplementedError("RUDA cumulative operations require a supported numeric output dtype")
     value = a.to(dtype)
@@ -1165,7 +1234,7 @@ for name, function in {
     "mm": mm, "addmm": addmm, "bmm": bmm,
     "mv": mv, "dot": dot, "outer": outer, "cat": cat, "stack": stack,
     "cat.out": lambda tensors, dim=0, *, out: _math_out(cat(tensors, dim), out),
-    "ger": outer, "vdot": dot,
+    "ger": outer, "vdot": vdot,
     "addmv": addmv, "addbmm": addbmm, "baddbmm": baddbmm,
     "constant_pad_nd": constant_pad_nd,
     "_adaptive_avg_pool2d": adaptive_avg_pool2d, "_adaptive_avg_pool2d_backward": adaptive_avg_pool2d_backward,
@@ -1187,9 +1256,11 @@ for name, function in {
     "tanh_": lambda a: _apply(17, a, out=a),
     "sin": lambda a: _apply(19, a), "sin_": lambda a: _apply(19, a, out=a),
     "cos": lambda a: _apply(20, a), "cos_": lambda a: _apply(20, a, out=a),
-    "abs": lambda a: _apply(21, a), "abs_": lambda a: _apply(21, a, out=a),
+    "abs": absolute, "abs_": lambda a: absolute(a, inplace=True),
+    "abs.out": lambda a, *, out: _math_out(absolute(a), out),
+    "sgn.out": lambda a, *, out: _math_out(sgn(a), out),
     "sign": lambda a: _apply(22, a), "sign_": lambda a: _apply(22, a, out=a),
-    "sgn": lambda a: _apply(22, a), "sgn_": lambda a: _apply(22, a, out=a),
+    "sgn": sgn, "sgn_": lambda a: sgn(a, inplace=True),
     "floor": lambda a: _apply(23, a), "floor_": lambda a: _apply(23, a, out=a),
     "ceil": lambda a: _apply(24, a), "ceil_": lambda a: _apply(24, a, out=a),
     "trunc": lambda a: _apply(25, a), "trunc_": lambda a: _apply(25, a, out=a),

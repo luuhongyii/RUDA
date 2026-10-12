@@ -24,7 +24,7 @@ at::Tensor& arange_out(const at::Scalar& start, const at::Scalar& end,
   TORCH_CHECK(arange_native, "RUDA factory API 1 unavailable; rebuild both native libraries");
   validate(out.device());
   const auto dtype = dtype_code(out.scalar_type());
-  TORCH_CHECK(dtype!=3, "arange does not support bool storage");
+  TORCH_CHECK(dtype!=3 && dtype<10, "arange does not support bool or complex storage");
   at::native::arange_check_bounds(start,end,step);
   int64_t size;
   if (out.scalar_type()==at::kLong) {
@@ -47,8 +47,8 @@ at::Tensor& arange_out(const at::Scalar& start, const at::Scalar& end,
   }
   at::assert_no_internal_overlap(out);
   Argument result(out);
-  auto a = dtype<=2 ? scalar_bits<float>(start) : scalar_bits<int64_t>(start);
-  auto s = dtype<=2 ? scalar_bits<float>(step) : scalar_bits<int64_t>(step);
+  auto a = dtype==9 ? scalar_bits<double>(start) : dtype<=2 ? scalar_bits<float>(start) : scalar_bits<int64_t>(start);
+  auto s = dtype==9 ? scalar_bits<double>(step) : dtype<=2 ? scalar_bits<float>(step) : scalar_bits<int64_t>(step);
   check(arange_native(&result.desc,a,s));
   return out;
 }

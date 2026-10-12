@@ -30,6 +30,7 @@ pub unsafe extern "C" fn ruda_torch_arange(out: *const Descriptor, start: u64, s
             6 => run!(i16, i64, start as i64, step as i64),
             7 => run!(i8, i64, start as i64, step as i64),
             8 => run!(u8, i64, start as i64, step as i64),
+            9 => run!(f64, f64, f64::from_bits(start), f64::from_bits(step)),
             _ => panic!("unsupported arange dtype"),
         }
         finish_dispatch(&client);

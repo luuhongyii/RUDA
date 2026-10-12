@@ -10,6 +10,10 @@ mod graph_contract;
 mod static_graph;
 mod paged;
 mod dense_attention;
+mod scientific;
+mod blas_bridge;
+mod linalg_bridge;
+mod fft_bridge;
 mod kernels;
 mod training;
 mod router;
@@ -65,7 +69,7 @@ pub struct Descriptor {
 struct View { handle: Handle, shape: Vec<usize>, strides: Vec<usize>, len: usize, dtype: u32 }
 
 fn element_bytes(dtype: u32) -> usize {
-    match dtype { 0 | 5 => 4, 1 | 2 | 6 => 2, 3 | 7 | 8 => 1, 4 => 8, _ => panic!("unsupported RUDA dtype") }
+    match dtype { 0 | 5 => 4, 1 | 2 | 6 => 2, 3 | 7 | 8 => 1, 4 | 9 | 10 => 8, 11 => 16, _ => panic!("unsupported RUDA dtype") }
 }
 
 impl View {
@@ -205,6 +209,11 @@ pub unsafe extern "C" fn ruda_torch_fill(out: *const Descriptor, bits: u64) -> i
 
 fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
     if out.len == 0 { return; }
+    if op != 108 && (a.dtype >= 9 || b.dtype >= 9 || out.dtype >= 9) {
+        if (102..=106).contains(&op) { primitives::launch(op,a,b,out,scalar); }
+        else { scientific::launch(op,a,b,out,scalar as f64); }
+        finish_dispatch(&client());return;
+    }
     if op == 0 { convert(a, out); return; }
     if op == 108 {
         assert_eq!(a.dtype, b.dtype);
@@ -228,6 +237,7 @@ fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
                         7 => run!(i64, i8), 8 => run!(i64, u8), _ => unreachable!()
                     }
                 }
+                9 => { assert_eq!(a.dtype,9); run!(f64,f64); }
                 _ => panic!("unsupported RUDA arange dtype"),
             }
         }
@@ -415,6 +425,7 @@ fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
 fn convert(a: &View, out: &View) {
     assert_eq!(a.shape, out.shape);
     if out.len == 0 { return; }
+    if a.dtype >= 9 || out.dtype >= 9 { scientific::convert(a,out);finish_dispatch(&client());return; }
     let client = client();
     let byte_work = a.dtype >= 3 && out.dtype >= 3;
     let work = if byte_work { out.len.checked_mul(element_bytes(out.dtype)).expect("byte length overflow") } else { out.len };

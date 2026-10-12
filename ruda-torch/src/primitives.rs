@@ -9,7 +9,7 @@ fn dtype(code: u32) -> DType {
     match code {
         0 => DType::F32, 1 => DType::F16, 2 => DType::BF16,
         3 | 8 => DType::U8, 4 => DType::I64, 5 => DType::I32,
-        6 => DType::I16, 7 => DType::I8, _ => panic!("unsupported RUDA dtype"),
+        6 => DType::I16, 7 => DType::I8, 9 => DType::F64, _ => panic!("unsupported RUDA dtype"),
     }
 }
 
@@ -58,6 +58,10 @@ pub(super) fn check_indices(indices: &View, bound: usize, allow_negative: bool) 
 
 pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
     assert_eq!(a.dtype, out.dtype);
+    if (102..=106).contains(&op) && a.dtype >= 9 {
+        wide_index(op,a,b,out,scalar);
+        return;
+    }
     if (125..=128).contains(&op) {
         integer_math(op, a, b, out);
         return;
@@ -130,6 +134,61 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
         _ => panic!("unsupported RUDA primitive {op}"),
     };
     store(result, out);
+}
+
+fn byte_indices(indices:&View,width:usize)->View {
+    let mut shape=indices.shape.clone();shape.push(width);
+    let mut strides=indices.strides.clone();strides.push(0);
+    View {handle:indices.handle.clone(),shape,strides,
+        len:indices.len.checked_mul(width).expect("wide index count overflow"),dtype:indices.dtype}
+}
+
+/// Gather/select/assignment preserve interleaved storage byte-for-byte. Add
+/// updates use the existing lane-owned serial-axis F32/F64 kernels: duplicate
+/// indices are accumulated in their input order, without atomics or CPU data.
+fn wide_index(op:u32,a:&View,b:&View,out:&View,scalar:f32) {
+    assert!(matches!(a.dtype,9|10|11) && a.dtype==out.dtype);
+    assert!(scalar>=0.0 && scalar.fract()==0.0);
+    let axis=scalar as usize;
+    assert!(axis<a.shape.len() && axis<out.shape.len());
+    let bound=if op<=103 {a.shape[axis]} else {out.shape[axis]};
+    check_indices(b,bound,false);
+    if b.len==0 || out.len==0 {return;}
+    if op==102 || op==103 || op==106 {
+        let bytes=a.byte_view();let output=out.byte_view();
+        let result=match op {
+            102=>ruprim::indexing::gather(axis,tensor(&bytes),tensor(&byte_indices(b,super::element_bytes(a.dtype)))),
+            103=>ruprim::indexing::select(tensor(&bytes),axis,tensor(b)),
+            106=>ruprim::indexing::scatter_assign(axis,tensor(&output),
+                tensor(&byte_indices(b,super::element_bytes(a.dtype))),tensor(&bytes)),
+            _=>unreachable!(),
+        };
+        store(result,&output);
+        return;
+    }
+    assert!(op==104 || op==105);
+    if a.dtype==9 {
+        let result=if op==104 {
+            ruprim::indexing::scatter(axis,tensor(out),tensor(b),tensor(a),false)
+        } else {
+            ruprim::indexing::select_assign(tensor(out),axis,tensor(b),tensor(a),false)
+        };
+        store(result,out);
+    } else {
+        let (ar,ai)=super::scientific::complex_parts(a);
+        let (re,im)=super::scientific::complex_parts(out);
+        let indices=tensor(b);
+        let (re,im)=if op==104 {
+            (ruprim::indexing::scatter(axis,re,indices.clone(),ar,false),
+             ruprim::indexing::scatter(axis,im,indices,ai,false))
+        } else {
+            (ruprim::indexing::select_assign(re,axis,indices.clone(),ar,false),
+             ruprim::indexing::select_assign(im,axis,indices,ai,false))
+        };
+        super::scientific::copy_complex(&re,&im,out);
+        finish_dispatch(&client());
+        LAUNCHES.fetch_add(2,Ordering::Relaxed);
+    }
 }
 
 fn integer_math(op: u32, a: &View, b: &View, out: &View) {

@@ -6390,8 +6390,10 @@ dependencies = [
  "ruda",
  "ruda-core",
  "ruda-driver-cuda",
+ "ruda-fft",
  "ruda-kernel",
  "ruda-optim",
+ "ruda-solver",
 ]
 
 [[package]]

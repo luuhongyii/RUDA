@@ -3,6 +3,23 @@ from . import _C
 from ._ops import _registry, _dimension, _out, _typed_value, clone, div, fill_, masked_fill, mul
 
 
+def _logical(a):
+    return a.resolve_conj().resolve_neg() if a.is_conj() or a.is_neg() else a
+
+
+def _target(a, inplace):
+    if not inplace:
+        return clone(a)
+    return clone(a) if a.is_conj() or a.is_neg() else a
+
+
+def _finish_target(a, result, inplace):
+    if inplace and result is not a:
+        a.copy_(result)
+        return a
+    return result
+
+
 def _indices(a, index, *, empty_dtype=False):
     if index.device != a.device:
         raise RuntimeError("RUDA indices must be on the same device as the tensor")
@@ -22,6 +39,7 @@ def _prefix(a, shape, except_axis=None):
 
 
 def gather(a, dim, index, *, sparse_grad=False):
+    a, index = _logical(a), _logical(index)
     axis = _dimension(dim, a.ndim)
     _indices(a, index, empty_dtype=True)
     result = _out(index.shape, a)
@@ -36,6 +54,7 @@ def gather(a, dim, index, *, sparse_grad=False):
 
 
 def index_select(a, dim, index):
+    a, index = _logical(a), _logical(index)
     axis = _dimension(dim, a.ndim)
     _indices(a, index)
     if index.ndim > 1:
@@ -51,9 +70,10 @@ def index_select(a, dim, index):
 
 
 def index_tensor(a, indices, *, out=None):
+    a = _logical(a)
     if len(indices) > a.ndim:
         raise IndexError("too many indices for tensor")
-    indices = list(indices) + [None] * (a.ndim - len(indices))
+    indices = [_logical(index) if index is not None else None for index in indices] + [None] * (a.ndim - len(indices))
     axes = [axis for axis, index in enumerate(indices) if index is not None]
     if not axes:
         result = clone(a)
@@ -112,11 +132,11 @@ def _scatter(a, dim, index, source, *, inplace=False, assign=False):
         raise RuntimeError("scatter source must match the destination device and dtype")
     if inplace:
         _C.check_index_output(a, source if tensor_source else index, index)
-    result = a if inplace else clone(a)
+    result = _target(a, inplace)
     if index.numel() == 0:
-        return result
-    indices, target = _nonempty_rank(index), _nonempty_rank(result)
-    value = (_nonempty_rank(source) if tensor_source else
+        return a if inplace else result
+    indices, target = _nonempty_rank(_logical(index)), _nonempty_rank(result)
+    value = (_nonempty_rank(_logical(source)) if tensor_source else
              _typed_value(source, a.dtype, a.device).expand(indices.shape))
     if indices.ndim != target.ndim or indices.ndim != value.ndim:
         raise RuntimeError("scatter index, source and destination must have matching ranks")
@@ -126,7 +146,7 @@ def _scatter(a, dim, index, source, *, inplace=False, assign=False):
     value = _prefix(value, indices.shape)
     target = _prefix(target, indices.shape, axis)
     _C.execute(106 if assign else 104, value, indices, target, float(axis))
-    return result
+    return _finish_target(a, result, inplace)
 
 
 def scatter_add(a, dim, index, source, *, inplace=False):
@@ -144,18 +164,18 @@ def index_add(a, dim, index, source, *, alpha=1, inplace=False):
         raise RuntimeError("index_add index must be a scalar or vector")
     if source.device != a.device or source.dtype != a.dtype:
         raise RuntimeError("index_add source must match the destination device and dtype")
-    value, target = _nonempty_rank(source), _nonempty_rank(a)
+    value, target = _nonempty_rank(_logical(source)), _nonempty_rank(a)
     if value.ndim != target.ndim or value.shape[axis] != index.numel():
         raise RuntimeError("index_add source dimension must match the number of indices")
     if any(value.shape[d] != target.shape[d] for d in range(target.ndim) if d != axis):
         raise RuntimeError("index_add source shape must match outside the indexed dimension")
     if inplace:
         _C.check_index_output(a, source, index)
-    result = a if inplace else clone(a)
+    result = _target(a, inplace)
     if alpha != 1:
         value = mul(value, _typed_value(alpha, a.dtype, a.device))
-    _C.execute(105, value, index.reshape(-1), _nonempty_rank(result), float(axis))
-    return result
+    _C.execute(105, value, _logical(index).reshape(-1), _nonempty_rank(result), float(axis))
+    return _finish_target(a, result, inplace)
 
 
 def embedding(weight, indices, padding_idx=-1, scale_grad_by_freq=False, sparse=False):
@@ -168,20 +188,21 @@ def embedding_dense_backward(grad, indices, num_weights, padding_idx, scale_grad
     _indices(grad, indices)
     if num_weights < 0 or grad.ndim != indices.ndim + 1 or grad.shape[:-1] != indices.shape:
         raise RuntimeError("invalid embedding gradient shape")
-    if grad.dtype not in (torch.float32, torch.float16, torch.bfloat16):
+    if grad.dtype not in (torch.float32, torch.float16, torch.bfloat16, torch.float64):
         raise RuntimeError("embedding gradients require a supported floating dtype")
     flat = indices.reshape(-1)
     width = grad.shape[-1]
-    value = grad.float().reshape(flat.numel(), width)
+    work_dtype = torch.float64 if grad.dtype == torch.float64 else torch.float32
+    value = _logical(grad).to(work_dtype).reshape(flat.numel(), width)
     if scale_grad_by_freq:
         counts = fill_(torch.empty((num_weights,), device=grad.device, dtype=torch.int64), 0)
         ones = fill_(torch.empty(flat.shape, device=grad.device, dtype=torch.int64), 1)
         counts = index_add(counts, 0, flat, ones, inplace=True)
-        frequencies = index_select(counts, 0, flat).float().view(-1, 1)
+        frequencies = index_select(counts, 0, flat).to(work_dtype).view(-1, 1)
         value = div(value, frequencies)
     if padding_idx >= 0:
         value = masked_fill(value, (flat == padding_idx).view(-1, 1), 0)
-    result = fill_(torch.empty((num_weights, width), device=grad.device, dtype=torch.float32), 0)
+    result = fill_(torch.empty((num_weights, width), device=grad.device, dtype=work_dtype), 0)
     return index_add(result, 0, flat, value, inplace=True).to(grad.dtype)
 
 

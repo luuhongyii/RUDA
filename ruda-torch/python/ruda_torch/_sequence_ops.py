@@ -15,7 +15,10 @@ def _solve_out(a, b, *, upper, left=True, unitriangular=False, out):
     return out
 
 
-_registry.impl('linalg_solve_triangular', _solve)
-_registry.impl('linalg_solve_triangular.out', _solve_out)
-_registry.impl('tril', lambda x, diagonal=0: triangular_mask(x, diagonal))
-_registry.impl('triu', lambda x, diagonal=0: triangular_mask(x, diagonal, upper=True))
+from . import _linalg_available, _scientific_available
+if not _linalg_available:
+    _registry.impl('linalg_solve_triangular', _solve)
+    _registry.impl('linalg_solve_triangular.out', _solve_out)
+if not _scientific_available:
+    _registry.impl('tril', lambda x, diagonal=0: triangular_mask(x, diagonal))
+    _registry.impl('triu', lambda x, diagonal=0: triangular_mask(x, diagonal, upper=True))

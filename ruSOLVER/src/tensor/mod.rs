@@ -208,6 +208,12 @@ pub use large::{LargeSolverOptions, lu_solve_blocked, qr_blocked};
 #[allow(unsafe_code)]
 mod jacobi;
 pub use jacobi::{DeviceJacobiOptions, DeviceSvdResult, symmetric_eigen_device, svd_device};
+#[allow(unsafe_code)]
+mod factorization;
+pub use factorization::{LuFactorResult,QrFactorResult,lu_factor_blocked,qr_factor_blocked,qr_form_q,qr_extract_r,qr_apply_q};
+#[allow(unsafe_code)]
+mod linear;
+pub use linear::{LinearSolveResult,CholeskyFactorResult,LeastSquaresResult,DeterminantResult,LuUnpackResult,lu_solve_factor,lu_inverse_factor,triangular_solve,triangular_inverse,identity_matrix,symmetric_from_triangle,cholesky_factor_blocked,cholesky_solve_factor,cholesky_inverse_factor,least_squares_qr,orthogonal_complete,determinant_from_lu,lu_unpack_factor};
 
 #[cfg(feature = "warp-solvers")]
 #[allow(unsafe_code)] // Generated checked launch boundary; no manual unsafe code.
