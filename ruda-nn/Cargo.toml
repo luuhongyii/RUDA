@@ -50,7 +50,7 @@ default-features = false
 
 [dependencies.ruda-tensor-rocm]
 path = "../ruda-tensor-rocm"
-version = "0.21.63"
+version = "0.21.64"
 optional = true
 default-features = false
 
