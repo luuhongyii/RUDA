@@ -8,7 +8,7 @@ use ruprim::reduce::{components::instructions::ReduceOperationConfig, tensor::{K
 fn dtype(code: u32) -> DType {
     match code {
         0 => DType::F32, 1 => DType::F16, 2 => DType::BF16,
-        3 | 8 => DType::U8, 4 => DType::I64, 5 => DType::I32,
+        3 | 8 | 12 | 13 => DType::U8, 4 => DType::I64, 5 => DType::I32,
         6 => DType::I16, 7 => DType::I8, 9 => DType::F64, _ => panic!("unsupported RUDA dtype"),
     }
 }

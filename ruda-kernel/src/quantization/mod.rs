@@ -9,6 +9,9 @@ pub mod layout;
 
 pub use ruda_core::quant::scheme;
 
+#[cfg(feature = "packed-quantization")]
+pub mod packed;
+
 #[cfg(feature = "quantization-kernels")]
 pub(crate) mod utils {
     use crate::quantization::scheme::{QuantLevel, QuantScheme};

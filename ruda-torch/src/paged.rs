@@ -15,6 +15,46 @@ pub(super) static BACKWARD_PLACEHOLDER_BYTES: AtomicU64=AtomicU64::new(0);
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_paged_backward_api_version()->u32 { 2 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_paged_quantized_api_version()->u32 { 1 }
+
+/// Q, Qposition, K triple, V triple, position-cache triple, output.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ruda_torch_paged_quantized(plan:*const NativePlan,
+    descriptors:*const Descriptor,count:usize,layout:*const u32,layout_count:usize,scale:f32,causal:bool)->i32 {
+    checked(|| {
+        use ruda_kernel::{quantization::packed::{PackedTensor,PackedFormat},tensor::allocation::empty_device_contiguous_dtype};
+        use ruda_core::tensor::{Shape,DType};
+        assert!(!plan.is_null() && count==12 && layout_count==10);
+        let native=unsafe{&*plan};let layout=unsafe{crate::abi::slice(layout,layout_count)};
+        let ds=unsafe{crate::abi::slice(descriptors,count)};
+        let views:Vec<_>=ds.iter().map(|d|unsafe{crate::abi::view(d)}).collect();
+        let tensors:Vec<_>=views.iter().map(primitives::tensor).collect();let q=&tensors[0];
+        let empty=empty_device_contiguous_dtype(q.client.clone(),q.device.clone(),Shape::new([0]),DType::I32);
+        let cache=|start:usize,format:u32,group:u32,width:u32| PackedTensor::new(
+            tensors[start].clone(),tensors[start+1].clone(),tensors[start+2].clone(),empty.clone(),
+            Shape::new([native.plan.host().page_count(),native.plan.host().page_size(),layout[3] as usize,width as usize]),
+            PackedFormat::from_code(format),group as usize);
+        let k=cache(2,layout[0],layout[1],layout[2]);
+        let v=cache(5,layout[4],layout[5],layout[6]);
+        let kp=(layout[9]>0).then(||cache(8,layout[7],layout[8],layout[9]));
+        let position=kp.as_ref().map(|kp|(&tensors[1],kp));
+        let mut guard=native.workspace.lock().expect("paged workspace lock poisoned");
+        let workspace=if native.splits>1 && q.meta.num_elements()!=0 {
+            assert_eq!(q.meta.num_dims(),3);
+            if !guard.as_ref().is_some_and(|w|w.matches(q,q.meta.shape()[0],q.meta.shape()[1],v.width(),native.splits)) {
+                *guard=Some(SplitWorkspace::new(q,q.meta.shape()[0],q.meta.shape()[1],v.width(),native.splits)
+                    .expect("quantized paged split workspace"));
+            }
+            guard.as_mut()
+        } else {None};
+        let output=native.plan.attention_quantized(q,&k,&v,position,scale,causal,workspace).expect("quantized paged attention failed");
+        primitives::store(output,&views[11]);
+        LAUNCHES.fetch_add(if native.splits>1 {2} else {1},Ordering::Relaxed);
+        finish_dispatch(&client());
+    })
+}
+
 pub(super) static ORDERED_CALLS: AtomicU64=AtomicU64::new(0);
 pub(super) static ORDERED_ALLOCS: AtomicU64=AtomicU64::new(0);
 pub(super) static ORDERED_BYTES: AtomicU64=AtomicU64::new(0);

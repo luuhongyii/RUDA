@@ -8,6 +8,23 @@ pub use crate::{QTensorPrimitive, quantization::*};
 /// The tensor quantization parameters.
 pub type QuantizationParameters<B> = QParams<Tensor<B, 1>>;
 
+/// Affine parameters for packed unsigned integer quantization.
+#[derive(Clone,Debug)]
+pub struct AffineQuantizationParameters<B:Backend> {
+    pub scales:Tensor<B,1>,
+    pub zero_points:Tensor<B,1>,
+    pub offsets:Tensor<B,1>,
+}
+
+pub fn compute_affine_q_params<B:Backend>(range:CalibrationRange<B>,bits:u8)->AffineQuantizationParameters<B> {
+    let params=quantization::compute_affine_q_params::<B>(range.min.primitive.tensor(),range.max.primitive.tensor(),bits);
+    AffineQuantizationParameters {
+        scales:Tensor::from_primitive(TensorPrimitive::Float(params.scales)),
+        zero_points:Tensor::from_primitive(TensorPrimitive::Float(params.zero_points)),
+        offsets:Tensor::from_primitive(TensorPrimitive::Float(params.offsets)),
+    }
+}
+
 /// The observed input calibration range.
 #[derive(Clone, Debug)]
 pub struct CalibrationRange<B: Backend> {

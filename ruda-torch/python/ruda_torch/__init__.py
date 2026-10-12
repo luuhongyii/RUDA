@@ -249,6 +249,24 @@ from .compiler import compile, make_backend, CompiledModel, CompiledFunction, Na
 
 from .quantization import LearnedFakeQuantize, learned_fake_quantize
 
+_packed_available = False
+if hasattr(_native, 'ruda_torch_packed_api_version') and hasattr(_C, 'initialize_packed'):
+    _native.ruda_torch_packed_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_packed_api_version() != 1 or getattr(_C, 'packed_api_version', None) != 1:
+        raise RuntimeError('RUDA packed quantization API mismatch; rebuild both native libraries')
+    _C.initialize_packed(ctypes.cast(_native.ruda_torch_packed, ctypes.c_void_p).value)
+    _packed_available = True
+_paged_quantized_available = False
+if hasattr(_native, 'ruda_torch_paged_quantized_api_version') and hasattr(_C, 'initialize_paged_quantized'):
+    _native.ruda_torch_paged_quantized_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_paged_quantized_api_version() != 1 or getattr(_C, 'paged_quantized_api_version', None) != 1:
+        raise RuntimeError('RUDA quantized paged API mismatch; rebuild both native libraries')
+    _C.initialize_paged_quantized(ctypes.cast(_native.ruda_torch_paged_quantized, ctypes.c_void_p).value)
+    _paged_quantized_available = True
+from .packed_quantization import (PackedQuantizedTensor, PackedLinear, PackedEmbedding, quantize_packed, scaled_float8_mm)
+from .quantization_calibration import (calibrate_quantization, QuantizationObserver, affine_fake_quantize)
+from .quantized_cache import QuantizedKVCache, quantized_paged_attention
+
 # Trainable architecture components are composed from same-device tensor ops.
 from .mhc import MHC, MHCResidual, MHCSequential, MHCCoefficients, sinkhorn
 from .sparse_attention import (LightningIndexer, DSAIndexer, indexer_kl_loss,
@@ -318,6 +336,8 @@ from .transformers_attention import register_transformers_attention
 from .parallel_mesh import ParallelMesh, TensorParallelGroup
 from .sharded_optim import ShardedMuon, distributed_grad_norm
 from .quantization_interop import bnb_nf4_linear, load_bnb_nf4_safetensors
+from .gptq import gptq_linear, load_gptq_safetensors
+from .gguf import GGUFWeights, GGUFTensorInfo, load_gguf
 from .parallel_adapters import (ColumnParallelLoRALinear,RowParallelLoRALinear,
     ColumnParallelNF4Linear,RowParallelNF4Linear,shard_nf4_linear)
 from .parallel_checkpoint_io import load_tensor_parallel_safetensors,load_tensor_parallel_bnb_nf4_safetensors

@@ -305,6 +305,9 @@ def parameter_shards(source,replacement,axis):
 
 
 def adapter_base_kind(layer):
+    from .packed_quantization import PackedLinear
+    if isinstance(layer.base,PackedLinear):
+        return 'packed:'+layer.base.format+':'+str(layer.base.group_size)
     return 'nf4' if isinstance(layer.base,(NF4Linear,_ParallelNF4)) else 'dense'
 
 

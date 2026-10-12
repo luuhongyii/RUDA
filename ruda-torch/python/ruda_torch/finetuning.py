@@ -208,11 +208,16 @@ class NF4Linear(nn.Module):
 
 
 class LoRALinear(nn.Module):
-    """Frozen dense/NF4 base plus alpha/rank * B(A(x))."""
+    """Frozen dense/NF4/packed base plus alpha/rank * B(A(x))."""
     def __init__(self, base, *, rank=16, alpha=16., adapter_dtype=torch.float32, dropout=0., use_rslora=False):
         super().__init__()
-        if not isinstance(base, (nn.Linear, NF4Linear)):
-            raise TypeError('LoRA requires nn.Linear or NF4Linear')
+        packed_types = ()
+        embedding_types = ()
+        if __package__:
+            from .packed_quantization import PackedLinear, PackedEmbedding
+            packed_types, embedding_types = (PackedLinear,), (PackedEmbedding,)
+        if not isinstance(base, (nn.Linear, NF4Linear)+packed_types) or isinstance(base,embedding_types):
+            raise TypeError('LoRA requires a dense, NF4 or packed Linear')
         _positive_int(rank, 'rank')
         if type(alpha) not in (float, int) or not math.isfinite(alpha) or alpha <= 0:
             raise ValueError('alpha must be finite and positive')
@@ -224,7 +229,7 @@ class LoRALinear(nn.Module):
         self.rank, self.alpha = rank, float(alpha)
         self.dropout, self.use_rslora = float(dropout), use_rslora
         self.in_features, self.out_features = base.in_features, base.out_features
-        device = base.weight.device if isinstance(base, nn.Linear) else base.packed.device
+        device = base.weight.device if isinstance(base, nn.Linear) else base.codes.device if isinstance(base,packed_types) else base.packed.device
         # Initialization is an explicit setup operation, not a runtime CPU fallback.
         a = torch.empty((rank, self.in_features), dtype=adapter_dtype, device='cpu')
         nn.init.kaiming_uniform_(a, a=math.sqrt(5))
@@ -295,13 +300,17 @@ def inject_lora(model, *, target_modules, rank=16, alpha=16., adapter_dtype=torc
     if __package__:
         from .parallel_adapters import (_ParallelLoRA,_ParallelNF4,lora_from_parallel_base)
         from .parallel_training import ColumnParallelLinear,RowParallelLinear
+        from .packed_quantization import PackedLinear, PackedEmbedding
         parallel_types=(ColumnParallelLinear,RowParallelLinear,_ParallelNF4)
+        packed_types,embedding_types=(PackedLinear,),(PackedEmbedding,)
     else:
         _ParallelLoRA=()
         parallel_types=()
+        packed_types,embedding_types=(),()
     if any(isinstance(m, (LoRALinear,_ParallelLoRA)) for m in model.modules()):
         raise ValueError('model already contains LoRA adapters')
-    selected = _selected(model, target_modules, (nn.Linear, NF4Linear)+parallel_types)
+    selected = _selected(model, target_modules, (nn.Linear, NF4Linear)+packed_types+parallel_types)
+    selected = [(name,base) for name,base in selected if not isinstance(base,embedding_types)]
     parallel_paths=[name for name,module in model.named_modules(remove_duplicate=False) if isinstance(module,parallel_types)]
     selected=[(name,module) for name,module in selected if not any(name.startswith(parent+'.') for parent in parallel_paths)]
     if not selected or (target_modules!='all-linear' and not set(target_modules).issubset({name for name,_ in selected})):

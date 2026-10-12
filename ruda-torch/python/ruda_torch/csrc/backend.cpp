@@ -1,4 +1,6 @@
 #include <ATen/EmptyTensor.h>
+#include <c10/util/Float8_e4m3fn.h>
+#include <c10/util/Float8_e5m2.h>
 #include <ATen/Context.h>
 #include <ATen/autocast_mode.h>
 #include <ATen/MemoryOverlap.h>
@@ -80,6 +82,7 @@ void validate(c10::Device device) {
   TORCH_CHECK(device.type() == c10::DeviceType::PrivateUse1 && device.index() <= 0,
               "RUDA currently exposes only ruda:0");
 }
+bool fp8_storage_available=false;
 uint32_t dtype_code(c10::ScalarType dtype) {
   if (dtype == at::kFloat) return 0;
   if (dtype == at::kHalf) return 1;
@@ -90,6 +93,10 @@ uint32_t dtype_code(c10::ScalarType dtype) {
   if (dtype == at::kShort) return 6;
   if (dtype == at::kChar) return 7;
   if (dtype == at::kByte) return 8;
+  if (dtype == at::ScalarType::Float8_e4m3fn || dtype == at::ScalarType::Float8_e5m2) {
+    TORCH_CHECK(fp8_storage_available,"FP8 storage requires matching packed API 1 native libraries");
+    return dtype == at::ScalarType::Float8_e4m3fn ? 12 : 13;
+  }
   if (dtype == at::kDouble || dtype == at::kComplexFloat || dtype == at::kComplexDouble) {
     TORCH_CHECK(scientific_native,"RUDA scientific storage API 1 requires matching rebuilt native libraries");
     return dtype==at::kDouble ? 9 : dtype==at::kComplexFloat ? 10 : 11;
@@ -220,12 +227,30 @@ struct Argument {
 #include "nf4.inc"
 #include "sequence_training.inc"
 #include "kda.inc"
+#include "packed.inc"
 #include "random.inc"
 #include "dense_attention.inc"
 
 class PagedPlanBridge {
   void* plan_=nullptr;
  public:
+  at::Tensor run_quantized(const at::Tensor& q,const at::Tensor& qp,
+      const std::vector<at::Tensor>& caches,const std::vector<uint32_t>& layout,double scale,bool causal) {
+    TORCH_CHECK(quantized_paged_native && caches.size()==9 && layout.size()==10 && q.dim()==3,
+                "quantized paged API 1 unavailable or invalid arguments");
+    training_tensor(q); training_tensor(qp);
+    TORCH_CHECK(std::isfinite(scale) && std::isfinite(float(scale)) && scale>0,"invalid attention scale");
+    auto out=at::empty({q.size(0),q.size(1),int64_t(layout[6])},q.options());
+    std::vector<Argument> args;args.reserve(12);args.emplace_back(q);args.emplace_back(qp);
+    for (const auto& t:caches) {
+      TORCH_CHECK(t.device()==q.device() && t.is_contiguous(),"quantized cache device/layout mismatch");
+      args.emplace_back(t);
+    }
+    args.emplace_back(out);
+    std::vector<Descriptor> ds;ds.reserve(12);for (const auto& a:args)ds.push_back(a.desc);
+    check(quantized_paged_native(plan_,ds.data(),ds.size(),layout.data(),layout.size(),float(scale),causal));
+    return out;
+  }
   PagedPlanBridge(const at::Tensor& like,const std::vector<uint32_t>& spec,const std::vector<uint32_t>& words) {
     TORCH_CHECK(paged_native && spec.size()==6,"invalid native paged plan header");
     Argument q(like);
@@ -442,6 +467,8 @@ void fill(at::Tensor out, const at::Scalar& value) {
     case 7: bits = scalar_bits<int8_t>(value); break;
     case 8: bits = scalar_bits<uint8_t>(value); break;
     case 9: bits = scalar_bits<double>(value); break;
+    case 12: { c10::Float8_e4m3fn v(value.toFloat()); bits=v.x; break; }
+    case 13: { c10::Float8_e5m2 v(value.toFloat()); bits=v.x; break; }
     case 10: {
       auto number=value.toComplexDouble();
       float pair[2]={float(number.real()),float(number.imag())};
@@ -536,6 +563,10 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("as_strided", at::native::as_strided_tensorimpl);
   m.impl("as_strided_", at::native::as_strided__symint);
   m.impl("view", at::native::view);
+  m.impl("view.dtype", [](const at::Tensor& self, c10::ScalarType dtype) {
+    dtype_code(dtype);
+    return at::native::view_dtype(self,dtype);
+  });
   m.impl("_reshape_alias", at::native::_reshape_alias);
   m.impl("copy_", copy_);
   m.impl("_copy_from", copy_from);
@@ -620,6 +651,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   });
   m.def("kda_forward", kda_forward);
   m.def("kda_backward", kda_backward);
+  m.attr("packed_api_version") = 1;
+  m.def("initialize_packed", [](uintptr_t address) {
+    TORCH_CHECK(allocate_native && address && !packed_native,"invalid or repeated packed initialization");
+    packed_native=reinterpret_cast<PackedDispatch>(address);
+    fp8_storage_available=true;
+  });
+  m.def("packed_dispatch", packed_dispatch);
+  m.attr("paged_quantized_api_version") = 1;
+  m.def("initialize_paged_quantized", [](uintptr_t address) {
+    TORCH_CHECK(allocate_native && address && !quantized_paged_native,"invalid quantized paged initialization");
+    quantized_paged_native=reinterpret_cast<QuantizedPaged>(address);
+  });
   m.def("initialize", [](std::vector<uintptr_t> addresses) {
     TORCH_CHECK(addresses.size() == 13 && !allocate_native, "invalid or repeated RUDA initialization");
     for (auto address : addresses) TORCH_CHECK(address != 0, "null RUDA ABI function");
@@ -698,6 +741,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   pybind11::class_<PagedPlanBridge,std::shared_ptr<PagedPlanBridge>>(m,"NativePagedPlan")
     .def(pybind11::init<const at::Tensor&,const std::vector<uint32_t>&,const std::vector<uint32_t>&>())
     .def("run",&PagedPlanBridge::run)
+    .def("run_quantized",&PagedPlanBridge::run_quantized)
     .def("backward",&PagedPlanBridge::backward)
     .def("backward_selected",&PagedPlanBridge::backward_selected,
         pybind11::arg("q"),pybind11::arg("k"),pybind11::arg("v"),pybind11::arg("qp"),pybind11::arg("kp"),

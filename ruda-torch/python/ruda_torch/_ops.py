@@ -10,7 +10,7 @@ _dtypes = (torch.float32, torch.float16, torch.bfloat16, torch.float64)
 _numeric_dtypes = _dtypes + (torch.complex64, torch.complex128)
 _wide_dtypes = (torch.float64, torch.complex64, torch.complex128)
 _integral_dtypes = (torch.bool, torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8)
-_storage_dtypes = _numeric_dtypes + _integral_dtypes
+_storage_dtypes = _numeric_dtypes + _integral_dtypes + (torch.float8_e4m3fn, torch.float8_e5m2)
 
 def _out(shape, tensor):
     return torch.empty(shape, device=tensor.device, dtype=tensor.dtype)

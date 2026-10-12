@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 half = "=2.7.1"
 ruda = { path = "../ruda", features = ["runtime-default"] }
 ruda-core = { path = "../ruda-core", features = ["std"] }
-ruda-kernel = { path = "../ruda-kernel" }
+ruda-kernel = { path = "../ruda-kernel", features = ["packed-quantization"] }
 ruda-driver-cuda = { path = "../ruda-driver-cuda", features = ["direct-ptx"] }
 rublas = { path = "../ruBLAS", default-features = false, features = ["std", "tensor-matmul", "tensor-nf4", "tensor-grouped"] }
 rufft = { package = "ruda-fft", path = "../ruFFT", default-features = false, features = ["std", "tensor"] }

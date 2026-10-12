@@ -124,6 +124,10 @@ class PagedAttentionPlan:
         with cached per-query statistics and inverse page metadata. It is opt-in,
         not an automatically tuned faster path; it may be slower on some shapes.
         """
+        from .packed_quantization import PackedQuantizedTensor
+        if isinstance(k, PackedQuantizedTensor) or isinstance(v, PackedQuantizedTensor):
+            from .quantized_cache import quantized_paged_attention
+            return quantized_paged_attention(self,q,k,v,scale=scale,causal=causal)
         native=self._native(q)
         if torch.is_grad_enabled() and any(t.requires_grad for t in (q,k,v)):
             return _PagedGQA.apply(native,q,k,v,float(scale),bool(causal),self._backward_strategy=="ordered")
@@ -133,8 +137,13 @@ class PagedAttentionPlan:
         """Return compressed context; model applies value/output projection.
 
         RoPE must already be applied; scale is the model's QK scale, NOT 1/sqrt(R).
-        FP8/INT4 checkpoints must first use a supported model dequantization path.
+        PackedQuantizedTensor caches use direct quantized inference.
         """
+        from .packed_quantization import PackedQuantizedTensor
+        if isinstance(latent_cache,PackedQuantizedTensor):
+            from .quantized_cache import quantized_paged_attention
+            return quantized_paged_attention(self,absorbed_query,latent_cache,latent_cache,
+                position_query=position_query,position_cache=position_cache,scale=scale,causal=causal)
         if latent_cache.ndim!=4 or latent_cache.shape[2]!=1:
             raise ValueError("MLA requires a single shared compressed cache head")
         native=self._native(absorbed_query)
