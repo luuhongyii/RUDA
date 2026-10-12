@@ -5816,7 +5816,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-fusion"
-version = "0.21.64"
+version = "0.21.65"
 dependencies = [
  "derive-new",
  "half",
