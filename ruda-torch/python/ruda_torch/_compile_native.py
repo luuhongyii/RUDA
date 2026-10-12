@@ -32,6 +32,8 @@ _TARGETS.update({torch.ops.aten.clone.default: 'copy', torch.ops.aten.add.Tensor
     torch.ops.aten._softmax.default: 'softmax', torch.ops.aten._log_softmax.default: 'log_softmax',
     torch.ops.aten._softmax_backward_data.default: 'softmax_backward',
     torch.ops.aten._log_softmax_backward_data.default: 'log_softmax_backward',
+    torch.ops.aten.threshold_backward.default: 'threshold_backward',
+    torch.ops.aten.sum.default: 'sum_all', torch.ops.aten.mean.default: 'mean_all',
     torch.ops.aten.sum.dim_IntList: 'sum_keepdim', torch.ops.aten.mean.dim: 'mean_keepdim',
     torch.ops.aten.add.Scalar: 'add', torch.ops.aten.sub.Scalar: 'sub',
     torch.ops.aten.mul.Scalar: 'mul', torch.ops.aten.div.Scalar: 'div'})
@@ -50,6 +52,18 @@ _ALIASES={torch.ops.aten.view.default:'reshape_copy',torch.ops.aten.reshape.defa
     torch.ops.aten.t.default:'transpose_copy',torch.ops.aten.transpose.int:'transpose_copy',
     torch.ops.aten.unsqueeze.default:'reshape_copy',torch.ops.aten.squeeze.dim:'reshape_copy',
     torch.ops.aten.squeeze.default:'reshape_copy',torch.ops.aten.expand.default:'expand_copy'}
+_METADATA = {torch.ops.aten.detach.default, torch.ops.aten.alias.default}
+
+
+def _native_metadata(node):
+    if node.op != 'call_function' or node.target not in _METADATA:
+        return False
+    if len(node.args) != 1 or not isinstance(node.args[0], Node) or node.kwargs:
+        return False
+    source, result = node.args[0].meta.get('val'), node.meta.get('val')
+    return (isinstance(source, torch.Tensor) and isinstance(result, torch.Tensor)
+            and source.device.type == 'ruda' and source.device == result.device and source.dtype == result.dtype
+            and source.shape == result.shape and source.stride() == result.stride())
 
 
 def _layout_capable():
@@ -71,7 +85,7 @@ def _internal_alias(node, seen=None):
     seen.add(node)
     for user in node.users:
         if user.op!='call_function':return False
-        if user.target in _ALIASES:
+        if user.target in _ALIASES or _native_metadata(user):
             if not _internal_alias(user,seen.copy()):return False
         elif user.target not in _TARGETS:return False
     return True
@@ -182,6 +196,11 @@ def _lower(node):
     if kind in ('mm', 'bmm', 'silu_backward', 'sigmoid_backward', 'tanh_backward'):
         if len(args) != 2 or not isinstance(args[1], Node) or kwargs: return None
         return GraphOp(kind, node.name, left, args[1].name)
+    if kind == 'threshold_backward':
+        if len(args) != 3 or not isinstance(args[1], Node) or kwargs: return None
+        threshold = args[2]
+        if type(threshold) not in (int,float) or not math.isfinite(threshold): return None
+        return GraphOp(kind,node.name,left,args[1].name,threshold)
     if kind.startswith(('softmax', 'log_softmax')):
         backward = kind.endswith('_backward')
         if kwargs or len(args) != (4 if backward else 3): return None
@@ -192,19 +211,29 @@ def _lower(node):
             value = args[0].meta.get('val')
             if not isinstance(args[1], Node) or args[3] != value.dtype: return None
         return GraphOp(kind, node.name, left, args[1].name if backward else None, axis % rank)
-    if kind in ('sum_keepdim', 'mean_keepdim'):
-        if not 2 <= len(args) <= 3 or set(kwargs) - {'keepdim','dtype'}: return None
-        keepdim = args[2] if len(args) == 3 else kwargs.get('keepdim', False)
+    if kind in ('sum_keepdim', 'mean_keepdim', 'sum_all', 'mean_all'):
+        all_dims = kind.endswith('_all')
+        if all_dims:
+            if len(args) != 1 or set(kwargs)-{'dtype'}: return None
+            keepdim = False
+        else:
+            if not 2 <= len(args) <= 3 or set(kwargs) - {'keepdim','dtype'}: return None
+            keepdim = args[2] if len(args) == 3 else kwargs.get('keepdim', False)
         if type(keepdim) is not bool: return None
         if not keepdim and not _layout_capable():return None
-        if kwargs.get('dtype') is not None: return None
-        rank = _rank(args[0]); dims = args[1]
+        source = args[0].meta.get('val')
+        if not isinstance(source,torch.Tensor) or kwargs.get('dtype') not in (None,source.dtype): return None
+        rank = _rank(args[0]); dims = list(range(rank)) if all_dims and rank is not None else (args[1] if not all_dims else None)
         if rank is None or not isinstance(dims, (tuple,list)): return None
+        if rank == 0:
+            if dims and (len(dims)!=1 or dims[0] not in (0,-1)): return None
+            return GraphOp('copy',node.name,left)
         dims = list(dims) if dims else list(range(rank))
         if any(type(d) is not int or not -rank <= d < rank for d in dims): return None
         dims = [d % rank for d in dims]
         if len(set(dims)) != len(dims): return None
-        return GraphOp(kind if keepdim else kind.removesuffix('_keepdim'), node.name, left,
+        operation = kind.removesuffix('_all') if all_dims else kind
+        return GraphOp(operation if keepdim else operation.removesuffix('_keepdim'), node.name, left,
                        scalar=sum(1 << d for d in dims))
     if kind == 'copy':
         if len(args) != 1 or set(kwargs) - {'memory_format'}: return None
@@ -375,8 +404,9 @@ def partition(gm, state, phase, options):
     all_nodes = list(gm.graph.nodes)
     calls = [n for n in all_nodes if n.op in ('call_function', 'call_method', 'call_module')]
     candidates = {n for n in calls if _lower(n) is not None}
+    metadata = {n for n in calls if _native_metadata(n)}
     if options.native == 'required':
-        unsupported = [f'{n.name}: {n.target}' for n in calls if n not in candidates]
+        unsupported = [f'{n.name}: {n.target}' for n in calls if n not in candidates and n not in metadata]
         if unsupported:
             raise NativeCoverageError(f'{phase} is not entirely native: ' + '; '.join(unsupported[:12]))
     groups, pending = [], []
@@ -408,10 +438,12 @@ def partition(gm, state, phase, options):
         'operator_count': len(calls),
         'native_candidate_ops': len(candidates),
         'planned_native_ops': len(covered),
+        'native_metadata_ops': len(metadata),
         'native_regions': len(regions),
-        'device_dispatch_ops': [str(n.target) for n in calls if n not in covered],
+        'device_dispatch_ops': [str(n.target) for n in calls if n not in covered and n not in metadata],
         'operators': [{'node': n.name, 'target': str(n.target),
-                       'execution': 'guarded-native-region' if n in covered else 'device-dispatch'}
+                       'execution': 'guarded-native-region' if n in covered else
+                                    'native-storage-metadata' if n in metadata else 'device-dispatch'}
                       for n in calls],
     }
     state.record(record)

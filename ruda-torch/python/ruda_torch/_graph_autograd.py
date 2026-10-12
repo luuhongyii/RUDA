@@ -26,6 +26,8 @@ def forward_values(layout, inputs):
             out = (x + scalar*y).to(left.dtype)
         elif op == 2:
             out = (x*y).to(left.dtype)
+        elif op == 4:
+            out = torch.ops.aten.threshold_backward.default(left,values[b],scalar)
         elif op == 14:
             out = _silu(x).to(left.dtype)
         elif op == 101:

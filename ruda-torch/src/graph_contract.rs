@@ -110,11 +110,11 @@ pub fn validate(tensors: &[TensorSpec<'_>], nodes: &[NodeSpec], inputs: usize) -
                     return Err("unary graph node must use its input as dummy and canonical zero scalar".into());
                 }
             }
-            ADD | MUL | 8 | 15 | 16 | 18 | SILU_MUL => {
+            ADD | MUL | 4 | 8 | 15 | 16 | 18 | SILU_MUL => {
                 if n.b as usize >= out_index { return Err("static graph second input must precede its output".into()); }
                 let b = &tensors[n.b as usize];
                 if a.shape != b.shape || a.dtype != b.dtype { return Err("static graph broadcasting/type promotion is not supported".into()); }
-                if !n.scalar.is_finite() || (n.op != ADD && n.scalar.to_bits() != 0f32.to_bits()) {
+                if !n.scalar.is_finite() || (!matches!(n.op, ADD | 4) && n.scalar.to_bits() != 0f32.to_bits()) {
                     return Err("invalid static graph pointwise scalar".into());
                 }
             }

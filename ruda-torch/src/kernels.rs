@@ -347,7 +347,7 @@ pub fn pointwise<A: Float + RudaElement, B: Float + RudaElement, O: Float + Ruda
             }
             else if comptime!(op == 4) {
                 let mut result = x;
-                if f32::cast_from(b[offset(b, pos)]) <= scalar { result = 0.0; }
+                if f32::cast_from(b[offset(b, pos)]) <= f32::cast_from(B::cast_from(scalar)) { result = 0.0; }
                 out[target] = O::cast_from(result);
             }
             else if comptime!(op == 8) { out[target] = O::cast_from(x / f32::cast_from(b[offset(b, pos)])); }

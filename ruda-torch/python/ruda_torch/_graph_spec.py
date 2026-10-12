@@ -49,7 +49,7 @@ UNARY_CODES = {'copy': 0, 'relu': 3, 'exp': 9, 'log': 10, 'sqrt': 11,
     'cos': 20, 'abs': 21, 'sign': 22, 'floor': 23, 'ceil': 24, 'trunc': 25,
     'reciprocal': 27, 'log1p': 35, 'sinh': 36, 'cosh': 37, 'asinh': 38,
     'acosh': 39, 'atanh': 40, 'hardsigmoid': 43, 'hardswish': 45, 'neg': 108}
-BINARY_CODES = {'add': 1, 'mul': 2, 'div': 8, 'silu_backward': 15,
+BINARY_CODES = {'add': 1, 'mul': 2, 'threshold_backward': 4, 'div': 8, 'silu_backward': 15,
     'sigmoid_backward': 16, 'tanh_backward': 18, 'silu_mul': 101}
 SCALAR_CODES = {'add_scalar': 109, 'mul_scalar': 110, 'div_scalar': 111}
 MATH_BINARY_CODES = {'pow': 121, 'floor_divide': 122, 'fmod': 123,
@@ -168,7 +168,7 @@ def plan_layout(inputs: Mapping[str,TensorSpec], nodes: Sequence[GraphOp], outpu
             if node.right not in ids: raise ValueError('missing second graph input')
             b = ids[node.right]
             if specs[b] != spec: raise ValueError('no broadcasting or mixed-dtype promotion in static graph')
-            if node.kind != 'add' and (scalar != 0. or math.copysign(1., scalar) < 0):
+            if node.kind not in ('add','threshold_backward') and (scalar != 0. or math.copysign(1., scalar) < 0):
                 raise ValueError('binary scalar must be canonical zero')
         elif node.kind in ('mm', 'bmm'):
             if node.right not in ids: raise ValueError('missing matrix input')
