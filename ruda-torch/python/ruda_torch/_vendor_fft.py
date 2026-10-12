@@ -46,6 +46,14 @@ class _AxisPlan:
         target = list(input.shape)
         target[axis] = self.length//2+1 if self.kind == 3 else self.length
         packed = _resize(input,target).permute(order).contiguous()
+        if self.kind == 3:
+            # cuFFT C2R overwrites input and requires real DC/Nyquist bins.
+            # PyTorch instead preserves input and ignores those imaginary parts.
+            packed = packed.clone()
+            components = torch.view_as_real(packed)
+            components[...,0,1].zero_()
+            if self.length%2==0:
+                components[...,-1,1].zero_()
         out_shape = (*packed.shape[:-1], self.length//2+1 if self.kind == 2 else self.length)
         dtype = (torch.float64 if self.double else torch.float32) if self.kind == 3 else (
             torch.complex128 if self.double else torch.complex64)
