@@ -164,7 +164,7 @@ fn merge_rows(x:&Array<f32>,out:&mut Array<f32>,width:u32,run:u32) {
 
 #[ruda]
 pub fn bits(#[comptime] format:u32)->usize {
-    if comptime!(format==14) { 4 } else if comptime!(format>=18) { 8 } else { format as usize }
+    usize::cast_from(comptime!(if format==14 {4usize} else if format>=18 {8usize} else {format as usize}))
 }
 
 /// Software minifloat decode, usable on hardware without native FP8/FP4 casts.
@@ -211,7 +211,7 @@ pub fn encode_code(value:f32,#[comptime] format:u32,#[comptime] saturate:bool)->
         let sign_bit=comptime!(if format==14 {8u32} else {128u32});
         let last=comptime!(if format==14 {7u32} else if format==18 {126u32} else {123u32});
         let magnitude=value.abs();
-        let mut low=0u32; let mut high=last;
+        let mut low=0u32; let mut high=u32::cast_from(last);
         while low<high {
             let mid=(low+high)/2;
             if decode_code(mid,format)<magnitude { low=mid+1; } else { high=mid; }
