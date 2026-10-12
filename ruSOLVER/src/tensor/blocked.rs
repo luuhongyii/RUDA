@@ -374,7 +374,7 @@ fn cleanup<F: Float>(
     info: &mut Array<i32>,
     order: u32,
     rhs: u32,
-    retain_failed_factor: bool,
+    #[comptime] retain_failed_factor: bool,
 ) {
     let sys = ABSOLUTE_POS;
     if sys >= info.len() {
@@ -399,7 +399,7 @@ fn cleanup<F: Float>(
             }
         }
     }
-    if code != 0 && !retain_failed_factor {
+    if code != 0 && comptime!(!retain_failed_factor) {
         for i in 0..n * n {
             lower[base + i] = F::new(0.0);
         }

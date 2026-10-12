@@ -196,7 +196,7 @@ fn boundary_kernel<F:Float>(input:&Tensor<F>,output:&mut Array<F>,#[comptime] ax
     output[pos]=if bin==0 || (n%2==0 && bin==n/2) {F::new(0.0)} else {input[offset]};
 }
 #[ruda(launch)]
-fn scale_kernel<F:Float>(input:&Tensor<F>,output:&mut Array<F>,factor:F,weight:F,
+fn scale_kernel<F:Float + RudaElement>(input:&Tensor<F>,output:&mut Array<F>,factor:F,weight:F,
     #[comptime] axis:usize,#[comptime] n:usize,#[comptime] interior:bool) {
     let pos=ABSOLUTE_POS;
     if pos>=output.len() { terminate!(); }
@@ -225,7 +225,7 @@ fn shift_kernel<F:Float>(input:&Tensor<F>,output:&mut Tensor<F>,#[comptime] axis
     output[pos]=input[offset];
 }
 #[ruda(launch)]
-fn frequency_kernel<F:Float>(output:&mut Array<F>,step:F,#[comptime] n:usize,#[comptime] onesided:bool) {
+fn frequency_kernel<F:Float + RudaElement>(output:&mut Array<F>,step:F,#[comptime] n:usize,#[comptime] onesided:bool) {
     let k=ABSOLUTE_POS;
     if k>=output.len() { terminate!(); }
     let frequency=if onesided || k<(n+1)/2 { F::cast_from(k) } else { -F::cast_from(n-k) };

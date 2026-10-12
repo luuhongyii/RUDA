@@ -451,7 +451,7 @@ fn factor_panel<F: Float + RudaElement>(
     cols: u32,
     first: u32,
     last: u32,
-    pivot: bool,
+    #[comptime] pivot: bool,
     atol: F,
     rtol: F,
 ) {
@@ -474,7 +474,7 @@ fn factor_panel<F: Float + RudaElement>(
             let mut scale = F::new(0.0);
             for i in k..m {
                 let z = lu[base + i * n + k].abs();
-                if pivot && z > peak {
+                if comptime!(pivot) && z > peak {
                     peak = z;
                     row = i;
                 }
@@ -791,7 +791,7 @@ fn apply_q<F: Float>(
     rows: u32,
     cols: u32,
     rhs: u32,
-    transpose: bool,
+    #[comptime] transpose: bool,
 ) {
     let m = rows as usize;
     let n = cols as usize;
@@ -807,7 +807,11 @@ fn apply_q<F: Float>(
         x[base + i * nr + j] = b[sys * b.stride(0) + i * b.stride(1) + j * b.stride(2)];
     }
     for step in 0..m.min(n) {
-        let k = if transpose { step } else { m.min(n) - 1 - step };
+        let k = if comptime!(transpose) {
+            step
+        } else {
+            m.min(n) - 1 - step
+        };
         let mut dot = x[base + k * nr + j];
         for i in k + 1..m {
             dot += w[sys * w.stride(0) + i * w.stride(1) + k * w.stride(2)] * x[base + i * nr + j];

@@ -323,11 +323,11 @@ fn complex_bool<F:Float>(re:&kernel_dsl::prelude::Tensor<F>,im:&kernel_dsl::prel
     if p<out.len() {out[address(out,p)]=u8::cast_from(re[address(re,p)]!=F::new(0.0)||im[address(im,p)]!=F::new(0.0));}
 }
 #[ruda(launch)]
-fn scale<F:Float>(a:&kernel_dsl::prelude::Tensor<F>,out:&mut kernel_dsl::prelude::Tensor<F>,factor:F) {
+fn scale<F:Float+RudaElement>(a:&kernel_dsl::prelude::Tensor<F>,out:&mut kernel_dsl::prelude::Tensor<F>,factor:F) {
     let p=ABSOLUTE_POS as usize;if p<out.len() {out[address(out,p)]=a[address(a,p)]*factor;}
 }
 #[ruda(launch)]
-fn constant<F:Float>(re:&mut kernel_dsl::prelude::Tensor<F>,im:&mut kernel_dsl::prelude::Tensor<F>,r:F,i:F) {
+fn constant<F:Float+RudaElement>(re:&mut kernel_dsl::prelude::Tensor<F>,im:&mut kernel_dsl::prelude::Tensor<F>,r:F,i:F) {
     let p=ABSOLUTE_POS as usize;if p<re.len() {re[address(re,p)]=r;im[address(im,p)]=i;}
 }
 #[ruda]
@@ -395,7 +395,7 @@ fn inverse_hyperbolic<F:Float>(x:F,y:F,#[comptime] acosh:bool)->(F,F) {
     (r,i)
 }
 #[ruda(launch)]
-fn pointwise<F:Float>(ar:&kernel_dsl::prelude::Tensor<F>,ai:&kernel_dsl::prelude::Tensor<F>,br:&kernel_dsl::prelude::Tensor<F>,bi:&kernel_dsl::prelude::Tensor<F>,oldr:&kernel_dsl::prelude::Tensor<F>,oldi:&kernel_dsl::prelude::Tensor<F>,re:&mut kernel_dsl::prelude::Tensor<F>,im:&mut kernel_dsl::prelude::Tensor<F>,alpha:F,#[comptime] op:u32,#[comptime] complex:bool) {
+fn pointwise<F:Float+RudaElement>(ar:&kernel_dsl::prelude::Tensor<F>,ai:&kernel_dsl::prelude::Tensor<F>,br:&kernel_dsl::prelude::Tensor<F>,bi:&kernel_dsl::prelude::Tensor<F>,oldr:&kernel_dsl::prelude::Tensor<F>,oldi:&kernel_dsl::prelude::Tensor<F>,re:&mut kernel_dsl::prelude::Tensor<F>,im:&mut kernel_dsl::prelude::Tensor<F>,alpha:F,#[comptime] op:u32,#[comptime] complex:bool) {
     let p=ABSOLUTE_POS as usize;
     if p<re.len() {
         let x=ar[address(ar,p)];let u=ai[address(ai,p)];let y=br[address(br,p)];let v=bi[address(bi,p)];

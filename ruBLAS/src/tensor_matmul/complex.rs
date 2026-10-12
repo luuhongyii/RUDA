@@ -63,7 +63,7 @@ pub fn complex_gemm<R:Runtime>(
         cr.into_tensor_arg(),ci.into_tensor_arg(),real.clone().into_tensor_arg(),imag.clone().into_tensor_arg(),
         options.alpha[0] as $f,options.alpha[1] as $f,options.beta[0] as $f,options.beta[1] as $f,
         ash[ra-1] as u32,options.transpose_lhs,options.transpose_rhs,options.conjugate_lhs,options.conjugate_rhs,
-        options.alpha!=[0.,0.] && ash[ra-1]!=0,read_c);}}
+        options.alpha!=[0.,0.] && ash[ra-1]!=0,read_c)}}
     match ar.dtype {DType::F32=>launch!(f32),DType::F64=>launch!(f64),_=>unreachable!()}
     Ok((real,imag))
 }

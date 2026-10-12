@@ -650,10 +650,10 @@ fn solve_rhs<F: Float>(
     flags: &mut Array<i32>,
     order: u32,
     rhs: u32,
-    transpose: bool,
-    upper: bool,
-    unit: bool,
-    lu: bool,
+    #[comptime] transpose: bool,
+    #[comptime] upper: bool,
+    #[comptime] unit: bool,
+    #[comptime] lu: bool,
 ) {
     let n = order as usize;
     let nr = rhs as usize;
@@ -672,14 +672,14 @@ fn solve_rhs<F: Float>(
             code = -1;
         }
     }
-    if lu {
+    if comptime!(lu) {
         for i in 0..n {
             if p[sys * n + i] < 0 || p[sys * n + i] >= order as i32 {
                 code = -2;
             }
         }
         if code != -2 {
-            if !transpose {
+            if comptime!(!transpose) {
                 for i in 0..n {
                     let j = p[sys * n + i] as usize;
                     let z = x[base + i * nr + col];
@@ -746,15 +746,15 @@ fn solve_rhs<F: Float>(
         }
     } else {
         for step in 0..n {
-            let i = if upper != transpose {
+            let i = if comptime!(upper != transpose) {
                 n - 1 - step
             } else {
                 step
             };
             let mut z = x[base + i * nr + col];
-            if upper != transpose {
+            if comptime!(upper != transpose) {
                 for j in i + 1..n {
-                    let off = if transpose {
+                    let off = if comptime!(transpose) {
                         sys * a.stride(0) + j * a.stride(1) + i * a.stride(2)
                     } else {
                         sys * a.stride(0) + i * a.stride(1) + j * a.stride(2)
@@ -763,7 +763,7 @@ fn solve_rhs<F: Float>(
                 }
             } else {
                 for j in 0..i {
-                    let off = if transpose {
+                    let off = if comptime!(transpose) {
                         sys * a.stride(0) + j * a.stride(1) + i * a.stride(2)
                     } else {
                         sys * a.stride(0) + i * a.stride(1) + j * a.stride(2)
@@ -772,7 +772,7 @@ fn solve_rhs<F: Float>(
                 }
             }
             let mut diag = F::new(1.0);
-            if !unit {
+            if comptime!(!unit) {
                 diag = a[sys * a.stride(0) + i * a.stride(1) + i * a.stride(2)];
                 if diag == F::new(0.0) && code == 0 {
                     code = (i + 1) as i32;
@@ -831,7 +831,7 @@ fn identity<F: Float>(out: &mut Array<F>, order: u32) {
     out[pos] = z;
 }
 #[ruda(launch)]
-fn symmetrize<F: Float>(a: &Tensor<F>, out: &mut Array<F>, order: u32, upper: bool) {
+fn symmetrize<F: Float>(a: &Tensor<F>, out: &mut Array<F>, order: u32, #[comptime] upper: bool) {
     let pos = ABSOLUTE_POS;
     if pos >= out.len() {
         terminate!();
@@ -842,7 +842,7 @@ fn symmetrize<F: Float>(a: &Tensor<F>, out: &mut Array<F>, order: u32, upper: bo
     let j = pos % n;
     let mut r = i;
     let mut c = j;
-    if (upper && i > j) || (!upper && i < j) {
+    if (comptime!(upper) && i > j) || (comptime!(!upper) && i < j) {
         r = j;
         c = i;
     }
@@ -940,12 +940,12 @@ fn determinant<F: Float>(
         if d == F::new(0.0) {
             singular = true;
         }
-        l += d.abs().log();
+        l += d.abs().ln();
     }
     if singular {
         value = F::new(0.0);
         s = F::new(0.0);
-        l = F::new(0.0).log();
+        l = F::new(0.0).ln();
     }
     if info[sys] < 0 {
         value = F::new(0.0) / F::new(0.0);
@@ -965,8 +965,8 @@ fn unpack_lu<F: Float>(
     u: &mut Array<F>,
     rows: u32,
     cols: u32,
-    data: bool,
-    permutation: bool,
+    #[comptime] data: bool,
+    #[comptime] permutation: bool,
 ) {
     let sys = ABSOLUTE_POS;
     if sys >= packed.shape(0) {
@@ -975,7 +975,7 @@ fn unpack_lu<F: Float>(
     let m = rows as usize;
     let n = cols as usize;
     let k = m.min(n);
-    if data {
+    if comptime!(data) {
         for i in 0..m {
             for j in 0..k {
                 let mut z = F::new(0.0);
@@ -999,7 +999,7 @@ fn unpack_lu<F: Float>(
             }
         }
     }
-    if permutation {
+    if comptime!(permutation) {
         let base = sys * m * m;
         for i in 0..m {
             for j in 0..m {

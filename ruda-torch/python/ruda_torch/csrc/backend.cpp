@@ -421,7 +421,7 @@ void fill(at::Tensor out, const at::Scalar& value) {
   at::assert_no_internal_overlap(out);
   if(out.is_conj() || out.is_neg()) {
     auto logical=at::empty(out.sizes(),out.options());
-    fill(logical,value);
+    (fill)(logical,value);
     scientific_call(207,{logical,out},{int64_t(out.is_conj()),int64_t(out.is_neg())},{});
     return;
   }
