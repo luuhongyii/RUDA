@@ -64,7 +64,7 @@ optional = true
 
 [dependencies.ruda-tensor]
 path = "../ruda-tensor"
-version = "0.21.65"
+version = "0.21.66"
 default-features = false
 
 [dependencies.ruda-core]
