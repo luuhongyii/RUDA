@@ -270,6 +270,16 @@ from .sequence_training import gated_delta_rule, solve_triangular
 from . import _native_training_ops
 from . import _sequence_ops
 
+_kda_available = False
+if hasattr(_native, "ruda_torch_kda_api_version") and hasattr(_C, "initialize_kda"):
+    _native.ruda_torch_kda_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_kda_api_version() != 1 or getattr(_C, "kda_api_version", None) != 1:
+        raise RuntimeError("RUDA KDA API mismatch; rebuild Rust and C++ libraries")
+    _C.initialize_kda([ctypes.cast(getattr(_native, name), ctypes.c_void_p).value
+                       for name in ('ruda_torch_kda_forward', 'ruda_torch_kda_backward')])
+    _kda_available = True
+from . import _kda_ops
+
 _nf4_available = False
 _nf4_matmul_available = False
 if hasattr(_native, "ruda_torch_nf4_matmul_api_version") and hasattr(_C, "initialize_nf4_matmul"):
@@ -321,3 +331,12 @@ from .varlen_attention import varlen_scaled_dot_product_attention
 from .causal_finetuning import PackedCausalLMFinetuner,CausalLMTrainer
 from .training_checkpoint import training_state_dict,validate_training_state_dict,load_training_state_dict
 from .training_autotune import TrainingAutotuner,TrainingPlan,PipelineAutotuner
+from .architecture_cache import KVCache, KDAState, MambaState, ArchitectureCache
+from ._recurrent_ops import causal_depthwise_conv1d, CausalDepthwiseConv1d
+from .kda import kda, KimiDeltaAttention
+from .mamba import ssd_scan, Mamba2
+from .block_attention import attention_softcap, cached_block_scaled_dot_product_attention
+from .moe import (RoutingPolicy, RoutingResult, route_experts, router_load_balancing_loss,
+                  router_z_loss, SwiGLUExperts, MixtureOfExperts, MoEOutput)
+from .weight_loading import (TensorSource, WeightMapping, SafetensorWeights,
+                             WeightLoadResult, load_safetensor_weights)

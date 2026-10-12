@@ -17,6 +17,6 @@ rublas = { path = "../ruBLAS", default-features = false, features = ["std", "ten
 rufft = { package = "ruda-fft", path = "../ruFFT", default-features = false, features = ["std", "tensor"] }
 rusolver = { package = "ruda-solver", path = "../ruSOLVER", default-features = false, features = ["tensor"] }
 ruPRIM = { path = "../ruPRIM", default-features = false, features = ["std", "indexing", "tensor-reduce", "tensor-scan"] }
-ruDNN = { path = "../ruDNN", default-features = false, features = ["std", "tensor-convolution", "pooling", "tensor-paged-attention", "tensor-moe", "tensor-gated-delta"] }
+ruDNN = { path = "../ruDNN", default-features = false, features = ["std", "tensor-convolution", "pooling", "tensor-paged-attention", "tensor-moe", "tensor-gated-delta", "tensor-kda"] }
 ruda-optim = { path = "../ruda-optim", default-features = false, features = ["fused-adamw-device"] }
 ruRAND = { path = "../ruRAND", default-features = false, features = ["std"] }

@@ -21,6 +21,7 @@ mod training;
 mod router;
 mod nf4;
 mod sequence_training;
+mod kda;
 mod random;
 mod training_kernels;
 mod matmul;

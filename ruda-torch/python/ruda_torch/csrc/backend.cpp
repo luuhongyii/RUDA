@@ -219,6 +219,7 @@ struct Argument {
 #include "router.inc"
 #include "nf4.inc"
 #include "sequence_training.inc"
+#include "kda.inc"
 #include "random.inc"
 #include "dense_attention.inc"
 
@@ -610,6 +611,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   });
   m.def("triangular_solve", triangular_solve);
   m.def("delta_forward", delta_forward);
+  m.attr("kda_api_version") = 1;
+  m.def("initialize_kda", [](std::vector<uintptr_t> addresses) {
+    TORCH_CHECK(allocate_native && addresses.size()==2 && addresses[0] && addresses[1] && !kda_forward_native,
+                "invalid or repeated KDA initialization");
+    kda_forward_native=reinterpret_cast<KdaForward>(addresses[0]);
+    kda_backward_native=reinterpret_cast<KdaBackward>(addresses[1]);
+  });
+  m.def("kda_forward", kda_forward);
+  m.def("kda_backward", kda_backward);
   m.def("initialize", [](std::vector<uintptr_t> addresses) {
     TORCH_CHECK(addresses.size() == 13 && !allocate_native, "invalid or repeated RUDA initialization");
     for (auto address : addresses) TORCH_CHECK(address != 0, "null RUDA ABI function");

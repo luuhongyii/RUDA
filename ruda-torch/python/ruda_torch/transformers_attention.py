@@ -26,8 +26,6 @@ def register_transformers_attention(name='ruda_block',*,query_block_size=128,key
             raise ValueError('Transformers attention requires [batch,heads,tokens,features] tensors')
         if kwargs.get('output_attentions',False) or kwargs.get('head_mask') is not None:
             raise ValueError('block attention does not return quadratic weights or implement head masking')
-        if kwargs.get('softcap') is not None:
-            raise ValueError('soft-capped logits require a separately defined attention transform')
         if attention_mask is not None:
             if attention_mask.ndim!=4:
                 raise ValueError('HF must construct a 4-D boolean/additive attention mask')
@@ -51,7 +49,7 @@ def register_transformers_attention(name='ruda_block',*,query_block_size=128,key
         output=block_scaled_dot_product_attention(query,key,value,attn_mask=attention_mask,
             dropout_p=dropout,is_causal=causal,scale=scaling,enable_gqa=query.shape[1]!=key.shape[1],
             query_block_size=query_block_size,key_block_size=key_block_size,
-            causal_offset=key.shape[-2]-query.shape[-2],window_size=window)
+            causal_offset=key.shape[-2]-query.shape[-2],window_size=window,softcap=kwargs.get('softcap'))
         return output.transpose(1,2).contiguous(),None
 
     # An unregistered mask backend would make HF discard padding/packed masks.

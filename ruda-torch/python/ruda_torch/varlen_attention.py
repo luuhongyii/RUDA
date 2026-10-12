@@ -16,7 +16,7 @@ def _boundaries(values,length):
 
 def varlen_scaled_dot_product_attention(query,key,value,cu_seqlens_q,cu_seqlens_k=None,*,
         dropout_p=0.,is_causal=False,scale=None,enable_gqa=False,query_block_size=128,key_block_size=256,
-        generator=None,window_size=None,causal_alignment='upper_left'):
+        generator=None,window_size=None,causal_alignment='upper_left',softcap=None):
     """Attend independently within each real document, without an N-by-N mask.
 
     Payloads are [total_tokens,heads,features]. CPU boundaries are input metadata,
@@ -40,5 +40,5 @@ def varlen_scaled_dot_product_attention(query,key,value,cu_seqlens_q,cu_seqlens_
         offset=0 if causal_alignment=='upper_left' else (kb-ka)-(qb-qa)
         outputs.append(block_scaled_dot_product_attention(q,k,v,dropout_p=dropout_p,is_causal=is_causal,
             scale=scale,enable_gqa=enable_gqa,query_block_size=query_block_size,key_block_size=key_block_size,
-            generator=generator,causal_offset=offset,window_size=window_size).transpose(0,1))
+            generator=generator,causal_offset=offset,window_size=window_size,softcap=softcap).transpose(0,1))
     return torch.cat(outputs,dim=0)

@@ -4,7 +4,15 @@ from __future__ import annotations
 import math
 import torch
 from torch.autograd.function import once_differentiable
-from ._architecture_ops import positions, precision_context, work_dtype
+from ._architecture_ops import positions, precision_context, work_dtype, positive_float
+
+
+def attention_softcap(scores, cap):
+    """Apply cap*tanh(scores/cap), before adding attention masks or biases."""
+    cap = positive_float(cap, 'softcap')
+    dtype = work_dtype(scores)
+    with precision_context(scores):
+        return (cap * (scores.to(dtype) / cap).tanh()).to(scores.dtype)
 
 
 def _rng(device, blocks, generator):
@@ -41,8 +49,9 @@ def _dropout(shape,device,dtype,p,generator):
     return (random>=p).to(dtype)/(1-p)
 
 
-def _scores(query,key,mask,causal,scale,row,col,offset,window):
+def _scores(query,key,mask,causal,scale,row,col,offset,window,softcap=None):
     scores=query@key.transpose(-1,-2)*scale
+    if softcap is not None:scores=attention_softcap(scores,softcap)
     if mask is not None:
         tile=mask[...,row:row+query.shape[-2],col:col+key.shape[-2]]
         scores=scores.masked_fill(~tile,float('-inf')) if tile.dtype==torch.bool else scores+tile.to(scores.dtype)
@@ -67,7 +76,7 @@ def _exponential(scores,maximum):
 
 class _BlockAttention(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,query,key,value,mask,causal,scale,p,qblock,kblock,generator,offset,window):
+    def forward(ctx,query,key,value,mask,causal,scale,p,qblock,kblock,generator,offset,window,softcap):
         dtype=work_dtype(query)
         prefix=query.shape[:-2]
         rows,columns=query.shape[-2],key.shape[-2]
@@ -92,7 +101,7 @@ class _BlockAttention(torch.autograd.Function):
                 for col in range(0,columns,kblock):
                     k=key[...,col:col+kblock,:].to(dtype)
                     v=value[...,col:col+kblock,:].to(dtype)
-                    scores=_scores(q,k,mask,causal,scale,row,col,offset,window)
+                    scores=_scores(q,k,mask,causal,scale,row,col,offset,window,softcap)
                     next_max=torch.maximum(maximum,scores.amax(-1,keepdim=True))
                     old_safe=torch.where(maximum==float('-inf'),torch.zeros_like(maximum),maximum)
                     next_safe=torch.where(next_max==float('-inf'),torch.zeros_like(next_max),next_max)
@@ -107,7 +116,7 @@ class _BlockAttention(torch.autograd.Function):
         ctx.save_for_backward(query,key,value,original_mask if original_mask is not None else query.new_empty(0),out,maxima,sums)
         ctx.has_mask=original_mask is not None
         ctx.mask_shape=None if original_mask is None else tuple(original_mask.shape)
-        ctx.options=causal,scale,p,qblock,kblock,offset,window
+        ctx.options=causal,scale,p,qblock,kblock,offset,window,softcap
         return out.to(query.dtype)
 
     @staticmethod
@@ -115,7 +124,7 @@ class _BlockAttention(torch.autograd.Function):
     def backward(ctx,gradient):
         query,key,value,saved_mask,out,maxima,sums=ctx.saved_tensors
         mask=saved_mask if ctx.has_mask else None
-        causal,scale,p,qblock,kblock,offset,window=ctx.options
+        causal,scale,p,qblock,kblock,offset,window,softcap=ctx.options
         dtype=work_dtype(query)
         dq=torch.zeros_like(query,dtype=dtype)
         dk=torch.zeros_like(key,dtype=dtype)
@@ -137,13 +146,17 @@ class _BlockAttention(torch.autograd.Function):
                 for col in range(0,columns,kblock):
                     k=key[...,col:col+kblock,:].to(dtype)
                     v=value[...,col:col+kblock,:].to(dtype)
-                    probability=_exponential(_scores(q,k,mask,causal,scale,row,col,offset,window),maximum)/denominator
+                    probability=_exponential(_scores(q,k,mask,causal,scale,row,col,offset,window,softcap),maximum)/denominator
                     drop=_dropout(probability.shape,query.device,dtype,p,generator) if p else None
                     dp=do@v.transpose(-1,-2)
                     if drop is not None:dp=dp*drop
                     ds=probability*(dp-delta)
-                    dq[...,row:row+qblock,:].add_(ds@k*scale)
-                    dk[...,col:col+kblock,:].add_(ds.transpose(-1,-2)@q*scale)
+                    dqk=ds
+                    if softcap is not None:
+                        capped=(q@k.transpose(-1,-2)*(scale/softcap)).tanh()
+                        dqk=ds*(1-capped.square())
+                    dq[...,row:row+qblock,:].add_(dqk@k*scale)
+                    dk[...,col:col+kblock,:].add_(dqk.transpose(-1,-2)@q*scale)
                     dv[...,col:col+kblock,:].add_((probability if drop is None else probability*drop).transpose(-1,-2)@do)
                     if dm is not None:
                         padded=(1,)*(ds.ndim-dm.ndim)+tuple(dm.shape)
@@ -156,12 +169,12 @@ class _BlockAttention(torch.autograd.Function):
                         row_start=0 if padded[-2]==1 else row
                         col_start=0 if padded[-1]==1 else col
                         dm.view(padded)[...,row_start:row_start+item.shape[-2],col_start:col_start+item.shape[-1]].add_(item)
-        return dq.to(query.dtype),dk.to(key.dtype),dv.to(value.dtype),None if dm is None else dm.to(mask.dtype),None,None,None,None,None,None,None,None
+        return dq.to(query.dtype),dk.to(key.dtype),dv.to(value.dtype),None if dm is None else dm.to(mask.dtype),None,None,None,None,None,None,None,None,None
 
 
 def block_scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,is_causal=False,
                                        scale=None,enable_gqa=False,query_block_size=128,key_block_size=256,
-                                       generator=None,causal_offset=0,window_size=None):
+                                       generator=None,causal_offset=0,window_size=None,softcap=None):
     """Exact softmax MHA/GQA with bounded score tiles and recomputed backward.
 
     Intermediate probabilities/masks are not retained as an N-by-N tensor.
@@ -171,12 +184,14 @@ def block_scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_
     not rewind or advance the application's generator.
     Causal row positions are shifted by causal_offset (zero is upper-left).
     window_size=(left,right) bounds distances; -1 means unbounded on that side.
+    softcap applies cap*tanh(scale*QK/cap) before masking; None disables it.
     """
     if query.ndim<3 or key.ndim!=query.ndim or value.ndim!=query.ndim:
         raise ValueError('attention requires [...,heads,tokens,features] operands')
     if query.device!=key.device or query.device!=value.device or query.dtype!=key.dtype or query.dtype!=value.dtype:
         raise ValueError('attention operands must share floating dtype and device')
     work_dtype(query)
+    if softcap is not None:softcap=positive_float(softcap,'softcap')
     if query.shape[-1]<=0 or query.shape[-1]!=key.shape[-1] or key.shape[-2]!=value.shape[-2]:
         raise ValueError('attention key/query/value dimensions differ')
     if type(is_causal) is not bool or type(enable_gqa) is not bool or not 0<=dropout_p<=1:
@@ -216,4 +231,40 @@ def block_scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_
             result=result+attn_mask.masked_fill(~torch.isfinite(attn_mask),0).sum()*0
         return result
     return _BlockAttention.apply(query,key,value,attn_mask,is_causal,factor,float(dropout_p),
-                                 query_block_size,key_block_size,generator,causal_offset,window_size)
+                                 query_block_size,key_block_size,generator,causal_offset,window_size,softcap)
+
+
+def cached_block_scaled_dot_product_attention(query, key, value, cache=None, *, scale=None,
+        enable_gqa=False, window_size=None, softcap=None, query_block_size=128, key_block_size=256):
+    """Causal prefill/decode returning (output, KVCache), without detaching state.
+
+    Operands are [B,H,T,D]; Q and new K/V have the same token count. A finite
+    left window bounds retained history after computing every new query, not
+    before prefill. Full attention rejects a previously truncated cache.
+    """
+    from .architecture_cache import KVCache
+    if query.ndim != 4 or key.ndim != 4 or value.ndim != 4 or query.shape[-2] != key.shape[-2]:
+        raise ValueError('cached self-attention requires [B,H,T,D] with matching new Q/K lengths')
+    if window_size is not None:
+        if not isinstance(window_size, (tuple, list)) or len(window_size) != 2 or any(type(n) is not int or n < -1 for n in window_size):
+            raise ValueError('window_size must contain left/right distances >= -1')
+    left = -1 if window_size is None else window_size[0]
+    if cache is None:
+        combined = KVCache(key, value, key.shape[-2])
+        past = 0
+    else:
+        if not isinstance(cache, KVCache):
+            raise TypeError('cached attention requires KVCache')
+        required = cache.seen_tokens if left < 0 else min(left, cache.seen_tokens)
+        if cache.key.shape[-2] < required:
+            raise ValueError('cache has insufficient history for the requested attention window')
+        past = cache.key.shape[-2]
+        combined = cache.append(key, value)
+    output = block_scaled_dot_product_attention(query, combined.key, combined.value,
+        is_causal=True, scale=scale, enable_gqa=enable_gqa, causal_offset=past,
+        window_size=window_size, softcap=softcap,
+        query_block_size=query_block_size, key_block_size=key_block_size)
+    if left >= 0 and combined.key.shape[-2] > left:
+        start = combined.key.shape[-2] - left
+        combined = KVCache(combined.key[..., start:, :].clone(), combined.value[..., start:, :].clone(), combined.seen_tokens)
+    return output, combined
