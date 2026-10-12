@@ -14,6 +14,7 @@ mod scientific;
 mod blas_bridge;
 mod linalg_bridge;
 mod fft_bridge;
+mod vendor_bridge;
 mod kernels;
 mod training;
 mod router;

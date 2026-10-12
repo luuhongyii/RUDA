@@ -5,6 +5,7 @@ import ctypes
 import operator
 from threading import RLock
 import torch
+from .math_backend import _nvidia, get_math_backend, math_backend
 
 _lock = RLock()
 _ready = False
@@ -133,6 +134,9 @@ def _run(input, kind, axes, lengths, norm, out=None, plan=None):
         _native().fft_execute(15, [input, out], [], [])
     elif plan is not None:
         plan.execute(input, out)
+    elif _nvidia():
+        from ._vendor_fft import transform
+        transform(input,kind,axes,lengths,norm,out)
     else:
         _native().fft_execute(kind, [input, out], _header(norm, axes, lengths), [])
     if destination is not None:
@@ -147,12 +151,14 @@ class _FFT(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, kind, axes, lengths, norm, plan):
         ctx.config = kind, axes, lengths, norm, tuple(input.shape), input.dtype
+        ctx.math_backend = ('nvidia' if getattr(plan,'vendor',False) else 'ruda') if plan is not None else get_math_backend()
         return _run(input, kind, axes, lengths, norm, plan=plan)
 
     @staticmethod
     def backward(ctx, grad):
         kind, axes, lengths, norm, shape, dtype = ctx.config
-        result = _Adjoint.apply(grad, kind, axes, lengths, norm, shape, dtype)
+        with math_backend(ctx.math_backend):
+            result = _Adjoint.apply(grad,kind,axes,lengths,norm,shape,dtype)
         return result, None, None, None, None, None
 
 
@@ -160,8 +166,12 @@ class _Adjoint(torch.autograd.Function):
     @staticmethod
     def forward(ctx, grad, kind, axes, lengths, norm, shape, dtype):
         ctx.config = kind, axes, lengths, norm
+        ctx.math_backend = get_math_backend()
         output = torch.empty(shape, device=grad.device, dtype=dtype)
-        if axes:
+        if axes and _nvidia():
+            from ._vendor_fft import adjoint
+            adjoint(grad,kind,axes,lengths,norm,shape,dtype,output)
+        elif axes:
             _native().fft_execute(20+kind, [grad.resolve_conj().resolve_neg(), output],
                                   _header(norm, axes, lengths), [])
         else:
@@ -171,7 +181,9 @@ class _Adjoint(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         kind, axes, lengths, norm = ctx.config
-        return _FFT.apply(grad, kind, axes, lengths, norm, None), None, None, None, None, None, None
+        with math_backend(ctx.math_backend):
+            result = _FFT.apply(grad,kind,axes,lengths,norm,None)
+        return result,None,None,None,None,None,None
 
 
 def _transform(input, kind, s=None, dim=None, norm=None, out=None, two_dim=False):
@@ -353,7 +365,11 @@ class FFTPlan:
             raise ValueError('explicit FFT plan requires at least one transform axis')
         self.norm = _norm(norm)
         self.shape, self.dtype, self.device = tuple(input.shape), input.dtype, input.device
-        self._plan = _native().NativeFftPlan(input, [self.kind, *_header(self.norm, self.axes, self.lengths)])
+        if _nvidia():
+            from ._vendor_fft import VendorFFTPlan
+            self._plan = VendorFFTPlan(input,self.kind,self.axes,self.lengths,self.norm)
+        else:
+            self._plan = _native().NativeFftPlan(input,[self.kind,*_header(self.norm,self.axes,self.lengths)])
 
     def execute(self, input, *, out=None):
         if self._plan is None:

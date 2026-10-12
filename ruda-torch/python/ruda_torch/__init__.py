@@ -23,6 +23,7 @@ if sys.platform == "win32":
 _native = ctypes.CDLL(str(_library))
 
 from . import _C
+from .math_backend import get_math_backend, set_math_backend, math_backend
 
 if not hasattr(_native, "ruda_torch_abi_version"):
     raise RuntimeError("RUDA native library is outdated; rebuild Rust and C++ extensions")

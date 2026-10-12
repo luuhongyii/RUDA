@@ -1,12 +1,13 @@
 """Native RUDA GEMM, fused half GEMM, expert GEMM and triangular solves.
 
-Complex GEMM uses split-component GPU arithmetic internally and standard
+By default complex GEMM uses split-component GPU arithmetic and standard
 interleaved complex PyTorch storage externally. These are operation APIs, not
 a cuBLAS ABI clone. Gradients are first order; no CPU numerical fallback exists.
 """
 from __future__ import annotations
 import torch
 from . import _C
+from .math_backend import _nvidia, get_math_backend, math_backend
 
 __all__ = ["gemm", "fused_gemm", "grouped_gemm", "triangular_solve"]
 
@@ -32,6 +33,9 @@ def _first_order():
 
 def _raw_gemm(a, b, c=None, *, alpha=1, beta=0, ta=False, tb=False, ca=False, cb=False, math=0, strategy=0):
     alpha, beta = _scalar(alpha), _scalar(beta)
+    if _nvidia():
+        from ._vendor_blas import gemm
+        return gemm(a,b,c,alpha=alpha,beta=beta,ta=ta,tb=tb,ca=ca,cb=cb,math=math,strategy=strategy)
     return _C.blas_gemm(a, b, c, alpha.real, alpha.imag, beta.real, beta.imag,
                         bool(ta), bool(tb), bool(ca), bool(cb), math, strategy)
 
@@ -42,9 +46,44 @@ def _scale(tensor, value):
     value = _scalar(value)
     return _C.blas_scale(tensor, value.real, value.imag)
 
+
+def _saved_backend(function):
+    def implementation(ctx,*args):
+        with math_backend(ctx.math_backend):
+            return function(ctx,*args)
+    return implementation
+
+
+def _raw_triangular(a,b,left,upper,transpose,unit,alpha):
+    if _nvidia():
+        from ._vendor_blas import triangular
+        return triangular(a,b,left,upper,transpose,unit,alpha)
+    return _C.blas_triangular(a,b,left,upper,transpose,unit,alpha)
+
+
+def _raw_fused(a,b,bias,activation,strategy,out_dtype):
+    if not _nvidia():
+        return _C.blas_fused(a,b,bias,activation,strategy,int(out_dtype==torch.float32))
+    if strategy!=0:
+        raise ValueError('explicit fused RUDA strategies require math_backend("ruda")')
+    if a.ndim!=2 or b.ndim!=2 or bias.ndim!=1 or a.shape[1]!=b.shape[0] or bias.shape[0]!=b.shape[1]:
+        raise ValueError('fused GEMM requires [M,K],[K,N],bias[N]')
+    if a.dtype not in (torch.float16,torch.bfloat16) or b.dtype!=a.dtype or bias.dtype not in (a.dtype,torch.float32):
+        raise ValueError('fused GEMM requires half/BF16 inputs and matching or F32 bias')
+    from ._vendor_blas import gemm
+    # NVIDIA GEMM accumulates into FP32; device epilogues precede the one final
+    # output cast. This route does not claim a cuBLASLt fused-epilogue launch.
+    z = gemm(a,b,out_dtype=torch.float32)+bias.to(torch.float32)
+    if activation==1:
+        z = torch.where(z>0,z,torch.zeros_like(z))
+    elif activation==2:
+        z = 0.5*z*(1+(0.7978845608028654*(z+0.044715*z*z*z)).tanh())
+    return z.to(out_dtype)
+
 class _Gemm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, a, b, c, alpha, beta, ta, tb, ca, cb, math, strategy):
+        ctx.math_backend = get_math_backend()
         ctx.save_for_backward(a, b)
         ctx.options = (alpha, beta, ta, tb, ca, cb, math, strategy)
         ctx.c_shape = None if c is None else tuple(c.shape)
@@ -52,6 +91,7 @@ class _Gemm(torch.autograd.Function):
         return _raw_gemm(a, b, c, alpha=alpha, beta=beta, ta=ta, tb=tb, ca=ca, cb=cb, math=math, strategy=strategy)
 
     @staticmethod
+    @_saved_backend
     def backward(ctx, grad):
         _first_order()
         if grad is None:
@@ -79,8 +119,9 @@ def gemm(a, b, c=None, *, alpha=1, beta=0, transpose_a=False, transpose_b=False,
 
     Transpose and conjugate are independent flags. C has exact result shape;
     beta != 0 requires C. Scalar parameters follow operand real precision.
-    Complex arithmetic retains component precision and currently uses the
-    native scalar GPU GEMM. 'auto' and 'scalar' never invoke a host GEMM.
+    Complex arithmetic retains component precision. The default backend uses
+    native scalar GPU GEMM; the NVIDIA backend uses cuBLAS with strategy='auto'.
+    Explicit 'scalar' selects a RUDA kernel and requires the RUDA backend.
     """
     a, b = _tensor(a, "a"), _tensor(b, "b")
     if c is not None:
@@ -95,12 +136,14 @@ def gemm(a, b, c=None, *, alpha=1, beta=0, transpose_a=False, transpose_b=False,
 class _Fused(torch.autograd.Function):
     @staticmethod
     def forward(ctx, a, b, bias, activation, strategy, out_dtype):
+        ctx.math_backend = get_math_backend()
         ctx.save_for_backward(a, b, bias)
         ctx.options = activation, strategy
         ctx.set_materialize_grads(False)
-        return _C.blas_fused(a, b, bias, activation, strategy, int(out_dtype == torch.float32))
+        return _raw_fused(a,b,bias,activation,strategy,out_dtype)
 
     @staticmethod
+    @_saved_backend
     def backward(ctx, grad):
         _first_order()
         if grad is None:
@@ -109,7 +152,7 @@ class _Fused(torch.autograd.Function):
         activation, strategy = ctx.options
         # Recompute FP32 pre-activation with the same GEMM path, without storing
         # an extra pre-activation matrix in the fused forward.
-        z = _C.blas_fused(a, b, bias, 0, strategy, 1)
+        z = _raw_fused(a,b,bias,0,strategy,torch.float32)
         dz = grad.to(torch.float32)
         if activation == 1:
             dz = dz * (z > 0).to(torch.float32)
@@ -174,7 +217,8 @@ def grouped_gemm(x, weights, row_experts, *, strategy="auto"):
 class _Triangular(torch.autograd.Function):
     @staticmethod
     def forward(ctx, a, b, left, upper, transpose, unit, alpha):
-        y = _C.blas_triangular(a, b, left, upper, transpose, unit, alpha)
+        ctx.math_backend = get_math_backend()
+        y = _raw_triangular(a,b,left,upper,transpose,unit,alpha)
         ctx.save_for_backward(a, y)
         ctx.options = left, upper, transpose, unit, alpha
         ctx.b_shape = tuple(b.shape)
@@ -182,6 +226,7 @@ class _Triangular(torch.autograd.Function):
         return y
 
     @staticmethod
+    @_saved_backend
     def backward(ctx, grad):
         _first_order()
         if grad is None:
@@ -192,7 +237,7 @@ class _Triangular(torch.autograd.Function):
             return (torch.zeros_like(a) if ctx.needs_input_grad[0] else None,
                     torch.zeros(ctx.b_shape, dtype=a.dtype, device=a.device) if ctx.needs_input_grad[1] else None,
                     None, None, None, None, None)
-        h = _C.blas_triangular(a, grad, left, upper, not transpose, unit, 1.0)
+        h = _raw_triangular(a,grad,left,upper,not transpose,unit,1.0)
         da = db = None
         if ctx.needs_input_grad[0]:
             da = _raw_gemm(h, y, alpha=-1, tb=True) if left else _raw_gemm(y, h, alpha=-1, ta=True)

@@ -3,6 +3,7 @@ import numbers
 import torch
 from torch._prims_common import suggest_memory_format
 from . import _C
+from .math_backend import _nvidia
 
 _registry = torch.library.Library("aten", "IMPL", "PrivateUse1")
 _dtypes = (torch.float32, torch.float16, torch.bfloat16, torch.float64)
@@ -127,6 +128,9 @@ def mm(a, b):
     _scalar(b, a)
     if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[0]:
         raise RuntimeError("RUDA mm requires compatible two-dimensional tensors")
+    if _nvidia():
+        from ._vendor_blas import gemm
+        return gemm(a,b)
     if a.dtype in _wide_dtypes:
         from .blas import aten_matmul
         return aten_matmul(a,b)
@@ -145,6 +149,9 @@ def addmm(bias, a, b, *, beta=1, alpha=1):
     # Validate broadcasting even when beta=0, but the device kernel will not
     # read bias values in that case (including NaN or infinity).
     expanded_bias = bias.expand(shape)
+    if _nvidia():
+        from ._vendor_blas import gemm
+        return gemm(a,b,expanded_bias,alpha=alpha,beta=beta)
     if a.dtype in _wide_dtypes:
         from .blas import gemm
         return gemm(a,b,expanded_bias,alpha=alpha,beta=beta)
@@ -156,6 +163,9 @@ def bmm(a, b):
     _scalar(b, a)
     if a.ndim != 3 or b.ndim != 3 or a.shape[0] != b.shape[0] or a.shape[2] != b.shape[1]:
         raise RuntimeError("RUDA bmm requires compatible three-dimensional batches")
+    if _nvidia():
+        from ._vendor_blas import gemm
+        return gemm(a,b)
     if a.dtype in _wide_dtypes:
         from .blas import aten_matmul
         return aten_matmul(a,b)

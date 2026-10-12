@@ -20,6 +20,10 @@ def triangular_mask(x, diagonal=0, *, upper=False):
 def _solve(a, b, upper, unitriangular):
     if a.device.type != 'ruda':
         return torch.linalg.solve_triangular(a, b, upper=upper, unitriangular=unitriangular)
+    from .math_backend import _nvidia
+    if _nvidia() and a.dtype in (torch.float32,torch.float64):
+        from ._vendor_blas import triangular
+        return triangular(a,b,upper=upper,unit=unitriangular)
     from . import _sequence_available
     if not _sequence_available:
         raise RuntimeError('RUDA sequence API 1 is required; rebuild both native libraries')

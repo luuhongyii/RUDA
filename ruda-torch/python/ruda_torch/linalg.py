@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import torch
 from . import _C
+from .math_backend import _nvidia
 
 _available = False
 _installed = False
@@ -49,6 +50,11 @@ def _info(a, batch=None):
 def _call(op, tensors, ints=()):
     if not _available:
         raise RuntimeError('RUDA linalg native API is unavailable')
+    if _nvidia() and op not in (15,255):
+        from ._vendor_solver import command
+        with torch.no_grad():
+            command(op,tensors,ints)
+        return
     _C.linalg(op, [t.resolve_conj().resolve_neg() for t in tensors], list(ints), [])
 
 
@@ -214,7 +220,9 @@ def eigh(A, UPLO='L', compute_v=True):
 
 def svd(A, full_matrices=False, compute_uv=True, *, driver=None):
     _matrix(A)
-    if driver is not None:
+    if _nvidia() and driver not in (None,'gesvdj','gesvd'):
+        raise RuntimeError('NVIDIA SVD supports only gesvdj and gesvd')
+    if not _nvidia() and driver is not None:
         raise RuntimeError('RUDA SVD uses native one-sided Jacobi; named cuSOLVER drivers are not available')
     batch, m, n = A.shape[:-2], A.shape[-2], A.shape[-1]
     k = min(m, n)
@@ -222,7 +230,10 @@ def svd(A, full_matrices=False, compute_uv=True, *, driver=None):
     S = _empty(A, batch + (k,))
     Vh = _empty(A, batch + (n if full_matrices else k, n) if compute_uv else (0,))
     info = _info(A)
-    _call(8, [A, U, S, Vh, info], [int(full_matrices), int(compute_uv)])
+    options = [int(full_matrices),int(compute_uv)]
+    if _nvidia():
+        options.append(int(driver=='gesvd'))
+    _call(8,[A,U,S,Vh,info],options)
     _check_errors(info, 'linalg.svd')
     return U, S, Vh
 

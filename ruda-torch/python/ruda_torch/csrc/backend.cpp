@@ -26,6 +26,8 @@
 #include <mutex>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
+#include <stdexcept>
 #include <c10/core/InferenceMode.h>
 #include <c10/core/GradMode.h>
 
@@ -210,6 +212,7 @@ struct Argument {
 #include "blas_bridge.inc"
 #include "linalg_bridge.inc"
 #include "fft_bridge.inc"
+#include "vendor_bridge.inc"
 
 #include "indexing.inc"
 #include "training.inc"
@@ -560,6 +563,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   #include "blas_bridge_bindings.inc"
   #include "linalg_bridge_bindings.inc"
   #include "fft_bridge_bindings.inc"
+  #include "vendor_bridge_bindings.inc"
   #include "dense_attention_bindings.inc"
   m.attr("abi_version") = 10;
   m.def("_cuda_alias", [](const at::Tensor& tensor, int64_t device_index) {
