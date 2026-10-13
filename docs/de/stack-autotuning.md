@@ -2,6 +2,8 @@
 
 [Inhalt](README.md) · [Runtime](runtime-api.md) · [Policy und Beispiele](../en/stack-autotuning.md)
 
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) enthält `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` und `SHA256SUMS`; dieselben Daten liegen in [`autotune/a100-sxm4-40gb/20261013/`](../../autotune/a100-sxm4-40gb/20261013). Entpacken Sie `stack-autotune-v1` unter dem Cache-Verzeichnis von `enable_stack_autotune`; `table.csv` dient nur der Einsicht. Exakte Geräte-/Treiber-/Build-/Workload-/Kontextschlüssel und TTL gelten weiterhin. Die Benchmark-Einträge passen nicht automatisch zu PyTorch-Wheels, und der Python-Import lädt sie nicht automatisch. [Verwendung und Grenzen](../en/stack-autotuning.md#distributed-a100-tables).
+
 Der Controller validiert semantisch gleiche Kandidaten, misst abgeschlossene Arbeit und cached pro Workload/Gerät. Angeschlossen sind Matmul, Attention, Forward-Convolution, fusioniertes Matmul und gepackte Greedy-Generation. FFT/Sparse/Solver/Kommunikation, GPU-Platzierung oder globale Modellsuche sind nicht automatisch enthalten.
 
 enable_stack_autotune(policy,cache_directory) einmal vor Modell/Workern/erster Rechnung. None bedeutet Memory-only. Device stack-autotune, Fusion device-stack-autotune oder LLM stack-autotune aktivieren. Standardbibliothek/native Systeme, nicht no-std/WASM.

@@ -194,7 +194,9 @@ fn delta_prefill<R: Runtime>(
 
 启用 `tensor-paged-attention`，使用 `rudnn::paged_attention`。`HostPlan::new(page_size, pages, tables, lengths, sequence_ids, positions)` 校验主机端调度元数据；positions 是各序列内从零开始的绝对位置。`DevicePlan::upload(host, &q)` 将元数据上传至查询所在设备及执行队列。只有调度不变时才能复用该计划。
 
-`DevicePlan::attention(q, k, v, scale, causal)` 直接读取物理缓存页，处理打包的变长预填充与解码。Q 为 `[queries, Hq, D]`，K 为 `[pages, page_size, Hkv, D]`，V 为 `[pages, page_size, Hkv, Dv]`，输出为 `[queries, Hq, Dv]`；`Hq` 必须能被 `Hkv` 整除。输入须连续、非量化，使用相同的 F32/F16/BF16 dtype、设备和队列。Q/K/V 须为有限值，scale 须有限且为正。`D`、`Dv` 范围为 `1..=1024`；设备需支持 32 或 64 lane 的 plane 及所需启动网格。支持前向与一阶反向，不支持任意外部掩码或量化 KV 缓存。
+`DevicePlan::attention(q, k, v, scale, causal)` 直接读取物理缓存页，处理打包的变长预填充与解码。Q 为 `[queries, Hq, D]`，K 为 `[pages, page_size, Hkv, D]`，V 为 `[pages, page_size, Hkv, Dv]`，输出为 `[queries, Hq, Dv]`；`Hq` 必须能被 `Hkv` 整除。输入须连续、非量化，使用相同的 F32/F16/BF16 dtype、设备和队列。Q/K/V 须为有限值，scale 须有限且为正。`D`、`Dv` 范围为 `1..=1024`；设备需支持 32 或 64 lane 的 plane 及所需启动网格。这些浮点缓存方法支持前向与一阶反向，不支持任意外部掩码。
+
+`DevicePlan::attention_quantized(q, k, v, position, scale, causal, workspace)` 是独立的压缩缓存推理入口，由同一 feature 启用。K／V 为 `ruda_kernel::quantization::packed::PackedTensor`，逻辑页几何不变；可选的位置 query／cache 参数选择 MLA。内核直接将压缩值解码到寄存器，可使用 split 工作区，不提供量化缓存反向。见[实现](../../../ruDNN/src/paged_attention/quantized.rs)和 [Python 缓存 API](../native-pytorch-api.md#量化-kv-注意力)。
 
 `DevicePlan::mla(q, qp, latent, kp, scale, causal)` 接收吸收投影后的查询 `[queries, H, R]`、位置查询 `[queries, H, P]`、共享潜在缓存 `[pages, page_size, 1, R]` 和位置缓存 `[pages, page_size, 1, P]`。输出压缩上下文 `[queries, H, R]`；`P` 范围为 `1..=256`。位置编码在调用前完成，value/output 投影在调用后完成。scale 使用原模型 QK 缩放，而非按压缩秩推算。
 

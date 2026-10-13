@@ -81,7 +81,7 @@ x = torch.arange(4, dtype=torch.float32).to("ruda:0")
 print((x + x).cpu())
 ```
 
-预构建 Windows wheel 位于 [RUDA Torch Windows build](https://github.com/shuqi2077/RUDA/actions/workflows/ruda-torch-windows.yml) 成功运行的产物中。下载 wheel 产物并解压，用 `python -m pip install --no-deps` 安装其中的 `.whl` 文件。wheel 包含原生 DLL，面向 Windows x64、CPython 3.13 和 PyTorch `2.13.0+cu130`，需先安装匹配的 PyTorch。产物保留七天。`ruda-torch-native` 由源码构建，不作为 crates.io 包提供。
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) 提供包含 Python 包、C++ 扩展和 Rust 原生库的 Linux／Windows x86_64 wheel。均要求 CPython 3.13；Linux 使用 PyTorch `2.10.0+cu126`（Ubuntu 24.04 构建），Windows 使用 `2.13.0+cu130`。Python 子包版本仍为 `ruda-torch==0.1.0`；安装命令与兼容要求见 [Release 安装](../../ruda-torch/README.md#v0195-release-wheels)。`ruda-torch-native` 由源码构建，不作为 crates.io 包提供。
 
 ## 软件栈组织
 
@@ -105,7 +105,9 @@ print((x + x).cpu())
 - **MoE**：分组 sigmoid 路由与分段专家矩阵乘直接使用设备端专家偏移。FP16/BF16 Tensor Core 路径需显式选择，现有专家入口默认保留标量 GPU 策略。 固定选择的路由权重与专家投影还提供一阶训练，路由权重梯度和专家权重梯度使用 FP32；详见 [ruDNN](libraries/rudnn.md) 与[分组反向](libraries/rublas.md)。
 - **流与事件**：`ruda_torch.Stream`、`Event` 和 `record_stream` 接入原生运行时。默认同步提交；在首次原生提交前设置 `RUDA_TORCH_ASYNC=1` 可启用异步提交。显式同步和主机回读仍等待完成。
 
-分页注意力要求连续、同精度、同设备和同执行队列的 FP32/FP16/BF16 张量，支持前向与一阶反向，不支持任意外部掩码或量化 KV 缓存。PyTorch 默认采用原子历史梯度；`backward_strategy="ordered"` 选择无原子路径。有序历史行缓存和物理页压缩需显式启用。MLA/MoE 是可复用组件，完整模型适配仍需提供投影、位置编码、路由参数和缓存所有权管理。
+浮点缓存分页注意力要求连续、同精度、同设备和同执行队列的 FP32/FP16/BF16 张量，支持前向与一阶反向，不支持任意外部掩码。PyTorch 默认采用原子历史梯度；`backward_strategy="ordered"` 选择无原子路径。有序历史行缓存和物理页压缩需显式启用。MLA/MoE 是可复用组件，完整模型适配仍需提供投影、位置编码、路由参数和缓存所有权管理。
+
+[Packed 量化](native-pytorch-api.md#packed-量化与权重导入) 提供 INT2/3/4/5/6/8、FP4／FP8 Linear／Embedding、标准 GPTQ v1/v2、常用 GGUF 导入、校准与 affine QAT。[量化 KV 注意力](native-pytorch-api.md#量化-kv-注意力) 直接读取压缩 MHA／GQA／MLA 缓存，仅用于推理。Release 附带的 [A100 调优表](stack-autotuning.md#发布的-a100-调优表) 受精确缓存键及有效期约束，并非同型号 GPU 即可通用。
 
 ## 通向硬件
 

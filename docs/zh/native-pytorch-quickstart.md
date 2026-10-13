@@ -6,6 +6,8 @@
 
 ## 1. 构建与安装
 
+无需本地编译 Rust／C++ 时，可使用 [v0.1.95 Release wheel](../../ruda-torch/README.md#v0195-release-wheels)：CPython 3.13，Linux x86_64 搭配 PyTorch `2.10.0+cu126`（Ubuntu 24.04 构建），或 Windows x86_64 搭配 `2.13.0+cu130`。安装匹配的 wheel／PyTorch 后，设置下方编译器环境即可；需要源码构建时再执行以下步骤。
+
 准备 [NVIDIA 构建环境](getting-started.md)、已安装 PyTorch 与 setuptools 的 Python，以及 C++20 编译器。Windows 下使用 x64 MSVC 开发者终端。在仓库根目录执行：
 
 ```sh
@@ -31,7 +33,7 @@ export RUDA_PTX_VERSION=8.0
 
 选择 GPU 与驱动支持的 [PTX 版本](ptx.md)。改用 `RUDA_CUDA_COMPILER=nvrtc` 可选择 CUDA C++／NVRTC 路径。
 
-加载器优先寻找包内原生库，其次寻找仓库的 debug 库。使用 release 构建或其他路径时，在导入前设置 `RUDA_TORCH_LIBRARY`。Rust 库与 C++ 扩展都必须使用 ABI 10。兼容的 Windows wheel 和 Linux／Colab 预编译包见[安装指南](../../ruda-torch/README.md#build-and-install)，按其中指定的 Python、PyTorch 和平台版本安装。
+加载器优先寻找包内原生库，其次寻找仓库的 debug 库。使用单独构建的 release 库或其他路径时，在导入前设置 `RUDA_TORCH_LIBRARY`；wheel 已包含对应原生库。Rust 库与 C++ 扩展都必须使用 ABI 10。Linux／Windows wheel 及独立的 Linux／Colab 预编译包见[安装指南](../../ruda-torch/README.md#build-and-install)，按其中指定的 Python、PyTorch 和平台版本安装。
 
 ## 2. 上传数据并读取结果
 

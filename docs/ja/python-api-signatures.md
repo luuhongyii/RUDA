@@ -4,6 +4,8 @@
 
 RUDA が定義するコンストラクタとメソッドを示します。PyTorch から継承する標準メソッドには基底クラスの契約が適用されます。
 
+Packed 量子化、校正／QAT、GPTQ／GGUF、量子化 KV キャッシュのシグネチャは [packed API 参照](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import)を参照してください。
+
 ## `__init__`
 
 | 公開名／呼び出し | ソース |

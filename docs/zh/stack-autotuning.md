@@ -103,6 +103,14 @@ export RUDA_AUTOTUNE_CONTEXT_TAG='实际负载、并发、拓扑与功耗配置�
 
 摘要是非密码学哈希，不能用于签名、抵御恶意篡改或声称提示词匿名化。缓存和报告应放在可信、受权限保护的目录，不跨不信任租户共享。完整键验证避免仅凭文件名哈希碰撞误选，但提示词与依赖摘要不是密码学身份保证。
 
+### 发布的 A100 调优表
+
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) 附带 `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` 和 `SHA256SUMS`。相同记录位于 [`autotune/a100-sxm4-40gb/20261013/`](../../autotune/a100-sxm4-40gb/20261013)。归档包含供查看的 `table.csv` 和原生 `stack-autotune-v1/*.rtune`；运行时读取后者，不读取 CSV。
+
+核对归档的 SHA-256 条目后，解压到传给 `enable_stack_autotune` 的缓存根目录，例如 `.ruda-stack-cache/stack-autotune-v1/*.rtune`。按前文安装控制器；不希望重新搜索时使用 `CacheOnly`，需要调优缺失项时使用 `Explore`。
+
+复用要求设备、驱动、源码／构建、工作负载、执行上下文精确键一致，且记录未过期（默认 TTL 七天）。调优表来自独立 benchmark 构建，不保证与 Release PyTorch wheel 的构建键匹配。导入 `ruda_torch` 不会安装这个 Rust 控制器或自动读取归档。不要修改构建／上下文标签或刷新记录时间戳来强制命中。键不匹配或过期会作为 miss，`CacheOnly` 此时使用参考实现；冷磁盘命中仍需运行时验证。这是特定环境的选择记录，不是通用 A100 分发预设或跨 GPU 提速保证。
+
 ## 7. 并发、嵌套和故障
 
 同一进程同一设备的调优只允许一个在途任务；全局默认也只有一个，可配置不同设备并行调优的上限。没有跨进程 GPU 排他锁，外部进程仍可能扰动测量。

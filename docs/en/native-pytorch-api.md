@@ -32,7 +32,7 @@ Source: [random generator and registration](../../ruda-torch/python/ruda_torch/r
 
 Import `ruda_torch` before creating tensors on `ruda:0`. Another PrivateUse1 backend cannot already be registered in the process. `is_available()` reports the initialized integration, not a complete inventory of GPU instruction support. `device_count()` is 1 and `current_device()` is 0. `synchronize(device=None)` accepts the native device only and waits for completion. `execution_stats()` returns cumulative native launch, transfer and selected-library counters; it is not a timer or an autotuning result.
 
-Rust/C++ components require base ABI 10. Optional features negotiate their own versions: graph 3, training 4, router 1, sequence 1, NF4 decode 1, NF4 matmul 1, scientific 1, BLAS 1, linalg 1 and FFT 1. Paged backward accepts native API 1 or 2 with a compatible bridge; ordered backward requires 2. A base-ABI match alone does not provide every optional feature. Use the matching [source build or precompiled bundle](../../ruda-torch/README.md#build-and-install).
+Rust/C++ components require base ABI 10. Optional features negotiate their own versions: graph 3, training 4, router 1, sequence 1, NF4 decode 1, NF4 matmul 1, scientific 1, BLAS 1, linalg 1, FFT 1, packed quantization 1 and quantized paged attention 1. Paged backward accepts native API 1 or 2 with a compatible bridge; ordered backward requires 2. A base-ABI match alone does not provide every optional feature. Use a matching [source build, release wheel or precompiled bundle](../../ruda-torch/README.md#build-and-install).
 
 The eager native backend does not install a generic CPU fallback. Unsupported operators, unavailable capabilities and device errors propagate. CUDA tensors and RUDA tensors are different allocations and are not interchangeable merely because they use the same GPU.
 
@@ -161,7 +161,7 @@ Set `RUDA_TORCH_ASYNC=1` before first native submission to select asynchronous d
 | `mla(absorbed_query, position_query, latent_cache, position_cache, scale=..., causal=True)` | Queries `[queries,heads,rank]` / `[queries,heads,position_dim]`; caches `[pages,page_size,1,rank]` / `[pages,page_size,1,position_dim]`; positional width at most 256. Returns `[queries,heads,rank]` context, before value/output projection. |
 | `workspace_bytes(query_heads, value_dim)` | Planned forward split scratch only, not backward memory or total peak VRAM. |
 
-`splits=1` is unsplit; values 2–32 use partial attention and FP32 merging with a 64 MiB per-workspace limit. Caller owns KV content/updates and positional encoding. Use the model's original MLA QK scale. First-order gradients are supported; arbitrary external masks, quantized KV storage and higher-order derivatives are not. Atomic backward is the default; `backward_strategy='ordered'` explicitly chooses atomic-free history reduction, not autotuning. Detailed ownership/compaction options: [package attention guide](../../ruda-torch/README.md#paged-gqa-and-mla).
+`splits=1` is unsplit; values 2–32 use partial attention and FP32 merging with a 64 MiB per-workspace limit. Caller owns KV content/updates and positional encoding. Use the model's original MLA QK scale. Floating caches support first-order gradients, but not arbitrary external masks or higher-order derivatives. Packed caches use the separate inference-only [quantized path](#quantized-kv-attention). Atomic backward is the default; `backward_strategy='ordered'` explicitly chooses atomic-free history reduction, not autotuning. Detailed ownership/compaction options: [package attention guide](../../ruda-torch/README.md#paged-gqa-and-mla).
 
 `selected_router_weights(logits, indices, scoring='softmax', renormalize=False, scale=1.)` takes contiguous native logits `[tokens,experts]` in FP32/FP16/BF16 and indices `[tokens,top_k]` in int32/int64, with `1 <= top_k <= min(experts,64)`. It returns FP32 selected weights and first-order logits gradients, not expert selection. Softmax covers all experts before gather; sigmoid is pointwise. Optional renormalization covers gathered slots and scale is applied last. Duplicate indices accumulate gradients. Invalid index values yield NaN for the affected forward/backward row with bounds-safe reads rather than a host index synchronization. See [router implementation](../../ruda-torch/python/ruda_torch/_router.py).
 
@@ -172,6 +172,55 @@ Set `RUDA_TORCH_ASYNC=1` before first native submission to select asynchronous d
 `gated_delta_rule(query, key, value, beta, log_decay, initial_state=None, query_scale=None, normalize_qk=False, norm_eps=1e-6, chunk_size=64, checkpoint_chunks=True, native_forward=True)` requires Q/K `[B,H,T,Dk]`, V `[B,H,T,Dv]`, beta/decay `[B,H,T]`, optional initial state `[B,H,Dk,Dv]` on one floating device. Q/K/V storage dtypes match. `chunk_size` is positive. The result is `(output, final_state)`; output is `[B,H,T,Dv]`. State/intermediates use FP32, or FP64 for explicit CPU FP64 input. The default RUDA forward reuses ruDNN chunk execution; backward recomputes same-device chunk operations and is not a standalone fused DeltaNet backward. Both output and final-state gradients propagate. Exact scale/normalization and empty-sequence behavior: [sequence implementation](../../ruda-torch/python/ruda_torch/sequence_training.py).
 
 `learned_fake_quantize(x, scales, bits=4, block_shape=None, symmetric=True)` accepts nonempty FP32/FP16/BF16 input and same-device FP32 scales. Bits are 2, 4 or 8. No block shape means exactly one scale; otherwise each axis has a positive block size and scales number `product(ceil(shape/block_shape))`, including edge blocks. Scales are floored at `1e-8`; their gradients below the floor are zero. It returns a **floating** tensor with first-order straight-through derivatives, not packed inference weights. `LearnedFakeQuantize(initial_scales, ...)` stores a trainable, checkpointable FP32 scale parameter; keep it FP32 when moving the module. See [quantization.py](../../ruda-torch/python/ruda_torch/quantization.py) and [NF4 fine-tuning](finetuning.md) for the separate packed-base format.
+
+## Packed quantization and checkpoint import
+
+Packed quantization API 1 provides `int2`, `int3`, `int4`, `int5`, `int6`, `int8`, `fp4_e2m1`, `fp8_e4m3` and `fp8_e5m2`. `PackedQuantizedTensor(codes, scales, offsets, shape, format, group_size, group_index=None)` stores row-byte-aligned uint8 codes and FP32 `[rows, ceil(width/group_size)]` scale/offset metadata. Integer codes are unsigned, with signed/asymmetric values represented by offsets. Optional int32 `group_index[width]` maps columns to groups for GPTQ act-order. Storage and metadata are contiguous, frozen and on one device; native execution requires RUDA.
+
+| API | Contract |
+| --- | --- |
+| `quantize_packed(x, *, format='int4', group_size=128, symmetric=True, calibration='minmax', percentile=99.9, mse_steps=80, scales=None, zero_points=None, offsets=None)` | FP32/FP16/BF16 RUDA input; groups run along the last axis. Returns packed storage. Explicit scales have the metadata shape above; supply zero points or offsets, not both. |
+| `PackedLinear(weight, bias=None)` / `PackedLinear.from_linear(linear, **kwargs)` | Weight `[out,in]`; input `[...,in]` and output `[...,out]` use FP32/FP16/BF16. Frozen weights/bias; input gradients are available and LoRA may wrap the layer. |
+| `PackedEmbedding(weight, *, padding_idx=None, output_dtype=torch.float16)` | Weight `[vocabulary,width]`; RUDA int32/int64 indices. Decodes selected rows only; no weight training. |
+| `weight.dequantize(dtype=torch.float32)` / `weight.to(device)` | Explicit full floating expansion or transfer of the packed representation. |
+| `scaled_float8_mm(a, b, scale_a, scale_b, *, out_dtype=torch.float16, bias=None)` | RUDA E4M3FN/E5M2 matrices `[M,K]` and `[K,N]`; FP32 scales are scalar or `[M,1]` / `[1,N]`. Output is FP16/BF16/FP32. |
+
+Packed Linear currently decodes weights inside a scalar dot-product kernel with FP32 accumulation; it is not a Tensor Core GEMM implementation. FP8 storage/casting and scaled matmul do not imply all ATen FP8 operations are supported. `torch._scaled_mm` requires an explicit FP16/BF16/FP32 `out_dtype`; FP8 output and `scale_result` are not supported.
+
+```python
+import torch
+import ruda_torch as r
+
+weight = torch.ones((64, 128), device="ruda:0", dtype=torch.float16)
+layer = r.PackedLinear(r.quantize_packed(weight, format="int4", group_size=32))
+x = torch.ones((2, 128), device="ruda:0", dtype=torch.float16)
+y = layer(x)
+```
+
+### Calibration and affine QAT
+
+`calibrate_quantization(x, *, format='int4', group_size=128, symmetric=True, method='minmax', percentile=99.9, mse_steps=80)` returns FP32 scales and additive offsets. Methods are `minmax`, `percentile` and `mse`; native calibration does not copy samples to CPU. `QuantizationObserver(*, channel_axis=None, averaging_constant=None)` collects per-tensor/per-channel min/max, or EMA with an explicit averaging constant; `calculate_qparams(*, format='int8', symmetric=False)` returns scales and zero points. `affine_fake_quantize(x, scales, zero_points, *, bits=8)` returns floating values with straight-through input/scale gradients and frozen zero points; it does not create packed weights. The existing learned fake quantization and NF4 paths remain separate.
+
+### GPTQ and GGUF
+
+The safetensors loader requires `python -m pip install safetensors`; it is not bundled in the wheel. GGUF parsing uses the package's own reader.
+
+- `gptq_linear(state, prefix, *, in_features, out_features, bits, group_size, checkpoint_format='gptq', desc_act=False, zero_point_wrap=False, device='ruda:0', dtype=torch.float16, chunk_rows=128)` imports standard GPTQ 2/3/4/8-bit weights, scales and `g_idx`. `checkpoint_format` accepts `gptq` (v1 zero-minus-one encoding) or `gptq_v2` (direct zeros); `group_size=-1` means full input width. `zero_point_wrap=True` explicitly selects legacy modulo wrapping at v1 zero-point boundaries. Marlin is not supported.
+- `load_gptq_safetensors(model, directory, *, target_modules, config=None, device='ruda:0', dtype=torch.float16, zero_point_wrap=False, chunk_rows=128)` loads local safetensors into an explicitly constructed model with selected Linear modules. No model architecture, key renaming, download or remote code is inferred.
+- `GGUFWeights(paths)` reads local GGUF v2/v3 files, including multiple shards. `info(name)` returns `GGUFTensorInfo`; `packed(name, *, device='ruda:0', chunk_rows=64, row_permutation=None)` imports Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q8_1 and Q2_K/Q3_K/Q4_K/Q5_K/Q6_K/Q8_K. IQ/TQ and other quantizers are not supported.
+- `load_gguf(model, paths, *, name_map, device='ruda:0', dtype=torch.float16, row_permutations=None, chunk_rows=64)` requires explicit model-parameter-to-GGUF-name mappings and Q/K RoPE row permutations where layouts differ. Quantized Linear/Embedding weights remain packed; supported dense tensors are loaded separately.
+
+Both importers preserve integer codes and quantization parameters through repacking, without requantizing or expanding full floating weights. GGUF block-scale metadata may expand in RUDA's representation, so packed memory size need not equal the file's byte size. They are weight importers, not automatic model/tokenizer adapters.
+
+### Quantized KV attention
+
+`QuantizedKVCache(*, num_pages, page_size, kv_heads, key_dim, value_dim=None, format='int8', value_format=None, group_size=32, symmetric=True, device='ruda:0')` stores packed physical K/V pages and FP32 metadata. The default value width/format matches the key width/format. `update_(slots, key, value)` packs only new `[tokens,Hkv,D]` values; slots are distinct physical `page*page_size+offset` indices on the cache device. `copy_pages_(source_pages, destination_pages)` copies codes and metadata for explicit page duplication. The caller manages page ownership and must not expose unwritten history in the plan.
+
+`cache.attention(plan, query, *, scale, causal=True)` and `plan.attention(query, cache.key, cache.value, scale=..., causal=True)` dispatch quantized paged MHA/GQA. `plan.mla(absorbed_query, position_query, latent_cache, position_cache, scale=..., causal=True)` accepts packed latent/position caches for MLA. The lower-level `quantized_paged_attention(plan, q, k, v, *, scale, causal=True, position_query=None, position_cache=None)` exposes both forms. Feature groups are contiguous; GPTQ-style `group_index` is not accepted for caches.
+
+Quantized paged API 1 decodes packed history into registers rather than expanding a dense historical cache, retaining chunked prefill/decode and the plan's split/merge scheduling. This path is **inference-only**; use floating caches for backward. Query tensors remain FP32/FP16/BF16, and the existing plan geometry, scale and device constraints apply.
+
+Sources: [packed tensors](../../ruda-torch/python/ruda_torch/packed_quantization.py), [calibration/QAT](../../ruda-torch/python/ruda_torch/quantization_calibration.py), [GPTQ](../../ruda-torch/python/ruda_torch/gptq.py), [GGUF](../../ruda-torch/python/ruda_torch/gguf.py), [quantized cache](../../ruda-torch/python/ruda_torch/quantized_cache.py).
 
 ## Compilation, graphs and models
 

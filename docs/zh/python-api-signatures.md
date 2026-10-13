@@ -4,6 +4,8 @@
 
 以下列出 RUDA 定义的构造器和方法；继承自 PyTorch 的标准方法遵循其基类契约。
 
+Packed 量化、校准／QAT、GPTQ／GGUF 导入与量化 KV 缓存的签名见 [packed API 参考](native-pytorch-api.md#packed-量化与权重导入)。
+
 ## 科学计算 BLAS 与 FFT
 
 参数契约与标准 `torch.linalg` 分发见[科学计算 API](native-pytorch-api.md#科学计算算子)。

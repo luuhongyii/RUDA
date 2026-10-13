@@ -4,6 +4,8 @@
 
 Constructors and methods defined by RUDA are listed below. Standard inherited PyTorch methods follow their base-class contracts.
 
+Packed quantization, calibration/QAT, GPTQ/GGUF import and quantized KV cache signatures are documented in the [packed API reference](native-pytorch-api.md#packed-quantization-and-checkpoint-import).
+
 ## Scientific BLAS and FFT
 
 Contracts and standard `torch.linalg` dispatch: [scientific API](native-pytorch-api.md#scientific-operations).

@@ -2,6 +2,8 @@
 
 [目次](README.md) · [runtime](runtime-api.md) · [方針とサンプル](../en/stack-autotuning.md)
 
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) は `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` と `SHA256SUMS` を配布します。同じデータは [`autotune/a100-sxm4-40gb/20261013/`](../../autotune/a100-sxm4-40gb/20261013) にあります。`enable_stack_autotune` のキャッシュディレクトリ配下に `stack-autotune-v1` を展開し、`table.csv` は閲覧用として扱います。正確な device／driver／build／workload／context キーと TTL が適用されます。benchmark の記録は PyTorch wheel と自動的に互換になるわけではなく、Python import だけでは読み込まれません。[使い方と制約](../en/stack-autotuning.md#distributed-a100-tables)。
+
 共通 controller は同じ意味の候補を検証し、完了時間を比較して device/workload ごとに cache。matmul、attention、forward convolution、fused matmul、packed greedy generation の接続です。FFT/sparse/solver/communication や multi-GPU placement、全 model 組合せ探索を自動で扱いません。
 
 enable_stack_autotune(policy,cache_directory) を model loading/worker/初回演算前に一度呼びます。None は memory only。device backend の stack-autotune、fusion の device-stack-autotune、LLM の stack-autotune feature が必要。std native 向けで no-std/WASM ではありません。

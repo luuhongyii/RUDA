@@ -2,6 +2,12 @@
 
 [Содержание](README.md) · [Подробная справка методов](../en/native-pytorch-api.md)
 
+## Packed-квантизация и квантованные KV-кеши
+
+Packed API 1 предоставляет INT2/3/4/5/6/8, FP4 E2M1 и FP8 E4M3/E5M2 через `PackedQuantizedTensor`, `PackedLinear` и `PackedEmbedding`. Linear поддерживает градиенты входа при замороженных весах; используется скалярное накопление FP32, не Tensor Core GEMM. `scaled_float8_mm` возвращает FP16/BF16/FP32. MinMax/Percentile/MSE, `QuantizationObserver` и `affine_fake_quantize` предоставляют калибровку/QAT.
+
+Импортируются стандартный GPTQ 2/3/4/8-bit (`g_idx`, v1/v2) и GGUF v2/v3 Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q8_1, Q2_K/Q3_K/Q4_K/Q5_K/Q6_K/Q8_K; Marlin и IQ/TQ не поддерживаются. Модель, целевые модули и соответствия имён/строк GGUF задаются явно. `QuantizedKVCache` и paged API 1 читают упакованные MHA/GQA/MLA-кеши напрямую только для инференса; backward требует кешей с плавающей точкой. [Сигнатуры, форматы и примеры](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import).
+
 [Публичные сигнатуры](python-api-signatures.md) · [Параллельное обучение, данные и восстановление](parallel-and-data.md)
 
 ## Случайные числа и состояние

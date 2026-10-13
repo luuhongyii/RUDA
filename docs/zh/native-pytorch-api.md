@@ -32,7 +32,7 @@ torch.testing.assert_close(x.cpu(), first, rtol=0, atol=0)
 
 先导入 `ruda_torch`，再创建 `ruda:0` 张量。同一进程不能已经注册其他 PrivateUse1 后端。`is_available()` 表示集成已初始化，不是 GPU 指令支持的完整清单；`device_count()` 为 1，`current_device()` 为 0。`synchronize(device=None)` 仅接受原生设备并等待完成。`execution_stats()` 返回累计内核、传输及部分库调用计数，不是计时器或 autotune 结果。
 
-Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、training 4、router 1、sequence 1、NF4 decode 1、NF4 matmul 1、scientific 1、BLAS 1、linalg 1、FFT 1。Paged backward 接受原生 API 1 或 2 及兼容桥接，ordered backward 要求 2；仅匹配基础 ABI 不表示具备全部扩展。使用匹配的[源码构建或预编译包](../../ruda-torch/README.md#build-and-install)。
+Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、training 4、router 1、sequence 1、NF4 decode 1、NF4 matmul 1、scientific 1、BLAS 1、linalg 1、FFT 1、packed quantization 1、quantized paged attention 1。Paged backward 接受原生 API 1 或 2 及兼容桥接，ordered backward 要求 2；仅匹配基础 ABI 不表示具备全部扩展。使用匹配的[源码构建、Release wheel 或预编译包](../../ruda-torch/README.md#build-and-install)。
 
 原生 eager 后端不安装通用 CPU 回退。算子不支持、能力缺失及设备错误直接传播。CUDA 与 RUDA 张量使用不同分配，不能因为在同一 GPU 上就混用。
 
@@ -161,7 +161,7 @@ Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python M
 | `mla(absorbed_query, position_query, latent_cache, position_cache, scale=..., causal=True)` | 查询 `[queries,heads,rank]`／`[queries,heads,position_dim]`，缓存 `[pages,page_size,1,rank]`／`[pages,page_size,1,position_dim]`，位置宽度不超过 256；返回尚未做 value／output 投影的 `[queries,heads,rank]` context。 |
 | `workspace_bytes(query_heads, value_dim)` | 仅前向 split scratch，不含反向内存或总峰值显存。 |
 
-`splits=1` 为不拆分，2–32 使用部分注意力与 FP32 归并，每个工作区上限 64 MiB。KV 内容／更新及位置编码由调用者负责，MLA 使用原模型 QK scale。支持一阶梯度，不支持任意外部 mask、量化 KV 或高阶导数。默认 atomic backward；`backward_strategy='ordered'` 显式选择无原子的历史归约，不是 autotune。所有权／压缩选项见[包注意力指南](../../ruda-torch/README.md#paged-gqa-and-mla)。
+`splits=1` 为不拆分，2–32 使用部分注意力与 FP32 归并，每个工作区上限 64 MiB。KV 内容／更新及位置编码由调用者负责，MLA 使用原模型 QK scale。浮点缓存支持一阶梯度，不支持任意外部 mask 或高阶导数；压缩缓存走独立的[量化 KV 推理路径](#量化-kv-注意力)。默认 atomic backward；`backward_strategy='ordered'` 显式选择无原子的历史归约，不是 autotune。所有权／压缩选项见[包注意力指南](../../ruda-torch/README.md#paged-gqa-and-mla)。
 
 `selected_router_weights(logits, indices, scoring='softmax', renormalize=False, scale=1.)` 输入连续原生 `[tokens,experts]` FP32／FP16／BF16 logits 和 `[tokens,top_k]` int32／int64 indices，`1 <= top_k <= min(experts,64)`。返回 FP32 已选择槽位权重及一阶 logits 梯度，不负责专家选择。Softmax 先覆盖全部专家再 gather，sigmoid 逐点计算；可选重归一化覆盖已 gather 槽位，最后乘 scale。重复索引累加梯度；无效索引使相应前向／反向整行输出 NaN，仍保持越界安全，不通过主机同步检查索引。见[路由实现](../../ruda-torch/python/ruda_torch/_router.py)。
 
@@ -172,6 +172,55 @@ Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python M
 `gated_delta_rule(query, key, value, beta, log_decay, initial_state=None, query_scale=None, normalize_qk=False, norm_eps=1e-6, chunk_size=64, checkpoint_chunks=True, native_forward=True)` 要求同一浮点设备：Q／K `[B,H,T,Dk]`，V `[B,H,T,Dv]`，beta／decay `[B,H,T]`，可选初始状态 `[B,H,Dk,Dv]`，Q／K／V 存储类型相同。`chunk_size` 为正；返回 `(output, final_state)`，输出 `[B,H,T,Dv]`。状态／中间值为 FP32，显式 CPU FP64 输入使用 FP64。默认 RUDA 前向复用 ruDNN chunk 路径，反向重算同设备分块操作，不是独立融合 DeltaNet backward；输出与最终状态均传播梯度。准确 scale／归一化及空序列行为见[序列实现](../../ruda-torch/python/ruda_torch/sequence_training.py)。
 
 `learned_fake_quantize(x, scales, bits=4, block_shape=None, symmetric=True)` 要求非空 FP32／FP16／BF16 输入及同设备 FP32 scales。bits 为 2、4、8；没有 block shape 时只有一个 scale，否则每轴一个正块大小，scale 数量为 `product(ceil(shape/block_shape))`，包括边缘块。scale 下限为 `1e-8`，低于下限的尺度梯度为零；返回具有一阶 straight-through 导数的**浮点**张量，不是打包推理权重。`LearnedFakeQuantize(initial_scales, ...)` 保存可训练、可存档的 FP32 尺度参数，移动模块时仍须保持 FP32。见[伪量化实现](../../ruda-torch/python/ruda_torch/quantization.py)和不同格式的 [NF4 微调](finetuning.md)。
+
+## Packed 量化与权重导入
+
+Packed quantization API 1 提供 `int2`、`int3`、`int4`、`int5`、`int6`、`int8`、`fp4_e2m1`、`fp8_e4m3`、`fp8_e5m2`。`PackedQuantizedTensor(codes, scales, offsets, shape, format, group_size, group_index=None)` 保存按行字节对齐的 uint8 码及 FP32 `[rows, ceil(width/group_size)]` 尺度／偏移。整数码无符号，有符号与非对称数值由偏移表达；可选 int32 `group_index[width]` 支持 GPTQ act-order 的列到组映射。存储与元数据须连续、冻结且位于同一设备，原生执行要求 RUDA。
+
+| API | 契约 |
+| --- | --- |
+| `quantize_packed(x, *, format='int4', group_size=128, symmetric=True, calibration='minmax', percentile=99.9, mse_steps=80, scales=None, zero_points=None, offsets=None)` | 输入为 RUDA FP32／FP16／BF16，沿末轴分组，返回压缩存储。显式 scales 使用上述元数据形状；zero_points 与 offsets 二选一。 |
+| `PackedLinear(weight, bias=None)`／`PackedLinear.from_linear(linear, **kwargs)` | 权重 `[out,in]`，输入 `[...,in]`、输出 `[...,out]` 使用 FP32／FP16／BF16。权重／偏置冻结，支持输入梯度，可由 LoRA 包装。 |
+| `PackedEmbedding(weight, *, padding_idx=None, output_dtype=torch.float16)` | 权重 `[vocabulary,width]`，索引为 RUDA int32／int64；仅解码选中行，不训练权重。 |
+| `weight.dequantize(dtype=torch.float32)`／`weight.to(device)` | 显式展开完整浮点权重，或迁移压缩表示。 |
+| `scaled_float8_mm(a, b, scale_a, scale_b, *, out_dtype=torch.float16, bias=None)` | RUDA E4M3FN／E5M2 矩阵 `[M,K]`、`[K,N]`；FP32 尺度为标量或 `[M,1]`／`[1,N]`，输出 FP16／BF16／FP32。 |
+
+当前 packed Linear 在标量点积内核中解码权重并以 FP32 累加，不是 Tensor Core GEMM。FP8 存储、转换与 scaled matmul 不表示覆盖所有 ATen FP8 算子。`torch._scaled_mm` 须显式指定 FP16／BF16／FP32 `out_dtype`，不支持 FP8 输出或 `scale_result`。
+
+```python
+import torch
+import ruda_torch as r
+
+weight = torch.ones((64, 128), device="ruda:0", dtype=torch.float16)
+layer = r.PackedLinear(r.quantize_packed(weight, format="int4", group_size=32))
+x = torch.ones((2, 128), device="ruda:0", dtype=torch.float16)
+y = layer(x)
+```
+
+### 校准与 affine QAT
+
+`calibrate_quantization(x, *, format='int4', group_size=128, symmetric=True, method='minmax', percentile=99.9, mse_steps=80)` 返回 FP32 尺度和加性偏移。方法为 `minmax`、`percentile`、`mse`，原生校准不把样本复制到 CPU。`QuantizationObserver(*, channel_axis=None, averaging_constant=None)` 记录逐张量／逐通道 min/max；显式指定 averaging constant 时采用 EMA。`calculate_qparams(*, format='int8', symmetric=False)` 返回尺度和零点。`affine_fake_quantize(x, scales, zero_points, *, bits=8)` 返回浮点值，提供输入／尺度的直通梯度，零点冻结，不生成压缩权重；与原有可学习伪量化及 NF4 路径分开。
+
+### GPTQ 与 GGUF
+
+Safetensors 加载器需要另外执行 `python -m pip install safetensors`，wheel 不包含此依赖；GGUF 使用包内解析器。
+
+- `gptq_linear(state, prefix, *, in_features, out_features, bits, group_size, checkpoint_format='gptq', desc_act=False, zero_point_wrap=False, device='ruda:0', dtype=torch.float16, chunk_rows=128)` 导入标准 GPTQ 2／3／4／8-bit 权重、尺度及 `g_idx`。`checkpoint_format` 接受 `gptq`（v1 零点减一编码）或 `gptq_v2`（直接零点）；`group_size=-1` 表示整个输入宽度。`zero_point_wrap=True` 显式选择旧解码器在 v1 零点边界上的取模行为。不支持 Marlin。
+- `load_gptq_safetensors(model, directory, *, target_modules, config=None, device='ruda:0', dtype=torch.float16, zero_point_wrap=False, chunk_rows=128)` 将本地 safetensors 装入显式构造的模型及选定 Linear 模块；不推断架构、键名重映射，不下载或执行远程代码。
+- `GGUFWeights(paths)` 读取本地 GGUF v2／v3，支持多分片。`info(name)` 返回 `GGUFTensorInfo`；`packed(name, *, device='ruda:0', chunk_rows=64, row_permutation=None)` 导入 Q4_0／Q4_1／Q5_0／Q5_1／Q8_0／Q8_1 及 Q2_K／Q3_K／Q4_K／Q5_K／Q6_K／Q8_K。不支持 IQ／TQ 等其他量化格式。
+- `load_gguf(model, paths, *, name_map, device='ruda:0', dtype=torch.float16, row_permutations=None, chunk_rows=64)` 要求显式提供模型参数到 GGUF 键名的映射；Q／K RoPE 行布局不同时须提供置换。量化 Linear／Embedding 保持压缩存储，支持的稠密张量另外装载。
+
+两个导入器均通过重打包保留整数码及量化参数，不重新量化，也不展开完整浮点权重。GGUF 块尺度元数据在 RUDA 表示中可能展开，压缩后的内存占用不一定等于文件字节数。这些是权重导入器，不是自动模型／tokenizer 适配器。
+
+### 量化 KV 注意力
+
+`QuantizedKVCache(*, num_pages, page_size, kv_heads, key_dim, value_dim=None, format='int8', value_format=None, group_size=32, symmetric=True, device='ruda:0')` 保存压缩物理 K／V 页及 FP32 元数据，默认 value 宽度／格式与 key 相同。`update_(slots, key, value)` 仅打包新增的 `[tokens,Hkv,D]` 数值；slots 为缓存设备上互不重复的物理 `page*page_size+offset` 索引。`copy_pages_(source_pages, destination_pages)` 同时复制码与元数据。调用者管理页所有权，调度不得读取尚未写入的历史位置。
+
+`cache.attention(plan, query, *, scale, causal=True)` 或 `plan.attention(query, cache.key, cache.value, scale=..., causal=True)` 调用量化分页 MHA／GQA。`plan.mla(absorbed_query, position_query, latent_cache, position_cache, scale=..., causal=True)` 接受压缩 latent／position 缓存。底层入口为 `quantized_paged_attention(plan, q, k, v, *, scale, causal=True, position_query=None, position_cache=None)`。缓存要求连续特征分组，不接受 GPTQ 式 `group_index`。
+
+Quantized paged API 1 将压缩历史直接解码到寄存器，避免展开完整历史缓存，保留分块 prefill／decode 及计划的 split／merge 调度。此路径**仅用于推理**；反向传播使用浮点缓存。Query 仍为 FP32／FP16／BF16，并遵守原有计划的几何、scale 和设备约束。
+
+源码：[packed 张量](../../ruda-torch/python/ruda_torch/packed_quantization.py)、[校准／QAT](../../ruda-torch/python/ruda_torch/quantization_calibration.py)、[GPTQ](../../ruda-torch/python/ruda_torch/gptq.py)、[GGUF](../../ruda-torch/python/ruda_torch/gguf.py)、[量化缓存](../../ruda-torch/python/ruda_torch/quantized_cache.py)。
 
 ## 编译、图与模型
 

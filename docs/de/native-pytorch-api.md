@@ -2,6 +2,12 @@
 
 [Inhalt](README.md) · [Ausführliche Methodenreferenz](../en/native-pytorch-api.md)
 
+## Packed-Quantisierung und quantisierte KV-Caches
+
+Packed-API 1 ergänzt INT2/3/4/5/6/8, FP4 E2M1 und FP8 E4M3/E5M2 mit `PackedQuantizedTensor`, `PackedLinear` und `PackedEmbedding`. Linear unterstützt Eingabegradienten bei eingefrorenen Gewichten; die Berechnung nutzt skalare FP32-Akkumulation, nicht Tensor Core GEMM. `scaled_float8_mm` liefert FP16/BF16/FP32. MinMax/Percentile/MSE, `QuantizationObserver` und `affine_fake_quantize` ergänzen Kalibrierung/QAT.
+
+Die Importer unterstützen Standard-GPTQ 2/3/4/8-bit mit `g_idx` und v1/v2 sowie GGUF v2/v3 Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q8_1 und Q2_K/Q3_K/Q4_K/Q5_K/Q6_K/Q8_K; kein Marlin oder IQ/TQ. Modell, Zielmodule und GGUF-Namens-/Zeilenabbildungen werden explizit vorgegeben. `QuantizedKVCache` und Paged-API 1 lesen gepackte MHA/GQA/MLA-Caches direkt, nur für Inferenz; Backward benötigt Fließkomma-Caches. [Signaturen, Layouts und Beispiele](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import).
+
 [Öffentliche Signaturen](python-api-signatures.md) · [Paralleles Training, Daten und Wiederherstellung](parallel-and-data.md)
 
 ## Zufall und Zustand

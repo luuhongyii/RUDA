@@ -84,6 +84,14 @@ Disk records use `stack-autotune-v1` under the selected directory. Full keys are
 
 `LocalTuner::clear` clears the old cache only. Use the shared controller's own invalidation APIs for this cache. Choices do not enumerate every possible dynamic compiler or external candidate dependency; immutable deployment tags are needed for dependencies not captured by the built-in fingerprint.
 
+## Distributed A100 tables
+
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) includes `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` and `SHA256SUMS`. The same records are in [`autotune/a100-sxm4-40gb/20261013/`](../../autotune/a100-sxm4-40gb/20261013). The archive contains `table.csv` for inspection and native `stack-autotune-v1/*.rtune` records; the runtime reads the records, not the CSV.
+
+After checking the archive's SHA-256 entry, extract it under the cache root passed to `enable_stack_autotune`, for example `.ruda-stack-cache/stack-autotune-v1/*.rtune`. Install the controller as above; choose `CacheOnly` to avoid new timing searches or `Explore` to tune misses.
+
+Reuse requires matching device, driver, source/build, workload and execution-context keys and an unexpired record (default TTL: seven days). The table's standalone benchmark build is not automatically key-compatible with the release's PyTorch wheels. Importing `ruda_torch` does not install this Rust controller or automatically load the archive. Do not relabel build/context tags or refresh record timestamps to force a hit. A mismatch or expired record is a miss; `CacheOnly` then uses the reference. Cold disk hits still undergo runtime validation. These are environment-specific choices, not universal A100 dispatch presets or cross-GPU speedup guarantees.
+
 ## Controller and cache API
 
 These public APIs are exported by `ruda::runtime::tune::stack`; their definitions document each field and validation limit.

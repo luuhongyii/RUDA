@@ -4,6 +4,8 @@
 
 Die von RUDA definierten Konstruktoren und Methoden stehen unten. Geerbte PyTorch-Standardmethoden behalten die Verträge ihrer Basisklassen.
 
+Signaturen für Packed-Quantisierung, Kalibrierung/QAT, GPTQ/GGUF und quantisierte KV-Caches: [Packed-API-Referenz](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import).
+
 ## `__init__`
 
 | Öffentlicher Name / Aufruf | Quellcode |

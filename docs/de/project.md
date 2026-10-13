@@ -87,7 +87,7 @@ x = torch.arange(4, dtype=torch.float32).to("ruda:0")
 print((x + x).cpu())
 ```
 
-Vorgefertigte Windows-Wheels stehen als Artefakte erfolgreicher [RUDA Torch Windows build](https://github.com/shuqi2077/RUDA/actions/workflows/ruda-torch-windows.yml)-Läufe bereit. Entpacken Sie das Wheel-Artefakt und installieren Sie die enthaltene `.whl`-Datei mit `python -m pip install --no-deps`. Das Wheel enthält die native DLL und ist für Windows x64, CPython 3.13 und PyTorch `2.13.0+cu130` vorgesehen; installieren Sie zuerst diese passende PyTorch-Ausgabe. Artefakte werden sieben Tage aufbewahrt. `ruda-torch-native` wird aus dem Quellcode erstellt und ist kein crates.io-Paket.
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) enthält Linux- und Windows-x86_64-Wheels mit Python-Paket, C++-Erweiterung und nativer Rust-Bibliothek. Beide benötigen CPython 3.13: Linux nutzt PyTorch `2.10.0+cu126` (Build auf Ubuntu 24.04), Windows `2.13.0+cu130`. Die Python-Paketversion bleibt `ruda-torch==0.1.0`; siehe [Release-Installation](../../ruda-torch/README.md#v0195-release-wheels). `ruda-torch-native` wird aus dem Quellcode erstellt und ist kein crates.io-Paket.
 
 ## Aufbau des Stacks
 
@@ -111,7 +111,9 @@ Ein Repository, mehrere Crates mit klar abgegrenzten Zuständigkeiten. Von Fachb
 - **MoE:** Gruppiertes Sigmoid-Routing und segmentierte Experten-Matrixmultiplikation verwenden Experten-Offsets auf dem Gerät. Der FP16/BF16-Tensor-Core-Pfad muss ausdrücklich gewählt werden; der bestehende Experten-Einstieg verwendet standardmäßig die skalare GPU-Strategie. Routergewichte bei fester Auswahl und Expertenprojektionen bieten auch Training erster Ordnung mit FP32-Gradienten für Router- und Expertengewichte; siehe [ruDNN](libraries/rudnn.md) und [gruppierten Rückwärtslauf](libraries/rublas.md).
 - **Streams und Ereignisse:** `ruda_torch.Stream`, `Event` und `record_stream` sind in die native Laufzeit integriert. Die Ausführung ist standardmäßig synchron; setzen Sie vor dem ersten nativen Aufruf `RUDA_TORCH_ASYNC=1`, um asynchrone Aufrufe zu aktivieren. Explizite Synchronisation und Rückübertragung zum Host warten weiterhin auf den Abschluss.
 
-Seitenbasierte Attention benötigt zusammenhängende FP32/FP16/BF16-Tensoren gleichen Datentyps auf demselben Gerät und derselben Ausführungsqueue. Sie unterstützt Vorwärtslauf und Rückwärtslauf erster Ordnung, aber keine beliebigen externen Masken oder quantisierten KV-Caches. PyTorch verwendet standardmäßig atomare Historiengradienten; `backward_strategy="ordered"` wählt den atomikfreien Pfad. Historienzeilen-Cache und physische Seitenkompaktierung sind opt-in. MLA/MoE sind wiederverwendbare Komponenten; vollständige Modelladapter müssen Projektionen, Positionskodierung, Routingparameter und die Verwaltung des Cache-Eigentums bereitstellen.
+Seitenbasierte Attention mit Fließkomma-Caches benötigt zusammenhängende FP32/FP16/BF16-Tensoren gleichen Datentyps auf demselben Gerät und derselben Ausführungsqueue. Sie unterstützt Vorwärtslauf und Rückwärtslauf erster Ordnung, aber keine beliebigen externen Masken. PyTorch verwendet standardmäßig atomare Historiengradienten; `backward_strategy="ordered"` wählt den atomikfreien Pfad. Historienzeilen-Cache und physische Seitenkompaktierung sind opt-in. MLA/MoE sind wiederverwendbare Komponenten; vollständige Modelladapter müssen Projektionen, Positionskodierung, Routingparameter und die Verwaltung des Cache-Eigentums bereitstellen.
+
+[Packed-Quantisierung](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import) ergänzt INT2/3/4/5/6/8, FP4/FP8 Linear/Embedding, Standard-GPTQ v1/v2, gängige GGUF-Formate, Kalibrierung und affine QAT. Quantisierte MHA/GQA/MLA-KV-Caches sind nur für Inferenz vorgesehen. Das Release enthält außerdem [A100-Tuningtabellen](../en/stack-autotuning.md#distributed-a100-tables), deren Wiederverwendung exakte Cache-Schlüssel und gültige Einträge voraussetzt.
 
 ## Wege zur Hardware
 

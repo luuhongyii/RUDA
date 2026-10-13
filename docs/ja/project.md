@@ -87,7 +87,7 @@ x = torch.arange(4, dtype=torch.float32).to("ruda:0")
 print((x + x).cpu())
 ```
 
-ビルド済み Windows wheel は、成功した [RUDA Torch Windows build](https://github.com/shuqi2077/RUDA/actions/workflows/ruda-torch-windows.yml) のアーティファクトから取得できます。wheel アーティファクトを展開し、中の `.whl` ファイルを `python -m pip install --no-deps` でインストールしてください。wheel はネイティブ DLL を含み、Windows x64、CPython 3.13、PyTorch `2.13.0+cu130` 向けです。対応する PyTorch を先にインストールしてください。アーティファクトの保存期間は 7 日です。`ruda-torch-native` はソースからビルドするコンポーネントで、crates.io パッケージではありません。
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) は Python パッケージ、C++ 拡張、Rust ネイティブライブラリを含む Linux／Windows x86_64 wheel を配布します。両方とも CPython 3.13 が必要で、Linux は PyTorch `2.10.0+cu126`（Ubuntu 24.04 でビルド）、Windows は `2.13.0+cu130` を使用します。Python パッケージのバージョンは `ruda-torch==0.1.0` のままです。[Release インストール手順](../../ruda-torch/README.md#v0195-release-wheels)を参照してください。`ruda-torch-native` はソースからビルドするコンポーネントで、crates.io パッケージではありません。
 
 ## スタックの構成
 
@@ -111,7 +111,9 @@ print((x + x).cpu())
 - **MoE:** グループ化 sigmoid ルーティングとセグメント化エキスパート行列積は、デバイス上のエキスパートオフセットを使用します。FP16/BF16 Tensor Core 経路は明示的な選択が必要で、既存のエキスパート API は既定でスカラー GPU 戦略を使います。 固定選択のルーター重みとエキスパート射影は一階学習にも対応し、ルーター重み・エキスパート重みの勾配は FP32 です。[ruDNN](libraries/rudnn.md) と[グループ逆伝播](libraries/rublas.md)を参照してください。
 - **ストリームとイベント:** `ruda_torch.Stream`、`Event`、`record_stream` はネイティブランタイムに接続します。投入は既定で同期的です。最初のネイティブ処理投入前に `RUDA_TORCH_ASYNC=1` を設定すると非同期投入を有効にできます。明示的な同期とホストへの読み戻しは引き続き完了を待ちます。
 
-ページ化 Attention には、同じデータ型・デバイス・実行キュー上の連続した FP32/FP16/BF16 テンソルが必要です。順伝播と一階の逆伝播に対応しますが、任意の外部マスクや量子化 KV キャッシュには対応しません。PyTorch の履歴勾配は既定でアトミック方式です。`backward_strategy="ordered"` はアトミックなしの経路を選び、履歴行キャッシュと物理ページ圧縮は明示的に有効化します。MLA/MoE は再利用可能なコンポーネントであり、完全なモデルアダプターには射影、位置エンコーディング、ルーティングパラメーター、キャッシュ所有権の管理が必要です。
+浮動小数点キャッシュのページ化 Attention には、同じデータ型・デバイス・実行キュー上の連続した FP32/FP16/BF16 テンソルが必要です。順伝播と一階の逆伝播に対応しますが、任意の外部マスクには対応しません。PyTorch の履歴勾配は既定でアトミック方式です。`backward_strategy="ordered"` はアトミックなしの経路を選び、履歴行キャッシュと物理ページ圧縮は明示的に有効化します。MLA/MoE は再利用可能なコンポーネントであり、完全なモデルアダプターには射影、位置エンコーディング、ルーティングパラメーター、キャッシュ所有権の管理が必要です。
+
+[Packed 量子化](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import) は INT2/3/4/5/6/8、FP4/FP8 Linear／Embedding、標準 GPTQ v1/v2、一般的な GGUF、校正、affine QAT を提供します。量子化 MHA/GQA/MLA KV キャッシュは推論専用です。Release の [A100 調整テーブル](../en/stack-autotuning.md#distributed-a100-tables)は、正確なキャッシュキーと有効期限が一致する場合にのみ再利用できます。
 
 ## ハードウェアへの経路
 

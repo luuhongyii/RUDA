@@ -33,7 +33,32 @@ python -m pip install --no-build-isolation --no-deps -e ./ruda-torch/python
 
 The loader uses a packaged native library when present, otherwise `target/debug/ruda_torch_native.dll` on Windows or `target/debug/libruda_torch_native.so` on Linux. Set `RUDA_TORCH_LIBRARY` before import to select a release build or another location. On Windows, `RUDA_TORCH_DLL_DIR` accepts semicolon-separated dependency directories.
 
-Prebuilt wheels are artifacts of successful [Windows build runs](https://github.com/shuqi2077/RUDA/actions/workflows/ruda-torch-windows.yml). They include the native DLL and target Windows x64, CPython 3.13 and PyTorch `2.13.0+cu130`. Install that matching PyTorch build first, extract the wheel artifact, and pass its `.whl` file to `python -m pip install --no-deps`. Artifacts are retained for seven days.
+### v0.1.95 release wheels
+
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) includes wheels with the Python package, C++ extension and Rust native library (ABI 10). These do not require a local Rust/C++ build. Use CPython 3.13 and the matching PyTorch build:
+
+| Platform | Wheel | Required PyTorch |
+| --- | --- | --- |
+| Linux x86_64, built on Ubuntu 24.04 | `ruda_torch-0.1.0-cp313-cp313-linux_x86_64.whl` | `2.10.0+cu126` |
+| Windows x86_64 | `ruda_torch-0.1.0-cp313-cp313-win_amd64.whl` | `2.13.0+cu130` |
+
+Download the matching wheel and `SHA256SUMS` from the release, and compare the wheel's SHA-256 digest with its entry. Install from the download directory on Linux:
+
+```sh
+python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu126
+python -m pip install --no-deps ./ruda_torch-0.1.0-cp313-cp313-linux_x86_64.whl
+```
+
+On Windows:
+
+```powershell
+python -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130
+python -m pip install --no-deps ./ruda_torch-0.1.0-cp313-cp313-win_amd64.whl
+```
+
+The overall release is v0.1.95; the Python subpackage retains version 0.1.0 and other crates retain independent versions. A compatible NVIDIA GPU/driver and the runtime dependencies of the selected compiler path are still required. The Linux wheel is not tagged manylinux; Ubuntu 24.04 is its build environment, not a promise of compatibility with older distributions. Other Python/PyTorch versions require a source build. Do not mix these wheels with another revision's Python sources or a stale `RUDA_TORCH_LIBRARY` override. Select PTX/NVRTC before execution as above.
+
+The [build workflow](https://github.com/shuqi2077/RUDA/actions/workflows/ruda-torch-windows.yml) also provides CI wheel artifacts, retained for seven days; release assets are a separate download source.
 
 ### Linux/Colab precompiled bundle
 
@@ -130,7 +155,7 @@ out = plan.attention(q, k, v, scale=8 ** -0.5, causal=True)
 print(out.cpu())
 ```
 
-Inputs must be contiguous FP32/FP16/BF16 tensors with the same dtype on the native `ruda` device and matching execution queue. Query-head count must be divisible by KV-head count. Supply finite Q/K/V and a finite positive scale; key/value feature dimensions are limited to 1024. Forward and first-order autograd are supported; arbitrary external masks, quantized KV caches and higher-order derivatives are not.
+Floating-cache inputs must be contiguous FP32/FP16/BF16 tensors with the same dtype on the native `ruda` device and matching execution queue. Query-head count must be divisible by KV-head count. Supply finite Q/K/V and a finite positive scale; key/value feature dimensions are limited to 1024. Forward and first-order autograd are supported; arbitrary external masks and higher-order derivatives are not. Packed caches use the separate inference-only [quantized KV attention](../docs/en/native-pytorch-api.md#quantized-kv-attention) path.
 
 `splits=1` is the default unsplit path; `2..32` uses partial attention followed by FP32 merging. `plan.workspace_bytes(query_heads, value_dim)` reports planned scratch bytes, capped at 64 MiB per workspace, not total device memory. Workspaces are cached per native plan/stream and shape, not in a global pool. Splitting is explicit and does not guarantee a speedup.
 
@@ -296,6 +321,14 @@ components must provide graph API 3. `LearnedFakeQuantize` adds trainable FP32 s
 but returns floating tensors and is not packed INT4 inference.
 See the [model compiler guide](../docs/en/model-compiler.md#exact-native-operator-coverage) for exact
 native-region overloads, supported metadata and execution policies.
+
+## Packed quantization, GPTQ and GGUF
+
+`PackedQuantizedTensor`, `PackedLinear`, `PackedEmbedding` and `quantize_packed` provide native packed INT2/3/4/5/6/8, FP4 E2M1 and FP8 E4M3/E5M2 storage and execution. Linear supports input gradients with frozen weights and can be wrapped by LoRA; the current packed matmul uses FP32 scalar accumulation, not Tensor Core GEMM. `scaled_float8_mm` returns FP16/BF16/FP32, not FP8.
+
+`gptq_linear` / `load_gptq_safetensors` import standard 2/3/4/8-bit GPTQ v1/v2 with `g_idx`. `GGUFWeights` / `load_gguf` import GGUF v2/v3 Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q8_1 and Q2_K through Q6_K plus Q8_K. Import repacks integer codes without requantizing or materializing full floating weights. Construct the model explicitly and supply selected GPTQ modules or GGUF name/row-layout mappings; Marlin and GGUF IQ/TQ formats are not supported.
+
+`calibrate_quantization` provides MinMax, Percentile and MSE calibration; `QuantizationObserver` provides streaming min/max or EMA statistics, and `affine_fake_quantize` provides affine QAT. `QuantizedKVCache` stores packed pages for direct MHA/GQA/MLA attention, without whole-history expansion; this path is inference-only. See the [API contracts and examples](../docs/en/native-pytorch-api.md#packed-quantization-and-checkpoint-import).
 
 ## LoRA, NF4 and causal fine-tuning
 

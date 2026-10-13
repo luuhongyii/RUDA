@@ -2,6 +2,12 @@
 
 [目次](README.md) · [詳細なメソッド参照](../en/native-pytorch-api.md)
 
+## Packed 量子化と量子化 KV キャッシュ
+
+Packed API 1 は `PackedQuantizedTensor`、`PackedLinear`、`PackedEmbedding` による INT2/3/4/5/6/8、FP4 E2M1、FP8 E4M3/E5M2 を提供します。Linear は凍結重みへの入力勾配を扱い、スカラー FP32 累積を使います。Tensor Core GEMM ではありません。`scaled_float8_mm` の出力は FP16/BF16/FP32 です。MinMax／Percentile／MSE、`QuantizationObserver`、`affine_fake_quantize` が校正／QAT を提供します。
+
+標準 GPTQ 2/3/4/8-bit（`g_idx`、v1/v2）と GGUF v2/v3 の Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q8_1、Q2_K/Q3_K/Q4_K/Q5_K/Q6_K/Q8_K を読み込みます。Marlin、IQ/TQ は非対応です。モデル、対象モジュール、GGUF キー／行配置の対応は明示指定します。`QuantizedKVCache` と paged API 1 は圧縮 MHA/GQA/MLA キャッシュを直接読む推論専用経路で、逆伝播には浮動小数点キャッシュを使います。[シグネチャ、配置、使用例](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import)。
+
 [公開シグネチャ](python-api-signatures.md) · [並列学習、データと復旧](parallel-and-data.md)
 
 ## 乱数と状態
