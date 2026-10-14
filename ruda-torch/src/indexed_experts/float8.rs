@@ -120,8 +120,12 @@ fn finish_statistics(partials:&Array<f32>,offsets:&Array<u32>,out:&mut Array<f32
     while p<partials.len()/2 {maximum=f32::max(maximum,partials[p*2]);invalid=f32::max(invalid,partials[p*2+1]);p+=32;}
     maximum=plane_max(maximum);invalid=plane_max(invalid);
     if UNIT_POS==0 {
-        let at=((expert*2+role)*3) as usize;out[at]=if invalid==0.0 {maximum}else{0.0};out[at+1]=invalid;
-        out[at+2]=if comptime!(enabled) {f32::cast_from(offsets[expert as usize+1]>offsets[expert as usize])}else{0.0};
+        let at=((expert*2+role)*3) as usize;
+        if invalid!=0.0 {maximum=0.0;}
+        out[at]=maximum;out[at+1]=invalid;
+        let mut seen=0.0f32;
+        if comptime!(enabled) {seen=f32::cast_from(offsets[expert as usize+1]>offsets[expert as usize]);}
+        out[at+2]=seen;
     }
 }
 

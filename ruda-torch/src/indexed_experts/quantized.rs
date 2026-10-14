@@ -139,7 +139,7 @@ fn cooperative<F:Float>(x:&Array<F>,codes:&Array<u8>,scales:&Array<f32>,offsets:
         #[unroll]
         for i in 0usize..8usize {
             let t=lane+i*32;let row=row_base+t/16;let column=col+t%16;
-            if row<end && column<width {out[indices[row] as usize*width+column]=F::cast_from(result[t]);}
+            if row<end && column<width {let target=indices[row] as usize*width+column;out[target]=F::cast_from(result[t]);}
         }
         sync_ruda();if end-row_base<=step as usize {row_base=end;}else {row_base+=step as usize;}
     }
