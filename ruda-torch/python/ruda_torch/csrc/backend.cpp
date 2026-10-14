@@ -1,3 +1,6 @@
+#if defined(_WIN32) && !defined(NOMINMAX)
+#define NOMINMAX
+#endif
 #include <ATen/EmptyTensor.h>
 #include <ATen/ExpandUtils.h>
 #include <ATen/WrapDimUtils.h>
