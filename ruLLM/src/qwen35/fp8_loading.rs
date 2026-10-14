@@ -145,7 +145,7 @@ where R: DeviceRuntime, R::Server: ComputeServer, R::Device: DeviceOps,
     let output = weight.shape[0];
     let weight = from_data::<R>(weight, device); let scales = from_data::<R>(scales, device);
     let bias = bias.map(|data| Tensor::<DeviceBackend<R,F,I,BT>, 1>::from_data(data, (device, dtype)));
-    Ok(Projection::Packed(Arc::new(move |input| {
+    Ok(Projection::Packed(Arc::new(move |input: ruda_kernel::tensor::RudaTensor<R>| {
         let mut shape = input.meta.shape().clone();
         let last = shape.len() - 1; shape[last] = output;
         let value = float8_block::linear(input, &weight, &scales, block);

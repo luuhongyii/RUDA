@@ -178,7 +178,7 @@ impl<B:Backend,M:PrefixBatchModel<B>> PrefixBatchExecutor<'_,B,M> {
         }
         let logits=entry.logits.as_ref().map(|bytes| {
             let data:TensorData=rmp_serde::from_slice(bytes).map_err(|e|ContinuousBatchError(e.to_string()))?;
-            if data.shape!=[1,1,self.inner.model.batch_limits().vocab_size] || !data.dtype.is_float() {
+            if data.shape!=[1,1,self.inner.model.batch_limits().vocab_size].into() || !data.dtype.is_float() {
                 return Err(ContinuousBatchError("active swap logits have invalid shape or dtype".into()));
             }
             let dtype=data.dtype;Ok(Tensor::<B,3>::from_data(data,(&self.inner.device,dtype)))
