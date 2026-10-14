@@ -116,6 +116,8 @@ class TensorParallelGroup:
         self.group,self.cuda_index=group.group,group.cuda_index
         self._specs=[(name,id(p),tuple(p.shape),p.dtype,p.device,p.requires_grad) for name,p in model.named_parameters()]
         group.validate_training_options([(name,tuple(p.shape),str(p.dtype),p.requires_grad) for name,p in model.named_parameters()])
+        from ._tp_replicas import initialize_replicas
+        initialize_replicas(model,group)
 
     def gather_metadata(self,value):return self.transport.gather_metadata(value)
 
@@ -150,6 +152,17 @@ class TensorParallelGroup:
         requests=self.gather_metadata(flags)
         if missing=='error' and any(not all(value) for value in requests):
             raise ValueError('a tensor-parallel shard lacks a trainable gradient')
+        with torch.no_grad():
+            parameters = [p for p in self.model.parameters() if p.requires_grad]
+            for index, parameter in enumerate(parameters):
+                if getattr(parameter, '_ruda_sp_replicated', False):
+                    if not any(flags[index] for flags in requests):
+                        parameter.grad = None
+                        continue
+                    work = (torch.zeros_like(parameter, dtype=torch.float32) if parameter.grad is None
+                            else parameter.grad.float().contiguous().clone())
+                    self.transport.sum_(work)
+                    parameter.grad = work.to(parameter.dtype)
         if not normalized:
             with torch.no_grad():
                 for parameter in self.model.parameters():
@@ -175,4 +188,5 @@ class TensorParallelGroup:
         elif getattr(optimizer,'max_grad_norm',None) is not None and hasattr(optimizer,'_distributed_grad_norm'):
             from .sharded_optim import distributed_grad_norm
             optimizer._distributed_grad_norm=distributed_grad_norm(parameters,self.transport,loss_scale=loss_scale,
-                replicated_ids={id(p) for p in parameters if not getattr(p,'_ruda_tp_sharded',False)})
+                replication_factors={id(p):getattr(p,'_ruda_tp_replicas',1) if getattr(p,'_ruda_tp_sharded',False)
+                                     else self.world_size for p in parameters})

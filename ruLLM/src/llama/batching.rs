@@ -42,11 +42,22 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
             let k=attn.k_proj.forward(input.clone()).reshape([b,s,kh,d]).swap_dims(1,2);
             let v=attn.v_proj.forward(input).reshape([b,s,kh,d]).swap_dims(1,2);
             let mut queries=Vec::with_capacity(b);let mut keys=Vec::with_capacity(b);
+            let mut rotary_updates=Vec::with_capacity(b);
             for (row,sequence) in batch.sequences.iter().enumerate() {
-                queries.push(attn.apply_rope(q.clone().slice([row..row+1,0..h,0..s,0..d]),sequence.start_position));
-                keys.push(attn.apply_rope(k.clone().slice([row..row+1,0..kh,0..s,0..d]),sequence.start_position));
+                let query=q.clone().slice([row..row+1,0..h,0..s,0..d]);
+                let key=k.clone().slice([row..row+1,0..kh,0..s,0..d]);
+                match &attn.rotary_state {
+                    Some(template)=>{
+                        let state=cache.rotary_state(sequence.request_id,index,sequence.start_position,template)?;
+                        queries.push(state.apply(query,sequence.start_position,sequence.context_length));
+                        keys.push(state.apply(key,sequence.start_position,sequence.context_length));
+                        rotary_updates.push((sequence.request_id,sequence.context_length,state));
+                    }
+                    None=>{queries.push(attn.apply_rope(query,sequence.start_position));keys.push(attn.apply_rope(key,sequence.start_position));}
+                }
             }
             let context=cache.attention(index,batch,Tensor::cat(queries,0),Tensor::cat(keys,0),v,(d as f32).sqrt().recip())?;
+            for (id,end,state) in rotary_updates {cache.commit_rotary(id,index,end,&state)?;}
             let attention=attn.finish(context);
             let attention=match reduction {Some(reduce)=>reduce(attention),None=>attention};
             hidden=hidden+attention;

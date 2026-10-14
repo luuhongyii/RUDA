@@ -10,10 +10,11 @@ from ._architecture_ops import masked_softmax,positions,precision_context,work_d
 
 _native_lock = RLock()
 _native_ready = False
+_indexed_native_ready = False
 
 
-def _initialize_dense():
-    global _native_ready
+def _initialize_dense(indexed=False):
+    global _native_ready, _indexed_native_ready
     from . import _C, _native
     with _native_lock:
         if not _native_ready:
@@ -24,10 +25,19 @@ def _initialize_dense():
                 raise RuntimeError('dense attention API mismatch; rebuild both native libraries')
             _C.initialize_dense_attention(ctypes.cast(_native.ruda_torch_dense_attention,ctypes.c_void_p).value)
             _native_ready = True
+        if indexed and not _indexed_native_ready:
+            version=getattr(_native,'ruda_torch_indexed_dense_attention_api_version',None)
+            if version is None or getattr(_C,'indexed_dense_attention_api_version',0)!=1:
+                raise RuntimeError('indexed dense attention requires rebuilding both native libraries')
+            version.restype=ctypes.c_uint32
+            if version()!=1:
+                raise RuntimeError('indexed dense attention API mismatch')
+            _C.initialize_indexed_dense_attention(ctypes.cast(_native.ruda_torch_indexed_dense_attention,ctypes.c_void_p).value)
+            _indexed_native_ready=True
     return _C
 
 
-def _fused_dense(query,key,value,mask,p,causal,scale,gqa):
+def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,global_heads=None,head_start=None,rng_state=None):
     batch = torch.broadcast_shapes(query.shape[:-3],key.shape[:-3],value.shape[:-3])
     if gqa:
         heads,kv_heads = query.shape[-3],key.shape[-3]
@@ -61,13 +71,19 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa):
     v = value.expand(*batch,kv_heads,s,dv).contiguous().reshape(b,kv_heads,s,dv)
     shape = (*batch,heads,l,s)
     with precision_context(query):
-        from ._dense_ops import forward
-        result = forward(q,k,v,mask,list(shape),kind,causal,scale,p)[0]
+        from ._dense_ops import forward,indexed_forward
+        if tensor_group is None and global_heads is None and head_start is None and rng_state is None:
+            result = forward(q,k,v,mask,list(shape),kind,causal,scale,p)[0]
+        else:
+            from ._parallel_rng import head_partition
+            global_heads,head_start,groups=head_partition(heads,tensor_group,global_heads,head_start)
+            if rng_state is None:rng_state=torch.empty(0,device='cpu',dtype=torch.int64)
+            result=indexed_forward(q,k,v,mask,list(shape),kind,causal,scale,p,global_heads,head_start,groups,rng_state)[0]
     return result.reshape(*batch,heads,l,dv)
 
 
 def scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,is_causal=False,
-                                 scale=None,enable_gqa=False):
+                                 scale=None,enable_gqa=False,tensor_group=None,global_heads=None,head_start=None,rng_state=None):
     """First-order MHA/GQA attention; tensor operations stay on the source device.
 
     RUDA uses plane-cooperative fused online softmax and recomputed backward,
@@ -93,7 +109,10 @@ def scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,i
         if key.shape[-3]!=value.shape[-3] or query.shape[-3]%key.shape[-3]:
             raise ValueError('GQA query heads must divide the common KV head count')
     if query.device.type=='ruda' and query.dtype in (torch.float16,torch.bfloat16,torch.float32) and query.shape[-1]>0 and value.shape[-1]>0:
-        return _fused_dense(query,key,value,attn_mask,dropout_p,is_causal,factor,enable_gqa)
+        return _fused_dense(query,key,value,attn_mask,dropout_p,is_causal,factor,enable_gqa,
+            tensor_group,global_heads,head_start,rng_state)
+    if tensor_group is not None or global_heads is not None or head_start is not None or rng_state is not None:
+        raise ValueError('globally indexed attention requires the RUDA native attention path')
     if enable_gqa:
         repeats=query.shape[-3]//key.shape[-3]
         key=key.repeat_interleave(repeats,dim=-3)

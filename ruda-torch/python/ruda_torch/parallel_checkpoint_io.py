@@ -68,7 +68,7 @@ def load_tensor_parallel_safetensors(model,directory,group,*,device,dtype=torch.
         for name,tensor in tensors:
             if id(tensor) in tied:overrides[name]=tied[id(tensor)]
     for name,module in selected.items():
-        _geometry(module.out_features,module.in_features,block_size,1 if isinstance(module,RowParallelLinear) else 0,group.world_size)
+        _geometry(module.out_features,module.in_features,block_size,1 if isinstance(module,RowParallelLinear) else 0,group.world_size//getattr(module,'replicas',1))
         weight=name+'.weight'
         if weight in parameter_dtypes:raise ValueError('exclude dtype-preserved weights from NF4 targets')
         consumers={path+'.weight' for path,other in selected.items() if other is module}
@@ -128,7 +128,8 @@ def load_tensor_parallel_safetensors(model,directory,group,*,device,dtype=torch.
             if full or axis is None:value=source.get_tensor(key)
             else:
                 selection=[slice(None)]*tensor.ndim
-                selection[axis]=slice(group.rank*tensor.shape[axis],(group.rank+1)*tensor.shape[axis])
+                shard=group.rank//layout.get(name,{}).get('tp_replicas',1)
+                selection[axis]=slice(shard*tensor.shape[axis],(shard+1)*tensor.shape[axis])
                 value=source.get_slice(key)[tuple(selection)]
         if value.is_floating_point()!=tensor.is_floating_point():
             raise ValueError(f'checkpoint tensor kind differs: {name}')
@@ -151,7 +152,7 @@ def load_tensor_parallel_safetensors(model,directory,group,*,device,dtype=torch.
                 packed=NF4Linear.from_linear(dense,block_size=block_size,tile_rows=tile_rows)
                 del dense
             if isinstance(base,ColumnParallelLinear):
-                replacement=ColumnParallelNF4Linear(packed,group,gather_output=base.gather_output)
+                replacement=ColumnParallelNF4Linear(packed,group,gather_output=base.gather_output,replicas=getattr(base,'replicas',1))
             else:replacement=RowParallelNF4Linear(packed,group,input_is_parallel=base.input_is_parallel)
             del packed
             replacements[id(base)]=replacement.to(device=device).train(base.training)
@@ -167,6 +168,7 @@ def load_tensor_parallel_safetensors(model,directory,group,*,device,dtype=torch.
             if isinstance(original,nn.Parameter):
                 value=nn.Parameter(value,requires_grad=original.requires_grad)
                 if getattr(original,'_ruda_tp_sharded',False):value._ruda_tp_sharded=True
+                if hasattr(original,'_ruda_tp_replicas'):value._ruda_tp_replicas=original._ruda_tp_replicas
             loaded[id(original)]=value
         setattr(parent,leaf,loaded[id(original)])
     return model

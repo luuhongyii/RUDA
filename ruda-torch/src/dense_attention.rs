@@ -6,6 +6,57 @@ use ruda_core::tensor::DType;
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_dense_attention_api_version() -> u32 { 1 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_indexed_dense_attention_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_attention_dropout_api_version() -> u32 { 1 }
+
+pub(super) fn validate_dropout(vs: &[View], ints: &[i64], p: f32) -> u64 {
+    assert_eq!(vs.len(),2);assert_eq!(ints.len(),7);assert!((0.0..=1.0).contains(&p));
+    let output=&vs[1];packed(output);assert!(output.dtype<=2);assert_eq!(vs[0].dtype,output.dtype);
+    assert_eq!(vs[0].len,0);assert_eq!(output.shape.len(),4);
+    assert_eq!(output.shape[0] as i64,ints[0]);assert!(ints[0]>=0);
+    let mut scores=ints[0];
+    for axis in 1..4 {
+        assert!(ints[axis]>=0 && ints[axis+3]>=0 && (output.shape[axis] as i64)<=ints[axis]
+            && ints[axis+3]<=ints[axis]-output.shape[axis] as i64);
+        scores=scores.checked_mul(ints[axis]).expect("dropout logical size overflow");
+    }
+    (scores as u64).div_ceil(4)
+}
+
+pub(super) fn prepare_dropout(c: &ComputeClient<CudaRuntime>, vs: &[View], ints: &[i64],
+    p: f32, seed: u64, counter: u64) -> PreparedKernel<CudaRuntime> {
+    counter.checked_add(validate_dropout(vs,ints,p)).expect("dropout RNG counter exhausted");
+    let out=&vs[1];let tensor=primitives::tensor(out);
+    unsafe { kernel::dropout_mask::prepare::<CudaRuntime>(c,
+        RudaCount::Static(out.len.div_ceil(128).max(1) as u32,1,1),RudaDim::new_1d(128),tensor.clone().into_array_arg(),
+        out.shape[1] as u32,out.shape[2] as u32,out.shape[3] as u32,
+        ints[1],ints[2],ints[3],ints[4],ints[5],ints[6],p,
+        seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,tensor.dtype.into()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ruda_torch_attention_dropout(descriptors: *const Descriptor,
+    integers: *const i64, p: f32, seed: u64, counter: u64) -> i32 {
+    checked(|| {
+        let vs:Vec<_>=unsafe { crate::abi::slice(descriptors,2) }.iter().map(|d|unsafe { crate::abi::view(d) }).collect();
+        let ints=unsafe { crate::abi::slice(integers,7) };
+        counter.checked_add(validate_dropout(&vs,ints,p)).expect("dropout RNG counter exhausted");
+        let c=client();let out=&vs[1];let tensor=primitives::tensor(out);
+        if out.len>0 {
+            unsafe { kernel::dropout_mask::launch::<CudaRuntime>(&c,
+                RudaCount::Static(out.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),tensor.clone().into_array_arg(),
+                out.shape[1] as u32,out.shape[2] as u32,out.shape[3] as u32,
+                ints[1],ints[2],ints[3],ints[4],ints[5],ints[6],p,
+                seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,tensor.dtype.into()); }
+            LAUNCHES.fetch_add(1,Ordering::Relaxed);
+        }
+        finish_dispatch(&c);
+    })
+}
+
 fn packed(view: &View) {
     let mut stride = 1usize;
     for d in (0..view.shape.len()).rev() {
@@ -22,6 +73,20 @@ fn packed(view: &View) {
 pub unsafe extern "C" fn ruda_torch_dense_attention(op: u32, descriptors: *const Descriptor,
     count: usize, mask_kind: u32, causal: bool, scale: f32, dropout_p: f32,
     seed: u64, counter: u64, need_mask: bool) -> i32 {
+    unsafe { dispatch(op, descriptors, count, mask_kind, causal, scale, dropout_p, seed, counter, need_mask, None) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ruda_torch_indexed_dense_attention(op: u32, descriptors: *const Descriptor,
+    count: usize, mask_kind: u32, causal: bool, scale: f32, dropout_p: f32,
+    seed: u64, counter: u64, need_mask: bool, global_heads: i64, head_start: i64) -> i32 {
+    unsafe { dispatch(op, descriptors, count, mask_kind, causal, scale, dropout_p, seed, counter, need_mask,
+        Some((global_heads, head_start))) }
+}
+
+unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_kind: u32,
+    causal: bool, scale: f32, dropout_p: f32, seed: u64, counter: u64, need_mask: bool,
+    head_partition: Option<(i64, i64)>) -> i32 {
     checked(|| {
         assert!(op <= 1 && mask_kind <= 2 && !descriptors.is_null());
         assert_eq!(count, if op == 0 { 6 } else { 10 });
@@ -40,7 +105,11 @@ pub unsafe extern "C" fn ruda_torch_dense_attention(op: u32, descriptors: *const
         assert_eq!(v.shape, vec![b,kh,s,dv]);
         let rows = b.checked_mul(h).and_then(|n| n.checked_mul(l)).expect("attention rows overflow");
         let scores = rows.checked_mul(s).filter(|&n| n <= u32::MAX as usize).expect("attention RNG/index range exceeds U32");
-        counter.checked_add(scores.div_ceil(4) as u64).expect("attention RNG counter exhausted");
+        let (global_heads, head_start) = head_partition.unwrap_or((h as i64, 0));
+        assert!(global_heads >= h as i64 && head_start >= 0 && head_start <= global_heads - h as i64);
+        let global_scores = (b as i64).checked_mul(global_heads).and_then(|n|n.checked_mul(l as i64))
+            .and_then(|n|n.checked_mul(s as i64)).expect("global attention RNG index overflow");
+        counter.checked_add((global_scores as u64).div_ceil(4)).expect("attention RNG counter exhausted");
         assert_eq!(mask.dtype, 0);
         if mask_kind != 0 { assert_eq!(mask.len, scores); }
         let stats = &xs[5]; packed(stats);
@@ -58,6 +127,7 @@ pub unsafe extern "C" fn ruda_torch_dense_attention(op: u32, descriptors: *const
                     qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),mt.into_tensor_arg(),
                     ot.into_array_arg(),st.into_array_arg(),h as u32,kh as u32,l as u32,s as u32,scale,dropout_p,
                     seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,
+                    global_heads,head_start,
                     d,dv,32,causal,mask_kind,dropout_p != 0.0,primitives::tensor(q).dtype.into()); }
                 LAUNCHES.fetch_add(1,Ordering::Relaxed);
             }
@@ -89,6 +159,7 @@ pub unsafe extern "C" fn ruda_torch_dense_attention(op: u32, descriptors: *const
                     wkt.clone().into_array_arg(),wvt.clone().into_array_arg(),dmt.into_array_arg(),
                     h as u32,kh as u32,l as u32,s as u32,scale,dropout_p,
                     seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,
+                    global_heads,head_start,
                     d,dv,32,causal,mask_kind,dropout_p != 0.0,need_mask,
                     match q.dtype {0=>DType::F32,1=>DType::F16,2=>DType::BF16,_=>unreachable!()}.into()); }
                 LAUNCHES.fetch_add(1,Ordering::Relaxed);

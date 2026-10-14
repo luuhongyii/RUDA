@@ -9,6 +9,90 @@ from ._compile_native import NativeCoverageError, _stream_id, partition
 from ._compile_shapes import ShapeSpecializationError, attribute, specialize, value_key
 
 
+def has_dynamic_collective(reference):
+    from ._compile_collectives import definition
+    return any((spec := definition(node)) is not None and spec[0] == 'ruda::expert_exchange'
+               for node in reference.graph.nodes)
+
+
+def stage_dynamic_collectives(reference, state, phase, options):
+    """Bind receive-size symbols after communication, without replaying dispatch."""
+    import operator
+    from torch.fx import Graph, GraphModule
+    from torch.fx.node import map_arg
+    from ._compile_collectives import CollectiveRegion, definition
+    from ._compile_shapes import needs_specialization
+    graph, root, env, pending = Graph(), torch.nn.Module(), {}, []
+    serial = 0
+
+    def install(module):
+        nonlocal serial
+        name = f'_ruda_stage_{serial}'
+        serial += 1
+        root.add_module(name, module)
+        return name
+
+    def flush():
+        if not pending:
+            return
+        members = set(pending)
+        outputs = [node for node in pending if any(user not in members for user in node.users)]
+        dependencies = []
+        def dependency(node):
+            if node not in members and node not in dependencies:
+                dependencies.append(node)
+            return node
+        for node in pending:
+            map_arg((node.args, node.kwargs), dependency)
+        piece, local = Graph(), {}
+        for source in dependencies:
+            local[source] = piece.placeholder(source.name)
+            local[source].meta = dict(source.meta)
+        for source in pending:
+            local[source] = piece.node_copy(source, lambda node: local[node])
+        piece.output(tuple(local[node] for node in outputs))
+        module = GraphModule(reference, piece)
+        label = f'{phase}/stage-{serial}'
+        lowered = (DynamicGraph(module, state, label, options) if needs_specialization(module)
+                   else partition(module, state, label, options))
+        call = graph.call_module(install(lowered), tuple(env[node] for node in dependencies))
+        for index, source in enumerate(outputs):
+            env[source] = graph.call_function(operator.getitem, (call, index))
+            env[source].meta = dict(source.meta)
+        pending.clear()
+
+    for node in reference.graph.nodes:
+        if node.op == 'placeholder':
+            env[node] = graph.node_copy(node, lambda source: env[source])
+        elif node.op == 'get_attr':
+            name = f'_ruda_attribute_{len(env)}'
+            value = attribute(reference, node.target)
+            if isinstance(value, torch.nn.Parameter):
+                root.register_parameter(name, value)
+            elif isinstance(value, torch.Tensor):
+                root.register_buffer(name, value)
+            else:
+                setattr(root, name, value)
+            env[node] = graph.get_attr(name)
+            env[node].meta = dict(node.meta)
+        elif node.op == 'output':
+            flush()
+            graph.output(map_arg(node.args[0], lambda source: env[source]))
+        elif (spec := definition(node)) is not None and spec[0] == 'ruda::expert_exchange':
+            flush()
+            module = CollectiveRegion(node, state, phase, options)
+            state.register_region(module)
+            env[node] = graph.call_module(install(module), tuple(env[source] for source in module.dependencies))
+            env[node].meta = dict(node.meta)
+            state.record({'phase': phase, 'operator_count': 1, 'native_candidate_ops': 1,
+                'planned_native_ops': 1, 'native_metadata_ops': 0, 'host_metadata_ops': 0,
+                'native_regions': 1, 'device_dispatch_ops': [],
+                'operators': [{'node': node.name, 'target': str(node.target), 'execution': 'native-dynamic-collective-program'}]})
+        else:
+            pending.append(node)
+    return GraphModule(root, graph)
+
+
 class _SpecializationState:
     """Own regions locally: eviction must not leave them in the backend registry."""
     def __init__(self, parent):

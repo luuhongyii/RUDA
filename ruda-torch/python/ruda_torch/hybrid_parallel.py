@@ -72,6 +72,8 @@ class DataTensorParallelGroup:
         total=self.total_weight(local_weight)
         self.validate_training_options((normalized,missing))
         self.data.synchronize_gradients(local_weight=local_weight,normalized=normalized,missing=missing)
+        from .sequence_parallel import synchronize_sequence_gradients
+        synchronize_sequence_gradients(self.model.parameters(), self.tensor)
         self._complete_logical_gradients(list(self.model.parameters()))
         return total
 
@@ -88,11 +90,13 @@ class DataTensorParallelGroup:
                 if active and parameter.grad is None:parameter.grad=torch.zeros_like(parameter)
 
     def begin_gradient_overlap(self,*,global_weight,normalized=False,bucket_bytes=25*1024*1024):
-        return self.data.begin_gradient_overlap(global_weight=global_weight,normalized=normalized,bucket_bytes=bucket_bytes)
+        from .sequence_parallel import SequenceGradientOverlap
+        pending = self.data.begin_gradient_overlap(global_weight=global_weight,normalized=normalized,bucket_bytes=bucket_bytes)
+        return SequenceGradientOverlap(pending, self.model.parameters(), self.tensor)
 
     def replication_factors(self,parameters):
         data,_,tensor=self.mesh.shape
-        return {id(p):data*(1 if getattr(p,'_ruda_tp_sharded',False) else tensor) for p in parameters}
+        return {id(p):data*(getattr(p,'_ruda_tp_replicas',1) if getattr(p,'_ruda_tp_sharded',False) else tensor) for p in parameters}
 
     def prepare_optimizer_step(self,optimizer,*,loss_scale=1.):
         from .sharded_training import Zero2Optimizer
@@ -104,6 +108,9 @@ class DataTensorParallelGroup:
         parameters=[p for options in actual.param_groups for p in options['params']]
         original_by_shard={id(shard):original for original,shard in optimizer.entries} if zero else {}
         originals=[original_by_shard[id(p)] for p in parameters] if zero else parameters
+        if zero:
+            from .sequence_parallel import synchronize_sequence_gradients
+            synchronize_sequence_gradients(parameters, self.tensor, originals)
         names={id(p):name for name,p in self.model.named_parameters()}
         self.validate_training_options([names[id(p)] for p in originals])
         if isinstance(actual,Muon) and any(getattr(p,'_ruda_tp_sharded',False) for p in originals):
@@ -123,7 +130,7 @@ class DataTensorParallelGroup:
             return
         if getattr(actual,'max_grad_norm',None) is not None and hasattr(actual,'_distributed_grad_norm'):
             data,_,tensor=self.mesh.shape
-            factors={id(p):(1 if zero else data)*(tensor if not getattr(original,'_ruda_tp_sharded',False) else 1)
+            factors={id(p):(1 if zero else data)*(tensor if not getattr(original,'_ruda_tp_sharded',False) else getattr(original,'_ruda_tp_replicas',1))
                      for p,original in zip(parameters,originals,strict=True)}
             norm=distributed_grad_norm(parameters,self.transport,loss_scale=loss_scale,replication_factors=factors)
             if zero:optimizer._mesh_grad_norm=norm

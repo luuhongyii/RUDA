@@ -52,6 +52,20 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
 impl<R,F,I,BT> PrefixBatchModel<DeviceBackend<R,F,I,BT>> for CausalBatchModel<DeviceBackend<R,F,I,BT>>
 where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement,I:IntElement,BT:BoolElement {
     type Prefix=CausalBatchPrefix<DeviceBackend<R,F,I,BT>>;
+    fn prefix_tensor_transfer(&self)->bool {match self {Self::Dense(m)=>m.prefix_tensor_transfer(),Self::Qwen35(m)=>m.prefix_tensor_transfer(),Self::KimiLinear(m)=>m.prefix_tensor_transfer()}}
+    fn export_prefix_tensors(&self,prefix:&Self::Prefix,shard:crate::PrefixShard)
+        ->Result<crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,GenerationError> {match (self,prefix) {
+        (Self::Dense(m),CausalBatchPrefix::Dense(p))=>m.export_prefix_tensors(p,shard),
+        (Self::Qwen35(m),CausalBatchPrefix::Qwen35(p))=>m.export_prefix_tensors(p,shard),
+        (Self::KimiLinear(m),CausalBatchPrefix::KimiLinear(p))=>m.export_prefix_tensors(p,shard),
+        _=>Err(error("causal prefix tensor variants differ")),
+    }}
+    fn import_prefix_tensors(&self,tensors:&crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,shard:crate::PrefixShard,device:&R::Device)
+        ->Result<Self::Prefix,GenerationError> {match self {
+        Self::Dense(m)=>m.import_prefix_tensors(tensors,shard,device).map(CausalBatchPrefix::Dense),
+        Self::Qwen35(m)=>m.import_prefix_tensors(tensors,shard,device).map(CausalBatchPrefix::Qwen35),
+        Self::KimiLinear(m)=>m.import_prefix_tensors(tensors,shard,device).map(CausalBatchPrefix::KimiLinear),
+    }}
     fn capture_prefix(&self,state:&Self::Cache,id:RequestId)->Result<Self::Prefix,GenerationError> {match (self,state) {
         (Self::Dense(m),CausalBatchCache::Dense(c))=>m.capture_prefix(c,id).map(CausalBatchPrefix::Dense),
         (Self::Qwen35(m),CausalBatchCache::Qwen35(c))=>m.capture_prefix(c,id).map(CausalBatchPrefix::Qwen35),

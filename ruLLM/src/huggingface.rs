@@ -49,6 +49,7 @@ struct HuggingFaceLlamaConfig {
     rope_theta: Option<f32>,
     rope_scaling: Option<serde_json::Value>,
     rope_parameters: Option<serde_json::Value>,
+    layer_types: Option<Vec<String>>,
     original_max_position_embeddings: Option<usize>,
     partial_rotary_factor: Option<f64>,
     hidden_act: Option<String>,
@@ -354,6 +355,11 @@ pub fn load_huggingface_qwen2<B: Backend>(
 }
 
 impl<B: Backend> LoadedHuggingFaceLlama<B> {
+    pub fn set_context_limit(&mut self, length: usize) -> Result<(), GenerationError> {
+        self.model.set_context_limit(length)?;
+        self.config.max_sequence_length = length;
+        Ok(())
+    }
     /// Decode token IDs with the loaded model. An empty EOS list inherits the
     /// exact `eos_token_id` value from Hugging Face `config.json`.
     pub fn generate_tokens(
@@ -376,6 +382,11 @@ impl<B: Backend> LoadedHuggingFaceLlama<B> {
 }
 
 impl<B: Backend> LoadedHuggingFaceQwen2<B> {
+    pub fn set_context_limit(&mut self, length: usize) -> Result<(), GenerationError> {
+        self.model.set_context_limit(length)?;
+        self.config.max_sequence_length = length;
+        Ok(())
+    }
     /// Decode with Qwen's architecture-specific model. An empty EOS list
     /// inherits the exact scalar or list value from `config.json`.
     pub fn generate_tokens(

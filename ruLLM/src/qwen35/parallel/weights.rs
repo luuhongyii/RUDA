@@ -34,6 +34,7 @@ pub(super) struct Weights<'a, B: Backend> {
     pub quantization: Option<AwqQuantizationConfig>,
     pub dtype: DType,
     pub packed: Option<PackedPartLoader<B>>,
+    pub fp8: Option<super::super::fp8_loading::Weights<B>>,
     pub dense_awq: usize,
     pub packed_awq: usize,
 }
@@ -82,6 +83,21 @@ impl<B: Backend> Weights<'_, B> {
     pub fn projection(&mut self, prefix: &str, input: usize, output: usize, bias: bool, part: Part)
         -> Result<Projection<B>, HuggingFaceLoadError> {
         part.validate(input, output)?;
+        if let Some(fp8) = &mut self.fp8 {
+            if fp8.is_encoded(&format!("{prefix}.weight")) {
+                let mut projections = Vec::with_capacity(part.output.len());
+                for rows in &part.output {
+                    projections.push(fp8.projection(self.checkpoint, prefix, input, output, part.input.clone(), rows.clone(),
+                        bias, part.bias, self.dtype, self.device)?);
+                }
+                if projections.len() == 1 { return Ok(projections.remove(0)); }
+                return Ok(Projection::Packed(std::sync::Arc::new(move |input| {
+                    let input = Tensor::<B, 3>::from_primitive(TensorPrimitive::Float(input));
+                    Tensor::cat(projections.iter().map(|projection| projection.forward(input.clone())).collect(), 2)
+                        .into_primitive().tensor()
+                })));
+            }
+        }
         let weight = if self.checkpoint.tensors.contains_key(&format!("{prefix}.qweight")) {
             let config = self.quantization.as_ref().ok_or_else(|| HuggingFaceLoadError(format!("{prefix}: missing AWQ configuration")))?;
             if config.modules_to_not_convert.as_ref().is_some_and(|names| names.iter().any(
@@ -120,6 +136,11 @@ impl<B: Backend> Weights<'_, B> {
 impl<B: Backend> super::super::moe::Weights<B> for Weights<'_, B> {
     fn checkpoint(&mut self) -> &mut Checkpoint { self.checkpoint }
     fn device(&self) -> B::Device { self.device.clone() }
+    fn fp8_block(&self) -> Option<[usize; 2]> { self.fp8.as_ref().map(|weights| weights.config.block) }
+    fn fp8_projection(&mut self, weight: TensorData, scales: TensorData) -> Result<Projection<B>, HuggingFaceLoadError> {
+        self.fp8.as_mut().ok_or_else(|| HuggingFaceLoadError("missing FP8 expert backend".into()))?
+            .from_data(weight, scales, None, self.dtype, self.device)
+    }
     fn mlp_projection(&mut self, prefix: &str, input: usize, output: usize,
         selection: Option<(usize, Range<usize>)>) -> Result<Projection<B>, HuggingFaceLoadError> {
         let part = match selection {

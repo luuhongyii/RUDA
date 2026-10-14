@@ -56,7 +56,9 @@ def training_state_dict(model, optimizer, *, base_id, step, data_state, scaler=N
     layout = _optimizer_layout(model, optimizer)
     schema = _tensor_schema(model)
     model_state = model.state_dict()
+    from .float8_parallel import recipe_contract
     state = {'format': 'ruda-training', 'version': 1, 'base_id': base_id, 'step': step,
+             'float8_recipe': recipe_contract(model),
              'model': _cpu_tree(model_state), 'model_schema': schema,
              'model_metadata': _cpu_tree(getattr(model_state, '_metadata', None)),
              'optimizer': _cpu_tree(optimizer.state_dict()),
@@ -77,6 +79,8 @@ def validate_training_state_dict(model, optimizer, state, *, base_id, scaler=Non
     """Check model, actual ties, optimizer/scaler and device-RNG contracts before load."""
     if not isinstance(state, dict) or state.get('format') != 'ruda-training' or state.get('version') != 1 or state.get('base_id') != base_id:
         raise ValueError('full training checkpoint format or initial-model identity differs')
+    from .float8_parallel import validate_recipe_contract
+    validate_recipe_contract(model, state.get('float8_recipe'))
     if type(state['step']) is not int or state['step'] < 0 or state['model_schema'] != _tensor_schema(model):
         raise ValueError('full training model geometry, dtype, frozen flags or tied aliases differ')
     name = type(optimizer).__module__ + '.' + type(optimizer).__qualname__

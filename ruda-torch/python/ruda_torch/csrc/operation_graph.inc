@@ -33,10 +33,25 @@ class OperationGraphBridge {
  public:
   OperationGraphBridge(uint32_t kind,const std::vector<at::Tensor>& tensors,const std::vector<int64_t>& integers,
       const std::vector<float>& scalars,const std::vector<int64_t>& score_shape):tensors_(tensors),kind_(kind) {
-    TORCH_CHECK(operation_graph_native && kind<=26,"operation graph API 1 unavailable or invalid kind");
+    TORCH_CHECK(operation_graph_native && kind<=44,"operation graph API 1 unavailable or invalid kind");
     const size_t counts[]={6,10,6,9,5,3,6,5,7,3,9,15,8,3,2,2},inputs[]={4,6,4,6,4,2,5,4,2,1,6,9,6,2,1,1};
-    TORCH_CHECK((kind==26 ? tensors.size()>=2 && tensors.size()<=3 : kind==25 ? tensors.size()>=3 && tensors.size()<=4 : kind>=23 ? tensors.size()==(kind==23 ? 4 : 6) : kind>=21 ? tensors.size()==(kind==21 ? 3 : 4) : kind==19 ? tensors.size()==2 : kind>=17 ? tensors.size()>=2 && tensors.size()<=3 : kind==16 ? tensors.size()>=2 : tensors.size()==counts[kind]) && integers.size()<=(kind==19 ? 19 : 8) && scalars.size()<=4,"invalid operation graph signature");
-    inputs_=kind==24 ? 4 : (kind==20 || kind==26) ? 1 : kind>=16 ? tensors.size()-1 : inputs[kind];stream_=stream_command(0);
+    TORCH_CHECK((kind==44 ? integers.size()==15 && integers[1]>=1 && integers[1]<=16 && integers[2]>=0 && integers[2]<=2
+        && tensors.size()==size_t(integers[2]==2?2*integers[1]+5:integers[1]+6)
+      : kind==43 ? integers.size()==9 && integers[1]>=1 && integers[1]<=16 && tensors.size()==size_t(integers[1]+5)
+      : kind==42 ? integers.size()==7 && integers[1]>=1 && integers[1]<=16 && integers[2]>=0 && integers[2]<=2
+        && tensors.size()==size_t(integers[2]==2?2*integers[1]+4:integers[1]+5)
+      : kind==41 ? integers.size()==3 && integers[1]>=1 && integers[1]<=16 && tensors.size()==size_t(integers[1]+3)
+      : kind==40 ? integers.size()>=3 && integers[1]>=1 && integers[1]<=16
+        && integers.size()==size_t(3+6*integers[1]) && tensors.size()==size_t(3+4*integers[1])
+      : kind==39 ? tensors.size()==2 && integers.size()==2
+      : kind==38 ? integers.size()==4 && integers[1]>=1 && integers[1]<=16 && tensors.size()==size_t(2*integers[1]+4)
+      : kind==37 ? tensors.size()==2 && integers.size()==7
+      : kind>=35 ? tensors.size()==(kind==35 ? 6 : 10) && integers.size()==5
+      : kind>=33 ? tensors.size()==(kind==33 ? 2 : 4) && integers.size()==(kind==33 ? 6 : 8)
+      : kind>=31 ? integers.size()==2 && integers[1]>=1 && integers[1]<=16
+        && tensors.size()==size_t(kind==31 ? integers[1]+3 : 2*integers[1]+4)
+      : kind==30 ? tensors.size()==8 : kind==29 ? tensors.size()==6 : kind>=27 ? tensors.size()==(kind==27 ? 3 : 5) : kind==26 ? tensors.size()>=2 && tensors.size()<=3 : kind==25 ? tensors.size()>=3 && tensors.size()<=4 : kind>=23 ? tensors.size()==(kind==23 ? 4 : 6) : kind>=21 ? tensors.size()==(kind==21 ? 3 : 4) : kind==19 ? tensors.size()==2 : kind>=17 ? tensors.size()>=2 && tensors.size()<=3 : kind==16 ? tensors.size()>=2 : tensors.size()==counts[kind]) && integers.size()<=(kind==40 ? 99 : kind==19 ? 19 : kind>=43 ? 15 : 8) && scalars.size()<=4,"invalid operation graph signature");
+    inputs_=kind==44 ? integers[1]+5 : kind==43 ? integers[1]+3 : kind==42 ? integers[1]+4 : kind>=40 ? tensors.size()-1 : kind==39 ? 1 : kind==38 ? integers[1]+3 : kind==37 ? 1 : kind>=35 ? (kind==35 ? 4 : 6) : kind>=33 ? (kind==33 ? 1 : 2) : kind>=31 ? integers[1]+(kind==31 ? 2 : 3) : kind==30 ? 4 : kind==29 ? 3 : kind==24 ? 4 : (kind==20 || kind==26 || kind==27) ? 1 : kind>=16 ? tensors.size()-1 : inputs[kind];stream_=stream_command(0);
     for(size_t i=0;i<tensors_.size();++i) {
       const auto& t=tensors_[i];
       validate(t.device());
@@ -51,8 +66,8 @@ class OperationGraphBridge {
     }
     std::vector<Argument> args;args.reserve(tensors.size());
     for(size_t i=0;i<tensors.size();++i) {
-      if(kind<=1 && i==3) {
-        TORCH_CHECK(integers.size()==3,"invalid dense graph policy");
+      if((kind<=1 || kind==35 || kind==36) && i==3) {
+        TORCH_CHECK(integers.size()==(kind>=35?5:3),"invalid dense graph policy");
         args.emplace_back(integers[0]!=0 ? tensors[i].expand(score_shape) : tensors[i]);
       } else args.emplace_back(tensors[i]);
     }
@@ -71,7 +86,7 @@ class OperationGraphBridge {
   }
   void run(uint64_t seed=0,uint64_t counter=0) {
     std::lock_guard<std::mutex> guard(mutex_);check_bindings();
-    if(kind_==1 || kind_==3)at::globalContext().alertNotDeterministic("ruda::compiled_attention_backward");
+    if(kind_==1 || kind_==3 || kind_==36)at::globalContext().alertNotDeterministic("ruda::compiled_attention_backward");
     for(size_t i=inputs_;i<tensors_.size();++i)tensors_[i].unsafeGetTensorImpl()->bump_version();
     command(1,seed,counter);
   }

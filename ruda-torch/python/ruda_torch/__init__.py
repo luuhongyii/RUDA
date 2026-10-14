@@ -280,6 +280,61 @@ if _operation_graph_available and hasattr(_native,'ruda_torch_scatter_graph_api_
 
 _sorting_graph_available = (_operation_graph_available and _sorting_available
                             and getattr(_C,'sorting_graph_api_version',0)==1)
+_block_float8_graph_available = False
+if _operation_graph_available and hasattr(_native, 'ruda_torch_float8_block_api_version'):
+    _native.ruda_torch_float8_block_api_version.restype = ctypes.c_uint32
+    _block_float8_graph_available = (_native.ruda_torch_float8_block_api_version() == 1
+                                    and getattr(_C, 'block_float8_graph_api_version', 0) == 1)
+
+_delayed_float8_graph_available = False
+_shard_float8_graph_available = False
+_indexed_attention_graph_available = False
+_attention_dropout_graph_available = False
+if _operation_graph_available and hasattr(_native, 'ruda_torch_attention_dropout_api_version'):
+    _native.ruda_torch_attention_dropout_api_version.restype = ctypes.c_uint32
+    _attention_dropout_graph_available = (_native.ruda_torch_attention_dropout_api_version() == 1
+                                         and getattr(_C, 'attention_dropout_api_version', 0) == 1)
+if _operation_graph_available and hasattr(_native, 'ruda_torch_indexed_dense_attention_api_version'):
+    _native.ruda_torch_indexed_dense_attention_api_version.restype = ctypes.c_uint32
+    _indexed_attention_graph_available = (_native.ruda_torch_indexed_dense_attention_api_version() == 1
+                                         and getattr(_C, 'indexed_dense_attention_api_version', 0) == 1)
+if _operation_graph_available and hasattr(_native, 'ruda_torch_float8_shard_api_version'):
+    _native.ruda_torch_float8_shard_api_version.restype = ctypes.c_uint32
+    _shard_float8_graph_available = (_native.ruda_torch_float8_shard_api_version() == 1
+                                    and getattr(_C, 'float8_shard_api_version', 0) == 1)
+
+if _operation_graph_available and hasattr(_native, 'ruda_torch_delayed_float8_graph_api_version'):
+    _native.ruda_torch_delayed_float8_graph_api_version.restype = ctypes.c_uint32
+    _delayed_float8_graph_available = (_native.ruda_torch_delayed_float8_graph_api_version() == 1
+                                      and getattr(_C, 'delayed_float8_graph_api_version', 0) == 1)
+
+_indexed_expert_available = False
+if hasattr(_native, 'ruda_torch_indexed_expert_api_version'):
+    _native.ruda_torch_indexed_expert_api_version.restype = ctypes.c_uint32
+    _indexed_expert_available = (_native.ruda_torch_indexed_expert_api_version() == 1
+                                 and getattr(_C, 'indexed_expert_api_version', 0) == 1)
+_indexed_expert_graph_available = _operation_graph_available and _indexed_expert_available
+_indexed_expert_training_available = False
+if _indexed_expert_available and hasattr(_native,'ruda_torch_indexed_expert_training_api_version'):
+    _native.ruda_torch_indexed_expert_training_api_version.restype = ctypes.c_uint32
+    _indexed_expert_training_available = (_native.ruda_torch_indexed_expert_training_api_version() == 1
+                                         and getattr(_C,'indexed_expert_training_api_version',0) == 1)
+
+_indexed_block_float8_expert_available = False
+if hasattr(_native,'ruda_torch_indexed_block_float8_expert_api_version'):
+    _native.ruda_torch_indexed_block_float8_expert_api_version.restype = ctypes.c_uint32
+    _indexed_block_float8_expert_available = (_native.ruda_torch_indexed_block_float8_expert_api_version() == 1
+                                            and getattr(_C,'indexed_block_float8_expert_api_version',0) == 1)
+_indexed_float8_expert_available = False
+if hasattr(_native,'ruda_torch_indexed_float8_expert_api_version'):
+    _native.ruda_torch_indexed_float8_expert_api_version.restype = ctypes.c_uint32
+    _indexed_float8_expert_available = (_native.ruda_torch_indexed_float8_expert_api_version() == 1
+                                      and getattr(_C,'indexed_float8_expert_api_version',0) == 1)
+_indexed_quantized_expert_available = False
+if hasattr(_native,'ruda_torch_indexed_quantized_expert_api_version'):
+    _native.ruda_torch_indexed_quantized_expert_api_version.restype = ctypes.c_uint32
+    _indexed_quantized_expert_available = (_native.ruda_torch_indexed_quantized_expert_api_version() == 1
+                                          and getattr(_C,'indexed_quantized_expert_api_version',0) == 1)
 
 # Training is a separately negotiated extension. Explicit StaticGraph training
 # and model compilation remain opt-in. No CPU fallback is installed.
@@ -345,6 +400,7 @@ if hasattr(_native, 'ruda_torch_paged_quantized_api_version') and hasattr(_C, 'i
     _paged_quantized_available = True
 from .packed_quantization import (PackedQuantizedTensor, PackedLinear, PackedEmbedding, quantize_packed, scaled_float8_mm)
 from .float8_training import Float8Recipe, Float8Linear, float8_linear, convert_to_float8_training
+from .float8_scaling import Float8ScaleState, advance_float8_scales
 from .quantization_calibration import (calibrate_quantization, QuantizationObserver, affine_fake_quantize)
 from .quantized_cache import QuantizedKVCache, quantized_paged_attention
 
@@ -416,6 +472,20 @@ from .block_attention import block_scaled_dot_product_attention
 from .parallel_loss import vocab_parallel_cross_entropy
 from .transformers_attention import register_transformers_attention
 from .parallel_mesh import ParallelMesh, TensorParallelGroup
+from .expert_parallel import (ExpertPartition, ExpertParallelMLP, expert_parallelize_kimi,
+                             expert_parallelize_qwen35, expert_parallelize_qwen3,
+                             expert_parallelize_deepseek, expert_parallelize_moe)
+from .expert_training import ExpertParallelGroup
+from .expert_parallel import tensor_parallelize_experts
+from .expert_checkpoint import load_expert_parallel_safetensors
+from .model_parallel_mesh import ModelParallelMesh
+from .model_parallel_training import ModelParallelTrainingGroup
+from .context_parallel import RingAttention, ring_scaled_dot_product_attention
+from .context_recurrent import (context_parallel_kda, context_parallel_delta,
+    context_parallel_causal_conv1d, context_document_resets)
+from .sequence_parallel import (gather_sequence_parallel, reduce_scatter_sequence_parallel,
+    scatter_sequence_parallel, SequenceParallelColumnLinear, SequenceParallelRowLinear, sequence_parallelize)
+from .transformers_sequence_parallel import sequence_parallelize_transformers
 from .sharded_optim import ShardedMuon, distributed_grad_norm
 from .quantization_interop import bnb_nf4_linear, load_bnb_nf4_safetensors
 from .gptq import gptq_linear, load_gptq_safetensors
@@ -434,6 +504,7 @@ from .training_data import StatefulShardSampler,TokenBudgetBatchSampler,collate_
 from .varlen_attention import varlen_scaled_dot_product_attention
 from . import _varlen_ops
 from .causal_finetuning import PackedCausalLMFinetuner,CausalLMTrainer
+from .causal_finetuning import ContextParallelFinetuner
 from .training_checkpoint import training_state_dict,validate_training_state_dict,load_training_state_dict
 from .training_autotune import TrainingAutotuner,TrainingPlan,PipelineAutotuner
 from .architecture_cache import KVCache, KDAState, MambaState, ArchitectureCache
@@ -460,3 +531,14 @@ def tensor_parallelize_kimi(model, group, *, vocab_parallel=True):
 def enable_transformers_qwen35(model):
     from .transformers_qwen35 import enable_transformers_qwen35 as enable
     return enable(model)
+
+
+def enable_transformers_context_parallel(model, group, **kwargs):
+    from .transformers_context_parallel import enable_transformers_context_parallel as enable
+    return enable(model, group, **kwargs)
+
+
+from .transformers_context_parallel import (ContextParallelCausalLM, shard_context_batch,
+    context_parallel_cross_entropy, context_parallel_router_loss, register_transformers_ring_attention)
+from .deepseek_mtp import (DeepseekMtpForCausalLM,DeepseekMtpPredictor,DeepseekMtpTrainingOutput,DeepseekMtpTrainer,
+                          load_deepseek_mtp,parallelize_deepseek_mtp)

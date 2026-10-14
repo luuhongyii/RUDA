@@ -47,7 +47,7 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
         let features=batch.sequences.iter().map(|row|cache.requests[&row.request_id].pending.as_ref().unwrap().clone()).collect();
         let context=norm(self.fc.forward(Tensor::cat(features,0)),&self.hidden_norm,c.rms_norm_eps);
         let mut queries=batch.clone();let mut writes=batch.clone();
-        let mut tokens=Vec::with_capacity(b*s);let mut qcos=Vec::new();let mut qsin=Vec::new();let mut kcos=Vec::new();let mut ksin=Vec::new();
+        let mut tokens=Vec::with_capacity(b*s);
         for (number,row) in batch.sequences.iter().enumerate() {
             let old=cache.draft.sequence_length(row.request_id).unwrap_or(0);
             if old.checked_add(context_len)!=Some(row.start_position) {return Err(GenerationError("batched draft context position differs".into()));}
@@ -57,14 +57,22 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
             let q=&mut queries.sequences[number];q.token_ids=vec![self.mask;s];q.token_ids[0]=row.token_ids[0];q.context_length=end;q.block_table=table.clone();
             let w=&mut writes.sequences[number];w.start_position=old;w.context_length=end;w.token_ids=vec![self.mask;context_len+s];w.block_table=table;
             tokens.extend_from_slice(&q.token_ids);
-            let (cos,sin)=self.rotary(row.start_position,s,device,dtype);qcos.push(cos);qsin.push(sin);
-            let (cos,sin)=self.rotary(old,context_len+s,device,dtype);kcos.push(cos);ksin.push(sin);
         }
         cache.draft.validate(&writes,CausalModelLimits{vocab_size:c.vocab_size,max_sequence_length:c.max_position_embeddings},self.layers.len())?;
         let ids=Tensor::<DeviceBackend<R,F,I,BT>,1,Int>::from_data(TensorData::new(tokens,[b*s]),device);
         let mut hidden=target.embedding.clone().select(0,ids).reshape([b,s,c.hidden_size]);
-        let qcos=Tensor::cat(qcos,0);let qsin=Tensor::cat(qsin,0);let kcos=Tensor::cat(kcos,0);let ksin=Tensor::cat(ksin,0);
         for (index,layer) in self.layers.iter().enumerate() {
+            let mut qcos=Vec::with_capacity(b);let mut qsin=Vec::with_capacity(b);
+            let mut kcos=Vec::with_capacity(b);let mut ksin=Vec::with_capacity(b);let mut rotary_updates=Vec::with_capacity(b);
+            for (query,write) in queries.sequences.iter().zip(&writes.sequences) {
+                let state=cache.draft.rotary_state(write.request_id,index,write.start_position,&self.rotary[index])?;
+                let (cos,sin)=state.cos_sin((query.start_position..query.context_length).map(|p|p as f32).collect(),
+                    1,s,write.context_length,dtype,device);qcos.push(cos);qsin.push(sin);
+                let (cos,sin)=state.cos_sin((write.start_position..write.context_length).map(|p|p as f32).collect(),
+                    1,context_len+s,write.context_length,dtype,device);kcos.push(cos);ksin.push(sin);
+                rotary_updates.push((write.request_id,write.context_length,state));
+            }
+            let qcos=Tensor::cat(qcos,0);let qsin=Tensor::cat(qsin,0);let kcos=Tensor::cat(kcos,0);let ksin=Tensor::cat(ksin,0);
             let normalized=norm(hidden.clone(),&layer.input_norm,c.rms_norm_eps);
             let q=norm(layer.q.forward(normalized.clone()).reshape([b,s,c.num_attention_heads,c.head_dim]),&layer.q_norm,c.rms_norm_eps).swap_dims(1,2);
             let tail=Tensor::cat(vec![context.clone(),normalized],1);
@@ -73,6 +81,7 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
             let q=rotate(q,qcos.clone(),qsin.clone());let k=rotate(k,kcos.clone(),ksin.clone());
             let attended=cache.draft.attention_queries(index,&writes,&queries,q,k,v,(c.head_dim as f32).sqrt().recip(),false)?
                 .swap_dims(1,2).reshape([b,s,c.num_attention_heads*c.head_dim]);
+            for (id,end,state) in rotary_updates {cache.draft.commit_rotary(id,index,end,&state)?;}
             hidden=hidden+layer.o.forward(attended);
             let normalized=norm(hidden.clone(),&layer.post_norm,c.rms_norm_eps);
             hidden=hidden+layer.mlp.forward(normalized)?;
@@ -204,6 +213,30 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
 impl<R,F,I,BT> PrefixBatchModel<DeviceBackend<R,F,I,BT>> for Qwen3Drafted<DeviceBackend<R,F,I,BT>>
 where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement,I:IntElement,BT:BoolElement {
     type Prefix=Qwen3DraftBatchPrefix<DeviceBackend<R,F,I,BT>>;
+    fn prefix_tensor_transfer(&self)->bool {true}
+    fn export_prefix_tensors(&self,prefix:&Self::Prefix,shard:crate::PrefixShard)
+        ->Result<crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,GenerationError> {
+        self.validate_batch_prefix(prefix)?;
+        let mut tensors=crate::PrefixTensors::new("qwen3-feature-draft-v1",prefix.target.position());
+        tensors.add_child("target",self.target.export_prefix_tensors(&prefix.target,shard)?)?;
+        if let Some(draft)=&prefix.draft {tensors.add_child("draft",draft.export_tensors(Default::default())?)?;}
+        if let Some(pending)=&prefix.pending {tensors.push("pending",pending.clone().unsqueeze_dim::<4>(1),(1,0..1))?;}
+        Ok(tensors)
+    }
+    fn import_prefix_tensors(&self,tensors:&crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,shard:crate::PrefixShard,device:&R::Device)
+        ->Result<Self::Prefix,GenerationError> {
+        let target=self.target.import_prefix_tensors(tensors.child("target")?,shard,device)?;
+        let draft=if tensors.has_child("draft") {Some(DenseBatchPrefix::import_tensors(tensors.child("draft")?,
+            &self.draft_geometry(),self.draft.config.max_position_embeddings,Default::default(),device)?)} else {None};
+        let old=draft.as_ref().map_or(0,DenseBatchPrefix::position);
+        if old>target.position() || target.position()!=tensors.position || tensors.children()!=1+usize::from(draft.is_some()) {
+            return Err(GenerationError("draft transfer child positions/count differ".into()));
+        }
+        let count=target.position()-old;let width=self.draft.taps.len()*self.target.config.hidden_size;
+        tensors.validate("qwen3-feature-draft-v1",self.batch_limits().max_sequence_length,usize::from(count>0))?;
+        let pending=if count>0 {Some(tensors.tensor("pending",[1,1,count,width],self.target.embedding.dtype(),(1,0..1),device)?.reshape([1,count,width]))} else {None};
+        let prefix=Self::Prefix{target,draft,pending};self.validate_batch_prefix(&prefix)?;Ok(prefix)
+    }
     fn capture_prefix(&self,cache:&<Self as DeviceBatchModel<DeviceBackend<R,F,I,BT>>>::Cache,id:RequestId)->Result<Self::Prefix,GenerationError> {
         let request=cache.requests.get(&id).ok_or_else(||GenerationError("missing draft batch prefix request".into()))?;
         let prefix=Self::Prefix{target:cache.target.capture_prefix(id)?,draft:if cache.draft.sequence_length(id).unwrap_or(0)>0 {Some(cache.draft.capture_prefix(id)?)} else {None},pending:request.pending.clone()};

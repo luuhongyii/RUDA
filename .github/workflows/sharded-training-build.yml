@@ -29,6 +29,11 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/sharded-training-build.yml'
   workflow_dispatch:
+    inputs:
+      compile_only:
+        description: Compile libraries without running regression tests
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -84,6 +89,7 @@ jobs:
           cargo check --locked -p ruda-tensor-remote --no-default-features --features server --lib
           cargo check --locked -p ruda-tensor-remote --features client,server --lib
       - name: Existing fusion planner and data loader regressions
+        if: ${{ !inputs.compile_only }}
         run: |
           cargo test --locked -p ruda-fusion --lib
           cargo test --locked -p ruda-fusion --features distributed,device-stack-autotune,device-autotune-checks,ruda-test-runtime/cuda --lib device::engine::scoring::tests

@@ -37,15 +37,16 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
         let ids=Tensor::<DeviceBackend<R,F,I,BT>,1,Int>::from_data(TensorData::new(batch.token_matrix(),[b*s]),device);
         let mut hidden=self.embedding.clone().select(0,ids).reshape([b,s,c.hidden_size]);
         let dtype=hidden.dtype();
-        let inverse=self.rotary.inverse_frequencies.clone();
-        let positions=batch.sequences.iter().flat_map(|row|(row.start_position..row.context_length).map(|p|p as f32)).collect::<Vec<_>>();
-        let frequencies=Tensor::<DeviceBackend<R,F,I,BT>,2>::from_data(TensorData::new(positions,[b*s,1]),(device,DType::F32))
-            * Tensor::<DeviceBackend<R,F,I,BT>,2>::from_data(TensorData::new(inverse,[1,c.head_dim/2]),(device,DType::F32));
-        let frequencies=Tensor::cat(vec![frequencies.clone(),frequencies],1).reshape([b,1,s,c.head_dim]);
-        let cos=(frequencies.clone().cos()*self.rotary.attention_factor).cast(dtype);
-        let sin=(frequencies.sin()*self.rotary.attention_factor).cast(dtype);
         let mut features=Vec::with_capacity(taps.len());
         for (index,layer) in self.layers.iter().enumerate() {
+            let mut cos_rows=Vec::with_capacity(b);let mut sin_rows=Vec::with_capacity(b);let mut rotary_updates=Vec::with_capacity(b);
+            for row in &batch.sequences {
+                let state=cache.rotary_state(row.request_id,index,row.start_position,&self.rotary[index])?;
+                let positions=(row.start_position..row.context_length).map(|p|p as f32).collect();
+                let (cos,sin)=state.cos_sin(positions,1,s,row.context_length,dtype,device);
+                cos_rows.push(cos);sin_rows.push(sin);rotary_updates.push((row.request_id,row.context_length,state));
+            }
+            let (cos,sin)=(Tensor::cat(cos_rows,0),Tensor::cat(sin_rows,0));
             let input=norm(hidden.clone(),&layer.input_norm,c.rms_norm_eps);
             let q=norm(layer.q.forward(input.clone()).reshape([b,s,c.num_attention_heads,c.head_dim]),&layer.q_norm,c.rms_norm_eps).swap_dims(1,2);
             let k=norm(layer.k.forward(input.clone()).reshape([b,s,c.num_key_value_heads,c.head_dim]),&layer.k_norm,c.rms_norm_eps).swap_dims(1,2);
@@ -53,6 +54,7 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
             let q=rotate(q,cos.clone(),sin.clone());let k=rotate(k,cos.clone(),sin.clone());
             let context=cache.attention(index,batch,q,k,v,(c.head_dim as f32).sqrt().recip())?
                 .swap_dims(1,2).reshape([b,s,c.num_attention_heads*c.head_dim]);
+            for (id,end,state) in rotary_updates {cache.commit_rotary(id,index,end,&state)?;}
             let update=layer.o.forward(context);
             let update=match &self.reduction {Some(reduce)=>reduce(update),None=>update};
             hidden=hidden+update;

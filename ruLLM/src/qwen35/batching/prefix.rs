@@ -9,6 +9,7 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
         if prefix.position==0 || prefix.position>c.max_position_embeddings || prefix.batch!=Some(1) || prefix.layers.len()!=self.layers.len() {
             return Err(GenerationError("invalid Qwen batch prefix position/layer count".into()));
         }
+        self.rotary_for(prefix)?;
         for (state,kind) in prefix.layers.iter().zip(&c.layer_types) {
             let valid=match (state,kind) {
                 (LayerCache::Full{key:Some(k),value:Some(v)},LayerType::FullAttention)=>
@@ -29,6 +30,80 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
 impl<R,F,I,BT> PrefixBatchModel<DeviceBackend<R,F,I,BT>> for Qwen35TextModel<DeviceBackend<R,F,I,BT>>
 where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement,I:IntElement,BT:BoolElement {
     type Prefix=Qwen35Cache<DeviceBackend<R,F,I,BT>>;
+    fn prefix_tensor_transfer(&self)->bool {true}
+    fn export_prefix_tensors(&self,prefix:&Self::Prefix,shard:crate::PrefixShard)
+        ->Result<crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,GenerationError> {
+        self.validate_batch_prefix(prefix)?;
+        let c=&self.config;
+        let schema=if prefix.rotary_length==0 {"qwen35-hybrid-v1"}else{"qwen35-hybrid-v2"};
+        let mut tensors=crate::PrefixTensors::new(schema,prefix.position);
+        if prefix.rotary_length!=0 {tensors.set_scalar("rotary-cached-length",prefix.rotary_length)?;}
+        for (index,layer) in prefix.layers.iter().enumerate() {
+            match layer {
+                LayerCache::Full{key:Some(key),value:Some(value)}=>{
+                    let span=shard.heads(shard.kv_heads,c.num_key_value_heads)?;
+                    tensors.push(format!("{index}/key"),key.clone(),span.clone())?;
+                    tensors.push(format!("{index}/value"),value.clone(),span)?;
+                },
+                LayerCache::Delta{convolution:Some(conv),state:Some(state)}=>{
+                    let key_channels=c.linear_num_key_heads*c.linear_key_head_dim;
+                    let value_channels=c.linear_num_value_heads*c.linear_value_head_dim;
+                    for (name,start,n,heads,dim,global) in [
+                        ("conv-q",0,key_channels,c.linear_num_key_heads,c.linear_key_head_dim,shard.linear_key_heads),
+                        ("conv-k",key_channels,key_channels,c.linear_num_key_heads,c.linear_key_head_dim,shard.linear_key_heads),
+                        ("conv-v",2*key_channels,value_channels,c.linear_num_value_heads,c.linear_value_head_dim,shard.linear_value_heads)] {
+                        let tensor=conv.clone().slice([0..1,start..start+n,0..c.linear_conv_kernel_dim]).reshape([1,heads,dim,c.linear_conv_kernel_dim]);
+                        tensors.push(format!("{index}/{name}"),tensor,shard.heads(global,heads)?)?;
+                    }
+                    tensors.push(format!("{index}/state"),state.clone(),shard.heads(shard.linear_value_heads,c.linear_num_value_heads)?)?;
+                },
+                _=>return Err(GenerationError("incomplete Qwen3.5 transfer state".into())),
+            }
+        }
+        Ok(tensors)
+    }
+    fn import_prefix_tensors(&self,tensors:&crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,shard:crate::PrefixShard,device:&R::Device)
+        ->Result<Self::Prefix,GenerationError> {
+        let c=&self.config;let dtype=self.embedding.weight.val().dtype();
+        let count=c.layer_types.iter().map(|kind|if matches!(kind,LayerType::FullAttention) {2}else{4}).sum();
+        let rotary_length=if self.rotary.initial_cached_length()==0 {
+            tensors.validate("qwen35-hybrid-v1",c.max_position_embeddings,count)?;
+            if tensors.scalars()!=0 {return Err(GenerationError("unexpected Qwen3.5 static rotary state".into()));}
+            0
+        } else {
+            tensors.validate("qwen35-hybrid-v2",c.max_position_embeddings,count)?;
+            if tensors.scalars()!=1 {return Err(GenerationError("missing Qwen3.5 dynamic rotary state".into()));}
+            let length=tensors.scalar("rotary-cached-length")
+                .ok_or_else(||GenerationError("missing Qwen3.5 dynamic rotary length".into()))?;
+            if self.rotary.state_at(length).is_none() {return Err(GenerationError("Qwen3.5 dynamic rotary policy differs".into()));}
+            length
+        };
+        if tensors.children()!=0 {return Err(GenerationError("Qwen3.5 prefix has unexpected child state".into()));}
+        let mut prefix=self.new_cache();prefix.position=tensors.position;prefix.batch=Some(1);
+        prefix.rotary_length=rotary_length;
+        for (index,kind) in c.layer_types.iter().enumerate() {
+            prefix.layers[index]=match kind {
+                LayerType::FullAttention=>{
+                    let shape=[1,c.num_key_value_heads,tensors.position,c.head_dim];let span=shard.heads(shard.kv_heads,c.num_key_value_heads)?;
+                    LayerCache::Full{key:Some(tensors.tensor(&format!("{index}/key"),shape,dtype,span.clone(),device)?),
+                        value:Some(tensors.tensor(&format!("{index}/value"),shape,dtype,span,device)?)}
+                },
+                LayerType::LinearAttention=>{
+                    let mut conv=Vec::with_capacity(3);
+                    for (name,heads,dim,global) in [("conv-q",c.linear_num_key_heads,c.linear_key_head_dim,shard.linear_key_heads),
+                        ("conv-k",c.linear_num_key_heads,c.linear_key_head_dim,shard.linear_key_heads),
+                        ("conv-v",c.linear_num_value_heads,c.linear_value_head_dim,shard.linear_value_heads)] {
+                        conv.push(tensors.tensor(&format!("{index}/{name}"),[1,heads,dim,c.linear_conv_kernel_dim],dtype,
+                            shard.heads(global,heads)?,device)?.reshape([1,heads*dim,c.linear_conv_kernel_dim]));
+                    }
+                    let state=tensors.tensor(&format!("{index}/state"),[1,c.linear_num_value_heads,c.linear_key_head_dim,c.linear_value_head_dim],
+                        DType::F32,shard.heads(shard.linear_value_heads,c.linear_num_value_heads)?,device)?;
+                    LayerCache::Delta{convolution:Some(Tensor::cat(conv,1)),state:Some(state)}
+                },
+            };
+        }
+        self.validate_batch_prefix(&prefix)?;Ok(prefix)
+    }
     fn capture_prefix(&self,cache:&Self::Cache,id:RequestId)->Result<Self::Prefix,GenerationError> {
         let mut prefix=cache.requests.get(&id).ok_or_else(||GenerationError("unknown Qwen batch prefix request".into()))?.clone();
         let table=cache.tables.get(&id).ok_or_else(||GenerationError("missing Qwen batch prefix pages".into()))?;

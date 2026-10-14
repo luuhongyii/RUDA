@@ -7,6 +7,8 @@ mod llama;
 mod continuous_batch;
 mod batch_kv;
 mod batch_prefix;
+mod prefix_transfer;
+pub use prefix_transfer::{PrefixShard,PrefixTensors,GpuPrefixBackend};
 #[cfg(feature = "tensor-parallel")]
 mod parallel_batch;
 #[cfg(feature = "tensor-parallel")]
@@ -23,6 +25,8 @@ mod deepseek2;
 pub use deepseek2::{DeepseekV2Config, DeepseekV2Yarn, DeepseekV2Model, DeepseekV2Cache,
     DeepseekV2CacheRecord, DeepseekV2AttentionMode, LoadedDeepseekV2, load_huggingface_deepseek_v2};
 pub use deepseek2::{MlaFp8Backend, MlaFp8Projection, load_huggingface_mla};
+pub use deepseek2::{DeepseekMtp, DeepseekMtpCache, DeepseekMtpGenerationCache, DeepseekMtpGenerationCacheRecord, DeepseekMtpOutput, LoadedDeepseekMtp,
+    load_huggingface_deepseek_mtp, load_huggingface_mla_mtp};
 pub use deepseek2::{KimiLinearConfig, KimiLinearAttentionConfig, KimiLinearModel, KimiLinearCache,
     KimiLinearCacheRecord, LoadedKimiLinear, load_huggingface_kimi_linear,
     KimiLinearBatchCache, KimiLinearBatchPrefix, KimiLinearBatchDelta};
@@ -33,6 +37,10 @@ pub use deepseek2::parallel::{DeepseekV2ExpertParallel, DeepseekV2ExpertParallel
     DeepseekV2ExpertParallelCacheRecord, LoadedDeepseekV2ExpertParallel, load_huggingface_deepseek_v2_expert_parallel};
 #[cfg(feature = "tensor-parallel")]
 pub use deepseek2::parallel::load_huggingface_mla_expert_parallel;
+pub use deepseek2::{DeepseekMtpBatchCache,DeepseekMtpBatchPrefix};
+#[cfg(feature="tensor-parallel")]
+pub use deepseek2::{DeepseekMtpExpertParallel,DeepseekMtpExpertParallelCache,DeepseekMtpExpertParallelCacheRecord,
+    LoadedDeepseekMtpExpertParallel,load_huggingface_deepseek_mtp_expert_parallel,load_huggingface_mla_mtp_expert_parallel};
 #[cfg(feature = "tensor-parallel")]
 pub use deepseek2::{KimiLinearExpertParallel, KimiLinearExpertParallelCache, KimiLinearExpertParallelCacheRecord,
     LoadedKimiLinearExpertParallel, load_huggingface_kimi_linear_expert_parallel};
@@ -78,7 +86,7 @@ pub use continuous_batch::{
     CancelledGeneration, ContinuousBatchOptions, KvAdmissionPolicy,
     BatchFence, BatchLaunchFailure, FencedBatchScheduler,
     DeviceBatchModel, DeviceBatchExecutor, ExecutedBatch, BatchSamplingState,
-    PrefixBatchModel,PrefixBatchExecutor,PrefixBatchStep,
+    PrefixBatchModel,PrefixBatchExecutor,PrefixBatchStep,ActiveKvSwapConfig,ActiveKvSwapStats,
 };
 pub use paged_kv::*;
 

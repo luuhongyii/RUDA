@@ -12,6 +12,7 @@ pub(super) struct Trajectory<B:Backend> {
     pub(super) end:usize,
     pub(super) initial:Qwen35Cache<B>,
     pub(super) layers:Vec<Vec<RecurrentStep<B>>>,
+    pub(super) rotary_lengths:Vec<usize>,
 }
 #[derive(Clone)]
 enum LayerDelta<B:Backend> {
@@ -19,7 +20,7 @@ enum LayerDelta<B:Backend> {
     Recurrent(Vec<RecurrentStep<B>>),
 }
 #[derive(Clone)]
-pub struct Qwen35BatchDelta<B:Backend> {start:usize,count:usize,layers:Vec<LayerDelta<B>>}
+pub struct Qwen35BatchDelta<B:Backend> {start:usize,count:usize,layers:Vec<LayerDelta<B>>,rotary_lengths:Vec<usize>}
 
 fn error(message:impl ToString)->GenerationError {GenerationError(message.to_string())}
 
@@ -65,7 +66,9 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
     fn capture_batch_delta(&self,cache:&Self::Cache,id:RequestId,start:usize,end:usize)->Result<Self::Delta,GenerationError> {
         let history=cache.trajectories.get(&id).ok_or_else(||error("missing Qwen speculative trajectory"))?;
         if start>=end || start<history.start || end>history.end || cache.sequence_length(id)!=Some(history.end)
-            || history.layers.len()!=self.layers.len() {return Err(error("Qwen speculative trajectory span differs"));}
+            || history.layers.len()!=self.layers.len() || history.rotary_lengths.len()!=history.end-history.start {
+            return Err(error("Qwen speculative trajectory span differs"));
+        }
         let mut layers=Vec::with_capacity(self.layers.len());
         for (index,kind) in self.config.layer_types.iter().enumerate() {
             layers.push(match kind {
@@ -77,7 +80,8 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
                 },
             });
         }
-        Ok(Self::Delta{start,count:end-start,layers})
+        Ok(Self::Delta{start,count:end-start,layers,
+            rotary_lengths:history.rotary_lengths[start-history.start..end-history.start].to_vec()})
     }
     fn truncate_batch_cache(&self,cache:&mut Self::Cache,id:RequestId,position:usize)->Result<(),GenerationError> {
         let history=cache.trajectories.get(&id).ok_or_else(||error("missing Qwen truncate trajectory"))?;
@@ -87,6 +91,8 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
         let mut request=history.initial.clone();request.position=position;
         if position>history.start {
             request.batch=Some(1);
+            request.rotary_length=*history.rotary_lengths.get(position-history.start-1)
+                .ok_or_else(||error("missing Qwen truncate rotary state"))?;
             for (index,kind) in self.config.layer_types.iter().enumerate() {
                 if *kind==LayerType::LinearAttention {
                     let step=history.layers[index].get(position-history.start-1).ok_or_else(||error("missing Qwen truncate recurrent state"))?;
@@ -111,6 +117,8 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
         let block=cache.config.block_size;
         if offset>=delta.count || cache.sequence_length(id)!=Some(position) || position>=cache.config.max_sequence_length
             || position>=c.max_position_embeddings || delta.layers.len()!=self.layers.len() || table.len()!=(position+1).div_ceil(block)
+            || delta.rotary_lengths.len()!=delta.count
+            || delta.rotary_lengths.get(offset).is_none_or(|&length|self.rotary.state_at(length).is_none())
             || table.iter().any(|p|p.0 as usize>=cache.config.num_pages) || table.iter().collect::<BTreeSet<_>>().len()!=table.len()
             || cache.tables.get(&id).is_none_or(|old|!table.starts_with(old))
             || cache.tables.iter().any(|(&other,pages)|other!=id && pages.iter().any(|p|table.contains(p))) {
@@ -162,6 +170,7 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
             }
         }
         let request=cache.requests.get_mut(&id).unwrap();request.position=position+1;request.batch=Some(1);
+        request.rotary_length=delta.rotary_lengths[offset];
         cache.tables.insert(id,table.to_vec());cache.trajectories.remove(&id);Ok(())
     }
 }

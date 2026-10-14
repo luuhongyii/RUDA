@@ -9,9 +9,11 @@ use ruda_tensor::device::Device;
 use ruda_tensor::distributed::{DistributedBackend, ReduceOperation};
 use std::{path::Path, sync::Arc};
 use crate::{DeviceBatchModel,PrefixBatchModel};
-crate::parallel_batch::parallel_batch_model!(Qwen3TensorParallel,Qwen3Model);
+crate::parallel_batch::parallel_batch_model!(Qwen3TensorParallel,Qwen3Model,|group|
+    crate::PrefixShard{kv_heads:Some(group.config.num_key_value_heads),..Default::default()});
 crate::parallel_batch::parallel_speculative_model!(Qwen3TensorParallel,Qwen3Model);
-crate::parallel_batch::parallel_batch_model!(Qwen3DraftTensorParallel,Qwen3Drafted);
+crate::parallel_batch::parallel_batch_model!(Qwen3DraftTensorParallel,Qwen3Drafted,|group|
+    crate::PrefixShard{kv_heads:Some(group.config.num_key_value_heads),..Default::default()});
 
 pub struct Qwen3DraftTensorParallel<B:DistributedBackend> {
     pub config:Qwen3Config,

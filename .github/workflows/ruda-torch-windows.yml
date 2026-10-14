@@ -21,6 +21,11 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/ruda-torch-windows.yml'
   workflow_dispatch:
+    inputs:
+      compile_only:
+        description: Build without running tests or runtime checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -162,9 +167,9 @@ jobs:
         working-directory: ruda-torch/python
         run: |
           python -m compileall -q ruda_torch tests
-          python tests/check_spatial_schemas.py
+          if [ '${{ inputs.compile_only }}' != 'true' ]; then python tests/check_spatial_schemas.py; fi
           python setup.py bdist_wheel
-          python tests/check_native_load.py
+          if [ '${{ inputs.compile_only }}' != 'true' ]; then python tests/check_native_load.py; fi
       - name: Save Linux wheel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -210,8 +215,10 @@ jobs:
         run: |
           python -m compileall -q ruda_torch tests
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/check_spatial_schemas.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ('${{ inputs.compile_only }}' -ne 'true') {
+            python tests/check_spatial_schemas.py
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
       - name: Build C++ extension and wheel
         working-directory: ruda-torch/python
         timeout-minutes: 10
@@ -225,8 +232,10 @@ jobs:
           $env:MSSdk = '1'
           python setup.py bdist_wheel
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/check_native_load.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ('${{ inputs.compile_only }}' -ne 'true') {
+            python tests/check_native_load.py
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
       - name: Save installable wheel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

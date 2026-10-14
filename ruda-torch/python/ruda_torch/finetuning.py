@@ -647,6 +647,11 @@ def finetune_state_dict(model, optimizer, *, base_id, step, data_state, scaler=N
             'scaler': None if scaler is None else _cpu_tree(scaler.state_dict()),
             'cpu_rng': torch.get_rng_state().clone(),
             'cuda_rng': {i: torch.cuda.get_rng_state(i).cpu() for i in cuda_devices}}
+    if __package__:
+        from .float8_parallel import recipe_contract
+        from .float8_scaling import iter_float8_states
+        state['float8_recipe'] = recipe_contract(model)
+        state['float8_states'] = {name: _cpu_tree(value.state_dict()) for name, value in iter_float8_states(model)}
     if any(p.device.type=='ruda' for p in model.parameters()):
         from . import get_rng_state
         state['ruda_rng'] = get_rng_state()
@@ -665,7 +670,24 @@ def load_finetune_state_dict(model, optimizer, state, *, base_id, scaler=None):
     devices = sorted({p.device.index for p in model.parameters() if p.device.type == 'cuda'})
     if devices != sorted(state['cuda_rng']):
         raise ValueError('CUDA RNG device set mismatch')
+    states = {}
+    if __package__:
+        from .float8_parallel import validate_recipe_contract
+        from .float8_scaling import iter_float8_states
+        validate_recipe_contract(model, state.get('float8_recipe'))
+        states = dict(iter_float8_states(model))
+    saved = state.get('float8_states', {})
+    if states.keys() != saved.keys():
+        raise ValueError('delayed FP8 scale state names differ')
+    for name, module in states.items():
+        expected = module.state_dict()
+        if expected.keys() != saved[name].keys() or any(
+                not isinstance(saved[name][key], torch.Tensor) or saved[name][key].shape != value.shape or saved[name][key].dtype != value.dtype
+                for key, value in expected.items()):
+            raise ValueError(f'delayed FP8 state schema differs: {name}')
     load_adapter_state_dict(model, state['adapter'])
+    for name, module in states.items():
+        module.load_state_dict(saved[name])
     optimizer.load_state_dict(copy.deepcopy(state['optimizer']))
     if scaler is not None:
         scaler.load_state_dict(state['scaler'])

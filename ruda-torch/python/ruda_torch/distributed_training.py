@@ -77,6 +77,8 @@ class ReplicaGroup:
                 self.cuda_index = torch.cuda.current_device()
             self._ruccl = RucclTransport(self.group, self.cuda_index, algorithm=ruccl_algorithm,
                 backend='metal' if device_type == 'mps' else 'cuda' if device_type == 'ruda' else None)
+        from ._collective_ops import group_key
+        group_key(self)
 
     def gather_metadata(self, value):
         """Gather rank-ordered, trusted application metadata, not tensor payloads."""
@@ -186,6 +188,32 @@ class ReplicaGroup:
         from .parallel_training import GradientOverlap
         return GradientOverlap(self, global_weight=global_weight, normalized=normalized,
                                bucket_bytes=bucket_bytes)
+
+    def all_to_all(self, tensor, send_rows, receive_rows):
+        """Exchange explicit row partitions; payload storage stays on the device."""
+        send_rows, receive_rows = tuple(send_rows), tuple(receive_rows)
+        if (tensor.ndim < 1 or len(send_rows) != self.world_size or
+                len(receive_rows) != self.world_size or
+                any(type(n) is not int or n < 0 for n in send_rows + receive_rows) or
+                sum(send_rows) != tensor.shape[0]):
+            raise ValueError('all-to-all requires nonnegative rank-ordered row partitions')
+        source = tensor.contiguous()
+        output = source.new_empty((sum(receive_rows), *source.shape[1:]))
+        if self.world_size == 1:
+            if send_rows != receive_rows:
+                raise ValueError('single-rank all-to-all row partitions differ')
+            output.copy_(source)
+            return output
+        if self._ruccl is not None:
+            from math import prod
+            width = prod(source.shape[1:])
+            self._ruccl.all_to_all(self._alias(source), self._alias(output),
+                [n * width for n in send_rows], [n * width for n in receive_rows])
+        else:
+            dist.all_to_all_single(self._alias(output), self._alias(source),
+                output_split_sizes=list(receive_rows), input_split_sizes=list(send_rows), group=self.group)
+        self._complete([output])
+        return output
 
     def initialize(self, model, *, root=0, broadcast_buffers=True):
         """Validate replicas/aliases collectively and broadcast state before optimizer creation."""

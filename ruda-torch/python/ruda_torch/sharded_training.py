@@ -127,6 +127,11 @@ class FullyShardedModule(nn.Module):
             shard_buffers=set(shard_buffers)
         if not shard_buffers<={name for name,value in buffers}:
             error='sharded buffer names must refer to existing, read-only model buffers'
+        from .float8_scaling import Float8ScaleState
+        for path, child in module.named_modules():
+            if isinstance(child, Float8ScaleState) and any(
+                    (path + '.' if path else '') + name in shard_buffers for name in child._buffers):
+                error='delayed FP8 histories are mutable replica buffers and cannot be sharded as read-only data'
         buffer_aliases={}
         buffer_schema=[]
         for name,value in buffers:
@@ -157,6 +162,9 @@ class FullyShardedModule(nn.Module):
                 shard=nn.Parameter(local)
                 shard._ruda_full_shape=tuple(parameter.shape)
                 shard._ruda_tp_sharded=getattr(parameter,'_ruda_tp_sharded',False)
+                shard._ruda_tp_replicas=getattr(parameter,'_ruda_tp_replicas',1)
+                shard._ruda_ep_sharded=getattr(parameter,'_ruda_ep_sharded',False)
+                shard._ruda_sp_replicated=getattr(parameter,'_ruda_sp_replicated',False)
                 name=next(name for name,identity,shape,dtype,trainable in schema if identity==index)
                 spec=self._template_layout.get(name,{})
                 shard._ruda_logical_shape=tuple(spec.get('shape',parameter.shape))
@@ -181,6 +189,10 @@ class FullyShardedModule(nn.Module):
         # The functional template retains structure, not a duplicate full model.
         metas = {id(p): nn.Parameter(torch.empty(p.shape, dtype=p.dtype, device='meta'),
                                      requires_grad=p.requires_grad) for p in unique}
+        for parameter in unique:
+            for attribute in ('_ruda_tp_sharded', '_ruda_tp_replicas', '_ruda_ep_sharded', '_ruda_sp_replicated', '_ruda_ep_global_shape'):
+                if hasattr(parameter, attribute):
+                    setattr(metas[id(parameter)], attribute, getattr(parameter, attribute))
         for name, parameter in named:
             parent, _, leaf = name.rpartition('.')
             setattr(module.get_submodule(parent), leaf, metas[id(parameter)])

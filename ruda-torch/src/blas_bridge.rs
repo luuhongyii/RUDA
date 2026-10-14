@@ -107,6 +107,32 @@ pub unsafe extern "C" fn ruda_torch_blas(op:u32,ds:*const Descriptor,count:usize
                 }
                 if complex {copy_complex(&rr,&ri,&xs[1]);}else {copy_real(&rr,&xs[1]);}
             }
+            7|8|9=>{
+                assert!(ss.is_empty());let c=client().fixed_execution_queue();
+                let plan=indexed_experts::prepare(&c,&xs,op!=7,ii);
+                for node in plan.kernels {let (task,count,arguments,client)=node.into_parts();client.launch(task,count,arguments);}
+            }
+            14|15=>{
+                assert!(ss.is_empty());let c=client().fixed_execution_queue();
+                let plan=indexed_experts::float8_block::prepare(&c,&xs,ii,op==15);
+                for node in plan.kernels {let (task,count,arguments,client)=node.into_parts();client.launch(task,count,arguments);}
+            }
+            12|13=>{
+                assert!(ss.is_empty());let c=client().fixed_execution_queue();
+                let plan=if op==12 {indexed_experts::float8::prepare_statistics(&c,&xs,ii)}
+                    else {indexed_experts::float8::prepare_product(&c,&xs,ii)};
+                for node in plan.kernels {let (task,count,arguments,client)=node.into_parts();client.launch(task,count,arguments);}
+            }
+            11=>{
+                assert!(ss.is_empty());let c=client().fixed_execution_queue();
+                let plan=indexed_experts::quantized::prepare(&c,&xs,ii);
+                for node in plan.kernels {let (task,count,arguments,client)=node.into_parts();client.launch(task,count,arguments);}
+            }
+            10=>{
+                assert!(ss.is_empty());let c=client().fixed_execution_queue();
+                let node=indexed_experts::prepare_activity(&c,&xs,ii);
+                let (task,count,arguments,client)=node.into_parts();client.launch(task,count,arguments);
+            }
             _=>panic!("unknown BLAS command"),
         }
         RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);finish_dispatch(&client());

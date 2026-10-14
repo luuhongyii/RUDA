@@ -76,12 +76,14 @@ def shard_nf4_linear(layer,group,*,axis):
 
 class _ParallelNF4(nn.Module):
     axis=None
-    def _setup(self,layer,group):
+    def _setup(self,layer,group,replicas=1):
         if not isinstance(layer,NF4Linear):raise TypeError('expected a frozen NF4 base')
+        from ._tp_replicas import shard_coordinates
         self.group=group
+        self.replicas=replicas
         self.in_features,self.out_features=layer.in_features,layer.out_features
         self.original_block_size=layer.block_size
-        self.local=shard_nf4_linear(layer,group,axis=self.axis)
+        self.local=shard_nf4_linear(layer,shard_coordinates(group,replicas),axis=self.axis)
 
     def get_extra_state(self):
         return {'version':1,'format':'ruda-nf4-tp','axis':self.axis,'in_features':self.in_features,
@@ -94,15 +96,16 @@ class _ParallelNF4(nn.Module):
 class ColumnParallelNF4Linear(_ParallelNF4):
     """Frozen packed output-row shard; input derivatives sum across TP ranks."""
     axis=0
-    def __init__(self,layer,group,*,gather_output=True):
+    def __init__(self,layer,group,*,gather_output=True,replicas=1):
         super().__init__()
-        self._setup(layer,group)
+        self._setup(layer,group,replicas)
         self.gather_output=bool(gather_output)
         self.local_out_features=self.local.out_features
 
     def forward(self,value):
-        output=self.local(copy_to_tensor_parallel(value,self.group))
-        return gather_from_tensor_parallel(output,self.group) if self.gather_output else output
+        from ._tp_replicas import column_input,column_output
+        output=self.local(column_input(self,value))
+        return column_output(output,self.group,self.replicas,self.gather_output)
 
 
 class RowParallelNF4Linear(_ParallelNF4):
@@ -117,7 +120,8 @@ class RowParallelNF4Linear(_ParallelNF4):
 
     def forward(self,value):
         local=value if self.input_is_parallel else scatter_to_tensor_parallel(value,self.group)
-        output=reduce_from_tensor_parallel(self.local(local),self.group)
+        from ._tp_replicas import row_output
+        output=row_output(self,self.local(local))
         return output if self.bias is None else output+self.bias.to(output.dtype)
 
 
@@ -141,19 +145,23 @@ def _dropout(value,p,group,*,sharded=False):
 
 class _ParallelLoRA(nn.Module):
     axis=None
-    def _setup(self,layer,group):
+    def _setup(self,layer,group,replicas=1):
         if not isinstance(layer,LoRALinear):raise TypeError('expected a LoRALinear')
+        from ._tp_replicas import coordinates,mark
+        shard,world=coordinates(group,replicas)
         self.group=group
+        self.replicas=replicas
         self.rank,self.alpha=layer.rank,layer.alpha
         self.dropout,self.use_rslora=layer.dropout,layer.use_rslora
         self.in_features,self.out_features=layer.in_features,layer.out_features
         a,b=layer.lora_A.detach(),layer.lora_B.detach()
-        if self.axis==0:b=b.chunk(group.world_size,dim=0)[group.rank]
+        if self.axis==0:b=b.chunk(world,dim=0)[shard]
         else:a=a.chunk(group.world_size,dim=1)[group.rank]
         self.lora_A=nn.Parameter(a.contiguous().clone(),requires_grad=layer.lora_A.requires_grad)
         self.lora_B=nn.Parameter(b.contiguous().clone(),requires_grad=layer.lora_B.requires_grad)
         self.lora_A._ruda_tp_sharded=self.axis==1
         self.lora_B._ruda_tp_sharded=self.axis==0
+        if self.axis==0:mark(self.lora_B,replicas)
         self.train(layer.training)
 
     @property
@@ -171,22 +179,27 @@ class _ParallelLoRA(nn.Module):
 class ColumnParallelLoRALinear(_ParallelLoRA):
     """Local base/B output rows, replicated A with SUM parameter derivatives."""
     axis=0
-    def __init__(self,layer,group,*,gather_output=True):
+    def __init__(self,layer,group,*,gather_output=True,replicas=1):
         super().__init__()
         if not isinstance(layer,LoRALinear):raise TypeError('expected a LoRALinear')
-        self.base=parallel_linear(layer.base,group,axis=0,gather_output=False)
+        self.base=parallel_linear(layer.base,group,axis=0,gather_output=gather_output if replicas>1 else False,replicas=replicas)
         self.gather_output=bool(gather_output)
-        self._setup(layer,group)
-        self.local_out_features=self.out_features//group.world_size
+        self._setup(layer,group,replicas)
+        self.local_out_features=self.out_features//(group.world_size//replicas)
 
     def forward(self,value):
+        from ._tp_replicas import scale_input_gradient,column_input,column_output
         result=self.base(value)
-        adapted=copy_to_tensor_parallel(value.to(self.lora_A.dtype),self.group)
+        replicas=getattr(self,'replicas',1)
+        adapted=column_input(self,value.to(self.lora_A.dtype))
         if self.training:adapted=_dropout(adapted,self.dropout,self.group)
-        a=copy_to_tensor_parallel(self.lora_A,self.group)
+        a=copy_to_tensor_parallel(scale_input_gradient(self.lora_A,replicas),self.group)
         update=F.linear(F.linear(adapted,a),self.lora_B)
-        output=result+(update*self.scaling).to(result.dtype)
-        return gather_from_tensor_parallel(output,self.group) if self.gather_output else output
+        if replicas==1:
+            output=result+(update*self.scaling).to(result.dtype)
+            return gather_from_tensor_parallel(output,self.group) if self.gather_output else output
+        update=column_output((update*self.scaling).to(result.dtype),self.group,replicas,self.gather_output)
+        return result+update
 
 
 class RowParallelLoRALinear(_ParallelLoRA):
@@ -207,6 +220,8 @@ class RowParallelLoRALinear(_ParallelLoRA):
         if self.training:adapted=_dropout(adapted,self.dropout,self.group,sharded=True)
         hidden=reduce_from_tensor_parallel(F.linear(adapted,self.lora_A),self.group)
         update=F.linear(hidden,self.lora_B)
+        if hasattr(self,'_ruda_sequence_axis'):
+            update=scatter_to_tensor_parallel(update,self.group,axis=self._ruda_sequence_axis)
         return result+(update*self.scaling).to(result.dtype)
 
 
@@ -226,6 +241,9 @@ def lora_from_parallel_base(base,*,rank=16,alpha=16.,adapter_dtype=torch.float32
     if type(dropout) not in (int,float) or not 0<=dropout<=1 or type(use_rslora) is not bool:
         raise ValueError('invalid adapter dropout/RSLoRA policy')
     group=base.group
+    from ._tp_replicas import coordinates,mark
+    replicas=getattr(base,'replicas',1)
+    shard,shards=coordinates(group,replicas)
     group.validate_training_options((type(base).__name__,base.in_features,base.out_features,
                                      rank,alpha,str(adapter_dtype),dropout,use_rslora))
     device=(base.local.packed.device if isinstance(base,_ParallelNF4)
@@ -235,13 +253,14 @@ def lora_from_parallel_base(base,*,rank=16,alpha=16.,adapter_dtype=torch.float32
     a=a.to(device)
     group.broadcast_(a)
     b=torch.zeros((base.out_features,rank),device='cpu',dtype=adapter_dtype).to(device)
-    if column:b=b.chunk(group.world_size,dim=0)[group.rank]
+    if column:b=b.chunk(shards,dim=0)[shard]
     else:a=a.chunk(group.world_size,dim=1)[group.rank]
     cls=ColumnParallelLoRALinear if column else RowParallelLoRALinear
     result=cls.__new__(cls)
     nn.Module.__init__(result)
     result.base=copy.copy(base)
     result.group=group
+    result.replicas=replicas
     result.in_features,result.out_features=base.in_features,base.out_features
     result.rank,result.alpha=rank,float(alpha)
     result.dropout,result.use_rslora=float(dropout),use_rslora
@@ -249,10 +268,11 @@ def lora_from_parallel_base(base,*,rank=16,alpha=16.,adapter_dtype=torch.float32
     result.lora_B=nn.Parameter(b.contiguous().clone())
     result.lora_A._ruda_tp_sharded=row
     result.lora_B._ruda_tp_sharded=column
+    if column:mark(result.lora_B,replicas)
     if column:
         result.gather_output=base.gather_output
         result.local_out_features=base.local_out_features
-        result.base.gather_output=False
+        result.base.gather_output=base.gather_output if replicas>1 else False
     else:
         result.input_is_parallel=base.input_is_parallel
         result.local_in_features=base.local_in_features
@@ -273,9 +293,11 @@ def merge_parallel_lora(layer):
     result._parameters=base._parameters.copy()
     result.weight=nn.Parameter((base.weight.float()+(layer.lora_B.float()@layer.lora_A.float())*layer.scaling).to(base.weight.dtype),requires_grad=False)
     result.weight._ruda_tp_sharded=True
+    result.weight._ruda_tp_replicas=getattr(base,'replicas',1)
     if base.bias is not None:
         result.bias=nn.Parameter(base.bias.detach().clone(),requires_grad=False)
         result.bias._ruda_tp_sharded=layer.axis==0
+        if layer.axis==0:result.bias._ruda_tp_replicas=getattr(base,'replicas',1)
     if layer.axis==0:result.gather_output=layer.gather_output
     else:result.input_is_parallel=layer.input_is_parallel
     return result.eval()
@@ -326,7 +348,10 @@ def adapter_base_kind(layer):
 def full_adapter_matrix(layer,name):
     value=getattr(layer,name)
     axis=1 if name=='lora_A' and layer.axis==1 else 0 if name=='lora_B' and layer.axis==0 else None
-    return value.detach().cpu().clone() if axis is None else layer.group.all_gather(value,axis=axis).cpu()
+    if axis is None:return value.detach().cpu().clone()
+    from .distributed_checkpoint import _join
+    pieces=list(layer.group.all_gather(value,axis=axis).cpu().chunk(layer.group.world_size,dim=axis))
+    return _join(pieces,{'name':name,'axis':axis,'tp_replicas':getattr(layer,'replicas',1)})
 
 
 def local_adapter_matrix(layer,name,value):
@@ -334,7 +359,8 @@ def local_adapter_matrix(layer,name,value):
     if name not in ('lora_A','lora_B') or not isinstance(value,torch.Tensor) or tuple(value.shape)!=shape or not value.is_floating_point():
         raise ValueError(f'full adapter tensor differs: {name}')
     axis=1 if name=='lora_A' and layer.axis==1 else 0 if name=='lora_B' and layer.axis==0 else None
-    return value if axis is None else value.chunk(layer.group.world_size,dim=axis)[layer.group.rank].contiguous()
+    replicas=getattr(layer,'replicas',1)
+    return value if axis is None else value.chunk(layer.group.world_size//replicas,dim=axis)[layer.group.rank//replicas].contiguous()
 
 
 def nf4_layout(module,prefix):
@@ -348,6 +374,9 @@ def nf4_layout(module,prefix):
             prefix+'local.codebook':{'name':prefix+'codebook','aliases':[],'shape':[16],'replicated':True}}
     if module.axis==0 and module.local.bias is not None:
         result[prefix+'local.bias']={'name':prefix+'bias','aliases':[],'shape':[module.out_features],'axis':0}
+    if getattr(module,'replicas',1)>1:
+        for spec in result.values():
+            if not spec.get('replicated'):spec['tp_replicas']=module.replicas
     return result
 
 
@@ -424,8 +453,12 @@ def full_nf4_state(module):
             value=module.local.packed if spec['transform']=='nf4-packed' else module.local.scales
             gathered=module.group.all_gather(value).cpu()
             pieces=list(gathered.chunk(module.group.world_size))
-            result[spec['name']]=join_nf4_field(pieces,spec)
-        else:result[spec['name']]=module.group.all_gather(module.local.bias).cpu()
+            from .distributed_checkpoint import _join
+            result[spec['name']]=_join(pieces,spec)
+        else:
+            from .distributed_checkpoint import _join
+            pieces=list(module.group.all_gather(module.local.bias).cpu().chunk(module.group.world_size))
+            result[spec['name']]=_join(pieces,spec)
     if module.axis==1 and module.bias is not None:result['bias']=module.bias.detach().cpu().clone()
     result['_extra_state']={'version':1,'format':'ruda-nf4','in_features':module.in_features,
                            'out_features':module.out_features,'block_size':module.original_block_size}
@@ -442,8 +475,8 @@ def local_nf4_state(module,state,prefix):
             expected={'version':1,'format':'ruda-nf4','in_features':module.in_features,
                       'out_features':module.out_features,'block_size':module.original_block_size}
             if value!=expected:raise ValueError('full NF4 checkpoint geometry differs')
-        if 'transform' in spec:value=slice_nf4_field(value,spec,module.group.rank,module.group.world_size)
-        elif not spec.get('replicated'):value=value.chunk(module.group.world_size,dim=spec['axis'])[module.group.rank].contiguous()
+        from .distributed_checkpoint import _slice
+        value=_slice(value,spec,module.group.rank,module.group.world_size)
         result[key]=value
     if module.axis==1 and prefix+'bias' in state:result[prefix+'bias']=state[prefix+'bias']
     result[prefix+'_extra_state']=module.get_extra_state()

@@ -98,6 +98,9 @@ impl<B:Backend,M:PrefixBatchModel<B>> PrefixStore<B,M> {
         rmp_serde::to_vec(&(cache,logits)).map_err(error)
     }
     fn decode(&self,model:&M,tokens:Vec<i32>,bytes:&[u8],device:&B::Device)->Result<Prefix<B,M>,GenerationError> {
+        self.decode_payload(model,tokens,bytes,device,false)
+    }
+    fn decode_payload(&self,model:&M,tokens:Vec<i32>,bytes:&[u8],device:&B::Device,portable:bool)->Result<Prefix<B,M>,GenerationError> {
         let (cache,logits):(Vec<u8>,TensorData)=rmp_serde::from_slice(bytes).map_err(error)?;
         if logits.shape.as_slice()!=[1,1,self.limits.vocab_size]
             || !matches!(logits.dtype,DType::F16|DType::BF16|DType::F32|DType::F64|DType::Flex32)
@@ -105,17 +108,31 @@ impl<B:Backend,M:PrefixBatchModel<B>> PrefixStore<B,M> {
             return Err(error("invalid batch prefix logits storage"));
         }
         let dtype=logits.dtype;
-        let prefix=Prefix{tokens,state:model.decode_prefix(&cache,&self.model_id,device)?,logits:Tensor::from_data(logits,(device,dtype))};
+        let state=if portable {
+            let tensors=crate::PrefixTensors::decode_host(&cache,&self.model_id)?;
+            model.import_prefix_tensors(&tensors,Default::default(),device)?
+        } else {model.decode_prefix(&cache,&self.model_id,device)?};
+        let prefix=Prefix{tokens,state,logits:Tensor::from_data(logits,(device,dtype))};
         self.validate(model,&prefix,device)?;Ok(prefix)
     }
-    pub fn export_handoff(&self,model:&M,prefix:&Prefix<B,M>,device:&B::Device)->Result<Vec<u8>,GenerationError> {
+    pub fn export_handoff(&self,model:&M,prefix:&Prefix<B,M>,device:&B::Device,portable:bool)->Result<Vec<u8>,GenerationError> {
+        if portable && model.prefix_tensor_transfer() {
+            self.validate(model,prefix,device)?;model.sync_batch(device)?;
+            let tensors=model.export_prefix_tensors(&prefix.state,Default::default())?;
+            let cache=tensors.encode_host(&self.model_id)?;
+            let logits=prefix.logits.clone().try_into_data().map_err(error)?;
+            let payload=rmp_serde::to_vec(&(cache,logits)).map_err(error)?;
+            let mut header=self.header(prefix.tokens.clone());header.version=2;
+            return rmp_serde::to_vec(&(header,payload)).map_err(error);
+        }
         rmp_serde::to_vec(&(self.header(prefix.tokens.clone()),self.encode(model,prefix,device)?)).map_err(error)
     }
     pub fn import_handoff(&self,model:&M,prompt:&[i32],bytes:&[u8],device:&B::Device)->Result<Prefix<B,M>,GenerationError> {
-        let (header,payload):(Header,Vec<u8>)=rmp_serde::from_slice(bytes).map_err(error)?;
+        let (mut header,payload):(Header,Vec<u8>)=rmp_serde::from_slice(bytes).map_err(error)?;
+        let portable=header.version==2;if portable {header.version=1;}
         self.validate_header(&header)?;
         if header.tokens!=prompt {return Err(error("remote batch prefix token sequence differs"));}
-        self.decode(model,header.tokens,&payload,device)
+        self.decode_payload(model,header.tokens,&payload,device,portable)
     }
     pub fn lookup(&mut self,model:&M,prompt:&[i32],device:&B::Device)->Result<Option<Prefix<B,M>>,GenerationError> {
         self.stats.lookups+=1;self.tick+=1;

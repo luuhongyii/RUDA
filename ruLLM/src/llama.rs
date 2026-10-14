@@ -115,6 +115,7 @@ pub struct LlamaLayerCache<B: Backend> {
     sequence_length: usize,
     storage_capacity: usize,
     max_sequence_length: usize,
+    pub(crate) rotary: rope::RotaryHistory,
 }
 
 impl<B: Backend> LlamaLayerCache<B> {
@@ -125,6 +126,7 @@ impl<B: Backend> LlamaLayerCache<B> {
             sequence_length: 0,
             storage_capacity: 0,
             max_sequence_length,
+            rotary: rope::RotaryHistory::default(),
         }
     }
 
@@ -132,15 +134,39 @@ impl<B: Backend> LlamaLayerCache<B> {
         self.sequence_length
     }
 
+    fn rotate_pair(&mut self, query: Tensor<B, 4>, key: Tensor<B, 4>, template: Option<&rope::RotaryState>,
+        position: usize, fallback: impl Fn(Tensor<B, 4>) -> Tensor<B, 4>) -> (Tensor<B, 4>, Tensor<B, 4>) {
+        match template {
+            Some(template) => {
+                let state = template.for_cache(&self.rotary, position).expect("valid layer rotary continuation");
+                let end = position + query.dims()[2];
+                let query = state.apply(query, position, end);
+                let key = state.apply(key, position, end);
+                self.rotary.commit(&state, end).expect("contiguous layer rotary history");
+                (query, key)
+            },
+            None => {
+                assert!(!self.rotary.is_dynamic(), "dynamic cache cannot be used with static rotary parameters");
+                (fallback(query), fallback(key))
+            },
+        }
+    }
+
     fn append(&mut self, key: Tensor<B, 4>, value: Tensor<B, 4>) -> (Tensor<B, 4>, Tensor<B, 4>) {
         let appended = key.dims()[2];
         let key = match self.key.take() {
-            Some(previous) => Tensor::cat(vec![previous, key], 2),
-            None => key,
+            Some(previous) if self.sequence_length > 0 => {
+                let [b,h,_,d] = previous.dims();
+                Tensor::cat(vec![previous.slice([0..b,0..h,0..self.sequence_length,0..d]), key], 2)
+            },
+            _ => key,
         };
         let value = match self.value.take() {
-            Some(previous) => Tensor::cat(vec![previous, value], 2),
-            None => value,
+            Some(previous) if self.sequence_length > 0 => {
+                let [b,h,_,d] = previous.dims();
+                Tensor::cat(vec![previous.slice([0..b,0..h,0..self.sequence_length,0..d]), value], 2)
+            },
+            _ => value,
         };
         self.sequence_length += appended;
         self.storage_capacity = self.sequence_length;
@@ -302,7 +328,12 @@ impl<B: Backend> LlamaKvCache<B> {
         if position > self.position || self.layers.iter().any(|layer| layer.sequence_length != self.position) {
             return Err(crate::GenerationError("invalid native KV rollback boundary".into()));
         }
-        for layer in &mut self.layers {layer.sequence_length = position;}
+        let mut histories = self.layers.iter().map(|layer| {
+            let mut history = layer.rotary.clone();history.validate(self.position)?;history.truncate(position)?;Ok(history)
+        }).collect::<Result<Vec<_>,crate::GenerationError>>()?;
+        for (layer, history) in self.layers.iter_mut().zip(histories.drain(..)) {
+            layer.sequence_length = position;layer.rotary = history;
+        }
         self.position = position;
         Ok(())
     }
@@ -315,6 +346,8 @@ pub struct LlamaAttention<B: Backend> {
     pub v_proj: Linear<B>,
     pub o_proj: Linear<B>,
     pub rope: RotaryEncoding<B>,
+    #[module(skip)]
+    rotary_state: Option<rope::RotaryState>,
     #[module(skip)]
     rotary_layout: RotaryLayout,
     num_query_heads: usize,
@@ -386,6 +419,7 @@ impl<B: Backend> LlamaAttention<B> {
                 .with_layout(linear_layout)
                 .init(device),
             rope,
+            rotary_state: None,
             rotary_layout,
             num_query_heads: config.num_query_heads,
             num_kv_heads: config.num_kv_heads,
@@ -397,6 +431,7 @@ impl<B: Backend> LlamaAttention<B> {
         &self,
         input: Tensor<B, 3>,
         position: usize,
+        cache: Option<&mut LlamaLayerCache<B>>,
     ) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
         let [batch, sequence, _] = input.dims();
         let query = self
@@ -414,14 +449,18 @@ impl<B: Backend> LlamaAttention<B> {
             .forward(input)
             .reshape([batch, sequence, self.num_kv_heads, self.head_dimension])
             .swap_dims(1, 2);
-        (
-            self.apply_rope(query, position),
-            self.apply_rope(key, position),
-            value,
-        )
+        let (query,key) = match cache {
+            Some(cache) => cache.rotate_pair(query,key,self.rotary_state.as_ref(),position,|t|self.apply_rope(t,position)),
+            None => (self.apply_rope(query,position),self.apply_rope(key,position)),
+        };
+        (query,key,value)
     }
 
     fn apply_rope(&self, input: Tensor<B, 4>, start: usize) -> Tensor<B, 4> {
+        if let Some(state) = &self.rotary_state {
+            let end = start + input.dims()[2];
+            return state.fresh().apply(input, start, end);
+        }
         match self.rotary_layout {
             RotaryLayout::Interleaved => self.rope.apply(input, start),
             RotaryLayout::HalfSplit => apply_half_split_rope(&self.rope, input, start),
@@ -446,7 +485,7 @@ impl<B: Backend> LlamaAttention<B> {
     }
 
     fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
-        let (query, key, value) = self.project(input, 0);
+        let (query, key, value) = self.project(input, 0, None);
         let key = repeat_kv(key, self.num_query_heads / self.num_kv_heads);
         let value = repeat_kv(value, self.num_query_heads / self.num_kv_heads);
         self.finish(causal_attention(query, key, value, 0))
@@ -463,7 +502,7 @@ impl<B: Backend> LlamaAttention<B> {
             position,
             "all Llama layer caches must advance in lockstep"
         );
-        let (query, key, value) = self.project(input, position);
+        let (query, key, value) = self.project(input, position, Some(cache));
         let (key, value) = cache.append(key, value);
         let key = repeat_kv(key, self.num_query_heads / self.num_kv_heads);
         let value = repeat_kv(value, self.num_query_heads / self.num_kv_heads);
@@ -631,6 +670,8 @@ struct PackedLlamaAttention<B: Backend> {
     o_proj: Linear<B>,
     rope: RotaryEncoding<B>,
     #[module(skip)]
+    rotary_state: Option<rope::RotaryState>,
+    #[module(skip)]
     rotary_layout: RotaryLayout,
     num_query_heads: usize,
     num_kv_heads: usize,
@@ -654,24 +695,28 @@ impl<B: Backend> LlamaForCausalLm<B> {
         device: &B::Device) -> Result<Self, LlamaConfigError> {
         config.validate()?;
         let dtype = Tensor::<B, 1>::zeros([1], device).dtype();
-        let rope = parameters.init(config, device, dtype);
+        let tables = parameters.tables(config, device, dtype);
+        let mut index = 0;
         let layout = if qwen2 { LinearLayout::Col } else { LinearLayout::Row };
         Self::init_with_layers(config, device, |config, device| {
-            let attention = LlamaAttention::init_with_options(config, qwen2, RotaryLayout::HalfSplit,
-                if qwen2 { LinearLayout::Col } else { LinearLayout::Row }, rope.clone(), device);
+            let mut attention = LlamaAttention::init_with_options(config, qwen2, RotaryLayout::HalfSplit,
+                if qwen2 { LinearLayout::Col } else { LinearLayout::Row }, tables[index].clone(), device);
+            attention.rotary_state = parameters.for_layer(index).runtime_state();
+            index += 1;
             let mlp = if qwen2 { LlamaFeedForward::init_qwen2(config, device) } else { LlamaFeedForward::init(config, device) };
             LlamaDecoderLayer::init_with_attention(config, attention, mlp, device)
         }, layout)
     }
 
     pub(crate) fn restore_rope_storage(&mut self, config: &LlamaConfig, parameters: &rope::RopeParameters, device: &B::Device) {
-        let mut tables: Vec<(DType, RotaryEncoding<B>)> = Vec::new();
-        for layer in &mut self.layers {
+        let mut tables: Vec<(DType, &rope::RopeParameters, RotaryEncoding<B>)> = Vec::new();
+        for (index, layer) in self.layers.iter_mut().enumerate() {
+            let parameters = parameters.for_layer(index);
             let dtype = layer.self_attn.q_proj.weight.val().dtype();
             if layer.self_attn.rope.freq_complex.dtype() == dtype { continue; }
-            let rope = match tables.iter().find(|(kind, _)| *kind == dtype) {
-                Some((_, rope)) => rope.clone(),
-                None => {let rope = parameters.init(config, device, dtype); tables.push((dtype, rope.clone())); rope},
+            let rope = match tables.iter().find(|(kind, p, _)| *kind == dtype && *p == parameters) {
+                Some((_, _, rope)) => rope.clone(),
+                None => {let rope = parameters.init(config, device, dtype); tables.push((dtype, parameters, rope.clone())); rope},
             };
             layer.self_attn.rope = rope;
         }
@@ -722,6 +767,15 @@ impl<B: Backend> LlamaForCausalLm<B> {
 
     pub fn new_cache(&self) -> LlamaKvCache<B> {
         LlamaKvCache::new(self.layers.len(), self.max_sequence_length)
+    }
+
+    pub fn set_context_limit(&mut self, length: usize) -> Result<(), crate::GenerationError> {
+        if length == 0 || self.layers.iter().any(|layer| layer.self_attn.rotary_state.is_none()
+            && layer.self_attn.rope.freq_complex.dims()[0] < length) {
+            return Err(crate::GenerationError("context extension requires runtime-scaled RoPE in every extended layer".into()));
+        }
+        self.max_sequence_length = length;
+        Ok(())
     }
 
     /// Full causal prefill. Returns logits in `[batch, sequence, vocabulary]` order.
@@ -852,6 +906,7 @@ impl<B: Backend> PackedLlamaAttention<B> {
             v_proj,
             o_proj,
             rope,
+            rotary_state,
             rotary_layout,
             num_query_heads,
             num_kv_heads,
@@ -888,6 +943,7 @@ impl<B: Backend> PackedLlamaAttention<B> {
             qkv_bias,
             o_proj,
             rope,
+            rotary_state,
             rotary_layout,
             num_query_heads,
             num_kv_heads,
@@ -896,6 +952,10 @@ impl<B: Backend> PackedLlamaAttention<B> {
     }
 
     fn apply_rope(&self, input: Tensor<B, 4>, start: usize) -> Tensor<B, 4> {
+        if let Some(state) = &self.rotary_state {
+            let end = start + input.dims()[2];
+            return state.fresh().apply(input, start, end);
+        }
         match self.rotary_layout {
             RotaryLayout::Interleaved => self.rope.apply(input, start),
             RotaryLayout::HalfSplit => apply_half_split_rope(&self.rope, input, start),
@@ -1024,8 +1084,7 @@ impl<B: Backend> PackedLlamaAttention<B> {
             ])
             .reshape([batch, sequence, self.num_kv_heads, self.head_dimension])
             .swap_dims(1, 2);
-        let query = self.apply_rope(query, position);
-        let key = self.apply_rope(key, position);
+        let (query,key) = cache.rotate_pair(query,key,self.rotary_state.as_ref(),position,|t|self.apply_rope(t,position));
         let (key, value) = cache.append(key, value);
         let key = repeat_kv(key, self.num_query_heads / self.num_kv_heads);
         let value = repeat_kv(value, self.num_query_heads / self.num_kv_heads);
@@ -1142,7 +1201,8 @@ where
             self.qkv_bias.as_ref().map(Param::val),
         );
         let (query, key, value, key_sequence) = match self.rotary_layout {
-            RotaryLayout::HalfSplit if ruda_inference::can_use_elementwise::<R>(&projected.device(), projected.dtype()) => {
+            RotaryLayout::HalfSplit if self.rotary_state.is_none() && self.rope.freq_complex.dims()[1] == self.head_dimension
+                && ruda_inference::can_use_elementwise::<R>(&projected.device(), projected.dtype()) => {
                 let device = projected.device();
                 let dtype = projected.dtype();
                 let (key_storage, value_storage, cache_start, cache_end) = cache.reserve_growable(
@@ -1186,8 +1246,7 @@ where
                     ])
                     .reshape([batch, sequence, self.num_kv_heads, self.head_dimension])
                     .swap_dims(1, 2);
-                let query = self.apply_rope(query, position);
-                let key = self.apply_rope(key, position);
+                let (query,key) = cache.rotate_pair(query,key,self.rotary_state.as_ref(),position,|t|self.apply_rope(t,position));
                 let (key, value, key_sequence) = cache.append_growable(key, value);
                 (query, key, value, key_sequence)
             }
@@ -1305,6 +1364,15 @@ impl<B: Backend> PackedLlamaForCausalLm<B> {
         LlamaKvCache::new(self.layers.len(), self.max_sequence_length)
     }
 
+    pub fn set_context_limit(&mut self, length: usize) -> Result<(), crate::GenerationError> {
+        if length == 0 || self.layers.iter().any(|layer| layer.self_attn.rotary_state.is_none()
+            && layer.self_attn.rope.freq_complex.dims()[0] < length) {
+            return Err(crate::GenerationError("context extension requires runtime-scaled RoPE in every extended layer".into()));
+        }
+        self.max_sequence_length = length;
+        Ok(())
+    }
+
     /// Full causal forward for pretraining and fine-tuning.
     pub fn forward(&self, tokens: Tensor<B, 2, Int>) -> Tensor<B, 3> {
         self.lm_head.forward(self.forward_hidden(tokens))
@@ -1408,7 +1476,9 @@ fn apply_half_split_rope<B: Backend>(
     input: Tensor<B, 4>,
     start: usize,
 ) -> Tensor<B, 4> {
-    let [_, _, sequence, dimension] = input.dims();
+    let [_, _, sequence, width] = input.dims();
+    let dimension = rope.freq_complex.dims()[1];
+    assert!(dimension <= width, "rotary prefix exceeds the attention head");
     let maximum = rope.freq_complex.dims()[0];
     let end = start
         .checked_add(sequence)
@@ -1439,17 +1509,7 @@ fn apply_half_split_rope<B: Backend>(
     let sine =
         Tensor::cat(vec![sine_half.clone(), sine_half], 1).reshape([1, 1, sequence, dimension]);
 
-    let first = input
-        .clone()
-        .slice([0..input.dims()[0], 0..input.dims()[1], 0..sequence, 0..half]);
-    let second = input.clone().slice([
-        0..input.dims()[0],
-        0..input.dims()[1],
-        0..sequence,
-        half..dimension,
-    ]);
-    let rotated = Tensor::cat(vec![-second, first], 3);
-    input * cosine + rotated * sine
+    rope::apply_partial(input, cosine, sine)
 }
 
 fn repeat_kv<B: Backend>(input: Tensor<B, 4>, repeats: usize) -> Tensor<B, 4> {

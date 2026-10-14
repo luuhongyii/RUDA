@@ -33,29 +33,33 @@ class PipelineTiedParameters:
                            getattr(parameter,'_ruda_tp_axis',None if spec.get('replicated') else spec.get('axis')),
                            getattr(parameter,'_ruda_full_shape',None))
         ranks=mesh.world.gather_metadata(local)
-        data,pipeline,tensor=mesh.shape
+        from .model_parallel_mesh import pipeline_rank_layout
+        (data, pipeline, tensor), _, rank_order = pipeline_rank_layout(mesh)
+        ranks = [ranks[index] for index in rank_order]
         symbols=sorted(set().union(*(entry.keys() for entry in ranks)))
         self.model,self.mesh,self.bindings,self.groups=model,mesh,dict(bindings),{}
         self.consumer_counts={}
         self._owned=[]
-        backend='nccl' if mesh.device_type=='ruda' else 'gloo'
+        transport = getattr(mesh, 'transport', 'nccl')
+        backend = transport if mesh.device_type == 'ruda' else 'gloo'
         for symbol in symbols:
             owners=[p for p in range(pipeline) if symbol in ranks[p*tensor]]
             if len(owners)<2:raise ValueError('a pipeline tie needs at least two owner stages')
-            reference=ranks[owners[0]*tensor][symbol]
             for d in range(data):
                 for t in range(tensor):
                     if [p for p in range(pipeline) if symbol in ranks[(d*pipeline+p)*tensor+t]]!=owners:
                         raise ValueError('tie stage ownership differs between DP/TP coordinates')
+                    expert_coordinate = d % mesh.shape[3] if len(mesh.shape) == 5 else 0
+                    reference = ranks[(expert_coordinate*pipeline+owners[0])*tensor][symbol]
                     if any(ranks[(d*pipeline+p)*tensor+t][symbol]!=reference for p in owners):
                         raise ValueError('tied parameter shape/dtype/gradient/TP axes differ')
             self.consumer_counts[symbol]=len(owners)
             for d in range(data):
                 for t in range(tensor):
-                    members=[(d*pipeline+p)*tensor+t for p in owners]
+                    members=[rank_order[(d*pipeline+p)*tensor+t] for p in owners]
                     process_group=dist.new_group(members,backend=backend)
                     if mesh.rank in members:
-                        self.groups[symbol]=ReplicaGroup(process_group,device_type=mesh.device_type)
+                        self.groups[symbol]=ReplicaGroup(process_group,device_type=mesh.device_type,transport=transport)
                         self._owned.append(process_group)
         with torch.no_grad():
             for symbol,group in self.groups.items():group.broadcast_(self.bindings[symbol],0)

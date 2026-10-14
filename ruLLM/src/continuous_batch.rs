@@ -10,7 +10,7 @@ mod sampling;
 mod device;
 pub use device::{DeviceBatchModel, DeviceBatchExecutor, ExecutedBatch};
 mod prefix_device;
-pub use prefix_device::{PrefixBatchModel,PrefixBatchExecutor,PrefixBatchStep};
+pub use prefix_device::{PrefixBatchModel,PrefixBatchExecutor,PrefixBatchStep,ActiveKvSwapConfig,ActiveKvSwapStats};
 mod fenced;
 pub use fenced::{BatchFence, BatchLaunchFailure, FencedBatchScheduler};
 mod lifecycle;
@@ -199,6 +199,7 @@ pub struct ContinuousBatchScheduler {
     next_request: u64,
     next_batch: u64,
     prefill_chunk_tokens:Option<usize>,
+    admission_ceiling:Option<RequestId>,
 }
 
 impl ContinuousBatchScheduler {
@@ -230,6 +231,7 @@ impl ContinuousBatchScheduler {
             next_request: 1,
             next_batch: 1,
             prefill_chunk_tokens:None,
+            admission_ceiling:None,
         })
     }
 
@@ -498,7 +500,8 @@ impl ContinuousBatchScheduler {
             }
         }
         while self.active.len() < self.config.max_active_sequences {
-            let Some(position)=self.pending.iter().position(|r|!self.deferred_prefill.contains(&r.id)) else {break;};
+            let Some(position)=self.pending.iter().position(|r|!self.deferred_prefill.contains(&r.id)
+                && self.admission_ceiling.is_none_or(|ceiling|r.id<ceiling)) else {break;};
             if self.options.kv_admission == KvAdmissionPolicy::ReserveSequenceCapacity {
                 let pending=&self.pending[position];
                 let pages = Self::request_page_budget(

@@ -7,7 +7,8 @@ crate::batch_kv::dense_prefix_model!(LlamaTensorParallelRank, |rank| rank.model.
         rank.model.embed_tokens.weight.val().dtype())
 }).collect::<Vec<_>>());
 crate::batch_kv::dense_speculative_model!(LlamaTensorParallelRank);
-crate::parallel_batch::parallel_batch_model!(LlamaTensorParallel, LlamaTensorParallelRank);
+crate::parallel_batch::parallel_batch_model!(LlamaTensorParallel, LlamaTensorParallelRank,|group|
+    crate::PrefixShard{kv_heads:Some(group.config.num_kv_heads),..Default::default()});
 crate::parallel_batch::parallel_speculative_model!(LlamaTensorParallel, LlamaTensorParallelRank);
 
 impl<R, F, I, BT> DeviceBatchModel<DeviceBackend<R, F, I, BT>> for LlamaTensorParallelRank<DeviceBackend<R, F, I, BT>>

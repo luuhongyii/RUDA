@@ -3,7 +3,7 @@ use crate::{PagedKvCacheConfig,PagedKvCacheManager,PrefixBatchModel,RequestId,
     ScheduledBatch,ScheduledBatchKind,ScheduledSequence};
 use crate::batch_prefix::{Prefix,PrefixStore};
 
-fn prefill<B:Backend,M:PrefixBatchModel<B>>(model:&M,device:&B::Device,tokens:&[i32],
+pub(super) fn prefill<B:Backend,M:PrefixBatchModel<B>>(model:&M,device:&B::Device,tokens:&[i32],
     mut kv:PagedKvCacheConfig,chunk:usize,store:&mut PrefixStore<B,M>)->Result<Prefix<B,M>,GenerationError> {
     crate::generation::validate_generation(&model.batch_limits(),tokens,&GreedyGenerationConfig {
         max_new_tokens:0,eos_token_ids:Vec::new(),
@@ -62,11 +62,11 @@ pub fn run_batch_prefill_service<B:Backend,M:PrefixBatchModel<B>>(
         let mut stream=match incoming {Ok(s)=>s,Err(e)=>{eprintln!("batch prefill connection: {e}");continue;}};
         let result=(|| {
             let request:PrefillRequest=rmp_serde::from_slice(&read_frame(&mut stream)?).map_err(error)?;
-            if request.version!=2 || request.model_id!=model_id || request.limits!=limits {
+            if !matches!(request.version,2|3) || request.model_id!=model_id || request.limits!=limits {
                 return Err(error("batch prefill model identity, version or limits differ"));
             }
             let prefix=prefill(&model,&device,&request.tokens,kv,chunk,&mut store)?;
-            store.export_handoff(&model,&prefix,&device)
+            store.export_handoff(&model,&prefix,&device,request.version==3)
         })();
         let response=match result {
             Ok(mut bytes)=>{bytes.insert(0,0);bytes},
@@ -127,7 +127,7 @@ mod network {
         pub fn submit(&mut self,id:RequestId,tokens:Vec<i32>)->Result<(),GenerationError> {
             if self.requests.len()>=self.capacity || self.requests.contains_key(&id) {return Err(error("remote prefill queue is full or request already exists"));}
             let address=self.address.clone();let sender=self.sender.clone();let owner=std::thread::current();
-            let request=PrefillRequest{version:2,model_id:self.model_id.clone(),limits:self.limits,tokens};
+            let request=PrefillRequest{version:3,model_id:self.model_id.clone(),limits:self.limits,tokens};
             let task=self.runtime.as_ref().unwrap().spawn(async move {
                 let result=exchange(address,request).await;
                 if sender.send((id,result)).await.is_ok() {owner.unpark();}

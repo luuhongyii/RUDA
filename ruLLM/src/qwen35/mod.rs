@@ -14,6 +14,7 @@ mod libtorch;
 mod libtorch_delta;
 mod loading;
 mod quantized_loading;
+mod fp8_loading;
 mod projection;
 use projection::Projection;
 #[cfg(feature = "tensor-parallel")]
@@ -91,6 +92,7 @@ struct Layer<B: Backend> {
 
 pub struct Qwen35TextModel<B: Backend> {
     pub config: Qwen35TextConfig,
+    rotary: crate::llama::rope::RopeParameters,
     embedding: Embedding<B>,
     layers: Vec<Layer<B>>,
     norm: Norm<B>,
@@ -117,6 +119,7 @@ pub struct Qwen35Cache<B: Backend> {
     layers: Vec<LayerCache<B>>,
     position: usize,
     batch: Option<usize>,
+    rotary_length: usize,
 }
 
 impl<B: Backend> Qwen35Cache<B> {
@@ -126,6 +129,18 @@ impl<B: Backend> Qwen35Cache<B> {
 }
 
 impl<B: Backend> Qwen35TextModel<B> {
+    pub fn set_context_limit(&mut self, length: usize) -> Result<(), GenerationError> {
+        if length == 0 || (length > self.config.max_position_embeddings
+            && matches!(self.rotary.scaling, crate::llama::rope::RopeScaling::Static)) {
+            return Err(GenerationError("context extension requires runtime-scaled Qwen3.5 RoPE".into()));
+        }
+        self.config.max_position_embeddings = length;
+        Ok(())
+    }
+    fn rotary_for(&self, cache: &Qwen35Cache<B>) -> Result<crate::llama::rope::RotaryState, GenerationError> {
+        self.rotary.state_at(cache.rotary_length)
+            .ok_or_else(|| GenerationError("Qwen3.5 cache rotary state differs from the model".into()))
+    }
     fn reduce(&self, value: Tensor<B, 3>) -> Tensor<B, 3> {
         match &self.reduction { Some(reduce) => reduce(value), None => value }
     }
@@ -148,6 +163,7 @@ impl<B: Backend> Qwen35TextModel<B> {
                 .collect(),
             position: 0,
             batch: None,
+            rotary_length: self.rotary.initial_cached_length(),
         }
     }
 }
@@ -204,14 +220,17 @@ where
             ));
         }
         let hidden = self.embedding.forward(tokens);
+        let rotary = self.rotary_for(cache)?;
         let (cos, sin) = attention::text_rope(
-            &self.config,
+            &rotary,
             cache.position,
             sequence,
             hidden.dtype(),
             &hidden.device(),
         );
-        self.run_layers(hidden, cos, sin, cache)
+        let hidden = self.run_layers(hidden, cos, sin, cache)?;
+        cache.rotary_length = rotary.cached_length();
+        Ok(hidden)
     }
 
     fn forward_embeddings_last(
@@ -228,10 +247,12 @@ where
         {
             return Err(GenerationError("invalid Qwen3.5 embedded input or cache capacity".into()));
         }
-        let (cos, sin) = attention::multimodal_rope(
-            &self.config, coordinates, batch, sequence, hidden.dtype(), &hidden.device(),
+        let rotary = self.rotary_for(cache)?;
+        let (cos, sin) = attention::multimodal_rope_with_state(
+            &self.config, &rotary, coordinates, batch, sequence, hidden.dtype(), &hidden.device(),
         )?;
         let hidden = self.run_layers(hidden, cos, sin, cache)?;
+        cache.rotary_length = rotary.cached_length();
         Ok(self.head.forward(self.norm.forward(hidden.slice([0..batch, sequence-1..sequence, 0..width]))?))
     }
 

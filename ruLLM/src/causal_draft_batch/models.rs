@@ -34,6 +34,11 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
 impl<R,F,I,BT> PrefixBatchModel<DeviceBackend<R,F,I,BT>> for DenseCausalBatchModel<DeviceBackend<R,F,I,BT>>
 where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement,I:IntElement,BT:BoolElement {
     type Prefix=DenseBatchPrefix<DeviceBackend<R,F,I,BT>>;
+    fn prefix_tensor_transfer(&self)->bool {dispatch!(self,m,m.prefix_tensor_transfer())}
+    fn export_prefix_tensors(&self,prefix:&Self::Prefix,shard:crate::PrefixShard)
+        ->Result<crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,GenerationError> {dispatch!(self,m,m.export_prefix_tensors(prefix,shard))}
+    fn import_prefix_tensors(&self,tensors:&crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,shard:crate::PrefixShard,device:&R::Device)
+        ->Result<Self::Prefix,GenerationError> {dispatch!(self,m,m.import_prefix_tensors(tensors,shard,device))}
     fn capture_prefix(&self,cache:&Self::Cache,id:RequestId)->Result<Self::Prefix,GenerationError> {dispatch!(self,m,m.capture_prefix(cache,id))}
     fn prefix_position(&self,prefix:&Self::Prefix)->usize {prefix.position()}
     fn prefix_bytes(&self,prefix:&Self::Prefix)->usize {prefix.bytes()}

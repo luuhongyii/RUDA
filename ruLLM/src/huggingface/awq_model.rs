@@ -59,6 +59,11 @@ impl<R: DeviceRuntime> LoadedHuggingFaceAwqQwen2<R>
 where
     R::Device: DeviceOps,
 {
+    pub fn set_context_limit(&mut self, length: usize) -> Result<(), GenerationError> {
+        self.model.set_context_limit(length)?;
+        self.config.max_sequence_length = length;
+        Ok(())
+    }
     pub fn generate_tokens(
         &self,
         prompt_token_ids: &[i32],

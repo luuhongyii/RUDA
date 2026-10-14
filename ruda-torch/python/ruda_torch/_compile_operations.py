@@ -17,6 +17,8 @@ from ._compile_sort import definition as sort_definition,describe as sort_descri
 
 _OPERATIONS={
     'ruda::dense_attention_forward':(0,9),'ruda::dense_attention_backward':(1,13),
+    'ruda::indexed_dense_attention_forward':(35,13),'ruda::indexed_dense_attention_backward':(36,15),
+    'ruda::attention_dropout_mask':(37,6),
     'ruda::varlen_attention_forward':(2,13),'ruda::varlen_attention_backward':(3,14),
     'ruda::float8_mm':(4,7),'ruda::float8_quantize':(5,3),
     'ruda::packed_linear':(6,7),'ruda::packed_linear_tensor_core':(6,7),
@@ -28,11 +30,38 @@ _OPERATIONS={
     'aten::cat':(16,2),
     'ruda::router_weights_forward':(21,5),'ruda::router_weights_backward':(22,6),
     'ruda::grouped_gemm':(23,4),'ruda::grouped_gemm_backward':(24,4),
+    'ruda::float8_block_quantize':(27,6),'ruda::float8_block_mm':(28,8),
+    'ruda::float8_delayed_quantize':(29,4),
+    'ruda::float8_delayed_advance':(30,10),
+    'ruda::indexed_expert_linear':(31,4),'ruda::indexed_expert_backward':(32,5),
+    'ruda::indexed_expert_backward_selected':(38,7),'ruda::indexed_expert_activity':(39,3),
+    'ruda::indexed_quantized_expert_linear':(40,6),
+    'ruda::indexed_float8_statistics':(41,5),'ruda::indexed_float8_product':(42,10),
+    'ruda::indexed_block_float8_statistics':(43,7),'ruda::indexed_block_float8_product':(44,13),
+    'ruda::float8_shard_statistics':(33,7),'ruda::float8_shard_quantize':(34,11),
 }
 _CPU_POSITIONS={0:(),1:(6,),2:(3,4,12),3:(6,),4:(),5:(),6:(),7:(),8:(),9:(),10:(),11:(),12:(),13:(),14:(),15:(),16:(),17:(),18:(),19:(),20:(),21:(),22:(),23:(),24:(),25:(),26:()}
+_CPU_POSITIONS.update({27:(),28:(),29:(),30:(),31:(),32:(),33:(),34:()})
+_CPU_POSITIONS.update({35:(12,),36:(6,)})
+_CPU_POSITIONS[37]=(1,)
+_CPU_POSITIONS.update({38:(),39:(),40:(),41:(),42:(),43:(),44:()})
 
 
 def available(kind=None):
+    if kind in (43,44):return (getattr(sys.modules.get(__package__),'_operation_graph_available',False)
+                              and getattr(sys.modules.get(__package__),'_indexed_block_float8_expert_available',False))
+    if kind in (41,42):return (getattr(sys.modules.get(__package__),'_operation_graph_available',False)
+                              and getattr(sys.modules.get(__package__),'_indexed_float8_expert_available',False))
+    if kind==40:return (getattr(sys.modules.get(__package__),'_operation_graph_available',False)
+                       and getattr(sys.modules.get(__package__),'_indexed_quantized_expert_available',False))
+    if kind in (38,39):return (getattr(sys.modules.get(__package__),'_operation_graph_available',False)
+                              and getattr(sys.modules.get(__package__),'_indexed_expert_training_available',False))
+    if kind==37:return getattr(sys.modules.get(__package__),'_attention_dropout_graph_available',False)
+    if kind in (35,36):return getattr(sys.modules.get(__package__),'_indexed_attention_graph_available',False)
+    if kind in (33,34):return getattr(sys.modules.get(__package__),'_shard_float8_graph_available',False)
+    if kind in (31,32):return getattr(sys.modules.get(__package__),'_indexed_expert_graph_available',False)
+    if kind in (29,30):return getattr(sys.modules.get(__package__),'_delayed_float8_graph_available',False)
+    if kind in (27,28):return getattr(sys.modules.get(__package__),'_block_float8_graph_available',False)
     if kind==26:return getattr(sys.modules.get(__package__),'_sorting_graph_available',False)
     if kind==25:return getattr(sys.modules.get(__package__),'_scatter_graph_available',False)
     if kind in (23,24):return getattr(sys.modules.get(__package__),'_grouped_graph_available',False)
@@ -86,7 +115,7 @@ def operation(node):
 def tuple_metadata(node,operations):
     if node.op!='call_function' or node.target is not operator.getitem or len(node.args)!=2 or node.kwargs:return False
     source,index=node.args
-    if not isinstance(source,Node) or source not in operations or type(index) is not int:return False
+    if not isinstance(source,Node) or (source not in operations and source.op!='placeholder') or type(index) is not int:return False
     val=source.meta.get('val')
     return isinstance(val,(tuple,list)) and -len(val)<=index<len(val) and isinstance(node.meta.get('val'),torch.Tensor)
 
@@ -105,9 +134,15 @@ def host_metadata_nodes(gm):
                 if not allowed(user,seen):return False
                 continue
             kind=operation(user)
-            if kind is None:return False
             positions=[i for i,arg in enumerate(user.args) if arg is node]
-            if not positions or any(i not in _CPU_POSITIONS[kind] for i in positions):return False
+            if kind is None:
+                from ._compile_collectives import definition
+                spec=definition(user)
+                allowed_positions=({'ruda::ring_attention_forward':(16,), 'ruda::indexed_ring_attention_forward':(16,),
+                                    'ruda::ring_attention_backward':(8,), 'ruda::attention_rng_state':(4,)}.get(spec[0],())
+                                   if spec is not None else ())
+            else:allowed_positions=_CPU_POSITIONS[kind]
+            if not positions or any(i not in allowed_positions for i in positions):return False
         return True
     return {node for node in gm.graph.nodes if allowed(node,set())}
 
@@ -116,9 +151,142 @@ def _shape(value):return tuple(value.shape)
 
 
 def _describe(kind,args,tensor_core):
+    if kind in (43,44):
+        from ._indexed_block_float8 import describe,product_metadata
+        if kind==43:
+            value,weights,ids,gradient,start,mode,geometry=args
+            specs=describe(value,weights,ids,gradient,start,mode,geometry)
+            return [value,ids,*weights,gradient],specs,(start,len(weights),mode,*geometry),(),(),{}
+        value,weights,ids,gradient,stats,start,mode,geometry,formats,margin,power,strategy,needed=args
+        specs=product_metadata(value,weights,ids,gradient,stats,start,mode,geometry,formats,margin,power,strategy,needed)
+        integers=(start,len(weights),mode,*geometry,*formats,margin,int(power),strategy,sum(int(flag)<<i for i,flag in enumerate(needed)))
+        return [value,ids,*weights,gradient,*stats],specs,integers,(),(),{}
+    if kind in (41,42):
+        from ._indexed_float8_experts import metadata,product_metadata
+        if kind==41:
+            value,weights,ids,start,include_weights=args
+            metadata(value,weights,ids,start)
+            return [value,ids,*weights],[((len(weights),2,3),torch.float32)],(start,len(weights),int(include_weights)),(),(),{}
+        value,weights,ids,gradient,scales,start,mode,formats,strategy,needed=args
+        specs=product_metadata(value,weights,ids,gradient,scales,start,mode,formats,strategy,needed)
+        integers=(start,len(weights),mode,*formats,strategy,sum(int(flag)<<i for i,flag in enumerate(needed)))
+        return [value,ids,*weights,gradient,scales],specs,integers,(),(),{}
+    if kind==40:
+        from ._indexed_quantized_experts import metadata
+        value,buffers,ids,start,layouts,transpose=args
+        width=metadata(value,buffers,ids,start,layouts,transpose)
+        return [value,ids,*buffers],[((value.shape[0],width),value.dtype)],(start,len(layouts)//6,int(transpose),*layouts),(),(),{}
+    if kind==39:
+        ids,start,count=args
+        if ids.device.type!='ruda' or ids.dtype not in (torch.int32,torch.int64) or ids.ndim!=1:
+            raise ValueError('expert activity requires a RUDA integer ID vector')
+        if not 0<=start<=0xffffffff-count or not 1<=count<=0xffffffff:
+            raise ValueError('expert activity range exceeds uint32')
+        return [ids],[((count,),torch.int32)],(start,count),(),(),{}
+    if kind==37:
+        anchor,rng,shape,global_shape,offsets,p=args
+        if len(shape)!=4 or len(global_shape)!=4 or len(offsets)!=3 or anchor.numel()!=0:
+            raise ValueError('native dropout tile geometry differs')
+        if anchor.device.type!='ruda' or anchor.dtype not in (torch.float16,torch.bfloat16,torch.float32):
+            raise ValueError('native dropout tiles require floating RUDA storage')
+        if not 0<=p<=1 or shape[0]!=global_shape[0] or any(n<0 for n in (*shape,*global_shape,*offsets)):
+            raise ValueError('invalid native dropout tile policy')
+        if any(start+local>total for start,local,total in zip(offsets,shape[1:],global_shape[1:])) or math.prod(global_shape)>=1<<63:
+            raise ValueError('native dropout tile exceeds global RNG geometry')
+        return [anchor],[(tuple(shape),anchor.dtype)],(*global_shape,*offsets),(p,),(),{'rng':rng}
+    if kind in (35,36):
+        count=9 if kind==35 else 13
+        inputs,outputs,integers,scalars,score_shape,extra=_describe(kind-35,args[:count],tensor_core)
+        global_heads,head_start=args[count:count+2]
+        q,k=args[:2]
+        if global_heads<q.shape[1] or not 0<=head_start<=global_heads-q.shape[1]:
+            raise ValueError('native indexed attention head interval differs')
+        shape=(q.shape[0],global_heads,q.shape[2],k.shape[2])
+        if math.prod(shape)>=1<<63:raise ValueError('native indexed attention RNG positions exceed int64')
+        if kind==35:extra.update(shape=shape,groups=args[11],requested_rng=args[12])
+        return inputs,outputs,(*integers,global_heads,head_start),scalars,score_shape,extra
     if kind==16 and (not isinstance(args[0],(tuple,list)) or not args[0]):raise ValueError('cat requires a nonempty tensor list')
     q=args[0][0] if kind==16 else args[0];extra={};score_shape=()
-    if kind==26:
+    if kind in (33,34):
+        from .float8_scaling import _shard_geometry
+        if kind==33:
+            value,*geometry=args
+            dtype,margin,power=None,0,False
+        else:
+            value,statistics,dtype,*geometry,margin,power=args
+        if any(type(n) is not int or not 0<=n<=0xffffffff for n in geometry):
+            raise ValueError('invalid sharded FP8 graph geometry')
+        rows,cols,origin_row,origin_col,global_rows,global_cols=geometry
+        shape=_shard_geometry(value,*geometry)
+        if rows*cols>0xffffffff-32 or math.prod(shape)>0xffffffff:
+            raise ValueError('sharded FP8 graph indexing overflow')
+        if ((global_rows+rows-1)//rows)*rows>0xffffffff or ((global_cols+cols-1)//cols)*cols>0xffffffff:
+            raise ValueError('sharded FP8 graph block coordinates overflow')
+        scalars=()
+        if kind==33:
+            inputs=[value];integers=tuple(geometry);outputs=[(shape,torch.float32)]
+        else:
+            if statistics.dtype!=torch.float32 or _shape(statistics)!=shape:
+                raise ValueError('sharded FP8 graph statistics geometry differs')
+            if dtype not in (torch.float8_e4m3fn,torch.float8_e5m2) or type(margin) is not int or not 0<=margin<=16 or type(power) is not bool:
+                raise ValueError('invalid sharded FP8 graph scaling policy')
+            height,width=value.shape[0]+origin_row%rows,value.shape[1]+origin_col%cols
+            inputs=[value,statistics];integers=(*geometry,margin,int(power))
+            outputs=[((height,width),dtype),(((height+rows-1)//rows,(width+cols-1)//cols),torch.float32)]
+    elif kind in (31,32,38):
+        from ._indexed_experts import metadata
+        value,weights,ids=args[:3]
+        start=args[4] if kind==38 else args[-1];gradient=args[3] if kind in (32,38) else None
+        metadata(value,weights,ids,start,gradient)
+        inputs=[value,ids,*weights];integers=(start,len(weights));scalars=()
+        if kind in (32,38):
+            inputs.append(gradient)
+            needed=[True]*(len(weights)+1) if kind==32 else [args[5],*args[6]]
+            if len(needed)!=len(weights)+1 or any(type(flag) is not bool for flag in needed):
+                raise ValueError('indexed expert derivative selection differs')
+            outputs=[(_shape(t) if need else (0,),t.dtype) for t,need in zip((value,*weights),needed,strict=True)]
+            if kind==38:integers=(*integers,int(needed[0]),sum(int(flag)<<index for index,flag in enumerate(needed[1:])))
+        else:outputs=[((value.shape[0],weights[0].shape[0]),value.dtype)]
+    elif kind==30:
+        scale,history,observed,step,interval,maximum,power,*limits=args
+        if (scale.dtype!=torch.float32 or scale.shape!=(3,) or history.dtype!=torch.float32 or history.ndim!=3
+                or history.shape[0]!=3 or history.shape[2]!=2 or not 1<=history.shape[1]<=0xffffffff
+                or observed.dtype!=torch.float32 or observed.shape!=(3,3) or step.dtype!=torch.int64 or step.shape!=()):
+            raise ValueError('invalid delayed FP8 graph history/state geometry')
+        if type(interval) is not int or not 1<=interval<=0x7fffffffffffffff or type(maximum) is not bool or type(power) is not bool:
+            raise ValueError('invalid delayed FP8 graph update policy')
+        if any(type(n) not in (int,float) or not math.isfinite(n) or n<=0 for n in limits):
+            raise ValueError('invalid delayed FP8 graph format maxima')
+        inputs=[scale,history,observed,step];integers=(interval,int(maximum),int(power));scalars=tuple(limits)
+        outputs=[(_shape(t),t.dtype) for t in inputs]
+    elif kind==29:
+        value,scale,pending,dtype=args
+        if value.dtype not in (torch.float32,torch.float16,torch.bfloat16) or dtype not in (torch.float8_e4m3fn,torch.float8_e5m2):
+            raise ValueError('invalid delayed FP8 graph storage dtype')
+        if scale.dtype!=torch.float32 or scale.shape!=() or pending.dtype!=torch.float32 or pending.shape!=(3,):
+            raise ValueError('delayed FP8 graph requires scalar scale and [amax,invalid,seen] state')
+        inputs=[value,scale,pending];integers=(12 if dtype==torch.float8_e4m3fn else 13,);scalars=()
+        outputs=[(_shape(value),dtype),((),torch.float32),((3,),torch.float32)]
+    elif kind==27:
+        value,dtype,rows,cols,margin,power=args
+        if value.ndim!=2 or value.dtype not in (torch.float32,torch.float16,torch.bfloat16):raise ValueError('block FP8 graph needs floating matrix storage')
+        if dtype not in (torch.float8_e4m3fn,torch.float8_e5m2) or type(rows) is not int or rows<1 or type(cols) is not int or cols<32 or cols%32:
+            raise ValueError('invalid block FP8 graph encoding geometry')
+        if type(margin) is not int or not 0<=margin<=16 or type(power) is not bool:raise ValueError('invalid block FP8 scaling policy')
+        inputs=[value];integers=(12 if dtype==torch.float8_e4m3fn else 13,rows,cols,margin,int(power));scalars=()
+        outputs=[(_shape(value),dtype),(((value.shape[0]+rows-1)//rows,(value.shape[1]+cols-1)//cols),torch.float32)]
+    elif kind==28:
+        a,w,sa,sw,rows_a,rows_w,block_k,strategy=args
+        if a.ndim!=2 or w.ndim!=2 or a.shape[1]!=w.shape[1] or any(t.dtype not in (torch.float8_e4m3fn,torch.float8_e5m2) for t in (a,w)):
+            raise ValueError('invalid block FP8 graph matrix geometry')
+        if any(type(size) is not int or size<1 for size in (rows_a,rows_w,block_k)) or block_k%32 or strategy not in (0,1,2):
+            raise ValueError('invalid block FP8 graph block size or strategy')
+        for scale,value,rows in ((sa,a,rows_a),(sw,w,rows_w)):
+            if scale.dtype!=torch.float32 or scale.shape!=((value.shape[0]+rows-1)//rows,(value.shape[1]+block_k-1)//block_k):
+                raise ValueError('block FP8 graph scale geometry differs')
+        inputs=[a,w,sa,sw];integers=(rows_a,rows_w,block_k,strategy);scalars=()
+        outputs=[((a.shape[0],w.shape[0]),torch.float32)]
+    elif kind==26:
         inputs,outputs,integers,scalars,score_shape,extra=sort_description(args)
     elif kind==25:
         inputs,outputs,integers,scalars,score_shape,extra=scatter_description(args)
@@ -242,7 +410,10 @@ def _describe(kind,args,tensor_core):
 
 def _state(kind,extra):
     from ._dense_ops import _rng_state,rng_words
-    if kind==0:state=_rng_state(extra['scores'],extra['p'])
+    if kind==35:
+        from ._parallel_rng import attention_state
+        state=attention_state(extra['shape'],extra['p'],extra['groups'],extra['requested_rng'])
+    elif kind==0:state=_rng_state(extra['scores'],extra['p'])
     elif kind==2:
         from ._varlen_ops import reserve
         requested=extra['requested_rng']
@@ -250,10 +421,21 @@ def _state(kind,extra):
         words=requested.tolist()
         words=reserve(extra['blocks']) if 0<extra['p']<1 and words[0]<0 else words[1:]
         state=torch.tensor(words,dtype=torch.int64,device='cpu')
-    elif kind in (1,3):state=extra['rng']
+    elif kind in (1,3,36,37):state=extra['rng']
     else:return 0,0,None
     seed,counter=rng_words(state)
     return seed,counter,state
+
+
+def _weight_bindings(kind,inputs,integers):
+    if kind in (31,32,38,41,42,43,44):
+        positions=range(2,2+integers[1])
+    elif kind==40:
+        positions=range(2,len(inputs))
+    else:
+        return {}
+    return {i:inputs[i] for i in positions
+            if inputs[i].is_contiguous() and not inputs[i].is_conj() and not inputs[i].is_neg()}
 
 
 class OperationRegion(torch.nn.Module):
@@ -278,10 +460,14 @@ class OperationRegion(torch.nn.Module):
             if self._closed:raise RuntimeError('native operation region closed')
             args=map_arg(self.template,lambda n:values[self._indices[n]])
             reason=None
-            if not available(self.kind):reason='native sorting graph API 1 unavailable' if self.kind==26 else 'native scatter graph API 1 unavailable' if self.kind==25 else 'native grouped GEMM graph API 1 unavailable' if self.kind in (23,24) else 'native router graph API 1 unavailable' if self.kind in (21,22) else 'native reduction graph API 1 unavailable' if self.kind==20 else 'native transform graph API 1 unavailable' if self.kind==19 else 'native pointwise graph API 1 unavailable' if self.kind>=17 else 'native sequence graph API 1 unavailable' if self.kind>=10 else 'native operation graph API 1 unavailable'
+            if not available(self.kind):reason='native indexed attention/dropout graph API 1 unavailable' if self.kind in (35,36,37) else 'native sharded FP8 graph API 1 unavailable' if self.kind in (33,34) else 'native delayed FP8 graph API 1 unavailable' if self.kind in (29,30) else 'native block FP8 graph API 1 unavailable' if self.kind in (27,28) else 'native sorting graph API 1 unavailable' if self.kind==26 else 'native scatter graph API 1 unavailable' if self.kind==25 else 'native grouped GEMM graph API 1 unavailable' if self.kind in (23,24) else 'native router graph API 1 unavailable' if self.kind in (21,22) else 'native reduction graph API 1 unavailable' if self.kind==20 else 'native transform graph API 1 unavailable' if self.kind==19 else 'native pointwise graph API 1 unavailable' if self.kind>=17 else 'native sequence graph API 1 unavailable' if self.kind>=10 else 'native operation graph API 1 unavailable'
             else:
                 try:inputs,specs,integers,scalars,score_shape,extra=_describe(self.kind,args,self.tensor_core)
                 except (ValueError,TypeError,OverflowError) as exc:reason=str(exc)
+            if self.kind in (38,39) and not available(self.kind):reason='native indexed expert training API 1 unavailable'
+            if self.kind==40 and not available(self.kind):reason='native indexed quantized expert API 1 unavailable'
+            if self.kind in (41,42) and not available(self.kind):reason='native indexed FP8 expert API 1 unavailable'
+            if self.kind in (43,44) and not available(self.kind):reason='native indexed block FP8 expert API 1 unavailable'
             if reason is not None:
                 if self.options.native=='required':raise NativeCoverageError(f'{self.phase}: {reason}')
                 self.state.add('region_reference_runs');self.state.reason(self.phase,reason)
@@ -296,6 +482,10 @@ class OperationRegion(torch.nn.Module):
             key=(_stream_id(),torch.is_inference_mode_enabled(),
                  tuple((_shape(t),t.dtype,t.device) for t in inputs),tuple(specs),integers,scalars,score_shape)
             if self.kind==26:key=(*key,extra['output_strides'])
+            borrowed=_weight_bindings(self.kind,inputs,integers)
+            if borrowed:
+                key=(*key,tuple((i,t.untyped_storage()._cdata,t.data_ptr(),t.storage_offset(),tuple(t.stride()))
+                               for i,t in borrowed.items()))
             with torch.no_grad():
                 entry=self._cache.get(key)
                 if entry is None:
@@ -303,13 +493,15 @@ class OperationRegion(torch.nn.Module):
                     for previous_key,(_,previous_buffers,_) in self._cache.items():
                         if previous_key[:2]!=key[:2]:continue
                         for i,(source,buffer) in enumerate(zip(inputs,previous_buffers,strict=True)):
+                            if self.kind in (31,32,38,40,41,42,43,44) and i>=2 and (self.kind==40 or i<2+integers[1]):continue
                             if _shape(source)==_shape(buffer) and source.dtype==buffer.dtype:
                                 reusable[i]=buffer
                     if len(self._cache)>=self.options.cache_size:
                         oldest=next(iter(self._cache));self._cache[oldest][0].close();del self._cache[oldest]
                         self.state.add('native_cache_evictions')
                     device=inputs[0].device
-                    buffers=[reusable[i] if i in reusable else torch.empty(t.shape,dtype=t.dtype,device=device) for i,t in enumerate(inputs)]
+                    buffers=[borrowed[i].detach() if i in borrowed else reusable[i] if i in reusable
+                             else torch.empty(t.shape,dtype=t.dtype,device=device) for i,t in enumerate(inputs)]
                     outputs=([torch.empty_strided(shape,stride,dtype=dtype,device=device)
                               for (shape,dtype),stride in zip(specs,extra['output_strides'],strict=True)] if self.kind==26 else
                              [torch.empty(shape,dtype=dtype,device=device) for shape,dtype in specs])
@@ -317,14 +509,17 @@ class OperationRegion(torch.nn.Module):
                     entry=graph,buffers,outputs;self._cache[key]=entry;self.state.add('native_builds')
                 else:self._cache.move_to_end(key);self.state.add('native_cache_hits')
                 graph,buffers,outputs=entry
-                for dst,src in zip(buffers,inputs,strict=True):dst.copy_(src)
+                for i,(dst,src) in enumerate(zip(buffers,inputs,strict=True)):
+                    if i not in borrowed:dst.copy_(src)
                 seed,counter,rng=_state(self.kind,extra)
                 graph.run(seed,counter)
                 owned=sort_output_layout(outputs,extra['output_strides'],copy=True) if self.kind==26 else tuple(t.clone() for t in outputs)
                 self.state.add('native_replays');self.state.add('native_nodes_executed',graph.kernel_count)
-                if self.kind==0:return (*owned,rng)
+                if self.kind in (0,35):return (*owned,rng)
                 if self.kind==2:return (*owned,buffers[3].clone(),rng)
-                return owned if self.kind in (1,3,8,9,10,11,12,24) or self.kind in (20,26) and len(owned)==2 else owned[0]
+                if self.kind in (32,38,42,44):return list(owned)
+                if self.kind==43:return owned
+                return owned if self.kind in (1,3,8,9,10,11,12,24,27,29,30,34,36) or self.kind in (20,26) and len(owned)==2 else owned[0]
 
     def close(self):
         with self._lock:

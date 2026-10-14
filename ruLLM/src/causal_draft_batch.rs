@@ -230,6 +230,25 @@ impl<B: Backend, T: SpeculativeBatchModel<B>, D: SpeculativeBatchModel<B>> Devic
 }
 
 impl<B: Backend, T: SpeculativeBatchModel<B>, D: SpeculativeBatchModel<B>> PrefixBatchModel<B> for CausalDraftBatch<B, T, D> {
+    fn prefix_tensor_transfer(&self)->bool {self.target.prefix_tensor_transfer() && self.draft.prefix_tensor_transfer()}
+    fn export_prefix_tensors(&self,prefix:&Self::Prefix,shard:crate::PrefixShard)->Result<crate::PrefixTensors<B>,GenerationError> {
+        self.validate_prefix(prefix)?;
+        let identity=serde_json::to_string(&("causal-draft-v1",&self.config.draft_model_id,&self.config.target_tokenizer_id)).map_err(error)?;
+        let mut tensors=crate::PrefixTensors::new(identity,self.prefix_position(prefix));
+        tensors.add_child("target",self.target.export_prefix_tensors(&prefix.target,shard)?)?;
+        tensors.add_child("draft",self.draft.export_prefix_tensors(&prefix.draft,Default::default())?)?;
+        Ok(tensors)
+    }
+    fn import_prefix_tensors(&self,tensors:&crate::PrefixTensors<B>,shard:crate::PrefixShard,device:&B::Device)->Result<Self::Prefix,GenerationError> {
+        let identity=serde_json::to_string(&("causal-draft-v1",&self.config.draft_model_id,&self.config.target_tokenizer_id)).map_err(error)?;
+        tensors.validate(&identity,self.batch_limits().max_sequence_length,0)?;
+        if tensors.children()!=2 {return Err(error("causal draft tensor child count differs"));}
+        let prefix=Self::Prefix{target:self.target.import_prefix_tensors(tensors.child("target")?,shard,device)?,
+            draft:self.draft.import_prefix_tensors(tensors.child("draft")?,Default::default(),device)?};
+        self.validate_prefix(&prefix)?;
+        if self.prefix_position(&prefix)!=tensors.position {return Err(error("causal draft transfer position differs"));}
+        Ok(prefix)
+    }
     type Prefix = CausalDraftBatchPrefix<T::Prefix, D::Prefix>;
     fn capture_prefix(&self, cache: &Self::Cache, id: RequestId) -> Result<Self::Prefix, GenerationError> {
         let prefix = Self::Prefix { target: self.target.capture_prefix(&cache.target, id)?, draft: self.draft.capture_prefix(&cache.draft, id)? };

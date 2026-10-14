@@ -6,81 +6,64 @@ import copy
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.autograd.function import once_differentiable
 import torch.distributed as dist
 
 
-class _Region(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, value, group, kind, axis):
-        ctx.group, ctx.kind, ctx.axis = group, kind, axis
-        if kind == 'copy':
-            return value.clone()
-        if kind == 'reduce':
-            return group.sum_(value.detach().clone())
-        if kind == 'gather':
-            return group.all_gather(value, axis=axis)
-        if value.shape[axis] % group.world_size:
-            raise ValueError('tensor-parallel dimension must divide the group size')
-        return value.chunk(group.world_size, dim=axis)[group.rank].contiguous()
-
-    @staticmethod
-    @once_differentiable
-    def backward(ctx, gradient):
-        if ctx.kind == 'copy':
-            result = ctx.group.sum_(gradient.contiguous().clone())
-        elif ctx.kind == 'reduce':
-            result = gradient
-        elif ctx.kind == 'gather':
-            result = gradient.chunk(ctx.group.world_size, dim=ctx.axis)[ctx.group.rank].contiguous()
-        else:
-            result = ctx.group.all_gather(gradient, axis=ctx.axis)
-        return result, None, None, None
+from ._collective_ops import parallel_region, group_key
 
 
 def copy_to_tensor_parallel(value, group):
-    return _Region.apply(value, group, 'copy', -1)
+    return parallel_region(value, group_key(group), 0, -1)
 
 
 def reduce_from_tensor_parallel(value, group):
-    return _Region.apply(value, group, 'reduce', -1)
+    return parallel_region(value, group_key(group), 1, -1)
 
 
 def gather_from_tensor_parallel(value, group, *, axis=-1):
-    return _Region.apply(value, group, 'gather', axis)
+    return parallel_region(value, group_key(group), 2, axis)
 
 
 def scatter_to_tensor_parallel(value, group, *, axis=-1):
-    return _Region.apply(value, group, 'scatter', axis)
+    return parallel_region(value, group_key(group), 3, axis)
 
 
 class ColumnParallelLinear(nn.Module):
     """Output-feature shard; optionally return a full replicated output."""
-    def __init__(self, linear, group, *, gather_output=True):
+    def __init__(self, linear, group, *, gather_output=True, replicas=1):
         super().__init__()
         from .float8_training import Float8Linear
-        if not isinstance(linear,(nn.Linear,Float8Linear)) or linear.out_features % group.world_size:
+        from ._tp_replicas import coordinates, mark
+        rank, shards = coordinates(group, replicas)
+        if not isinstance(linear,(nn.Linear,Float8Linear)) or linear.out_features % shards:
             raise ValueError('column parallelism requires divisible Linear output features')
+        self.replicas = replicas
         self.float8_recipe=linear.recipe if isinstance(linear,Float8Linear) else None
         self.group, self.gather_output = group, bool(gather_output)
         self.in_features, self.out_features = linear.in_features, linear.out_features
-        self.local_out_features = linear.out_features // group.world_size
-        start = group.rank * self.local_out_features
+        self.local_out_features = linear.out_features // shards
+        start = rank * self.local_out_features
         self.weight = nn.Parameter(linear.weight.detach().narrow(0, start, self.local_out_features).contiguous().clone(),
                                    requires_grad=linear.weight.requires_grad)
         self.bias = None if linear.bias is None else nn.Parameter(
             linear.bias.detach().narrow(0, start, self.local_out_features).contiguous().clone(),
             requires_grad=linear.bias.requires_grad)
-        self.weight._ruda_tp_sharded=True
-        if self.bias is not None:self.bias._ruda_tp_sharded=True
+        mark(self.weight, replicas)
+        mark(self.bias, replicas)
+        if self.float8_recipe is not None:
+            from .float8_scaling import make_scale_state
+            self.scale_state=make_scale_state(self.float8_recipe,self.weight,group,getattr(linear,'scale_state',None))
 
     def forward(self, value):
+        from ._tp_replicas import scale_input_gradient, column_output
+        replicas = getattr(self, 'replicas', 1)
+        value = scale_input_gradient(value, replicas)
         if getattr(self,'float8_recipe',None) is not None:
             from .float8_parallel import linear_forward
             return linear_forward(self,value,0)
         value = copy_to_tensor_parallel(value, self.group)
         output = F.linear(value, self.weight, self.bias)
-        return gather_from_tensor_parallel(output, self.group) if self.gather_output else output
+        return column_output(output, self.group, replicas, self.gather_output)
 
 
 class RowParallelLinear(nn.Module):
@@ -100,6 +83,9 @@ class RowParallelLinear(nn.Module):
         self.bias = None if linear.bias is None else nn.Parameter(linear.bias.detach().clone(),
                                                                   requires_grad=linear.bias.requires_grad)
         self.weight._ruda_tp_sharded=True
+        if self.float8_recipe is not None:
+            from .float8_scaling import make_scale_state
+            self.scale_state=make_scale_state(self.float8_recipe,self.weight,group,getattr(linear,'scale_state',None))
 
     def forward(self, value):
         if getattr(self,'float8_recipe',None) is not None:
@@ -170,17 +156,19 @@ class TensorParallelAttention(nn.Module):
         head_dim = query.out_features//num_heads if head_dim is None else head_dim
         if type(head_dim) is not int or head_dim<=0 or query.out_features!=num_heads*head_dim:
             raise ValueError('query projection does not match head geometry')
-        if num_heads%group.world_size or kv_heads%group.world_size:
-            raise ValueError('query and KV heads must divide the TP group size')
+        if num_heads%group.world_size or (kv_heads%group.world_size and group.world_size%kv_heads):
+            raise ValueError('query heads must be divisible by TP; KV heads must divide TP or be divisible by TP')
+        replicas = max(1, group.world_size // kv_heads)
         if key.out_features!=kv_heads*head_dim or value.out_features!=key.out_features or output.in_features!=query.out_features:
             raise ValueError('attention projection dimensions differ')
         if any(p.in_features!=query.in_features for p in (key,value)) or not 0<=dropout_p<=1:
             raise ValueError('attention input/dropout configuration differs')
         self.q_proj = parallel_linear(query,group,axis=0,gather_output=False)
-        self.k_proj = parallel_linear(key,group,axis=0,gather_output=False)
-        self.v_proj = parallel_linear(value,group,axis=0,gather_output=False)
+        self.k_proj = parallel_linear(key,group,axis=0,gather_output=False,replicas=replicas)
+        self.v_proj = parallel_linear(value,group,axis=0,gather_output=False,replicas=replicas)
         self.o_proj = parallel_linear(output,group,axis=1,input_is_parallel=True)
-        self.heads,self.kv_heads,self.head_dim = num_heads//group.world_size,kv_heads//group.world_size,head_dim
+        self.heads,self.kv_heads,self.head_dim = num_heads//group.world_size,max(1,kv_heads//group.world_size),head_dim
+        self.global_heads,self.head_start = num_heads,group.rank*self.heads
         self.scale,self.dropout_p = scale,float(dropout_p)
         if attention_impl is not None and not callable(attention_impl):
             raise TypeError('attention_impl must be a callable attention implementation')
@@ -190,6 +178,8 @@ class TensorParallelAttention(nn.Module):
         if hidden.ndim!=3:
             raise ValueError('attention inputs must have [batch,sequence,hidden] shape')
         batch,length,_=hidden.shape
+        if attention_mask is not None and attention_mask.ndim >= 3 and attention_mask.shape[-3] == self.global_heads:
+            attention_mask = attention_mask.narrow(-3, self.head_start, self.heads)
         query=self.q_proj(hidden).view(batch,length,self.heads,self.head_dim).transpose(1,2)
         key=self.k_proj(hidden).view(batch,length,self.kv_heads,self.head_dim).transpose(1,2)
         value=self.v_proj(hidden).view(batch,length,self.kv_heads,self.head_dim).transpose(1,2)
@@ -206,8 +196,11 @@ class TensorParallelAttention(nn.Module):
             attention=scaled_dot_product_attention
         else:
             attention=F.scaled_dot_product_attention
+        options={}
+        if self.attention_impl is None and hidden.device.type=='ruda':
+            options=dict(tensor_group=self.q_proj.group,global_heads=self.global_heads,head_start=self.head_start)
         output=attention(query,key,value,attn_mask=attention_mask,is_causal=is_causal,
-            dropout_p=self.dropout_p if self.training else 0.,scale=self.scale)
+            dropout_p=self.dropout_p if self.training else 0.,scale=self.scale,**options)
         output=output.transpose(1,2).contiguous().view(batch,length,self.heads*self.head_dim)
         return self.o_proj(output)
 
@@ -307,9 +300,12 @@ def tensor_parallel_state_dict(model, group):
                     if key.startswith(prefix+'local.'):del result[key]
                 result.update((prefix+key,value) for key,value in full_nf4_state(module).items())
             elif isinstance(module, (ColumnParallelLinear, VocabParallelEmbedding)):
-                result[prefix+'weight'] = group.all_gather(module.weight, axis=0).cpu()
+                from .distributed_checkpoint import _join
+                replicas=getattr(module,'replicas',1)
+                spec={'name':prefix+'weight','axis':0,'tp_replicas':replicas}
+                result[prefix+'weight'] = _join(list(group.all_gather(module.weight, axis=0).cpu().chunk(group.world_size,0)),spec)
                 if isinstance(module, ColumnParallelLinear) and module.bias is not None:
-                    result[prefix+'bias'] = group.all_gather(module.bias, axis=0).cpu()
+                    result[prefix+'bias'] = _join(list(group.all_gather(module.bias, axis=0).cpu().chunk(group.world_size,0)),spec)
             elif isinstance(module, RowParallelLinear):
                 result[prefix+'weight'] = group.all_gather(module.weight, axis=1).cpu()
     return result
@@ -341,11 +337,15 @@ def load_tensor_parallel_state_dict(model, state, group, *, strict=True):
             key = prefix+'weight'
             if key in local:
                 value = local[key]
-                if value.shape[axis] != module.weight.shape[axis]*group.world_size:
+                replicas=getattr(module,'replicas',1)
+                shards=group.world_size//replicas
+                shard=group.rank//replicas
+                if value.shape[axis] != module.weight.shape[axis]*shards:
                     raise ValueError(f'global checkpoint shape mismatch: {key}')
-                local[key] = value.chunk(group.world_size, dim=axis)[group.rank].contiguous()
+                local[key] = value.chunk(shards, dim=axis)[shard].contiguous()
             if isinstance(module, ColumnParallelLinear) and module.bias is not None and prefix+'bias' in local:
-                local[prefix+'bias'] = local[prefix+'bias'].chunk(group.world_size)[group.rank].contiguous()
+                replicas=getattr(module,'replicas',1)
+                local[prefix+'bias'] = local[prefix+'bias'].chunk(group.world_size//replicas)[group.rank//replicas].contiguous()
     return model.load_state_dict(local, strict=strict)
 
 

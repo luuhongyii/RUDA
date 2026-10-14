@@ -5,6 +5,217 @@ use crate::tensor::{RudaTensor, allocation::empty_device_contiguous_dtype, conti
 use ruda_core::{device::Device, tensor::{DType, Shape}, ir::{ElemType, FloatKind, features::MmaConfig}};
 use super::packed::{decode_code, encode_code};
 
+/// Encoded matrices A[M,K] and W[N,K], with independent row blocks and common K blocks.
+pub fn scaled_mm<R: Runtime>(a: &RudaTensor<R>, w: &RudaTensor<R>, sa: &RudaTensor<R>, sw: &RudaTensor<R>,
+    rows_a: usize, rows_w: usize, block_k: usize, format_a: u32, format_w: u32, strategy: u32) -> RudaTensor<R> {
+    let [m, k]: [usize; 2] = a.meta.shape().as_slice().try_into().expect("FP8 activation matrix");
+    let [n, kw]: [usize; 2] = w.meta.shape().as_slice().try_into().expect("FP8 weight matrix");
+    assert!(k == kw && rows_a > 0 && rows_w > 0 && block_k > 0 && block_k.is_multiple_of(32));
+    assert!([rows_a, rows_w, block_k].iter().all(|&size| size <= u32::MAX as usize));
+    assert!(matches!(format_a, 18 | 19) && matches!(format_w, 18 | 19) && strategy <= 2);
+    assert_eq!(a.dtype, DType::U8); assert_eq!(w.dtype, DType::U8);
+    assert_eq!(sa.dtype, DType::F32); assert_eq!(sw.dtype, DType::F32);
+    let groups = k.div_ceil(block_k);
+    assert_eq!(sa.meta.shape().as_slice(), &[m.div_ceil(rows_a), groups]);
+    assert_eq!(sw.meta.shape().as_slice(), &[n.div_ceil(rows_w), groups]);
+    for tensor in [a, w, sa, sw] {
+        assert!(tensor.is_contiguous() && tensor.qparams.is_none() && tensor.meta.num_elements() <= u32::MAX as usize);
+        assert_eq!(tensor.device.to_id(), a.device.to_id());
+        assert!(tensor.client.same_execution_queue(&a.client));
+    }
+    assert!(m.checked_mul(n).is_some_and(|size| size <= u32::MAX as usize));
+    let dtype = |format| ElemType::Float(if format == 18 {FloatKind::E4M3} else {FloatKind::E5M2}).into();
+    let native = strategy != 2 && a.client.features().matmul.mma.contains(&MmaConfig {
+        a_type: dtype(format_a), b_type: dtype(format_w), cd_type: DType::F32.into(), m: 16, n: 8, k: 32 });
+    assert!(strategy != 1 || native, "native block FP8 MMA is unavailable");
+    let carrier = MmaConfig {a_type: DType::F16.into(), b_type: DType::F16.into(), cd_type: DType::F32.into(), m: 16, n: 16, k: 16};
+    let hardware = &a.client.properties().hardware;
+    assert!(hardware.plane_size_min == 32 && hardware.plane_size_max == 32);
+    assert!(native || (hardware.max_shared_memory_size >= 2048 && a.client.features().matmul.cmma.contains(&carrier)));
+    let tile = if native {8} else {16};
+    assert!(n.div_ceil(tile) <= hardware.max_ruda_count.0 as usize && m.div_ceil(16) <= hardware.max_ruda_count.1 as usize);
+    let output = empty_device_contiguous_dtype(a.client.clone(), a.device.clone(), Shape::new([m, n]), DType::F32);
+    if m == 0 || n == 0 {return output;}
+    let grid = RudaCount::Static(n.div_ceil(tile) as u32, m.div_ceil(16) as u32, 1);
+    if native {
+        native_block::launch::<R>(&a.client, grid, RudaDim::new_1d(32), a.clone().into_array_arg(), w.clone().into_array_arg(),
+            sa.clone().into_array_arg(), sw.clone().into_array_arg(), output.clone().into_array_arg(),
+            m as u32, n as u32, k as u32, rows_a as u32, rows_w as u32, block_k as u32, groups as u32, dtype(format_a), dtype(format_w));
+    } else {
+        carrier_block::launch::<R>(&a.client, grid, RudaDim::new_1d(32), a.clone().into_array_arg(), w.clone().into_array_arg(),
+            sa.clone().into_array_arg(), sw.clone().into_array_arg(), output.clone().into_array_arg(),
+            m as u32, n as u32, k as u32, rows_a as u32, rows_w as u32, block_k as u32, groups as u32, format_a, format_w);
+    }
+    output
+}
+
+pub fn prepare_scaled_mm<R: Runtime>(a: &RudaTensor<R>, w: &RudaTensor<R>, sa: &RudaTensor<R>, sw: &RudaTensor<R>,
+    output: &RudaTensor<R>, rows_a: usize, rows_w: usize, block_k: usize, format_a: u32, format_w: u32,
+    strategy: u32) -> Vec<PreparedKernel<R>> {
+    let [m, k]: [usize; 2] = a.meta.shape().as_slice().try_into().expect("FP8 activation matrix");
+    let [n, kw]: [usize; 2] = w.meta.shape().as_slice().try_into().expect("FP8 weight matrix");
+    assert!(k == kw && rows_a > 0 && rows_w > 0 && block_k > 0 && block_k.is_multiple_of(32));
+    assert!([rows_a, rows_w, block_k].iter().all(|&size| size <= u32::MAX as usize));
+    assert!(matches!(format_a, 18 | 19) && matches!(format_w, 18 | 19) && strategy <= 2);
+    assert_eq!(a.dtype, DType::U8); assert_eq!(w.dtype, DType::U8);
+    for tensor in [sa, sw, output] {assert_eq!(tensor.dtype, DType::F32);}
+    let groups = k.div_ceil(block_k);
+    assert_eq!(sa.meta.shape().as_slice(), &[m.div_ceil(rows_a), groups]);
+    assert_eq!(sw.meta.shape().as_slice(), &[n.div_ceil(rows_w), groups]);
+    assert_eq!(output.meta.shape().as_slice(), &[m, n]);
+    for tensor in [a, w, sa, sw, output] {
+        assert!(tensor.is_contiguous() && tensor.qparams.is_none() && tensor.meta.num_elements() <= u32::MAX as usize);
+        assert_eq!(tensor.device.to_id(), a.device.to_id());
+        assert!(tensor.client.same_execution_queue(&a.client));
+    }
+    if m == 0 || n == 0 {return Vec::new();}
+    let dtype = |format| ElemType::Float(if format == 18 {FloatKind::E4M3} else {FloatKind::E5M2}).into();
+    let native = strategy != 2 && a.client.features().matmul.mma.contains(&MmaConfig {
+        a_type: dtype(format_a), b_type: dtype(format_w), cd_type: DType::F32.into(), m: 16, n: 8, k: 32 });
+    assert!(strategy != 1 || native, "native block FP8 graph MMA is unavailable");
+    let carrier = MmaConfig {a_type: DType::F16.into(), b_type: DType::F16.into(), cd_type: DType::F32.into(), m: 16, n: 16, k: 16};
+    let hardware = &a.client.properties().hardware;
+    assert!(hardware.plane_size_min == 32 && hardware.plane_size_max == 32);
+    assert!(native || (hardware.max_shared_memory_size >= 2048 && a.client.features().matmul.cmma.contains(&carrier)));
+    let tile = if native {8} else {16};
+    assert!(n.div_ceil(tile) <= hardware.max_ruda_count.0 as usize && m.div_ceil(16) <= hardware.max_ruda_count.1 as usize);
+    let grid = RudaCount::Static(n.div_ceil(tile) as u32, m.div_ceil(16) as u32, 1);
+    vec![unsafe {if native {
+        native_block::prepare::<R>(&a.client, grid, RudaDim::new_1d(32), a.clone().into_array_arg(), w.clone().into_array_arg(),
+            sa.clone().into_array_arg(), sw.clone().into_array_arg(), output.clone().into_array_arg(),
+            m as u32, n as u32, k as u32, rows_a as u32, rows_w as u32, block_k as u32, groups as u32, dtype(format_a), dtype(format_w))
+    } else {
+        carrier_block::prepare::<R>(&a.client, grid, RudaDim::new_1d(32), a.clone().into_array_arg(), w.clone().into_array_arg(),
+            sa.clone().into_array_arg(), sw.clone().into_array_arg(), output.clone().into_array_arg(),
+            m as u32, n as u32, k as u32, rows_a as u32, rows_w as u32, block_k as u32, groups as u32, format_a, format_w)
+    }}]
+}
+
+#[ruda(launch)]
+pub fn quantize_blocks<F: Float>(input: &Array<F>, encoded: &mut Array<u8>, scales: &mut Array<f32>,
+    rows: u32, cols: u32, groups: u32, #[comptime] block_rows: u32, #[comptime] block_cols: u32,
+    maximum: f32, #[comptime] format: u32, #[comptime] power_of_two: bool, #[define(F)] _dtype: StorageType) {
+    let row_begin = RUDA_POS_X / groups * block_rows;
+    let col_begin = RUDA_POS_X % groups * block_cols;
+    let lane = UNIT_POS;
+    let mut amax = 0.0f32; let mut invalid = 0u32;
+    let mut offset = lane;
+    while offset < block_rows * block_cols {
+        let row = row_begin + offset / block_cols; let col = col_begin + offset % block_cols;
+        if row < rows && col < cols {
+            let value = f32::cast_from(input[(row * cols + col) as usize]).abs();
+            if value.to_bits() >= 0x7f800000u32 {invalid = 1u32;} else {amax = f32::max(amax, value);}
+        }
+        offset += 32;
+    }
+    amax = plane_max(amax); invalid = plane_max(invalid);
+    let mut scale = 1.0f32;
+    if invalid == 0u32 && amax > 0.0 {scale = f32::max(amax / maximum, f32::from_bits(0x00800000u32));}
+    if comptime!(power_of_two) {
+        let bits = scale.to_bits(); let mut exponent = bits & 0x7f800000u32;
+        if bits & 0x007fffffu32 != 0u32 {exponent += 0x00800000u32;}
+        scale = f32::from_bits(exponent);
+    }
+    if lane == 0 {scales[RUDA_POS_X as usize] = scale;}
+    offset = lane;
+    while offset < block_rows * block_cols {
+        let row = row_begin + offset / block_cols; let col = col_begin + offset % block_cols;
+        if row < rows && col < cols {
+            let index = (row * cols + col) as usize;
+            let value = f32::cast_from(input[index]) / scale;
+            let mut code = encode_code(value, format, true);
+            if (value.to_bits() & 0x7fffffffu32) >= 0x7f800000u32 {code = encode_code(value, format, false);}
+            encoded[index] = code as u8;
+        }
+        offset += 32;
+    }
+}
+
+#[ruda(launch)]
+pub fn shard_statistics<F: Float>(input: &Array<F>, statistics: &mut Array<f32>,
+    local_rows: u32, local_cols: u32, origin_row: u32, origin_col: u32, groups: u32,
+    blocks: u32, #[comptime] block_rows: u32, #[comptime] block_cols: u32,
+    #[define(F)] _dtype: StorageType) {
+    let block = RUDA_POS_X;
+    let row_begin = block / groups * block_rows;
+    let col_begin = block % groups * block_cols;
+    let row_end = u32::min(row_begin + block_rows, origin_row + local_rows);
+    let col_end = u32::min(col_begin + block_cols, origin_col + local_cols);
+    let row_start = u32::max(row_begin, origin_row);
+    let col_start = u32::max(col_begin, origin_col);
+    let mut maximum = 0.0f32;
+    let mut invalid = 0u32;
+    if row_end > row_start && col_end > col_start {
+        let width = col_end - col_start;
+        let count = (row_end - row_start) * width;
+        let mut offset = UNIT_POS;
+        while offset < count {
+            let row = row_start + offset / width - origin_row;
+            let col = col_start + offset % width - origin_col;
+            let value = f32::cast_from(input[(row * local_cols + col) as usize]).abs();
+            if value.to_bits() >= 0x7f800000u32 {invalid = 1u32;}
+            else {maximum = f32::max(maximum, value);}
+            offset += 32;
+        }
+    }
+    maximum = plane_max(maximum);
+    invalid = plane_max(invalid);
+    if UNIT_POS == 0 {
+        statistics[block as usize] = maximum;
+        statistics[(blocks + block) as usize] = f32::cast_from(invalid);
+    }
+}
+
+#[ruda(launch)]
+pub fn quantize_shard<F: Float>(input: &Array<F>, statistics: &Array<f32>,
+    encoded: &mut Array<u8>, scales: &mut Array<f32>,
+    local_rows: u32, local_cols: u32, origin_row: u32, origin_col: u32,
+    global_groups: u32, global_blocks: u32, padded_rows: u32, padded_cols: u32,
+    groups: u32, #[comptime] block_rows: u32, #[comptime] block_cols: u32,
+    maximum: f32, #[comptime] format: u32, #[comptime] power_of_two: bool,
+    #[define(F)] _dtype: StorageType) {
+    let block_row = RUDA_POS_X / groups;
+    let block_col = RUDA_POS_X % groups;
+    let global_block = (origin_row / block_rows + block_row) * global_groups
+        + origin_col / block_cols + block_col;
+    let observed = statistics[global_block as usize];
+    let invalid = statistics[(global_blocks + global_block) as usize];
+    let mut scale = 1.0f32;
+    if invalid == 0.0 && observed > 0.0 {
+        scale = f32::max(observed / maximum, f32::from_bits(0x00800000u32));
+    }
+    if comptime!(power_of_two) {
+        let bits = scale.to_bits();
+        let mut exponent = bits & 0x7f800000u32;
+        if bits & 0x007fffffu32 != 0u32 {exponent += 0x00800000u32;}
+        scale = f32::from_bits(exponent);
+    }
+    if UNIT_POS == 0 {scales[RUDA_POS_X as usize] = scale;}
+    let pad_row = origin_row % block_rows;
+    let pad_col = origin_col % block_cols;
+    let mut offset = UNIT_POS;
+    while offset < block_rows * block_cols {
+        let row = block_row * block_rows + offset / block_cols;
+        let col = block_col * block_cols + offset % block_cols;
+        if row < padded_rows && col < padded_cols {
+            let mut code = 0u32;
+            if row >= pad_row && col >= pad_col {
+                let source_row = row - pad_row;
+                let source_col = col - pad_col;
+                if source_row < local_rows && source_col < local_cols {
+                    let value = f32::cast_from(input[(source_row * local_cols + source_col) as usize]) / scale;
+                    code = encode_code(value, format, true);
+                    if (value.to_bits() & 0x7fffffffu32) >= 0x7f800000u32 {
+                        code = encode_code(value, format, false);
+                    }
+                }
+            }
+            encoded[(row * padded_cols + col) as usize] = code as u8;
+        }
+        offset += 32;
+    }
+}
+
 pub fn linear<R: Runtime>(input: RudaTensor<R>, weight: &RudaTensor<R>, scales: &RudaTensor<R>,
     block: [usize; 2]) -> RudaTensor<R> {
     let input = into_contiguous(input);
@@ -47,11 +258,11 @@ pub fn linear<R: Runtime>(input: RudaTensor<R>, weight: &RudaTensor<R>, scales: 
     if native {
         native_block::launch::<R>(&input.client, grid, RudaDim::new_1d(32), encoded.into_array_arg(),
             weight.clone().into_array_arg(), activation_scales.into_array_arg(), scales.clone().into_array_arg(), out.clone().into_array_arg(),
-            m as u32, n as u32, k as u32, bn as u32, bk as u32, groups as u32, fp8);
+            m as u32, n as u32, k as u32, 1u32, bn as u32, bk as u32, groups as u32, fp8, fp8);
     } else {
         carrier_block::launch::<R>(&input.client, grid, RudaDim::new_1d(32), encoded.into_array_arg(),
             weight.clone().into_array_arg(), activation_scales.into_array_arg(), scales.clone().into_array_arg(), out.clone().into_array_arg(),
-            m as u32, n as u32, k as u32, bn as u32, bk as u32, groups as u32);
+            m as u32, n as u32, k as u32, 1u32, bn as u32, bk as u32, groups as u32, 18u32, 18u32);
     }
     out
 }
@@ -99,16 +310,17 @@ fn quantize_rows<F: Float>(input: &Array<F>, encoded: &mut Array<u8>, scales: &m
 }
 
 #[ruda(launch)]
-fn native_block<F: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Array<f32>, out: &mut Array<f32>,
-    m: u32, n: u32, k: u32, #[comptime] bn: u32, #[comptime] bk: u32, groups: u32, #[define(F)] _fp8: StorageType) {
-    let def = cmma::MmaDefinition::<F, F, f32>::new(16usize, 8usize, 32usize);
+fn native_block<A: Float, W: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Array<f32>, out: &mut Array<f32>,
+    m: u32, n: u32, k: u32, #[comptime] bm: u32, #[comptime] bn: u32, #[comptime] bk: u32, groups: u32,
+    #[define(A)] _a_fp8: StorageType, #[define(W)] _w_fp8: StorageType) {
+    let def = cmma::MmaDefinition::<A, W, f32>::new(16usize, 8usize, 32usize);
     let va = def.vector_size(cmma::MatrixIdent::A); let vb = def.vector_size(cmma::MatrixIdent::B);
     let vc = def.vector_size(cmma::MatrixIdent::Accumulator);
     let size!(NA) = va; let size!(NB) = vb; let size!(NC) = vc;
     let ca = def.vectors_per_lane(cmma::MatrixIdent::A);
     let cb = def.vectors_per_lane(cmma::MatrixIdent::B);
     let cc = def.vectors_per_lane(cmma::MatrixIdent::Accumulator);
-    let mut left = Array::<Vector<F, NA>>::new(ca); let mut right = Array::<Vector<F, NB>>::new(cb);
+    let mut left = Array::<Vector<A, NA>>::new(ca); let mut right = Array::<Vector<W, NB>>::new(cb);
     let mut sum = Array::<Vector<f32, NC>>::new(cc);
     #[unroll] for i in 0..cc { sum[i] = Vector::cast_from(0.0f32); }
     let row_base = RUDA_POS_Y * 16; let col_base = RUDA_POS_X * 8; let lane = UNIT_POS_PLANE;
@@ -123,7 +335,7 @@ fn native_block<F: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Ar
                     let (r, c) = def.position_of_nth(lane, (i * va + j) as u32, cmma::MatrixIdent::A);
                     let row = row_base + r; let col = base + c; let mut byte = 0u8;
                     if row < m && col < k { byte = a[(row * k + col) as usize]; }
-                    reg[j] = F::reinterpret(byte);
+                    reg[j] = A::reinterpret(byte);
                 }
                 left[i] = reg;
             }
@@ -133,7 +345,7 @@ fn native_block<F: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Ar
                     let (r, c) = def.position_of_nth(lane, (i * vb + j) as u32, cmma::MatrixIdent::B);
                     let row = base + r; let col = col_base + c; let mut byte = 0u8;
                     if row < k && col < n { byte = w[(col * k + row) as usize]; }
-                    reg[j] = F::reinterpret(byte);
+                    reg[j] = W::reinterpret(byte);
                 }
                 right[i] = reg;
             }
@@ -144,7 +356,7 @@ fn native_block<F: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Ar
             #[unroll] for j in 0..vc {
                 let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
                 let row = row_base + r; let col = col_base + c;
-                if row < m && col < n { total[j] += partial[j] * sa[(row * groups + group) as usize] * sw[((col / bn) * groups + group) as usize]; }
+                if row < m && col < n { total[j] += partial[j] * sa[((row / bm) * groups + group) as usize] * sw[((col / bn) * groups + group) as usize]; }
             }
             sum[i] = total;
         }
@@ -161,7 +373,8 @@ fn native_block<F: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Ar
 
 #[ruda(launch)]
 fn carrier_block(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Array<f32>, out: &mut Array<f32>,
-    m: u32, n: u32, k: u32, #[comptime] bn: u32, #[comptime] bk: u32, groups: u32) {
+    m: u32, n: u32, k: u32, #[comptime] bm: u32, #[comptime] bn: u32, #[comptime] bk: u32, groups: u32,
+    #[comptime] format_a: u32, #[comptime] format_w: u32) {
     let rb = RUDA_POS_Y * 16; let cb = RUDA_POS_X * 16; let lane = UNIT_POS as usize;
     let mut left = SharedMemory::<f16>::new_aligned(256usize, 32usize);
     let mut right = SharedMemory::<f16>::new_aligned(256usize, 32usize);
@@ -175,8 +388,8 @@ fn carrier_block(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Array<f32>,
             #[unroll] for i in 0usize..8usize {
                 let t = lane + i * 32; let r = t as u32 / 16; let c = t as u32 % 16;
                 let mut av = 0.0f32; let mut bv = 0.0f32;
-                if rb + r < m && base + c < k { av = decode_code(a[((rb + r) * k + base + c) as usize] as u32, 18u32); }
-                if base + r < k && cb + c < n { bv = decode_code(w[((cb + c) * k + base + r) as usize] as u32, 18u32); }
+                if rb + r < m && base + c < k { av = decode_code(a[((rb + r) * k + base + c) as usize] as u32, format_a); }
+                if base + r < k && cb + c < n { bv = decode_code(w[((cb + c) * k + base + r) as usize] as u32, format_w); }
                 left[t] = f16::cast_from(av); right[t] = f16::cast_from(bv);
             }
             sync_ruda();
@@ -187,7 +400,7 @@ fn carrier_block(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Array<f32>,
         cmma::store(&mut result.to_slice_mut(), &acc, 16, cmma::MatrixLayout::RowMajor); sync_ruda();
         #[unroll] for i in 0usize..8usize {
             let t = lane + i * 32; let row = rb + t as u32 / 16; let col = cb + t as u32 % 16;
-            if row < m && col < n { sum[i] += result[t] * sa[(row * groups + group) as usize] * sw[((col / bn) * groups + group) as usize]; }
+            if row < m && col < n { sum[i] += result[t] * sa[((row / bm) * groups + group) as usize] * sw[((col / bn) * groups + group) as usize]; }
         }
         sync_ruda();
     }

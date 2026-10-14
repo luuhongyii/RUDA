@@ -15,6 +15,7 @@ pub struct BatchServingConfig {
     pub block_tokens: usize,
     pub kv_pages: usize,
     pub max_queued_requests: usize,
+    pub active_kv_host_bytes: usize,
 }
 
 struct Active<'a> {
@@ -143,6 +144,7 @@ pub fn run_continuous_batch<B: Backend, M: DeviceBatchModel<B>>(
     jobs: mpsc::Receiver<Job>,
     on_ready: impl FnOnce() -> bool,
 ) -> Result<(), String> {
+    if config.active_kv_host_bytes!=0 {return Err("active KV swap requires the prefix-capable batch executor".into());}
     let mut executor = DeviceBatchExecutor::<B, M>::new(
         &model,
         device,
@@ -193,8 +195,24 @@ pub fn run_continuous_batch_with_prefill<B:Backend,M:PrefixBatchModel<B>>(
         ContinuousBatchOptions { max_pending_requests: Some(config.max_queued_requests), ..Default::default() },
         model_id, prefixes,
     ).map_err(|e| e.to_string())?;
+    executor.set_active_kv_swap(crate::ActiveKvSwapConfig{host_bytes:config.active_kv_host_bytes}).map_err(|e|e.to_string())?;
     if let Some(remote)=remote {executor.set_remote_prefill(remote).map_err(|e|e.to_string())?;}
     run_batch_loop(&mut executor, eos, tokenizer, tokenizer_config, config, jobs, on_ready)
+}
+
+#[cfg(feature="gpu-kv")]
+pub fn run_continuous_batch_with_gpu_prefill<B:crate::GpuPrefixBackend,M:PrefixBatchModel<B>>(
+    model:M,device:B::Device,devices:Vec<B::Device>,eos:Vec<i32>,tokenizer:tokenizers::Tokenizer,tokenizer_config:Value,
+    config:BatchServingConfig,model_id:String,prefixes:PrefixCacheConfig,
+    remote:crate::disaggregated::RemotePrefill,gpu:crate::disaggregated::GpuKvConfig,jobs:mpsc::Receiver<Job>,on_ready:impl FnOnce()->bool,
+)->Result<(),String> {
+    let mut executor=PrefixBatchExecutor::<B,M>::new(&model,device,
+        ContinuousBatchConfig{max_active_sequences:config.max_sequences,max_batch_tokens:config.max_batch_tokens},
+        PagedKvCacheConfig{block_size:config.block_tokens,num_pages:config.kv_pages,max_sequence_length:model.batch_limits().max_sequence_length},
+        ContinuousBatchOptions{max_pending_requests:Some(config.max_queued_requests),..Default::default()},model_id,prefixes).map_err(|e|e.to_string())?;
+    executor.set_active_kv_swap(crate::ActiveKvSwapConfig{host_bytes:config.active_kv_host_bytes}).map_err(|e|e.to_string())?;
+    executor.set_remote_gpu_prefill(remote,devices,gpu).map_err(|e|e.to_string())?;
+    run_batch_loop(&mut executor,eos,tokenizer,tokenizer_config,config,jobs,on_ready)
 }
 
 fn run_batch_loop<E: BatchEngine>(

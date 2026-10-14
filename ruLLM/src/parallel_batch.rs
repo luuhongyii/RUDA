@@ -23,7 +23,8 @@ impl<B:Backend,M:crate::SpeculativeBatchModel<B>> Clone for ParallelBatchDelta<B
 }
 
 macro_rules! parallel_batch_model {
-    ($group:ident,$rank:ident) => {
+    ($group:ident,$rank:ident) => {crate::parallel_batch::parallel_batch_model!($group,$rank,|_group|crate::PrefixShard::default());};
+    ($group:ident,$rank:ident,|$this:ident|$layout:expr) => {
         impl<B:ruda_tensor::distributed::DistributedBackend> crate::DeviceBatchModel<B> for $group<B>
         where $rank<B>:crate::PrefixBatchModel<B>+Sync,
             <$rank<B> as crate::DeviceBatchModel<B>>::Cache:Send {
@@ -81,6 +82,34 @@ macro_rules! parallel_batch_model {
         where $rank<B>:crate::PrefixBatchModel<B>+Sync,
             <$rank<B> as crate::DeviceBatchModel<B>>::Cache:Send {
             type Prefix=crate::ParallelBatchPrefix<B,$rank<B>>;
+            fn prefix_tensor_transfer(&self)->bool {self.ranks.iter().all(|m|m.prefix_tensor_transfer())}
+            fn export_prefix_tensors(&self,prefix:&Self::Prefix,shard:crate::PrefixShard)->Result<crate::PrefixTensors<B>,crate::GenerationError> {
+                if shard!=crate::PrefixShard::default() || prefix.ranks.len()!=self.ranks.len() || prefix.devices!=self.devices {
+                    return Err(crate::GenerationError("parallel tensor prefix source topology differs".into()));
+                }
+                let $this=self;let layout=$layout;
+                let mut result:Option<crate::PrefixTensors<B>>=None;
+                for (rank,((model,state),device)) in self.ranks.iter().zip(&prefix.ranks).zip(&self.devices).enumerate() {
+                    let part=model.export_prefix_tensors(state,crate::PrefixShard{rank,world:self.ranks.len(),..layout})?;
+                    model.sync_batch(device)?;
+                    if let Some(result)=&mut result {result.merge(part)?;} else {result=Some(part);}
+                }
+                result.ok_or_else(||crate::GenerationError("parallel tensor prefix has no ranks".into()))
+            }
+            fn import_prefix_tensors(&self,tensors:&crate::PrefixTensors<B>,shard:crate::PrefixShard,device:&B::Device)
+                ->Result<Self::Prefix,crate::GenerationError> {
+                if shard!=crate::PrefixShard::default() || self.devices.first()!=Some(device) {
+                    return Err(crate::GenerationError("parallel tensor prefix destination topology differs".into()));
+                }
+                let $this=self;let layout=$layout;
+                let mut ranks=Vec::with_capacity(self.ranks.len());
+                for (rank,(model,device)) in self.ranks.iter().zip(&self.devices).enumerate() {
+                    let prefix=model.import_prefix_tensors(tensors,crate::PrefixShard{rank,world:self.ranks.len(),..layout},device)?;
+                    if model.prefix_position(&prefix)!=tensors.position {return Err(crate::GenerationError("parallel tensor prefix position differs".into()));}
+                    model.sync_batch(device)?;ranks.push(prefix);
+                }
+                Ok(Self::Prefix{ranks,devices:self.devices.clone(),position:tensors.position})
+            }
             fn capture_prefix(&self,cache:&<Self as crate::DeviceBatchModel<B>>::Cache,id:crate::RequestId)
                 ->Result<Self::Prefix,crate::GenerationError> {
                 if cache.ranks.len()!=self.ranks.len() || cache.devices!=self.devices {

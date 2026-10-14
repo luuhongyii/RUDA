@@ -15,6 +15,8 @@ pub struct RopeConfig {
     pub partial_rotary_factor: f64,
     pub mrope_section: [usize; 3],
     pub mrope_interleaved: bool,
+    #[serde(flatten)]
+    pub scaling: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,6 +41,8 @@ pub struct Qwen35TextConfig {
     pub num_key_value_heads: usize,
     pub head_dim: usize,
     pub max_position_embeddings: usize,
+    #[serde(default)]
+    pub original_max_position_embeddings: Option<usize>,
     pub layer_types: Vec<LayerType>,
     pub linear_conv_kernel_dim: usize,
     pub linear_key_head_dim: usize,
@@ -61,11 +65,21 @@ pub struct Qwen35TextConfig {
 impl Qwen35TextConfig {
     pub fn is_moe(&self) -> bool { self.model_type == "qwen3_5_moe_text" }
 
+    pub(crate) fn rotary_parameters(&self) -> Result<crate::llama::rope::RopeParameters, HuggingFaceLoadError> {
+        let rope = &self.rope_parameters;
+        let mut fields: serde_json::Map<String, serde_json::Value> = rope.scaling.clone().into_iter().collect();
+        fields.insert("rope_type".into(), rope.rope_type.clone().into());
+        fields.insert("rope_theta".into(), rope.rope_theta.into());
+        fields.insert("partial_rotary_factor".into(), rope.partial_rotary_factor.into());
+        crate::huggingface::rope::static_parameters(self.head_dim, self.max_position_embeddings,
+            rope.rope_theta, self.original_max_position_embeddings, rope.partial_rotary_factor,
+            Some(&serde_json::Value::Object(fields)))
+    }
+
     pub fn validate(&self) -> Result<(), HuggingFaceLoadError> {
         let fail = |message: &str| Err(HuggingFaceLoadError(message.into()));
         if !matches!(self.model_type.as_str(), "qwen3_5_text" | "qwen3_5_moe_text")
             || self.hidden_act != "silu"
-            || self.rope_parameters.rope_type != "default"
             || self.attention_dropout != 0.0
             || self.mamba_ssm_dtype != "float32"
             || self.quantization_config.is_some()
@@ -138,6 +152,7 @@ impl Qwen35TextConfig {
                 return fail("Qwen3.5 tensor dimensions exceed supported indexing");
             }
         }
+        self.rotary_parameters()?;
         Ok(())
     }
 }

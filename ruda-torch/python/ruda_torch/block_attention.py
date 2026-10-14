@@ -76,7 +76,8 @@ def _exponential(scores,maximum):
 
 class _BlockAttention(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,query,key,value,mask,causal,scale,p,qblock,kblock,generator,offset,window,softcap):
+    def forward(ctx,query,key,value,mask,causal,scale,p,qblock,kblock,generator,offset,window,softcap,
+                indexed_state,global_heads,head_start):
         dtype=work_dtype(query)
         prefix=query.shape[:-2]
         rows,columns=query.shape[-2],key.shape[-2]
@@ -86,7 +87,9 @@ class _BlockAttention(torch.autograd.Function):
         maxima=torch.full((*prefix,rows,1),float('-inf'),device=query.device,dtype=dtype)
         sums=torch.zeros_like(maxima)
         ctx.rng_state=None
-        if 0<p<1:
+        ctx.indexed=indexed_state.numel()==4
+        ctx.global_shape=(math.prod(prefix[:-1]),global_heads,rows,columns)
+        if 0<p<1 and not ctx.indexed:
             heads=math.prod(prefix)
             blocks=sum((heads*min(qblock,rows-r)*min(kblock,columns-c)+3)//4
                        for r in range(0,rows,qblock) for c in range(0,columns,kblock))
@@ -109,22 +112,27 @@ class _BlockAttention(torch.autograd.Function):
                     probability=_exponential(scores,next_max)
                     total.mul_(correction).add_(probability.sum(-1,keepdim=True))
                     if p:
-                        probability=probability*_dropout(probability.shape,query.device,dtype,p,generator)
+                        if ctx.indexed:
+                            from ._attention_dropout import tile
+                            drop=tile(probability,indexed_state,ctx.global_shape,head_start,row,col,p)
+                        else:
+                            drop=_dropout(probability.shape,query.device,dtype,p,generator)
+                        probability=probability*drop
                     result.mul_(correction).add_(probability@v)
                     maximum.copy_(next_max)
                 result.div_(torch.where(total==0,torch.ones_like(total),total))
-        ctx.save_for_backward(query,key,value,original_mask if original_mask is not None else query.new_empty(0),out,maxima,sums)
+        ctx.save_for_backward(query,key,value,original_mask if original_mask is not None else query.new_empty(0),out,maxima,sums,indexed_state)
         ctx.has_mask=original_mask is not None
         ctx.mask_shape=None if original_mask is None else tuple(original_mask.shape)
-        ctx.options=causal,scale,p,qblock,kblock,offset,window,softcap
+        ctx.options=causal,scale,p,qblock,kblock,offset,window,softcap,head_start
         return out.to(query.dtype)
 
     @staticmethod
     @once_differentiable
     def backward(ctx,gradient):
-        query,key,value,saved_mask,out,maxima,sums=ctx.saved_tensors
+        query,key,value,saved_mask,out,maxima,sums,indexed_state=ctx.saved_tensors
         mask=saved_mask if ctx.has_mask else None
-        causal,scale,p,qblock,kblock,offset,window,softcap=ctx.options
+        causal,scale,p,qblock,kblock,offset,window,softcap,head_start=ctx.options
         dtype=work_dtype(query)
         dq=torch.zeros_like(query,dtype=dtype)
         dk=torch.zeros_like(key,dtype=dtype)
@@ -147,7 +155,11 @@ class _BlockAttention(torch.autograd.Function):
                     k=key[...,col:col+kblock,:].to(dtype)
                     v=value[...,col:col+kblock,:].to(dtype)
                     probability=_exponential(_scores(q,k,mask,causal,scale,row,col,offset,window,softcap),maximum)/denominator
-                    drop=_dropout(probability.shape,query.device,dtype,p,generator) if p else None
+                    if p and ctx.indexed:
+                        from ._attention_dropout import tile
+                        drop=tile(probability,indexed_state,ctx.global_shape,head_start,row,col,p)
+                    else:
+                        drop=_dropout(probability.shape,query.device,dtype,p,generator) if p else None
                     dp=do@v.transpose(-1,-2)
                     if drop is not None:dp=dp*drop
                     ds=probability*(dp-delta)
@@ -169,12 +181,13 @@ class _BlockAttention(torch.autograd.Function):
                         row_start=0 if padded[-2]==1 else row
                         col_start=0 if padded[-1]==1 else col
                         dm.view(padded)[...,row_start:row_start+item.shape[-2],col_start:col_start+item.shape[-1]].add_(item)
-        return dq.to(query.dtype),dk.to(key.dtype),dv.to(value.dtype),None if dm is None else dm.to(mask.dtype),None,None,None,None,None,None,None,None,None
+        return dq.to(query.dtype),dk.to(key.dtype),dv.to(value.dtype),None if dm is None else dm.to(mask.dtype),*(None for _ in range(12))
 
 
 def block_scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,is_causal=False,
                                        scale=None,enable_gqa=False,query_block_size=128,key_block_size=256,
-                                       generator=None,causal_offset=0,window_size=None,softcap=None):
+                                       generator=None,causal_offset=0,window_size=None,softcap=None,
+                                       tensor_group=None,global_heads=None,head_start=None,rng_state=None):
     """Exact softmax MHA/GQA with bounded score tiles and recomputed backward.
 
     Intermediate probabilities/masks are not retained as an N-by-N tensor.
@@ -185,6 +198,7 @@ def block_scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_
     Causal row positions are shifted by causal_offset (zero is upper-left).
     window_size=(left,right) bounds distances; -1 means unbounded on that side.
     softcap applies cap*tanh(scale*QK/cap) before masking; None disables it.
+    RUDA's default RNG indexes global [B,H,Q,K], independently of tile sizes.
     """
     if query.ndim<3 or key.ndim!=query.ndim or value.ndim!=query.ndim:
         raise ValueError('attention requires [...,heads,tokens,features] operands')
@@ -224,6 +238,21 @@ def block_scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_
         scores_shape=(*prefix,query.shape[-2],key.shape[-2])
         if torch.broadcast_shapes(scores_shape,mask_shape)!=scores_shape:
             raise ValueError('attention mask does not broadcast to scores')
+    indexed=query.device.type=='ruda' and generator is None
+    if not indexed and any(option is not None for option in (tensor_group,global_heads,head_start,rng_state)):
+        raise ValueError('parallel attention RNG requires RUDA storage and its default generator or explicit state')
+    state=torch.empty(0,device='cpu',dtype=torch.int64)
+    if indexed:
+        from ._parallel_rng import head_partition,reserve_attention
+        global_heads,head_start,groups=head_partition(prefix[-1],tensor_group,global_heads,head_start)
+        requested=state if rng_state is None else rng_state
+        if requested.device.type!='cpu' or requested.dtype!=torch.int64 or requested.shape not in ((0,),(4,)):
+            raise ValueError('attention RNG request requires CPU int64[0 or 4]')
+        if 0<dropout_p<1:
+            state=reserve_attention(query,[math.prod(prefix[:-1]),global_heads,query.shape[-2],key.shape[-2]],
+                groups,float(dropout_p),requested)
+    else:
+        global_heads,head_start=prefix[-1],0
     if not query.shape[-2] or not key.shape[-2] or dropout_p==1 or math.prod(prefix)==0:
         result=query.new_zeros((*prefix,query.shape[-2],value.shape[-1]))
         result=result+query.sum()*0+key.sum()*0+value.sum()*0
@@ -231,7 +260,8 @@ def block_scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_
             result=result+attn_mask.masked_fill(~torch.isfinite(attn_mask),0).sum()*0
         return result
     return _BlockAttention.apply(query,key,value,attn_mask,is_causal,factor,float(dropout_p),
-                                 query_block_size,key_block_size,generator,causal_offset,window_size,softcap)
+                                 query_block_size,key_block_size,generator,causal_offset,window_size,softcap,
+                                 state,global_heads,head_start)
 
 
 def cached_block_scaled_dot_product_attention(query, key, value, cache=None, *, scale=None,

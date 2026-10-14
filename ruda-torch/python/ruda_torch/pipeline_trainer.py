@@ -23,9 +23,11 @@ class PipelineTrainer:
     """
     def __init__(self,stage,optimizer,mesh,*,stage_name,base_id,run_config,
                  scaler=None,scheduler=None,input_is_parallel=False,tied_parameters=None):
+        from .model_parallel_mesh import pipeline_rank_layout
+        self._pipeline_shape, self._pipeline_coordinates, self._rank_order = pipeline_rank_layout(mesh)
         if not isinstance(stage_name,str) or not stage_name or Path(stage_name).name!=stage_name or stage_name in ('.','..'):
             raise ValueError('stage_name must be an explicit single directory component')
-        if stage.group.group is not mesh.pipeline.group or stage.rank!=mesh.coordinates[1]:
+        if stage.group.group is not mesh.pipeline.group or stage.rank!=self._pipeline_coordinates[1]:
             raise ValueError('stage schedule and trainer must use the same pipeline group')
         if type(input_is_parallel) is not bool:raise ValueError('input_is_parallel must be bool')
         if optimizer is None and any(p.requires_grad for p in stage.module.parameters()):
@@ -42,13 +44,16 @@ class PipelineTrainer:
             raise ValueError('tie bindings must belong to this actual stage and mesh')
         from .sharded_training import FullyShardedModule
         from .sharded_mesh import ShardedDataTensorParallelGroup
-        coordinator=ShardedDataTensorParallelGroup if any(isinstance(unit,FullyShardedModule) for unit in stage.module.modules()) else DataTensorParallelGroup
+        from .model_parallel_training import ModelParallelTrainingGroup
+        has_fsdp = any(isinstance(unit, FullyShardedModule) for unit in stage.module.modules())
+        coordinator = ModelParallelTrainingGroup if len(mesh.shape) == 5 else (
+            ShardedDataTensorParallelGroup if has_fsdp else DataTensorParallelGroup)
         self.coordinator=coordinator(stage.module,mesh.stage_mesh())
         self.coordinator.validate_training_options(stage.invocation_contract)
-        self.sharded_pipeline=any(mesh.world.gather_metadata(isinstance(self.coordinator,ShardedDataTensorParallelGroup)))
+        self.sharded_pipeline=any(mesh.world.gather_metadata(has_fsdp))
         if tied_parameters is not None:tied_parameters.validate_optimizer(optimizer)
-        names=mesh.world.gather_metadata(stage_name)
-        data,pipeline,tensor=mesh.shape
+        names=self._gather_pipeline_metadata(stage_name)
+        data,pipeline,tensor=self._pipeline_shape
         self.stage_names=[names[p*tensor] for p in range(pipeline)]
         if len(set(self.stage_names))!=pipeline or any(names[(d*pipeline+p)*tensor+t]!=self.stage_names[p]
                 for d in range(data) for p in range(pipeline) for t in range(tensor)):
@@ -59,12 +64,16 @@ class PipelineTrainer:
         self.started=time.monotonic()
         if optimizer is not None:optimizer.zero_grad(set_to_none=True)
 
+    def _gather_pipeline_metadata(self, value):
+        entries = self.mesh.world.gather_metadata(value)
+        return [entries[index] for index in self._rank_order]
+
     def train_step(self,inputs=None,targets=None,*,local_weight,loss_sum,microbatch_specs=None,schedule='1f1b'):
         inputs=list(inputs or [])
         targets=list(targets or [])
         if not callable(loss_sum):raise TypeError('supply a loss_sum(output,target) callable')
-        weights=self.mesh.world.gather_metadata(local_weight)
-        data,pipeline,tensor=self.mesh.shape
+        weights=self._gather_pipeline_metadata(local_weight)
+        data,pipeline,tensor=self._pipeline_shape
         width=pipeline*tensor
         if any(type(value) is not int or value<0 for value in weights) or any(len(set(weights[d*width:(d+1)*width]))!=1 for d in range(data)):
             raise ValueError('each DP replica must agree on its logical weight across PP/TP ranks')
@@ -76,14 +85,18 @@ class PipelineTrainer:
                 error='pipeline trainer input/target tensor leaves must be on CPU'
         for failure in self.mesh.world.gather_metadata(error):
             if failure:raise ValueError(failure)
-        schedules=self.mesh.world.gather_metadata((len(inputs),len(targets)))
+        schedules=self._gather_pipeline_metadata((len(inputs),len(targets)))
         counts=[schedules[d*width+t][0] for d in range(data) for t in range(tensor)]
         if any(schedules[d*width+t][0]!=schedules[d*width+(pipeline-1)*tensor+t][1]
                for d in range(data) for t in range(tensor)):
             raise ValueError('first-stage inputs and last-stage targets need identical microbatch counts')
         if self.sharded_pipeline and len(set(counts))!=1:
             raise ValueError('FSDP pipeline replicas must execute the same collective-bearing microbatch count')
-        data_rank,_,tensor_rank=self.mesh.coordinates
+        if len(self.mesh.shape) == 5:
+            dp, _, cp, ep, tp = self.mesh.shape
+            if any(len(set(counts[d*cp*ep*tp:(d+1)*cp*ep*tp])) != 1 for d in range(dp)):
+                raise ValueError('context/expert pipeline peers must execute the same microbatch count')
+        data_rank,_,tensor_rank=self._pipeline_coordinates
         count=schedules[data_rank*width+tensor_rank][0]
         interfaces=None
         try:interfaces=self.stage.validate_interfaces(count,microbatch_specs)
@@ -112,7 +125,10 @@ class PipelineTrainer:
         result=self.stage.run(inputs,targets,loss_sum=loss_sum,global_weight=total,loss_scale=scale,microbatch_specs=interfaces,schedule=schedule)
         if self.tied_parameters is not None:self.tied_parameters.synchronize_gradients()
         if self.optimizer is not None:
-            if hasattr(self.optimizer,'synchronize_gradients'):
+            if hasattr(self.coordinator, 'synchronize_optimizer_gradients'):
+                self.coordinator.synchronize_optimizer_gradients(self.optimizer,
+                    local_weight=local_weight, normalized=True, missing='zero')
+            elif hasattr(self.optimizer,'synchronize_gradients'):
                 self.optimizer.synchronize_gradients(local_weight=local_weight,normalized=True,missing='zero')
             else:self.coordinator.synchronize_gradients(local_weight=local_weight,normalized=True,missing='zero')
         bad=torch.zeros(1,device=self.stage.device,dtype=torch.float32)
@@ -141,6 +157,8 @@ class PipelineTrainer:
         flags={skip for active,skip,failure in decisions if active}
         if len(flags)>1:raise RuntimeError('pipeline optimizers disagreed on update; restore the committed mesh checkpoint')
         skipped=next(iter(flags),False)
+        from .float8_scaling import advance_float8_scales
+        advance_float8_scales(self.stage.module,group=self.coordinator)
         if self.tied_parameters is not None and not skipped:self.tied_parameters.synchronize_state(self.optimizer)
         if self.scaler is not None:
             self.scaler.record_step(skipped)
@@ -148,7 +166,7 @@ class PipelineTrainer:
         if self.scheduler is not None and not skipped:self.scheduler.step()
         if self.optimizer is not None:self.optimizer.zero_grad(set_to_none=True)
         loss=torch.tensor([result['loss_sum']],device=self.stage.device,dtype=torch.float32)
-        self.mesh.data.sum_(loss)
+        self.coordinator.sum_(loss)
         count=self.mesh.pipeline.gather_metadata(len(inputs))[0]
         self.step+=1
         self.tokens+=total
@@ -179,12 +197,13 @@ class PipelineTrainer:
         if not any(self.mesh.world.gather_metadata(requested)):return
         parameters=[] if actual is None else [p for options in actual.param_groups for p in options['params']]
         originals={id(shard):original for original,shard in self.optimizer.entries} if zero else {}
-        data,_,tensor=self.mesh.shape
-        factors={} if zero else self.coordinator.replication_factors(parameters)
+        logical_parameters = [originals[id(p)] for p in parameters] if zero else parameters
+        logical_factors = self.coordinator.replication_factors(logical_parameters)
+        factors = {}
         for parameter in parameters:
             original=originals[id(parameter)] if zero else parameter
             consumers=1 if self.tied_parameters is None else self.tied_parameters.replication_count(original)
-            factors[id(parameter)]=(tensor if not getattr(original,'_ruda_tp_sharded',False) else 1)*consumers if zero else factors[id(parameter)]*consumers
+            factors[id(parameter)] = logical_factors[id(original)] * consumers // (self.mesh.data.world_size if zero else 1)
         norm=distributed_grad_norm(parameters,self.mesh.world,loss_scale=scale,replication_factors=factors)
         if requested:
             if zero:self.optimizer._mesh_grad_norm=norm if math.isfinite(norm) else None
@@ -246,7 +265,7 @@ class PipelineTrainer:
         except Exception as failure:error=str(failure)
         for failure in self.mesh.world.gather_metadata(error):
             if failure:raise ValueError(failure)
-        stage=manifest['stages'][self.mesh.coordinates[1]]
+        stage=manifest['stages'][self._pipeline_coordinates[1]]
         def validate(state):
             if (state['base_id'],state['run_config'])!=(self.base_id,self.run_config):raise ValueError('checkpoint base/config differs')
         restored,error=None,None
@@ -279,7 +298,7 @@ class PipelineTrainer:
         if state.get('version')!=1:raise ValueError('invalid consolidated pipeline checkpoint')
         source,error=None,None
         try:
-            source=state['stages'][self.stage_name] if stage_transform is None else stage_transform(state['stages'],self.stage_name,self.mesh.coordinates[1])
+            source=state['stages'][self.stage_name] if stage_transform is None else stage_transform(state['stages'],self.stage_name,self._pipeline_coordinates[1])
             if source['step']!=state['step']:raise ValueError('consolidated stage step differs from mesh commit')
             if any((rank['application']['base_id'],rank['application']['run_config'])!=(self.base_id,self.run_config)
                    for rank in source['rank_states']):raise ValueError('checkpoint base/config differs')

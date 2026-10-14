@@ -108,8 +108,8 @@ impl Qwen3Config {
     }
 
     fn rotary_parameters(&self) -> Result<crate::llama::rope::RopeParameters, HuggingFaceLoadError> {
-        crate::huggingface::rope::static_parameters(self.head_dim, self.max_position_embeddings, self.rope_theta,
-            None, 1.0, self.rope_scaling.as_ref())
+        crate::huggingface::rope::layer_parameters(self.head_dim, self.max_position_embeddings, self.rope_theta,
+            None, 1.0, self.rope_scaling.as_ref(), self.layer_types.as_deref(), self.num_hidden_layers)
     }
 }
 
@@ -119,11 +119,17 @@ fn read_config(directory: &Path) -> Result<(Qwen3Config, Option<Qwen3MoeConfig>)
     let mut rotary = source.get("rope_parameters").filter(|v| !v.is_null()).cloned()
         .or_else(|| source.get("rope_scaling").filter(|v| !v.is_null()).cloned()).unwrap_or_else(|| serde_json::json!({}));
     let object = rotary.as_object_mut().ok_or_else(|| HuggingFaceLoadError("Qwen3 RoPE parameters must be an object".into()))?;
-    if let Some(original) = source.get("original_max_position_embeddings").filter(|v| !v.is_null()) {
-        object.insert("original_max_position_embeddings".into(), original.clone());
-    }
-    if let Some(partial) = source.get("partial_rotary_factor").filter(|v| !v.is_null()) {
-        object.entry("partial_rotary_factor").or_insert_with(|| partial.clone());
+    let defaults = ["original_max_position_embeddings", "partial_rotary_factor"];
+    if object.values().any(serde_json::Value::is_object) {
+        for value in object.values_mut().filter_map(serde_json::Value::as_object_mut) {
+            for name in defaults { if let Some(default) = source.get(name).filter(|v| !v.is_null()) {
+                value.entry(name).or_insert_with(|| default.clone());
+            }}
+        }
+    } else {
+        for name in defaults { if let Some(default) = source.get(name).filter(|v| !v.is_null()) {
+            object.entry(name).or_insert_with(|| default.clone());
+        }}
     }
     if let Some(theta) = object.get("rope_theta") { source["rope_theta"] = theta.clone(); }
     source["rope_scaling"] = rotary;
@@ -168,7 +174,7 @@ pub struct Qwen3Model<B: Backend> {
     layers: Vec<Layer<B>>,
     norm: Tensor<B, 1>,
     head: Projection<B>,
-    rotary: crate::llama::rope::RopeParameters,
+    rotary: Vec<crate::llama::rope::RotaryState>,
     reduction: Option<Arc<dyn Fn(Tensor<B, 3>) -> Tensor<B, 3> + Send + Sync>>,
 }
 pub struct LoadedQwen3<B: Backend> {
@@ -197,10 +203,7 @@ fn ops<B: Backend>() -> TensorOps<Tensor<B, 4>> {
     }
 }
 fn rotate<B: Backend>(x: Tensor<B, 4>, cos: Tensor<B, 4>, sin: Tensor<B, 4>) -> Tensor<B, 4> {
-    let [b, h, t, d] = x.dims();
-    let first = x.clone().slice([0..b, 0..h, 0..t, 0..d / 2]);
-    let second = x.clone().slice([0..b, 0..h, 0..t, d / 2..d]);
-    x * cos + Tensor::cat(vec![-second, first], 3) * sin
+    crate::llama::rope::apply_partial(x, cos, sin)
 }
 
 impl<B: Backend> Qwen3Model<B> {
@@ -247,25 +250,11 @@ impl<B: Backend> Qwen3Model<B> {
             .select(0, tokens.reshape([sequence]))
             .reshape([1, sequence, c.hidden_size]);
         let dtype = hidden.dtype();
-        let inverse = self.rotary.inverse_frequencies.clone();
-        let frequencies = Tensor::<B, 2>::from_data(
-            TensorData::new(
-                (start..start + sequence)
-                    .map(|i| i as f32)
-                    .collect::<Vec<_>>(),
-                [sequence, 1],
-            ),
-            (&device, DType::F32),
-        ) * Tensor::<B, 2>::from_data(
-            TensorData::new(inverse, [1, c.head_dim / 2]),
-            (&device, DType::F32),
-        );
-        let frequencies = Tensor::cat(vec![frequencies.clone(), frequencies], 1)
-            .reshape([1, 1, sequence, c.head_dim]);
-        let cos = (frequencies.clone().cos() * self.rotary.attention_factor).cast(dtype);
-        let sin = (frequencies.sin() * self.rotary.attention_factor).cast(dtype);
         let mut features = Vec::with_capacity(tapped_layers.len());
         for (index, (layer, state)) in self.layers.iter().zip(&mut cache.layers).enumerate() {
+            let rotary = self.rotary[index].for_cache(&state.rotary, start)?;
+            let (cos, sin) = rotary.cos_sin((start..start + sequence).map(|p| p as f32).collect(),
+                1, sequence, start + sequence, dtype, &device);
             if state.sequence_length() != start {
                 return Err(GenerationError("Qwen3 layer cache positions differ".into()));
             }
@@ -300,6 +289,7 @@ impl<B: Backend> Qwen3Model<B> {
             let query = rotate(query, cos.clone(), sin.clone());
             let key = rotate(key, cos.clone(), sin.clone());
             let (key, value, end) = state.append_growable(key, value);
+            state.rotary.commit(&rotary, end)?;
             let ranges = [0..1, 0..c.num_key_value_heads, 0..end, 0..c.head_dim];
             let key = key.slice(ranges.clone());
             let value = value.slice(ranges);
@@ -420,7 +410,8 @@ fn load_rank<B: Backend>(
         .map_err(|e| HuggingFaceLoadError(e.to_string()))?;
     let (mut config, mut moe_config) = read_config(&directory)?;
     config.validate()?;
-    let rotary = config.rotary_parameters()?;
+    let parameters = config.rotary_parameters()?;
+    let rotary = (0..config.num_hidden_layers).map(|index| parameters.for_layer(index).state()).collect();
     if let Some(s) = &shard {
         if s.world == 0
             || s.rank >= s.world

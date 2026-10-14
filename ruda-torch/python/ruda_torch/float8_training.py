@@ -1,4 +1,4 @@
-"""FP8 tensor-core GEMMs and current-scaled Linear forward/dgrad/wgrad."""
+"""FP8 tensor-core GEMMs with current, block and delayed training scales."""
 from __future__ import annotations
 
 import ctypes
@@ -103,7 +103,7 @@ def _quantize(x,dtype,margin,power_of_two):
 
 @dataclass(frozen=True)
 class Float8Recipe:
-    """Stateless per-tensor current scaling, including both backward GEMMs.
+    """Scaling policy for forward, input-gradient and weight-gradient GEMMs.
 
     auto selects native FP8 MMA or an exact FP16 carrier on older tensor cores.
     native requires FP8 instructions; float16 explicitly chooses the carrier.
@@ -115,6 +115,14 @@ class Float8Recipe:
     strategy: str = 'auto'
     margin: int = 0
     power_of_two_scale: bool = False
+    scaling: str = 'current'
+    block_size: int = 128
+    input_block_rows: int = 1
+    weight_block_rows: int = 128
+    grad_block_rows: int = 1
+    amax_history_len: int = 16
+    amax_compute_algo: str = 'max'
+    scaling_interval: int = 1
 
     def __post_init__(self):
         if any(dtype not in _FP8 for dtype in (self.input_dtype, self.weight_dtype, self.grad_dtype)):
@@ -125,6 +133,17 @@ class Float8Recipe:
             raise ValueError('FP8 scaling margin must be an integer in [0,16]')
         if type(self.power_of_two_scale) is not bool:
             raise TypeError('power_of_two_scale must be boolean')
+        if self.scaling not in ('current', 'block', 'delayed'):
+            raise ValueError('FP8 scaling must be current, block or delayed')
+        for value in (self.block_size, self.input_block_rows, self.weight_block_rows,
+                      self.grad_block_rows, self.amax_history_len, self.scaling_interval):
+            if type(value) is not int or value < 1:
+                raise ValueError('FP8 block dimensions, history and interval must be positive integers')
+        if self.block_size % 32 or any(rows * self.block_size > 2**32 - 33
+                for rows in (self.input_block_rows, self.weight_block_rows, self.grad_block_rows)):
+            raise ValueError('FP8 K block must be a multiple of 32 with U32-addressable block geometry')
+        if self.amax_compute_algo not in ('max', 'most_recent'):
+            raise ValueError('delayed amax_compute_algo must be max or most_recent')
 
 
 @torch.library.custom_op('ruda::float8_linear_forward', mutates_args=())
@@ -172,7 +191,7 @@ def _linear_backward(ctx, grad, _qx, _qw, _sx, _sw):
 _linear.register_autograd(_linear_backward, setup_context=_linear_context)
 
 
-def float8_linear(x, weight, bias=None, *, recipe=None, output_dtype=None):
+def float8_linear(x, weight, bias=None, *, recipe=None, output_dtype=None, scale_state=None, observe_scaling=True):
     """Trainable FP8 Linear with FP32 accumulation; no CPU tensor transfers."""
     recipe = Float8Recipe() if recipe is None else recipe
     if not isinstance(recipe, Float8Recipe):
@@ -190,8 +209,12 @@ def float8_linear(x, weight, bias=None, *, recipe=None, output_dtype=None):
     shape = x.shape[:-1] + (weight.shape[0],)
     flat = x.reshape(math.prod(x.shape[:-1]), weight.shape[1]).contiguous()
     # Bias is added to the FP32 accumulator before the output conversion.
-    out = _linear(flat, weight.contiguous(), recipe.input_dtype, recipe.weight_dtype, recipe.grad_dtype,
-                  torch.float32, _STRATEGIES[recipe.strategy], recipe.margin, recipe.power_of_two_scale)[0]
+    if recipe.scaling == 'current':
+        out = _linear(flat, weight.contiguous(), recipe.input_dtype, recipe.weight_dtype, recipe.grad_dtype,
+                      torch.float32, _STRATEGIES[recipe.strategy], recipe.margin, recipe.power_of_two_scale)[0]
+    else:
+        from .float8_scaling import recipe_linear
+        out = recipe_linear(flat, weight.contiguous(), recipe, scale_state, observe=observe_scaling)
     if bias is not None:
         out = out + bias.float()
     return out.to(output_dtype).reshape(shape)
@@ -200,8 +223,8 @@ def float8_linear(x, weight, bias=None, *, recipe=None, output_dtype=None):
 class Float8Linear(nn.Module):
     """Trainable master parameters plus FP8 forward, input and weight gradients.
 
-    Current scaling is stateless, so activation recomputation does not advance
-    a scaling history. State dictionaries retain dense weight/bias parameter keys.
+    Master parameter keys are unchanged. Delayed scaling adds persistent scale,
+    history and pending-observation buffers, advanced at optimizer boundaries.
     """
     def __init__(self, in_features, out_features, bias=True, *, device='ruda:0',
                  dtype=torch.float32, recipe=None):
@@ -214,6 +237,8 @@ class Float8Linear(nn.Module):
             raise TypeError('recipe must be Float8Recipe')
         self.weight = nn.Parameter(torch.empty((out_features, in_features), device=device, dtype=dtype))
         self.bias = nn.Parameter(torch.empty(out_features, device=device, dtype=dtype)) if bias else None
+        from .float8_scaling import make_scale_state
+        self.scale_state = make_scale_state(self.recipe, self.weight)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -233,11 +258,13 @@ class Float8Linear(nn.Module):
         if not isinstance(result.recipe, Float8Recipe):
             raise TypeError('recipe must be Float8Recipe')
         result.weight, result.bias = linear.weight, linear.bias
+        from .float8_scaling import make_scale_state
+        result.scale_state = make_scale_state(result.recipe, result.weight)
         result.train(linear.training)
         return result
 
     def forward(self, x):
-        return float8_linear(x, self.weight, self.bias, recipe=self.recipe)
+        return float8_linear(x, self.weight, self.bias, recipe=self.recipe, scale_state=self.scale_state, observe_scaling=self.training)
 
     def extra_repr(self):
         return f'in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}, recipe={self.recipe!r}'

@@ -117,6 +117,90 @@ pub fn prepare_current_quantize<R:Runtime>(x:&RudaTensor<R>,encoded:&RudaTensor<
     nodes
 }
 
+pub fn prepare_delayed_quantize<R:Runtime>(x:&RudaTensor<R>,scale:&RudaTensor<R>,pending:&RudaTensor<R>,
+    encoded:&RudaTensor<R>,used:&RudaTensor<R>,updated:&RudaTensor<R>,partials:&RudaTensor<R>,format:u32)->Vec<PreparedKernel<R>> {
+    assert!(matches!(format,18|19) && matches!(x.dtype,DType::F32|DType::F16|DType::BF16));
+    assert_eq!(encoded.dtype,DType::U8);assert_eq!(encoded.meta.shape(),x.meta.shape());
+    for t in [scale,pending,used,updated,partials] {assert_eq!(t.dtype,DType::F32);}
+    assert_eq!(scale.meta.num_elements(),1);assert_eq!(used.meta.shape(),scale.meta.shape());
+    assert_eq!(pending.meta.shape().as_slice(),&[3]);assert_eq!(updated.meta.shape(),pending.meta.shape());
+    let blocks=x.meta.num_elements().div_ceil(4096).max(1);
+    assert_eq!(partials.meta.shape().as_slice(),&[blocks,2]);
+    for t in [x,scale,pending,encoded,used,updated,partials] {
+        assert!(t.is_contiguous() && t.qparams.is_none() && t.meta.num_elements()<=u32::MAX as usize);
+        assert_eq!(t.device.to_id(),x.device.to_id());assert!(t.client.same_execution_queue(&x.client));
+    }
+    let mut nodes=vec![unsafe {amax_partials::prepare::<R>(&x.client,RudaCount::Static(blocks as u32,1,1),RudaDim::new_1d(32),
+        x.clone().into_array_arg(),partials.clone().into_array_arg(),x.dtype.into())},
+        unsafe {delayed_observation::prepare::<R>(&x.client,RudaCount::Static(1,1,1),RudaDim::new_1d(32),
+        partials.clone().into_array_arg(),scale.clone().into_array_arg(),pending.clone().into_array_arg(),
+        used.clone().into_array_arg(),updated.clone().into_array_arg(),x.meta.num_elements()!=0)}];
+    if x.meta.num_elements()!=0 {nodes.push(unsafe {quantize::prepare::<R>(&x.client,
+        RudaCount::Static(x.meta.num_elements().div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
+        x.clone().into_array_arg(),used.clone().into_array_arg(),encoded.clone().into_array_arg(),format,x.dtype.into())});}
+    nodes
+}
+
+#[ruda(launch)]
+fn delayed_observation(partials:&Array<f32>,scale:&Array<f32>,pending:&Array<f32>,
+    used:&mut Array<f32>,updated:&mut Array<f32>,#[comptime] seen:bool) {
+    let lane=UNIT_POS as usize;let mut i=lane;let mut maximum=0.0f32;let mut invalid=0.0f32;
+    while i<partials.len()/2 {maximum=f32::max(maximum,partials[2*i]);invalid=f32::max(invalid,partials[2*i+1]);i+=32;}
+    maximum=plane_max(maximum);invalid=plane_max(invalid);
+    if lane==0 {
+        used[0]=scale[0];
+        if comptime!(seen) {
+            if maximum.to_bits()>=0x7f800000u32 {invalid=1.0;}
+            if invalid!=0.0 {maximum=0.0;}
+            updated[0]=f32::max(pending[0],maximum);
+            updated[1]=f32::max(pending[1],invalid);
+            updated[2]=f32::max(pending[2],1.0f32);
+        } else {
+            updated[0]=pending[0];updated[1]=pending[1];updated[2]=pending[2];
+        }
+    }
+}
+
+#[ruda(launch)]
+pub fn delayed_advance(scales:&Array<f32>,history:&Array<f32>,observed:&Array<f32>,step:&Array<i64>,
+    new_scales:&mut Array<f32>,new_history:&mut Array<f32>,pending:&mut Array<f32>,new_step:&mut Array<i64>,
+    length:u32,interval:i64,input_maximum:f32,weight_maximum:f32,grad_maximum:f32,
+    #[comptime] history_max:bool,#[comptime] power_of_two:bool) {
+    let role=RUDA_POS_X as usize;let lane=UNIT_POS as usize;
+    let seen=observed[role*3+2]>0.0;let mut i=lane;
+    let mut maximum=0.0f32;let mut invalid=0.0f32;
+    while i<length as usize {
+        let index=(role*length as usize+i)*2;
+        let mut amax=history[index];let mut bad=history[index+1];
+        if seen {
+            if i==0 {amax=observed[role*3];bad=observed[role*3+1];}
+            else {amax=history[index-2];bad=history[index-1];}
+        }
+        new_history[index]=amax;new_history[index+1]=bad;
+        if comptime!(history_max) {
+            maximum=f32::max(maximum,amax);invalid=f32::max(invalid,bad);
+            if amax!=amax || bad!=bad {invalid=1.0;}
+        } else {if i==0 {maximum=amax;invalid=bad;if amax!=amax || bad!=bad {invalid=1.0;}}}
+        i+=32;
+    }
+    maximum=plane_max(maximum);invalid=plane_max(invalid);
+    if lane==0 {
+        let next=step[0]+1i64;let mut value=scales[role];
+        if seen && next%interval==0i64 {
+            let bound=if role==0 {input_maximum} else if role==1 {weight_maximum} else {grad_maximum};
+            value=1.0;
+            if maximum>0.0 && invalid==0.0 {value=f32::max(maximum/bound,f32::from_bits(0x00800000u32));}
+            if comptime!(power_of_two) {
+                let bits=value.to_bits();let mut exponent=bits&0x7f800000u32;
+                if bits&0x007fffffu32!=0u32 {exponent+=0x00800000u32;}
+                value=f32::from_bits(exponent);
+            }
+        }
+        new_scales[role]=value;pending[role*3]=0.0;pending[role*3+1]=0.0;pending[role*3+2]=0.0;
+        if role==0 {new_step[0]=next;}
+    }
+}
+
 #[ruda(launch)]
 fn amax_partials<F:Float>(x:&Array<F>,out:&mut Array<f32>,#[define(F)] _dtype:StorageType) {
     let block=RUDA_POS_X as usize;let lane=UNIT_POS as usize;let base=block*4096;
@@ -243,9 +327,14 @@ pub fn quantize<F:Float>(x:&Array<F>,scale:&Array<f32>,out:&mut Array<u8>,#[comp
     #[define(F)] _dtype:StorageType) {
     let i=ABSOLUTE_POS as usize;
     if i<out.len() {
-        let value=f32::cast_from(x[i])/scale[0];
-        let mut code=encode_code(value,format,true);
-        if (value.to_bits()&0x7fffffffu32)>=0x7f800000u32 {code=encode_code(value,format,false);}
-        out[i]=code as u8;
+        out[i]=encode_scaled(f32::cast_from(x[i]),scale[0],format);
     }
+}
+
+#[ruda]
+pub fn encode_scaled(value:f32,scale:f32,#[comptime] format:u32)->u8 {
+    let value=value/scale;
+    let mut code=encode_code(value,format,true);
+    if (value.to_bits()&0x7fffffffu32)>=0x7f800000u32 {code=encode_code(value,format,false);}
+    code as u8
 }

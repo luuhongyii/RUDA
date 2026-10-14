@@ -183,6 +183,7 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
                 let history=cache.trajectories.entry(row.request_id).or_insert_with(||Trajectory {
                     start:row.start_position,end:row.start_position,initial:cache.requests[&row.request_id].clone(),
                     layers:(0..self.layers.len()).map(|_|Vec::new()).collect(),
+                    rotary_lengths:Vec::new(),
                 });
                 if history.end!=row.start_position {return Err(GenerationError("Qwen speculative history is not contiguous".into()));}
             } else {cache.trajectories.remove(&row.request_id);}
@@ -195,11 +196,14 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
         let dtype = hidden.dtype();
         let mut cos_rows = Vec::with_capacity(b);
         let mut sin_rows = Vec::with_capacity(b);
+        let mut rotary_lengths = Vec::with_capacity(b);
         for row in &batch.sequences {
+            let rotary = self.rotary_for(&cache.requests[&row.request_id])?;
             let (cos, sin) =
-                attention::text_rope(&self.config, row.start_position, s, dtype, device);
+                attention::text_rope(&rotary, row.start_position, s, dtype, device);
             cos_rows.push(cos);
             sin_rows.push(sin);
+            rotary_lengths.push(rotary.cached_length());
         }
         let cos = Tensor::cat(cos_rows, 0);
         let sin = Tensor::cat(sin_rows, 0);
@@ -289,11 +293,16 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
             let update = layer.mlp.forward(layer.post_norm.forward(hidden.clone())?)?;
             hidden = hidden + self.reduce(update);
         }
-        for row in &batch.sequences {
+        for (row, rotary_length) in batch.sequences.iter().zip(rotary_lengths) {
             let state = cache.requests.get_mut(&row.request_id).unwrap();
             state.position = row.context_length;
             state.batch = Some(1);
-            if speculative {cache.trajectories.get_mut(&row.request_id).unwrap().end=row.context_length;}
+            state.rotary_length = rotary_length;
+            if speculative {
+                let history = cache.trajectories.get_mut(&row.request_id).unwrap();
+                history.end = row.context_length;
+                history.rotary_lengths.extend(std::iter::repeat_n(rotary_length, s));
+            }
         }
         let width = hidden.dims()[2];
         if !speculative {hidden=hidden.slice([0..b,s-1..s,0..width]);}

@@ -252,19 +252,30 @@ class KimiSparseMoeBlock(nn.Module):
 
     def forward(self, hidden):
         ids, weights = self.gate(hidden)
+        from .expert_parallel import ExpertParallelMLP
+        if isinstance(self.experts, ExpertParallelMLP):
+            shape = hidden.shape
+            output = self.experts(hidden.reshape(-1, shape[-1]), ids, weights).reshape(shape)
+            if hasattr(self, 'shared_experts'):
+                output = output + self.shared_experts(hidden)
+            return output
         flat = hidden.reshape(-1, hidden.shape[-1])
         if not flat.shape[0]:
             return hidden
         order = ids.reshape(-1).argsort(stable=True)
         routed = flat.index_select(0, torch.div(order, ids.shape[-1], rounding_mode='floor'))
-        counts = torch.stack([(ids == expert).to(torch.int64).sum() for expert in range(len(self.experts))])
-        counts = counts.detach().to('cpu').tolist()
-        outputs, start = [], 0
-        for expert, count in zip(self.experts, counts):
-            if count:
-                outputs.append(expert(routed[start:start + count]))
-            start += count
-        output = torch.cat(outputs, 0).index_select(0, order.argsort())
+        from ._indexed_experts import dense_bank
+        output = dense_bank(self.experts, routed, ids.reshape(-1).index_select(0, order))
+        if output is None:
+            counts = torch.stack([(ids == expert).to(torch.int64).sum() for expert in range(len(self.experts))])
+            counts = counts.detach().to('cpu').tolist()
+            outputs, start = [], 0
+            for expert, count in zip(self.experts, counts):
+                if count:
+                    outputs.append(expert(routed[start:start + count]))
+                start += count
+            output = torch.cat(outputs, 0)
+        output = output.index_select(0, order.argsort())
         with precision_context(output):
             output = (output.reshape(*ids.shape, -1).float() * weights[:, :, None]).sum(1).to(output.dtype)
         output = output.reshape(hidden.shape)
@@ -287,7 +298,15 @@ class KimiDecoderLayer(nn.Module):
 
     def forward(self, hidden, layout, attention, state=None, documents=None):
         normalized = self.input_layernorm(hidden)
-        if self.is_linear_attn:
+        sequence_group = getattr(layout, 'sequence_group', None)
+        if sequence_group is not None:
+            from .parallel_training import gather_from_tensor_parallel
+            normalized = gather_from_tensor_parallel(normalized, sequence_group, axis=1)
+        if getattr(layout, 'context', None) is not None:
+            from .hybrid_context_parallel import kimi_recurrent_forward, kimi_mla_forward
+            operation = kimi_recurrent_forward if self.is_linear_attn else kimi_mla_forward
+            mixed, updated = operation(self.self_attn, normalized, layout)
+        elif self.is_linear_attn:
             if documents is None:
                 mixed, updated = self.self_attn(normalized, layout, state)
             else:
@@ -301,7 +320,14 @@ class KimiDecoderLayer(nn.Module):
                 updated = None
         else:
             mixed, updated = self.self_attn(normalized, *attention, state)
+        if sequence_group is not None:
+            from .parallel_training import scatter_to_tensor_parallel
+            mixed = scatter_to_tensor_parallel(mixed, sequence_group, axis=1)
         hidden = hidden + mixed
         normalized = self.post_attention_layernorm(hidden)
+        if sequence_group is not None:
+            normalized = gather_from_tensor_parallel(normalized, sequence_group, axis=1)
         output = self.block_sparse_moe(normalized) if hasattr(self, 'block_sparse_moe') else self.mlp(normalized)
+        if sequence_group is not None:
+            output = scatter_to_tensor_parallel(output, sequence_group, axis=1)
         return hidden + output, updated

@@ -31,7 +31,7 @@ pub(super) fn load_rank<B: Backend>(
     };
     let ff = config.d_ff / world;
     let ff_range = rank * ff..(rank + 1) * ff;
-    let rope = rotary.init(config, device, dtype);
+    let tables = rotary.tables(config, device, dtype);
     let mut layers = Vec::with_capacity(config.num_hidden_layers);
     for index in 0..config.num_hidden_layers {
         let prefix = format!("model.layers.{index}");
@@ -68,7 +68,8 @@ pub(super) fn load_rank<B: Backend>(
         let post_norm = checkpoint.tensor::<B, 1>(&format!("{prefix}.post_attention_layernorm.weight"), [config.d_model], device)?;
         layers.push(LlamaDecoderLayer {
             self_attn: LlamaAttention {
-                q_proj, k_proj, v_proj, o_proj, rope: rope.clone(),
+                q_proj, k_proj, v_proj, o_proj, rope: tables[index].clone(),
+                rotary_state: rotary.for_layer(index).runtime_state(),
                 rotary_layout: RotaryLayout::HalfSplit,
                 num_query_heads: queries, num_kv_heads: kv_heads, head_dimension: width,
             },

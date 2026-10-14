@@ -21,15 +21,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut explicit_libtorch_device = false;
     let mut role = "integrated".to_string();
     let mut prefill_address = None;
+    let mut prefill_transport = "host".to_string();
+    let mut gpu_kv_library = None;
+    let mut gpu_kv_transports = "rc,cuda_ipc".to_string();
+    let mut gpu_kv_timeout_ms = 300_000u64;
+    let mut gpu_kv_options = false;
     let mut mla_mode = DeepseekV2AttentionMode::Expanded;
     let mut draft_directory = None;
     let mut draft_id = None;
     let mut causal_draft_tokens = None;
+    let mut mtp = false;
     let mut multimodal = false;
     let mut batch_sequences = None;
     let mut batch_tokens = None;
     let mut batch_pages = None;
     let mut batch_block = None;
+    let mut active_kv_host_bytes = 0usize;
     let mut config = PrefixCacheConfig {
         block_tokens: 64,
         device_entries: 4,
@@ -45,6 +52,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!(
                 "[structured-output feature: response_format JSON Schema/JSON object or grammar regex/Lark/llguidance; standard or continuous-batch serving]"
             );
+            println!("[--active-kv-host-bytes N enables bounded active-request KV/recurrent-state swap for continuous batching; distinct from reusable --kv-host-bytes prefix entries; no disk spill]");
+            println!("[--mtp uses checkpoint DeepSeek MTP modules for speculative decoding; single-device or native EP, continuous batching and prefill/decode KV transfer; no separate draft model]");
+            println!("[gpu-kv feature: --prefill-transport ucx --gpu-kv-library PATH_TO_RUCCL_UCX_BRIDGE [--gpu-kv-transports rc,cuda_ipc] [--gpu-kv-timeout-ms 300000]; native batch prefill/decode roles, CUDA device payloads with TCP metadata, no implicit host fallback]");
             println!("[--causal-draft-tokens N selects an independent causal draft instead of DFlash/DSpark; requires --draft-model-path/--draft-model-id and native batching; Llama/Qwen2/Qwen3(dense/MoE)/Qwen3.5(dense/MoE)/DeepSeek-V2/V3/Kimi-K2/Kimi-Linear target and draft, Llama/Qwen2/Qwen3(dense/MoE)/Qwen3.5(dense/MoE) TP/DeepSeek-V2/V3/Kimi-K2/Kimi-Linear EP targets with draft on root GPU, matching token-ID mappings/decoders]");
             println!(
                 "[Codex: --responses-max-output-tokens N enables /v1/responses and /v1/codex/models; checkpoint context window, stateless HTTP tool replay]"
@@ -58,6 +68,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             multimodal = true;
             continue;
         }
+        if arg == "--mtp" {mtp=true;continue;}
         let value = args
             .next()
             .ok_or_else(|| io::Error::other(format!("missing value for {arg}")))?;
@@ -74,6 +85,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             "--role" => role = value,
             "--prefill-address" => prefill_address = Some(value),
+            "--prefill-transport" => prefill_transport = value,
+            "--gpu-kv-library" => {gpu_kv_library=Some(PathBuf::from(value));gpu_kv_options=true;},
+            "--gpu-kv-transports" => {gpu_kv_transports=value;gpu_kv_options=true;},
+            "--gpu-kv-timeout-ms" => {gpu_kv_timeout_ms=value.parse()?;gpu_kv_options=true;},
             "--draft-model-path" => draft_directory = Some(PathBuf::from(value)),
             "--draft-model-id" => draft_id = Some(value),
             "--causal-draft-tokens" => causal_draft_tokens = Some(value.parse::<usize>()?),
@@ -96,6 +111,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "--batch-max-tokens" => batch_tokens = Some(value.parse::<usize>()?),
             "--batch-kv-pages" => batch_pages = Some(value.parse::<usize>()?),
             "--batch-block-tokens" => batch_block = Some(value.parse::<usize>()?),
+            "--active-kv-host-bytes" => active_kv_host_bytes = value.parse()?,
             "--devices" => {
                 device_indices = value.split(',').map(str::parse).collect::<Result<_, _>>()?
             }
@@ -163,6 +179,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .into());
     }
     let prefill_only = role == "prefill";
+    if !matches!(prefill_transport.as_str(),"host"|"ucx") || (prefill_transport=="host" && gpu_kv_options) {
+        return Err(io::Error::other("--prefill-transport must be host or ucx; GPU KV options require ucx").into());
+    }
+    if prefill_transport=="ucx" && (role=="integrated" || backend!="native" || batch_sequences.is_none() || multimodal || device_indices.iter().any(|&i|i>u16::MAX as usize)) {
+        return Err(io::Error::other("UCX KV handoff requires native batch prefill/decode and representable CUDA device ordinals").into());
+    }
+    #[cfg(not(feature="gpu-kv"))]
+    if prefill_transport=="ucx" {return Err(io::Error::other("UCX KV handoff requires the gpu-kv build feature").into());}
+    #[cfg(feature="gpu-kv")]
+    let gpu_kv=if prefill_transport=="ucx" {
+        let gpu=rullm::disaggregated::GpuKvConfig{library:gpu_kv_library.ok_or_else(||io::Error::other("--gpu-kv-library is required for ucx"))?,
+            transports:gpu_kv_transports,timeout_ms:gpu_kv_timeout_ms};
+        gpu.validate().map_err(io::Error::other)?;Some(gpu)
+    } else {None};
     if draft_directory.is_some() != draft_id.is_some()
         || draft_id.as_ref().is_some_and(|id: &String| id.is_empty())
     {
@@ -188,9 +218,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             })?,
             block_tokens: batch_block.unwrap_or(64),
             max_queued_requests: queue_capacity,
+            active_kv_host_bytes,
         })
     } else {
-        if batch_tokens.is_some() || batch_pages.is_some() || batch_block.is_some() {
+        if batch_tokens.is_some() || batch_pages.is_some() || batch_block.is_some() || active_kv_host_bytes!=0 {
             return Err(io::Error::other("batch options require --batch-max-sequences").into());
         }
         None
@@ -268,10 +299,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         devices: device_indices,
         prefill_only,
         prefill_address,
+        #[cfg(feature="gpu-kv")]
+        gpu_kv,
         mla_mode,
         draft_directory,
         draft_id,
         causal_draft_tokens,
+        mtp,
         cache: config,
         batch,
         multimodal,
@@ -285,7 +319,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .map_err(io::Error::other)?
         .map_err(io::Error::other)?;
     if prefill_only {
-        println!("RUDA {backend} prefill service ready (TCP host KV handoff)");
+        println!("RUDA {backend} prefill service ready ({})",if prefill_transport=="ucx" {"UCX GPU payload, TCP metadata"} else {"TCP host KV handoff"});
         tokio::task::spawn_blocking(move || {
             worker
                 .join()

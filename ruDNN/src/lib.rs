@@ -50,3 +50,4 @@ pub mod dense_attention;
 
 #[cfg(feature = "tensor-paged-attention")]
 pub mod varlen_attention;
+pub mod ring_attention;

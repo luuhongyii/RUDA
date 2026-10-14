@@ -3,6 +3,50 @@ use super::*;
 impl<R, F, I, BT> PrefixBatchModel<DeviceBackend<R, F, I, BT>> for KimiLinearModel<DeviceBackend<R, F, I, BT>>
 where R: DeviceRuntime, R::Server: ComputeServer, R::Device: DeviceOps, F: FloatElement, I: IntElement, BT: BoolElement {
     type Prefix = KimiLinearBatchPrefix<DeviceBackend<R, F, I, BT>>;
+    fn prefix_tensor_transfer(&self)->bool {true}
+    fn export_prefix_tensors(&self,prefix:&Self::Prefix,shard:crate::PrefixShard)
+        ->Result<crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,GenerationError> {
+        if shard.kv_heads.is_some() || shard.linear_key_heads.is_some() || shard.linear_value_heads.is_some() {
+            return Err(error("Kimi Linear native caches are EP-replicated, not TP-sharded"));
+        }
+        prefix.dense.validate(&self.dense_geometry(),self.config.model_max_length)?;
+        self.validate_recurrent(&prefix.recurrent,true)?;
+        let mut tensors=crate::PrefixTensors::new("kimi-linear-v1",prefix.dense.position());
+        tensors.add_child("dense",prefix.dense.export_tensors(Default::default())?)?;
+        if let Some(c)=&self.config.linear_attn_config {
+            for (index,state) in prefix.recurrent.iter().enumerate() {
+                for (which,conv) in state.conv.as_ref().unwrap().iter().enumerate() {
+                    tensors.push(format!("{index}/conv-{which}"),conv.clone().reshape([1,c.num_heads,c.head_dim,c.short_conv_kernel_size]),(c.num_heads,0..c.num_heads))?;
+                }
+                tensors.push(format!("{index}/state"),state.recurrent.as_ref().unwrap().clone(),(c.num_heads,0..c.num_heads))?;
+            }
+        }
+        Ok(tensors)
+    }
+    fn import_prefix_tensors(&self,tensors:&crate::PrefixTensors<DeviceBackend<R,F,I,BT>>,shard:crate::PrefixShard,device:&R::Device)
+        ->Result<Self::Prefix,GenerationError> {
+        if shard.kv_heads.is_some() || shard.linear_key_heads.is_some() || shard.linear_value_heads.is_some() {
+            return Err(error("Kimi Linear native caches are EP-replicated, not TP-sharded"));
+        }
+        let count=self.config.num_hidden_layers-self.config.mla_layers();
+        tensors.validate("kimi-linear-v1",self.config.model_max_length,count*4)?;
+        if tensors.children()!=1 {return Err(error("Kimi Linear prefix children differ"));}
+        let dense=DenseBatchPrefix::import_tensors(tensors.child("dense")?,&self.dense_geometry(),self.config.model_max_length,Default::default(),device)?;
+        if dense.position()!=tensors.position {return Err(error("Kimi Linear dense/recurrent positions differ"));}
+        let mut recurrent=Vec::with_capacity(count);
+        if let Some(c)=&self.config.linear_attn_config {
+            for index in 0..count {
+                let mut conv=Vec::with_capacity(3);
+                for which in 0..3 {
+                    conv.push(tensors.tensor(&format!("{index}/conv-{which}"),[1,c.num_heads,c.head_dim,c.short_conv_kernel_size],
+                        self.embedding.dtype(),(c.num_heads,0..c.num_heads),device)?.reshape([1,c.num_heads*c.head_dim,c.short_conv_kernel_size]));
+                }
+                let state=tensors.tensor(&format!("{index}/state"),[1,c.num_heads,c.head_dim,c.head_dim],DType::F32,(c.num_heads,0..c.num_heads),device)?;
+                recurrent.push(kda::State{conv:Some(conv.try_into().map_err(|_|error("Kimi convolution count"))?),recurrent:Some(state)});
+            }
+        }
+        self.validate_recurrent(&recurrent,true)?;Ok(Self::Prefix{dense,recurrent})
+    }
     fn capture_prefix(&self, cache: &Self::Cache, id: RequestId) -> Result<Self::Prefix, GenerationError> {
         let recurrent = cache.recurrent.get(&id).ok_or_else(|| error("unknown Kimi Linear prefix request"))?.clone();
         self.validate_recurrent(&recurrent, true)?;

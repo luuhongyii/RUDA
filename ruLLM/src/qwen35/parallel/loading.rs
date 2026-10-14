@@ -28,14 +28,15 @@ pub(super) fn validate(config: &Qwen35TextConfig, world: usize) -> Result<(), Hu
 
 pub(super) fn load_rank<B: Backend>(directory: &Path, source: &Qwen35TextConfig,
     quantization: Option<AwqQuantizationConfig>, multimodal: bool, rank: usize, world: usize,
-    device: &B::Device, reduction: Reduction<B>, packed: Option<PackedPartLoader<B>>)
+    device: &B::Device, reduction: Reduction<B>, packed: Option<PackedPartLoader<B>>,
+    fp8_loader: Option<super::super::fp8_loading::Loader<B>>)
     -> Result<super::super::loading::LoadedQwen35Text<B>, HuggingFaceLoadError> {
-    let mut checkpoint = Checkpoint::open(directory)?;
+    let (mut checkpoint, fp8) = super::super::fp8_loading::open(directory, fp8_loader)?;
     let base = if multimodal { "model.language_model" } else { "model" };
     let embedding_name = format!("{base}.embed_tokens.weight");
     let embedding = checkpoint.tensor::<B, 2>(&embedding_name, [source.vocab_size, source.hidden_size], device)?;
     let dtype = embedding.dtype();
-    let mut w = Weights { checkpoint: &mut checkpoint, device, quantization, dtype, packed, dense_awq: 0, packed_awq: 0 };
+    let mut w = Weights { checkpoint: &mut checkpoint, device, quantization, dtype, packed, fp8, dense_awq: 0, packed_awq: 0 };
     let c = source;
     let query = shard(c.num_attention_heads, c.head_dim, rank, world);
     let qgate = shard(c.num_attention_heads, 2 * c.head_dim, rank, world);
@@ -100,6 +101,7 @@ pub(super) fn load_rank<B: Backend>(directory: &Path, source: &Qwen35TextConfig,
     } else { w.projection("lm_head", c.hidden_size, c.vocab_size, false, Part::full(c.hidden_size, c.vocab_size))? };
     let dequantized_awq_linears = w.dense_awq;
     let packed_awq_linears = w.packed_awq;
+    let packed_fp8_linears = w.fp8.as_ref().map_or(0, |weights| weights.projections);
     drop(w);
     let unloaded_tensors = checkpoint.tensors.keys().filter(|name| !checkpoint.consumed.contains(*name)).cloned().collect::<Vec<_>>();
     if unloaded_tensors.iter().any(|name| !(name.starts_with("mtp.") || (multimodal && name.starts_with("model.visual.")))) {
@@ -117,9 +119,10 @@ pub(super) fn load_rank<B: Backend>(directory: &Path, source: &Qwen35TextConfig,
     config.validate()?;
     B::sync(device).map_err(|e| HuggingFaceLoadError(e.to_string()))?;
     Ok(super::super::loading::LoadedQwen35Text {
-        model: Qwen35TextModel { config, embedding: Embedding { weight: Param::from_tensor(embedding) }, layers, norm, head, reduction: Some(reduction) },
+        model: Qwen35TextModel { rotary: config.rotary_parameters()?, config,
+            embedding: Embedding { weight: Param::from_tensor(embedding) }, layers, norm, head, reduction: Some(reduction) },
         report: HuggingFaceLoadReport { config_path: directory.join("config.json"), weight_files: checkpoint.files,
             applied_tensors: checkpoint.consumed.len(), tied_word_embeddings: source.tie_word_embeddings },
-        unloaded_tensors, dequantized_awq_linears, packed_awq_linears,
+        unloaded_tensors, dequantized_awq_linears, packed_awq_linears, packed_fp8_linears,
     })
 }

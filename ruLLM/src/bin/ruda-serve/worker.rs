@@ -14,10 +14,13 @@ pub struct Options {
     pub devices: Vec<usize>,
     pub prefill_only: bool,
     pub prefill_address: Option<String>,
+    #[cfg(feature="gpu-kv")]
+    pub gpu_kv:Option<rullm::disaggregated::GpuKvConfig>,
     pub mla_mode: DeepseekV2AttentionMode,
     pub draft_directory: Option<PathBuf>,
     pub draft_id: Option<String>,
     pub causal_draft_tokens: Option<usize>,
+    pub mtp: bool,
     pub cache: PrefixCacheConfig,
     pub batch: Option<serving::BatchServingConfig>,
     pub multimodal: bool,
@@ -170,6 +173,13 @@ impl Worker {
         )
         .map_err(|e| e.to_string())?;
         let model_type = source.get("model_type").and_then(serde_json::Value::as_str);
+        if options.mtp {
+            if !matches!(model_type,Some("deepseek_v2"|"deepseek_v3"|"kimi_k2")) || options.draft_directory.is_some()
+                || options.causal_draft_tokens.is_some() || source.get("num_nextn_predict_layers").and_then(serde_json::Value::as_u64).unwrap_or(0)==0 {
+                return Err("--mtp requires checkpoint MTP modules and cannot select an independent draft simultaneously".into());
+            }
+            options.model_id=format!("{}:mtp",options.model_id);
+        }
         if options.multimodal
             && (!matches!(model_type, Some("qwen3_5" | "qwen3_5_text" | "qwen3_5_moe" | "qwen3_5_moe_text"))
                 || options.devices.len() != 1
@@ -287,6 +297,11 @@ impl Worker {
             .and_then(serde_json::Value::as_str)
         {
             Some("deepseek_v2"|"deepseek_v3"|"kimi_k2") => {
+                if self.options.mtp {
+                    let loaded=rullm::load_huggingface_mla_mtp::<B>(&self.options.directory,&device).map_err(|e|e.to_string())?;
+                    let limits=loaded.model.target.config.limits();let model=loaded.model.with_attention_mode(self.options.mla_mode);
+                    return self.launch::<B,_>(model,device,limits,loaded.eos_token_ids,ready);
+                }
                 let loaded = load_huggingface_mla::<B>(&self.options.directory, &device)
                     .map_err(|e| e.to_string())?;
                 let limits = loaded.model.config.limits();
@@ -341,9 +356,25 @@ impl Worker {
     }
 
     #[cfg(feature = "nvidia")]
-    fn launch_batch<B:Backend,M:rullm::PrefixBatchModel<B>>(
+    fn launch_batch<B:rullm::GpuPrefixBackend,M:rullm::PrefixBatchModel<B>>(
         self,model:M,device:B::Device,eos:Vec<i32>,config:serving::BatchServingConfig,ready:&mut Ready,
     )->Result<(),String> {
+        #[cfg(feature="gpu-kv")]
+        if let Some(gpu)=self.options.gpu_kv.clone() {
+            if self.options.prefill_only {
+                let kv=rullm::PagedKvCacheConfig{block_size:config.block_tokens,num_pages:config.kv_pages,max_sequence_length:model.batch_limits().max_sequence_length};
+                return rullm::disaggregated::run_gpu_batch_prefill_service::<B,_>(model,device,self.options.model_id,
+                    self.options.cache,kv,config.max_batch_tokens,self.options.prefill_address.as_deref().expect("GPU prefill address"),gpu,
+                    ||ready.take().expect("worker readiness").send(Ok(())).is_ok()).map_err(|e|e.to_string());
+            }
+            use ruda_tensor::device::Device;
+            let devices=self.options.devices.iter().map(|&index|Ok(B::Device::from_id(ruda_core::device::DeviceId{
+                type_id:0,index_id:u16::try_from(index).map_err(|e|e.to_string())?}))).collect::<Result<Vec<_>,String>>()?;
+            let remote=rullm::disaggregated::RemotePrefill{address:self.options.prefill_address.expect("GPU decode address")};
+            return serving::run_continuous_batch_with_gpu_prefill::<B,_>(model,device,devices,eos,self.tokenizer.expect("batch tokenizer"),
+                self.tokenizer_config,config,self.options.model_id,self.options.cache,remote,gpu,self.jobs,
+                ||ready.take().expect("worker readiness").send(Ok(())).is_ok());
+        }
         if self.options.prefill_only {
             let kv=rullm::PagedKvCacheConfig{block_size:config.block_tokens,num_pages:config.kv_pages,
                 max_sequence_length:model.batch_limits().max_sequence_length};
@@ -470,6 +501,11 @@ impl Worker {
                             self.launch_batch::<Native,_>(loaded.model,device,loaded.eos_token_ids,config,ready)
                         },
                         Some("deepseek_v2"|"deepseek_v3"|"kimi_k2")=>{
+                            if self.options.mtp {
+                                let loaded=rullm::load_huggingface_mla_mtp_expert_parallel::<Native>(&self.options.directory,devices).map_err(|e|e.to_string())?;
+                                let model=loaded.model.with_attention_mode(self.options.mla_mode);
+                                return self.launch_batch::<Native,_>(model,device,loaded.eos_token_ids,config,ready);
+                            }
                             let loaded=rullm::load_huggingface_mla_expert_parallel::<Native>(&self.options.directory,devices).map_err(|e|e.to_string())?;
                             let model=loaded.model.with_attention_mode(self.options.mla_mode);
                             self.launch_batch::<Native,_>(model,device,loaded.eos_token_ids,config,ready)
@@ -507,6 +543,11 @@ impl Worker {
                     self.launch_batch::<Native,_>(loaded.model,device,loaded.eos_token_ids,config,ready)
                 },
                 Some("deepseek_v2"|"deepseek_v3"|"kimi_k2")=>{
+                    if self.options.mtp {
+                        let loaded=rullm::load_huggingface_mla_mtp::<Native>(&self.options.directory,&device).map_err(|e|e.to_string())?;
+                        let model=loaded.model.with_attention_mode(self.options.mla_mode);
+                        return self.launch_batch::<Native,_>(model,device,loaded.eos_token_ids,config,ready);
+                    }
                     let loaded=load_huggingface_mla::<Native>(&self.options.directory,&device).map_err(|e|e.to_string())?;
                     let model=loaded.model.with_attention_mode(self.options.mla_mode);
                     self.launch_batch::<Native,_>(model,device,loaded.eos_token_ids,config,ready)
@@ -581,6 +622,11 @@ impl Worker {
                 self.launch::<B, _>(loaded.model, device, limits, loaded.eos_token_ids, ready)
             }
             Some("deepseek_v2"|"deepseek_v3"|"kimi_k2") => {
+                if self.options.mtp {
+                    let loaded=rullm::load_huggingface_mla_mtp_expert_parallel::<B>(&self.options.directory,devices).map_err(|e|e.to_string())?;
+                    let limits=loaded.model.config.limits();let model=loaded.model.with_attention_mode(self.options.mla_mode);
+                    return self.launch::<B,_>(model,device,limits,loaded.eos_token_ids,ready);
+                }
                 let loaded = rullm::load_huggingface_mla_expert_parallel::<B>(
                     &self.options.directory,
                     devices,

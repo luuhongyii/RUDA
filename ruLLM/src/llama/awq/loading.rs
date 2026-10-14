@@ -137,7 +137,7 @@ where
                 device,
             )?),
         };
-        let rope = rotary.init::<AwqBackend<R>>(config, device, DType::F16);
+        let tables = rotary.tables::<AwqBackend<R>>(config, device, DType::F16);
         let mut layers = Vec::with_capacity(config.num_hidden_layers);
         let kv_dimension = config.num_kv_heads * config.head_dimension();
         for layer in 0..config.num_hidden_layers {
@@ -171,7 +171,8 @@ where
                     false,
                     device,
                 )?,
-                rope: rope.clone(),
+                rope: tables[layer].clone(),
+                rotary_state: rotary.for_layer(layer).runtime_state(),
                 rotary_layout: RotaryLayout::HalfSplit,
                 num_query_heads: config.num_query_heads,
                 num_kv_heads: config.num_kv_heads,

@@ -311,7 +311,7 @@ pub fn load(codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Arr
 }
 
 #[ruda]
-fn load_grouped(codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Array<i32>,
+pub fn load_grouped(codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Array<i32>,
     row:usize,col:usize,#[comptime] width:usize,#[comptime] group:usize,
     #[comptime] parameter_groups:usize,#[comptime] format:u32,#[comptime] indexed:bool)->f32 {
     let b=bits(format); let stride=(width*b+7)/8;

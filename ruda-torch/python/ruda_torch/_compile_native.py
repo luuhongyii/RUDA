@@ -175,7 +175,8 @@ def _internal_alias(node, seen=None):
             if not _internal_alias(user,seen.copy()):return False
         elif user.target not in _TARGETS:
             from ._compile_operations import operation
-            if operation(user) is None:return False
+            from ._compile_collectives import definition as collective_definition
+            if operation(user) is None and collective_definition(user) is None:return False
     return True
 
 
@@ -622,8 +623,11 @@ def partition(gm, state, phase, options):
     all_nodes = list(gm.graph.nodes)
     calls = [n for n in all_nodes if n.op in ('call_function', 'call_method', 'call_module')]
     from ._compile_operations import OperationRegion,operation,tuple_metadata,host_metadata_nodes
+    from ._compile_collectives import make_region as collective_region,definition as collective_definition
     from ._compile_shapes import shape_guard
     operations={n:OperationRegion(n,state,phase,options) for n in calls if options.native!='off' and operation(n) is not None}
+    collectives={n:collective_region(n,state,phase,options) for n in calls if options.native!='off' and collective_definition(n) is not None}
+    operations.update(collectives)
     candidates = {n for n in calls if n not in operations and _lower(n) is not None}
     host_metadata=host_metadata_nodes(gm).intersection(calls) | {n for n in calls if shape_guard(n)}
     metadata = {n for n in calls if _native_metadata(n) or tuple_metadata(n,operations)} | host_metadata
@@ -665,7 +669,9 @@ def partition(gm, state, phase, options):
         'native_regions': len(regions)+len(operations),
         'device_dispatch_ops': [str(n.target) for n in calls if n not in covered and n not in metadata],
         'operators': [{'node': n.name, 'target': str(n.target),
-                       'execution': 'guarded-native-operation-graph' if n in operations else
+                       'execution': 'explicit-host-rng-metadata' if n in collectives and collective_definition(n)[0]=='ruda::attention_rng_state' else
+                                    'native-collective-program' if n in collectives else
+                                    'guarded-native-operation-graph' if n in operations else
                                     'guarded-native-region' if n in covered else
                                     'explicit-host-metadata' if n in host_metadata else
                                     'native-storage-metadata' if n in metadata else 'device-dispatch'}

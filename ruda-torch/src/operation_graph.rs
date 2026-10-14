@@ -29,7 +29,64 @@ fn grid(n:usize)->RudaCount {RudaCount::Static(u32::try_from(n.div_ceil(128)).ex
 fn same(a:&View,b:&View) {assert_eq!(a.shape,b.shape);assert_eq!(a.dtype,b.dtype);}
 
 fn validate(kind:u32,vs:&[View],ints:&[i64],floats:&[f32]) {
-    assert!(kind<=26);
+    assert!(kind<=44);
+    if matches!(kind,43|44) {assert!(floats.is_empty());indexed_experts::float8_block::validate(vs,ints,kind==44);return;}
+    if matches!(kind,41|42) {assert!(floats.is_empty());indexed_experts::float8::validate(vs,ints,kind==41);return;}
+    if kind==40 {assert!(floats.is_empty());indexed_experts::quantized::validate(vs,ints);return;}
+    if kind==39 {assert!(floats.is_empty());indexed_experts::validate_activity(vs,ints);return;}
+    if kind==38 {assert!(floats.is_empty());assert_eq!(ints.len(),4);indexed_experts::validate(vs,true,ints);return;}
+    if kind==37 {
+        assert_eq!(floats.len(),1);dense_attention::validate_dropout(vs,ints,floats[0]);return;
+    }
+    if matches!(kind,35|36) {
+        assert_eq!(ints.len(),5);validate(kind-35,vs,&ints[..3],floats);
+        let q=&vs[0];let h=q.shape[1] as i64;
+        assert!(ints[3]>=h && ints[4]>=0 && ints[4]<=ints[3]-h);
+        (q.shape[0] as i64).checked_mul(ints[3]).and_then(|n|n.checked_mul(q.shape[2] as i64))
+            .and_then(|n|n.checked_mul(vs[1].shape[2] as i64)).expect("global attention RNG index overflow");
+        return;
+    }
+    if matches!(kind,33|34) {
+        assert!(floats.is_empty());float8_shard::validate(vs,kind==34,ints);return;
+    }
+    if matches!(kind,31|32) {
+        assert!(floats.is_empty());indexed_experts::validate(vs,kind==32,ints);return;
+    }
+    if kind==30 {
+        assert_eq!((vs.len(),ints.len(),floats.len()),(8,3,3));assert!(ints[0]>0);flag(ints[1]);flag(ints[2]);
+        assert!(floats.iter().all(|&n|n.is_finite() && n>0.0));
+        for v in vs {packed(v);}
+        for i in [0,1,2] {assert_eq!(vs[i].dtype,0);same(&vs[i],&vs[i+4]);}
+        assert_eq!(vs[0].shape,vec![3]);assert_eq!(vs[2].shape,vec![3,3]);
+        assert_eq!(vs[1].shape.len(),3);assert_eq!(vs[1].shape[0],3);assert_eq!(vs[1].shape[2],2);assert!(vs[1].shape[1]>0);
+        assert_eq!(vs[3].dtype,4);assert!(vs[3].shape.is_empty());same(&vs[3],&vs[7]);return;
+    }
+    if kind==29 {
+        assert_eq!((vs.len(),ints.len(),floats.len()),(6,1,0));assert!(matches!(ints[0],12|13));
+        for v in vs {packed(v);}
+        assert!(vs[0].dtype<=2);assert_eq!(vs[3].dtype,ints[0] as u32);assert_eq!(vs[3].shape,vs[0].shape);
+        for i in [1,2,4,5] {assert_eq!(vs[i].dtype,0);}
+        assert!(vs[1].shape.is_empty());same(&vs[1],&vs[4]);
+        assert_eq!(vs[2].shape,vec![3]);same(&vs[2],&vs[5]);return;
+    }
+    if kind>=27 {
+        assert!(floats.is_empty());
+        assert_eq!((vs.len(),ints.len()),if kind==27 {(3,5)} else {(5,4)});
+        for v in vs {packed(v);assert!(v.shape.iter().all(|&d|d<=u32::MAX as usize));}
+        assert!(ints.iter().all(|&i|i>=0 && i<=u32::MAX as i64));
+        if kind==27 {
+            assert!(vs[0].dtype<=2 && matches!(ints[0],12|13));
+            assert_eq!(vs[0].shape.len(),2);assert_eq!(vs[0].shape,vs[1].shape);assert_eq!(vs[1].dtype,ints[0] as u32);
+            let (rows,cols)=(ints[1] as usize,ints[2] as usize);
+            assert!(rows>0 && cols>0 && cols%32==0 && rows.checked_mul(cols).is_some_and(|n|n<=u32::MAX as usize-32));
+            assert!(ints[3]<=16);flag(ints[4]);
+            assert_eq!(vs[2].dtype,0);assert_eq!(vs[2].shape,vec![vs[0].shape[0].div_ceil(rows),vs[0].shape[1].div_ceil(cols)]);
+        } else {
+            assert!(matches!(vs[0].dtype,12|13) && matches!(vs[1].dtype,12|13));
+            assert!(ints[0]>0 && ints[1]>0 && ints[2]>0 && ints[2]%32==0 && ints[3]<=2);
+        }
+        return;
+    }
     if kind==26 {operation_sort::validate(vs,ints,floats);return;}
     if kind==25 {operation_scatter::validate(vs,ints,floats);return;}
     if kind>=23 {
@@ -151,20 +208,27 @@ fn validate(kind:u32,vs:&[View],ints:&[i64],floats:&[f32]) {
 }
 
 fn attention(c:&ComputeClient<CudaRuntime>,vs:&[View],scratch:&[View],kind:u32,ints:&[i64],floats:&[f32],seed:u64,counter:u64)->PreparedKernel<CudaRuntime> {
+    if kind==37 {return dense_attention::prepare_dropout(c,vs,ints,floats[0],seed,counter);}
+    let kind=if matches!(kind,35|36) {kind-35} else {kind};
     let ts:Vec<_>=vs.iter().map(|v|tensor(c,v)).collect();let q=&vs[0];
     let rows=vs[5].shape[0];let blocks=RudaCount::Static(rows as u32,1,1);let dim=RudaDim::new_1d(32);
     if kind<=1 {
         let (h,l,d)=(q.shape[1],q.shape[2],q.shape[3]);let (kh,s,dv)=(vs[1].shape[1],vs[1].shape[2],vs[2].shape[3]);
-        counter.checked_add((rows*s).div_ceil(4) as u64).expect("attention RNG counter overflow");
+        let (global_heads,head_start)=if ints.len()==5 {(ints[3],ints[4])}else {(h as i64,0)};
+        let scores=(q.shape[0] as i64).checked_mul(global_heads).and_then(|n|n.checked_mul(l as i64))
+            .and_then(|n|n.checked_mul(s as i64)).expect("global attention RNG index overflow");
+        counter.checked_add((scores as u64).div_ceil(4)).expect("attention RNG counter overflow");
         unsafe {if kind==0 {dense::forward::prepare::<CudaRuntime>(c,blocks,dim,
             ts[0].clone().into_array_arg(),ts[1].clone().into_array_arg(),ts[2].clone().into_array_arg(),ts[3].clone().into_tensor_arg(),
             ts[4].clone().into_array_arg(),ts[5].clone().into_array_arg(),h as u32,kh as u32,l as u32,s as u32,floats[0],floats[1],
-            seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,d,dv,32,ints[1]!=0,ints[0] as u32,floats[1]!=0.0,ts[0].dtype.into())}
+            seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,global_heads,head_start,
+            d,dv,32,ints[1]!=0,ints[0] as u32,floats[1]!=0.0,ts[0].dtype.into())}
         else {dense::backward::prepare::<CudaRuntime>(c,blocks,dim,
             ts[0].clone().into_array_arg(),ts[1].clone().into_array_arg(),ts[2].clone().into_array_arg(),ts[3].clone().into_tensor_arg(),
             ts[4].clone().into_array_arg(),ts[5].clone().into_array_arg(),ts[6].clone().into_array_arg(),tensor(c,&scratch[0]).into_array_arg(),
             tensor(c,&scratch[1]).into_array_arg(),ts[9].clone().into_array_arg(),h as u32,kh as u32,l as u32,s as u32,floats[0],floats[1],
-            seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,d,dv,32,ints[1]!=0,ints[0] as u32,floats[1]!=0.0,ints[2]!=0,ts[0].dtype.into())}}
+            seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,global_heads,head_start,
+            d,dv,32,ints[1]!=0,ints[0] as u32,floats[1]!=0.0,ints[2]!=0,ts[0].dtype.into())}}
     } else {
         let (h,d,kh,dv)=(q.shape[1],q.shape[2],vs[1].shape[1],vs[2].shape[2]);let docs=vs[3].shape[0] as u32;
         unsafe {if kind==2 {varlen::forward::prepare::<CudaRuntime>(c,blocks,dim,
@@ -180,6 +244,7 @@ fn attention(c:&ComputeClient<CudaRuntime>,vs:&[View],scratch:&[View],kind:u32,i
 }
 
 fn prepare(c:&ComputeClient<CudaRuntime>,vs:&[View],scratch:&[View],kind:u32,ints:&[i64],floats:&[f32])->(Vec<PreparedKernel<CudaRuntime>>,Option<usize>) {
+    let kind=if matches!(kind,35|36) {kind-35} else {kind};
     let mut nodes=Vec::new();let mut update=None;
     if kind<=3 {
         if kind%2==1 {
@@ -226,6 +291,9 @@ fn prepare(c:&ComputeClient<CudaRuntime>,vs:&[View],scratch:&[View],kind:u32,int
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_operation_graph_api_version()->u32 {1}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_delayed_float8_graph_api_version()->u32 {1}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_sequence_graph_api_version()->u32 {1}
@@ -282,19 +350,68 @@ pub unsafe extern "C" fn ruda_torch_operation_graph(command:u32,plan:*mut *mut N
     checked(|| {
         assert!(!plan.is_null() && !result.is_null());unsafe {*result=0;}
         if command==0 {
-            assert!(unsafe{(*plan).is_null()});assert!((count<=16 || kind==16 && count<=u32::MAX as usize) && integer_count<=(if kind==19 {19}else {8}) && scalar_count<=4);
+            assert!(unsafe{(*plan).is_null()});assert!((count<=16 || matches!(kind,31|32|38) && count<=36
+                || kind==40 && count<=67 || matches!(kind,41|42) && count<=36 || matches!(kind,43|44) && count<=37
+                || kind==16 && count<=u32::MAX as usize)
+                && integer_count<=(if kind==40 {99}else if kind==19 {19}else if matches!(kind,43|44) {15}else {8}) && scalar_count<=4);
             let vs:Vec<_>=unsafe{abi::slice(descriptors,count)}.iter().map(|d|unsafe{abi::view(d)}).collect();
             let ints=unsafe{abi::slice(integers,integer_count)}.to_vec();let floats=unsafe{abi::slice(scalars,scalar_count)}.to_vec();
             validate(kind,&vs,&ints,&floats);let client=client().fixed_execution_queue();
-            let mut scratch=if matches!(kind,1|3) {vs[1..3].iter().map(|v|View::packed(client.empty(v.len.max(1).checked_mul(4).expect("attention workspace overflow")),v.shape.clone(),0)).collect()}else {Vec::new()};
-            if matches!(kind,8|9) {
+            let mut scratch=if matches!(kind,1|3|36) {vs[1..3].iter().map(|v|View::packed(client.empty(v.len.max(1).checked_mul(4).expect("attention workspace overflow")),v.shape.clone(),0)).collect()}else {Vec::new()};
+            if matches!(kind,8|9|29) {
                 for value in &vs[..if kind==8 {2} else {1}] {
                     let blocks=value.len.div_ceil(4096).max(1);
                     scratch.push(View::packed(client.empty(blocks*8),vec![blocks,2],0));
                 }
                 if kind==8 {scratch.push(View::packed(if vs[2].dtype==0 {vs[2].handle.clone()}else {client.empty(vs[2].len.checked_mul(4).expect("FP8 graph accumulator overflow"))},vs[2].shape.clone(),0));}
             }
-            let (prepared,attention_node,workspace)=if kind==26 {
+            let (prepared,attention_node,workspace)=if matches!(kind,43|44) {
+                let plan=indexed_experts::float8_block::prepare(&client,&vs,&ints,kind==44);(plan.kernels,None,plan.workspace)
+            } else if matches!(kind,41|42) {
+                let plan=if kind==41 {indexed_experts::float8::prepare_statistics(&client,&vs,&ints)}
+                    else {indexed_experts::float8::prepare_product(&client,&vs,&ints)};
+                (plan.kernels,None,plan.workspace)
+            } else if kind==40 {
+                let plan=indexed_experts::quantized::prepare(&client,&vs,&ints);(plan.kernels,None,plan.workspace)
+            } else if kind==39 {
+                (vec![indexed_experts::prepare_activity(&client,&vs,&ints)],None,Vec::new())
+            } else if kind==38 {
+                let plan=indexed_experts::prepare(&client,&vs,true,&ints);(plan.kernels,None,plan.workspace)
+            } else if kind==37 {
+                (vec![attention(&client,&vs,&scratch,kind,&ints,&floats,0,0)],Some(0),Vec::new())
+            } else if matches!(kind,35|36) {
+                let (nodes,update)=prepare(&client,&vs,&scratch,kind,&ints,&floats);(nodes,update,Vec::new())
+            } else if matches!(kind,33|34) {
+                (float8_shard::prepare(&client,&vs,kind==34,&ints),None,Vec::new())
+            } else if matches!(kind,31|32) {
+                let plan=indexed_experts::prepare(&client,&vs,kind==32,&ints);(plan.kernels,None,plan.workspace)
+            } else if kind==30 {
+                let ts:Vec<_>=vs.iter().map(|v|tensor(&client,v)).collect();
+                (vec![unsafe {float8::delayed_advance::prepare::<CudaRuntime>(&client,RudaCount::Static(3,1,1),RudaDim::new_1d(32),
+                    ts[0].clone().into_array_arg(),ts[1].clone().into_array_arg(),ts[2].clone().into_array_arg(),ts[3].clone().into_array_arg(),
+                    ts[4].clone().into_array_arg(),ts[5].clone().into_array_arg(),ts[6].clone().into_array_arg(),ts[7].clone().into_array_arg(),
+                    vs[1].shape[1] as u32,ints[0],floats[0],floats[1],floats[2],flag(ints[1]),flag(ints[2]))}],None,Vec::new())
+            } else if kind==29 {
+                let ts:Vec<_>=vs.iter().map(|v|tensor(&client,v)).collect();
+                (float8::prepare_delayed_quantize(&ts[0],&ts[1],&ts[2],&ts[3],&ts[4],&ts[5],
+                    &tensor(&client,&scratch[0]),if ints[0]==12 {18} else {19}),None,Vec::new())
+            } else if kind>=27 {
+                use ruda_kernel::quantization::float8_block as block;
+                let ts:Vec<_>=vs.iter().map(|v|tensor(&client,v)).collect();
+                let format=|dtype|if dtype==12 {18u32} else {19u32};
+                let nodes=if kind==28 {
+                    block::prepare_scaled_mm(&ts[0],&ts[1],&ts[2],&ts[3],&ts[4],ints[0] as usize,ints[1] as usize,ints[2] as usize,
+                        format(vs[0].dtype),format(vs[1].dtype),ints[3] as u32)
+                } else if vs[0].len==0 {Vec::new()} else {
+                    assert!(vs[2].len<=client.properties().hardware.max_ruda_count.0 as usize);
+                    let maximum=if ints[0]==12 {448.0f32} else {57344.0f32};
+                    vec![unsafe {block::quantize_blocks::prepare::<CudaRuntime>(&client,RudaCount::Static(vs[2].len as u32,1,1),RudaDim::new_1d(32),
+                        ts[0].clone().into_array_arg(),ts[1].clone().into_array_arg(),ts[2].clone().into_array_arg(),
+                        vs[0].shape[0] as u32,vs[0].shape[1] as u32,vs[2].shape[1] as u32,ints[1] as u32,ints[2] as u32,
+                        maximum*2.0f32.powi(-(ints[3] as i32)),format(ints[0] as u32),flag(ints[4]),ts[0].dtype.into())}]
+                };
+                (nodes,None,Vec::new())
+            } else if kind==26 {
                 let (nodes,extra)=operation_sort::prepare(&client,&vs,&ints);scratch.extend(extra);
                 (nodes,None,Vec::new())
             } else if kind==25 {

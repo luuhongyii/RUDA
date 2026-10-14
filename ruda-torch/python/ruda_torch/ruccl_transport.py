@@ -284,6 +284,7 @@ class RucclTransport:
         if self._tensor is not None:
             self._tensor.close()
             self._tensor = None
-        if self.handle.value:
-            (self.library.ruccl_ipc_destroy if self.ipc else self.library.ruccl_destroy)(self.handle)
-            self.handle = ctypes.c_void_p()
+        with self._lock:
+            if self.handle.value:
+                (self.library.ruccl_ipc_destroy if self.ipc else self.library.ruccl_destroy)(self.handle)
+                self.handle = ctypes.c_void_p()

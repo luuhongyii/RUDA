@@ -10,6 +10,11 @@ from .sequence_training import gated_delta_rule
 
 
 def _delta_forward(module, hidden_states, cache_params=None, attention_mask=None, **kwargs):
+    if hasattr(module, '_ruda_context_group'):
+        if cache_params is not None:
+            raise ValueError('context-sharded Qwen3.5 recurrence does not use a replicated decode cache')
+        from .hybrid_context_parallel import qwen35_recurrent_forward
+        return qwen35_recurrent_forward(module, hidden_states, attention_mask, kwargs)
     if hidden_states.device.type != 'ruda':
         return module._ruda_original_forward(hidden_states, cache_params=cache_params,
                                               attention_mask=attention_mask, **kwargs)

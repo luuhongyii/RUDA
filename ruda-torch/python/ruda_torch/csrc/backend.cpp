@@ -24,6 +24,8 @@
 #include <torch/csrc/utils/pybind.h> // Tensor caster without the full C++ frontend
 #include <torch/csrc/utils/python_arg_parser.h>
 #include <torch/library.h>
+#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
+#include <c10/core/DeviceGuard.h>
 #include <cstdio>
 #include <algorithm>
 #include <cstring>
@@ -234,6 +236,7 @@ struct Argument {
 #include "random.inc"
 #include "dense_attention.inc"
 #include "varlen_attention.inc"
+#include "ring_attention.inc"
 #include "float8.inc"
 #include "sorting.inc"
 
@@ -364,6 +367,7 @@ class PagedPlanBridge {
 
 #include "static_graph.inc"
 #include "operation_graph.inc"
+#include "collective_program.inc"
 
 at::Tensor empty(c10::IntArrayRef size, std::optional<c10::ScalarType> dtype,
   std::optional<c10::Layout> layout, std::optional<c10::Device> device,
@@ -614,6 +618,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   #include "vendor_bridge_bindings.inc"
   #include "dense_attention_bindings.inc"
   #include "varlen_attention_bindings.inc"
+  #include "ring_attention_bindings.inc"
+  #include "collective_program_bindings.inc"
   #include "float8_bindings.inc"
   m.attr("abi_version") = 10;
   m.def("_cuda_alias", [](const at::Tensor& tensor, int64_t device_index) {
@@ -753,6 +759,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.attr("grouped_graph_api_version") = 1;
   m.attr("scatter_graph_api_version") = 1;
   m.attr("sorting_graph_api_version") = 1;
+  m.attr("block_float8_graph_api_version") = 1;
+  m.attr("delayed_float8_graph_api_version") = 1;
   m.attr("sorting_api_version") = 1;
   m.def("initialize_sorting",[](uintptr_t address) {
     TORCH_CHECK(allocate_native && address && !sorting_native,"invalid or repeated sorting initialization");

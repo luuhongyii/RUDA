@@ -205,8 +205,8 @@ class CausalLMFinetuner(nn.Module):
             else:
                 self._checkpoint_backbone = True
 
-    def hidden(self, input_ids, attention_mask):
-        kwargs = {'input_ids': input_ids, 'attention_mask': attention_mask}
+    def hidden(self, input_ids, attention_mask, **metadata):
+        kwargs = {'input_ids': input_ids, 'attention_mask': attention_mask, **metadata}
         if hasattr(self.backbone, 'config'):
             kwargs.update(use_cache=False, return_dict=True)
         if self._checkpoint_backbone and self.training and torch.is_grad_enabled():
@@ -256,6 +256,43 @@ class PackedCausalLMFinetuner(CausalLMFinetuner):
         if tuple(hidden.shape[:-1])!=tuple(input_ids.shape):raise ValueError('packed backbone must preserve flat tokens, not return vocabulary logits')
         return chunked_lm_cross_entropy(hidden,self.head,labels,token_chunk_size=self.token_chunk_size,
                                        reduction=reduction,label_smoothing=self.label_smoothing if label_smoothing is None else label_smoothing)
+
+
+class ContextParallelFinetuner(CausalLMFinetuner):
+    """Chunked-vocabulary local token sums over an actual CP backbone.
+
+    shard_context_batch shifts targets before splitting the sequence. SFT's
+    mesh coordinator counts and reduces those disjoint targets once; no global
+    mean is divided by another token count during backward.
+    """
+    context_input = True
+
+    def __init__(self, backbone, head, group, *, group_key='context-ring',
+                 attention_name='ruda_ring', **options):
+        from .transformers_context_parallel import enable_transformers_context_parallel
+        enable_transformers_context_parallel(backbone, group, name=attention_name, group_key=group_key)
+        super().__init__(backbone, head, **options)
+        self.context_group, self.context_key = group, group_key
+
+    def forward(self, input_ids, attention_mask, position_ids, ruda_context_documents,
+                context_targets, *, reduction='mean', label_smoothing=None):
+        from .transformers_context_parallel import _reduce_loss
+        from ._expert_exchange import register_group
+        if any(value.shape != input_ids.shape for value in
+               (attention_mask, position_ids, ruda_context_documents, context_targets)):
+            raise ValueError('context token fields must share the local [batch,tokens] layout')
+        hidden = self.hidden(input_ids, attention_mask, position_ids=position_ids,
+            ruda_context_positions=position_ids, ruda_context_documents=ruda_context_documents,
+            ruda_context_valid=attention_mask)
+        loss = chunked_lm_cross_entropy(hidden, self.head, context_targets,
+            token_chunk_size=self.token_chunk_size, shift=False, reduction='sum',
+            label_smoothing=self.label_smoothing if label_smoothing is None else label_smoothing)
+        if reduction == 'sum':
+            return loss
+        if reduction != 'mean':
+            raise ValueError('context loss reduction must be sum or mean')
+        count = (context_targets != -100).sum(dtype=torch.int64).reshape(())
+        return _reduce_loss(loss.reshape(()), count, register_group(self.context_key, self.context_group))[0]
 
 
 def load_hf_nf4_model(directory, *, target_modules, device, dtype=torch.bfloat16,
@@ -321,6 +358,9 @@ class SFTTrainer:
         self.scaler, self.scheduler = scaler, scheduler
         self.replica_group = replica_group
         self.packed_input=bool(getattr(template,'packed_input',False))
+        self.context_input=bool(getattr(template,'context_input',False))
+        if self.context_input and template.context_group.world_size > 1 and replica_group is None:
+            raise ValueError('context-sharded training requires its gradient/loss coordinator')
         self.sampler=sampler
         if sampler is not None:
             from .training_data import StatefulShardSampler,TokenBudgetBatchSampler
@@ -351,6 +391,20 @@ class SFTTrainer:
     def _batch_counts(self, microbatches):
         counts = []
         for batch in microbatches:
+            if self.context_input:
+                expected = {'input_ids', 'attention_mask', 'position_ids', 'ruda_context_documents', 'context_targets'}
+                if set(batch) != expected or any(not isinstance(value, torch.Tensor) or value.device.type != 'cpu'
+                                               for value in batch.values()):
+                    raise ValueError('supply CPU context shards produced by shard_context_batch')
+                ids, mask, labels = batch['input_ids'], batch['attention_mask'], batch['context_targets']
+                if ids.ndim != 2 or any(value.shape != ids.shape for value in batch.values()):
+                    raise ValueError('context batch fields must share [batch,local_tokens]')
+                if (mask.dtype != torch.bool or labels.dtype not in (torch.int32, torch.int64)
+                        or batch['position_ids'].dtype != torch.int64 or batch['ruda_context_documents'].dtype != torch.int64
+                        or ((labels != -100) & ~mask).any()):
+                    raise ValueError('invalid context target, mask or position metadata')
+                counts.append(int((labels != -100).sum()))
+                continue
             expected={'input_ids','attention_mask','labels'}|({'position_ids','cu_seqlens','max_seqlen'} if self.packed_input else set())
             if set(batch) != expected or any(t.device.type != 'cpu' for t in batch.values() if isinstance(t,torch.Tensor)):
                 raise ValueError('supply collated CPU input_ids, attention_mask and labels')
@@ -430,6 +484,9 @@ class SFTTrainer:
                     overlap = self.replica_group.begin_gradient_overlap(global_weight=count, normalized=True,
                                                                        bucket_bytes=self.bucket_bytes)
                 overlap.finish(local_weight=local_count, missing='zero')
+            elif hasattr(self.replica_group, 'synchronize_optimizer_gradients'):
+                self.replica_group.synchronize_optimizer_gradients(self.optimizer,
+                    local_weight=local_count, normalized=True, missing='zero')
             elif hasattr(self.optimizer, 'synchronize_gradients'):
                 self.optimizer.synchronize_gradients(local_weight=local_count, normalized=True, missing='zero')
             else:
@@ -443,6 +500,8 @@ class SFTTrainer:
         else:
             self.scaler.step(self.optimizer); self.scaler.update()
         skipped = bool(getattr(self.optimizer, 'last_step_skipped', False))
+        from .float8_scaling import advance_float8_scales
+        advance_float8_scales(self.model, group=self.replica_group)
         if self.scheduler is not None and not skipped:
             self.scheduler.step()
         self.optimizer.zero_grad(set_to_none=True)
@@ -548,7 +607,10 @@ class SFTTrainer:
 
     def _loss_options(self):
         template = getattr(self.model, '_template', self.model)
-        return {'label_smoothing': template.label_smoothing}
+        options = {'label_smoothing': template.label_smoothing}
+        if self.context_input:
+            options['targets'] = 'pre_shifted_context_shards'
+        return options
 
     def _capture_training_state(self):
         return finetune_state_dict(self.model, self.optimizer, base_id=self.base_id,

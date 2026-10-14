@@ -50,6 +50,7 @@ def model_shard_layout(model):
     from .parallel_training import ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding
     from .parallel_adapters import _ParallelNF4,_ParallelLoRA,nf4_layout
     from .packed_parallel import _ParallelPacked,packed_layout
+    from .expert_parallel import ExpertParallelMLP
     layout = {}
     for path, module in model.named_modules(remove_duplicate=False):
         prefix = path+'.' if path else ''
@@ -69,6 +70,16 @@ def model_shard_layout(model):
                     layout[prefix+key]['aliases'].append(prefix+name)
                 else:
                     layout[prefix+key]=spec
+        elif isinstance(module, ExpertParallelMLP):
+            for name in ('gate_up_proj', 'down_proj'):
+                shape = ([module.num_experts, 2 * module.intermediate_size, module.hidden_size]
+                         if name == 'gate_up_proj' else [module.num_experts, module.hidden_size, module.intermediate_size])
+                layout[prefix+name] = {'name': prefix+name, 'aliases': [], 'shape': shape,
+                                      'axis': 0, 'partition': 'expert'}
+                if getattr(module, 'tensor_group', None) is not None:
+                    layout[prefix+name]['expert_tensor_axis'] = 1 if name == 'gate_up_proj' else 2
+                    if name == 'gate_up_proj':
+                        layout[prefix+name]['transform'] = 'expert-gate-up'
         elif isinstance(module,_ParallelLoRA):
             for name,shape,axis in (('lora_A',[module.rank,module.in_features],1 if module.axis==1 else None),
                                     ('lora_B',[module.out_features,module.rank],0 if module.axis==0 else None)):
@@ -82,10 +93,16 @@ def model_shard_layout(model):
         elif isinstance(module, (ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding)):
             axis = 1 if isinstance(module, RowParallelLinear) else 0
             shape = list(module.weight.shape)
-            shape[axis] *= module.group.world_size
+            replicas = getattr(module, 'replicas', 1)
+            shape[axis] *= module.group.world_size // replicas
             layout[prefix+'weight'] = {'name': prefix+'weight', 'aliases': [], 'shape': shape, 'axis': axis}
             if isinstance(module, ColumnParallelLinear) and module.bias is not None:
                 layout[prefix+'bias'] = {'name': prefix+'bias', 'aliases': [], 'shape': [module.out_features], 'axis': 0}
+        replicas = getattr(module, 'replicas', 1)
+        if replicas > 1:
+            for name, spec in layout.items():
+                if name.startswith(prefix) and spec.get('axis') == 0 and not spec.get('replicated'):
+                    spec['tp_replicas'] = replicas
     return layout
 
 
@@ -107,7 +124,9 @@ def _optimizer_description(model, optimizer, layout):
         for parameter,shard in optimizer.entries:
             name=names[id(shard)]
             spec=layout.get(name)
-            if spec is not None and 'mesh' in spec:
+            if spec is not None and 'model_mesh' in spec:
+                optimizer_layout[name] = dict(spec, data_flat=True)
+            elif spec is not None and 'mesh' in spec:
                 optimizer_layout[name]=dict(spec,transform='zero2-tp-flat',local_shape=list(parameter.shape))
             elif any('mesh' in entry for entry in layout.values()):
                 mesh=next(entry['mesh'] for entry in layout.values() if 'mesh' in entry)
@@ -141,6 +160,7 @@ class DistributedCheckpoint:
         self.group, self.directory = group, Path(directory)
 
     def save(self, model, optimizer, *, step, application_state=None, scheduler=None, scaler=None):
+        from .float8_parallel import recipe_contract
         layout = _checkpoint_layout(model,self.group)
         self.group.validate_training_options((step, layout))
         if type(step) is not int or step < 0:
@@ -153,6 +173,7 @@ class DistributedCheckpoint:
         try:
             folder.mkdir(parents=True, exist_ok=True)
             state = {'version': 1, 'step': step, 'rank': self.group.rank, 'world_size': self.group.world_size,
+                     'float8_recipe': recipe_contract(model),
                      'model': model.state_dict(), 'layout': layout,
                      'optimizer': _optimizer_description(model, optimizer, layout),
                      'application': application_state,
@@ -210,6 +231,8 @@ class DistributedCheckpoint:
         state, error = None, None
         try:
             state = torch.load(folder/manifest['files'][self.group.rank], map_location='cpu', weights_only=True)
+            from .float8_parallel import validate_recipe_contract
+            validate_recipe_contract(model, state.get('float8_recipe'))
             if (state['step'], state['rank'], state['world_size'], state['layout']) != (
                     manifest['step'], self.group.rank, self.group.world_size, _checkpoint_layout(model,self.group)):
                 raise ValueError('rank checkpoint topology or layout differs')
@@ -266,6 +289,8 @@ class DistributedCheckpoint:
         ranks = [torch.load(folder/name, map_location='cpu', weights_only=True) for name in manifest['files']]
         first = ranks[0]
         for rank, state in enumerate(ranks):
+            if state.get('float8_recipe') != first.get('float8_recipe'):
+                raise ValueError('rank FP8 recipes differ')
             if (state['version'], state['rank'], state['world_size'], state['step'], state['layout']) != (
                     1, rank, manifest['world_size'], manifest['step'], first['layout']):
                 raise ValueError('rank checkpoint identities differ')
@@ -293,8 +318,8 @@ class DistributedCheckpoint:
             fields = {}
             for key, value in values[0].items():
                 shape = None if spec is None else spec['shape']
-                is_parameter_state = isinstance(value, torch.Tensor) and shape is not None and (
-                    spec.get('transform')=='zero2-tp-flat' and value.ndim==1 or
+                is_parameter_state = isinstance(value, torch.Tensor) and shape is not None and key != 'step' and (
+                    (spec.get('transform')=='zero2-tp-flat' or spec.get('data_flat')) and value.ndim==1 or
                     local_parameter is not None and value.shape == local_parameter.shape or
                     spec.get('axis') is None and value.ndim == 1 and value.numel() == math.ceil(math.prod(shape)/len(ranks)))
                 fields[key] = _join([entry[key] for entry in values], spec if is_parameter_state else None)
@@ -302,6 +327,7 @@ class DistributedCheckpoint:
         groups = [dict(group, params=[base['layout'].get(name, {}).get('name', name) for name in group['params']])
                   for group in base['groups']]
         return {'version': 1, 'step': first['step'], 'model': model,
+                'float8_recipe': first.get('float8_recipe'),
                 'optimizer': dict(base, groups=groups, states=states, layout={}),
                 'rank_states': [{'application': state['application'], 'torch_rng': state['torch_rng'],
                                  'cuda_rng': state.get('cuda_rng'),'ruda_rng':state.get('ruda_rng')} for state in ranks],
@@ -313,6 +339,8 @@ class DistributedCheckpoint:
         reshard_application(old_rank_states, new_rank, new_world) returns the
         application state and must explicitly restore any run-specific RNG.
         """
+        from .float8_parallel import validate_recipe_contract
+        validate_recipe_contract(model, state.get('float8_recipe'))
         layout = _checkpoint_layout(model,self.group)
         local = {}
         for name, target in model.state_dict().items():
@@ -334,9 +362,23 @@ class DistributedCheckpoint:
 
 
 def _join(values, spec):
+    if spec is not None and 'model_mesh' in spec:
+        from .model_parallel_checkpoint import join_model_mesh_field
+        return join_model_mesh_field(values, spec)
     if spec is not None and 'mesh' in spec:
         from .hybrid_parallel import join_mesh_field
         return join_mesh_field(values,spec)
+    if spec is not None and spec.get('tp_replicas', 1) > 1:
+        replicas = spec['tp_replicas']
+        if len(values) % replicas:
+            raise ValueError('checkpoint TP replicas do not divide the tensor ranks')
+        unique = []
+        for start in range(0, len(values), replicas):
+            copies = values[start:start+replicas]
+            if any(not _equal(copies[0], value) for value in copies[1:]):
+                raise ValueError('KV head replica checkpoint fields differ: ' + spec['name'])
+            unique.append(copies[0])
+        return _join(unique, {key: value for key, value in spec.items() if key != 'tp_replicas'})
     if spec is not None and spec.get('transform','').startswith('packed-'):
         from .packed_parallel import join_packed_field
         return join_packed_field(values,spec)
@@ -354,9 +396,18 @@ def _join(values, spec):
 
 
 def _slice(value, spec, rank, world):
+    if spec is not None and 'model_mesh' in spec:
+        from .model_parallel_checkpoint import slice_model_mesh_field
+        return slice_model_mesh_field(value, spec, rank, world)
     if spec is not None and 'mesh' in spec:
         from .hybrid_parallel import slice_mesh_field
         return slice_mesh_field(value,spec,rank,world)
+    if spec is not None and spec.get('tp_replicas', 1) > 1:
+        replicas = spec['tp_replicas']
+        if world % replicas:
+            raise ValueError('target TP replicas do not divide the tensor ranks')
+        return _slice(value, {key: item for key, item in spec.items() if key != 'tp_replicas'},
+                      rank // replicas, world // replicas)
     if spec is not None and spec.get('transform','').startswith('packed-'):
         from .packed_parallel import slice_packed_field
         return slice_packed_field(value,spec,rank,world)
@@ -365,6 +416,9 @@ def _slice(value, spec, rank, world):
         return slice_nf4_field(value,spec,rank,world)
     if spec is None or spec.get('replicated'):
         return value
+    if spec.get('partition') == 'expert':
+        count = value.shape[0]
+        return value[count * rank // world:count * (rank + 1) // world].contiguous()
     if spec['axis'] is None:
         size = math.ceil(math.prod(spec['shape'])/world)
         result = value.new_zeros(size)
@@ -405,7 +459,7 @@ def _restore_optimizer(model, optimizer, description, layout, group, *, consolid
             fields = {}
             spec = specs.get(name)
             for key, value in entry.items():
-                if consolidated and spec is not None and (not spec.get('replicated') or 'fsdp_shape' in spec or spec.get('transform')=='zero2-tp-flat') and isinstance(value, torch.Tensor) and tuple(value.shape) == tuple(spec['shape']):
+                if consolidated and spec is not None and (not spec.get('replicated') or 'fsdp_shape' in spec or spec.get('data_flat') or spec.get('transform')=='zero2-tp-flat') and isinstance(value, torch.Tensor) and tuple(value.shape) == tuple(spec['shape']) and key != 'step':
                     value = _slice(value, spec, group.rank, group.world_size)
                 fields[key] = value
             states[identity] = fields

@@ -194,13 +194,15 @@ class ShardedDataTensorParallelGroup(DataTensorParallelGroup):
         total=self.total_weight(local_weight)
         self.validate_training_options((normalized,missing))
         self.sharded_data.synchronize_gradients(local_weight=local_weight,normalized=normalized,missing=missing)
+        from .sequence_parallel import synchronize_sequence_gradients
+        synchronize_sequence_gradients(self.model.parameters(), self.tensor)
         self._complete_logical_gradients(list(self.model.parameters()))
         return total
 
     def replication_factors(self,parameters):
         data,_,tensor=self.mesh.shape
         return {id(p):(1 if id(p) in self.sharded_ids else data)*
-                (1 if getattr(p,'_ruda_tp_sharded',False) else tensor) for p in parameters}
+                (getattr(p,'_ruda_tp_replicas',1) if getattr(p,'_ruda_tp_sharded',False) else tensor) for p in parameters}
 
     def prepare_optimizer_step(self,optimizer,*,loss_scale=1.):
         from .sharded_training import Zero2Optimizer

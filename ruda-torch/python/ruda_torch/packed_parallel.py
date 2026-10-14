@@ -101,9 +101,11 @@ def shard_packed_linear(layer, group, *, axis):
 class _ParallelPacked(nn.Module):
     axis = None
 
-    def _setup(self, layer, group):
-        self.local = shard_packed_linear(layer, group, axis=self.axis)
+    def _setup(self, layer, group, replicas=1):
+        from ._tp_replicas import shard_coordinates
+        self.local = shard_packed_linear(layer, shard_coordinates(group, replicas), axis=self.axis)
         self.group = group
+        self.replicas = replicas
         self.in_features, self.out_features = layer.in_features, layer.out_features
         self.format, self.group_size, self.strategy = layer.format, layer.group_size, layer.strategy
         self.parameter_groups = layer.scales.shape[1]
@@ -123,16 +125,17 @@ class _ParallelPacked(nn.Module):
 class ColumnParallelPackedLinear(_ParallelPacked):
     axis = 0
 
-    def __init__(self, layer, group, *, gather_output=True):
+    def __init__(self, layer, group, *, gather_output=True, replicas=1):
         super().__init__()
-        self._setup(layer, group)
+        self._setup(layer, group, replicas)
         self.gather_output = bool(gather_output)
         self.local_out_features = self.local.out_features
         self.train(layer.training)
 
     def forward(self, value):
-        output = self.local(copy_to_tensor_parallel(value, self.group))
-        return gather_from_tensor_parallel(output, self.group) if self.gather_output else output
+        from ._tp_replicas import column_input, column_output
+        output = self.local(column_input(self, value))
+        return column_output(output, self.group, self.replicas, self.gather_output)
 
 
 class RowParallelPackedLinear(_ParallelPacked):
@@ -148,7 +151,8 @@ class RowParallelPackedLinear(_ParallelPacked):
 
     def forward(self, value):
         value = value if self.input_is_parallel else scatter_to_tensor_parallel(value, self.group)
-        output = reduce_from_tensor_parallel(self.local(value), self.group)
+        from ._tp_replicas import row_output
+        output = row_output(self, self.local(value))
         return output if self.bias is None else output + self.bias.to(output.dtype)
 
 
@@ -193,6 +197,9 @@ def packed_layout(module, prefix):
         result[prefix + 'local.bias'] = {'name': prefix + 'bias', 'aliases': [], 'shape': [module.out_features], 'axis': 0}
     if module.axis == 1 and module.bias is not None:
         result[prefix + 'bias'] = {'name': prefix + 'bias', 'aliases': [], 'shape': [module.out_features], 'replicated': True}
+    if getattr(module, 'replicas', 1) > 1:
+        for spec in result.values():
+            if not spec.get('replicated'):spec['tp_replicas'] = module.replicas
     return result
 
 
@@ -304,10 +311,8 @@ def full_packed_state(module):
             pieces = list(gathered.chunk(module.group.world_size, 0))
         else:
             pieces = [value.detach().cpu().clone() for _ in range(module.group.world_size)]
-        if 'transform' in spec:
-            value = join_packed_field(pieces, spec)
-        else:
-            value = _same(pieces) if spec.get('replicated') else torch.cat(pieces, spec['axis'])
+        from .distributed_checkpoint import _join
+        value = _join(pieces, spec)
         result[spec['name']] = value
     result['_extra_state'] = _state(module.get_extra_state(), (module.out_features, module.in_features))
     return result
@@ -319,10 +324,9 @@ def local_packed_state(module, state, prefix):
         if spec['name'] not in state:
             continue
         value = state[spec['name']]
-        if 'transform' in spec:
-            value = slice_packed_field(value, spec, module.group.rank, module.group.world_size)
-        elif not spec.get('replicated'):
+        if 'transform' not in spec and not spec.get('replicated'):
             _expect_tensor(value, spec['shape'], module.local.bias.dtype)
-            value = value.chunk(module.group.world_size, spec['axis'])[module.group.rank].contiguous()
+        from .distributed_checkpoint import _slice
+        value = _slice(value, spec, module.group.rank, module.group.world_size)
         result[key] = value
     return result

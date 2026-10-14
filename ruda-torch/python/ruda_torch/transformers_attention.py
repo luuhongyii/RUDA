@@ -46,10 +46,12 @@ def register_transformers_attention(name='ruda_block',*,query_block_size=128,key
             if type(requested_window) is not int or requested_window<=0 or not causal:
                 raise ValueError('unmasked sliding attention requires a positive causal window')
             window=(requested_window-1,0)
+        from ._parallel_rng import module_partition
+        partition=module_partition(module,query.shape[1]) if query.device.type=='ruda' else {}
         output=block_scaled_dot_product_attention(query,key,value,attn_mask=attention_mask,
             dropout_p=dropout,is_causal=causal,scale=scaling,enable_gqa=query.shape[1]!=key.shape[1],
             query_block_size=query_block_size,key_block_size=key_block_size,
-            causal_offset=key.shape[-2]-query.shape[-2],window_size=window,softcap=kwargs.get('softcap'))
+            causal_offset=key.shape[-2]-query.shape[-2],window_size=window,softcap=kwargs.get('softcap'),**partition)
         return output.transpose(1,2).contiguous(),None
 
     # An unregistered mask backend would make HF discard padding/packed masks.

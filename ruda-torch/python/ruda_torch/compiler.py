@@ -91,6 +91,10 @@ class _State:
                 'dynamo_graphs', 'forward_calls', 'inference_calls', 'backward_calls',
                 'eager_calls', 'native_builds', 'native_replays', 'native_cache_hits',
                 'native_cache_evictions', 'native_nodes_executed', 'region_reference_runs',
+                'native_collective_program_calls',
+                'native_ring_program_calls',
+                'host_attention_rng_reservations',
+                'optional_expert_gradient_boundaries',
                 'dynamic_specializations', 'dynamic_cache_hits', 'dynamic_cache_evictions',
                 'dynamic_specialization_failures', 'dynamic_reference_runs',
                 'execution_errors')}
@@ -180,6 +184,10 @@ class RudaBackend:
 
     def _compiler(self, phase, gm, example_inputs):
         self._state.check_open()
+        optional_gradients=None
+        if phase=='backward':
+            from ._compile_optional_gradients import extract
+            gm,optional_gradients=extract(gm)
         # example_inputs can contain FakeTensors and symbolic sizes. Never run a
         # native kernel, read tensor data or allocate native workspace here.
         from ._compile_operations import host_metadata_nodes
@@ -196,7 +204,10 @@ class RudaBackend:
                        allowed_host={id(value) for i,value in enumerate(example_inputs) if i in host_indices})
         _check_module(gm, self.options.device_type,allowed_host=attributes)
         from ._compile_shapes import needs_specialization
-        if self.options.native!='off' and self.options.device_type=='ruda' and needs_specialization(gm):
+        from ._compile_dynamic import has_dynamic_collective, stage_dynamic_collectives
+        if self.options.native!='off' and self.options.device_type=='ruda' and has_dynamic_collective(gm):
+            lowered=stage_dynamic_collectives(gm,self._state,phase,self.options)
+        elif self.options.native!='off' and self.options.device_type=='ruda' and needs_specialization(gm):
             from ._compile_dynamic import DynamicGraph
             lowered=DynamicGraph(gm,self._state,phase,self.options)
         else:
@@ -209,7 +220,11 @@ class RudaBackend:
                            allowed_host={id(value) for i,value in enumerate(args) if i in host_indices})
             self._state.add(f'{phase}_calls')
             try:
-                return lowered(*args)
+                result=lowered(*args)
+                if optional_gradients is not None:
+                    result=optional_gradients.finish(result)
+                    self._state.add('optional_expert_gradient_boundaries')
+                return result
             except NativeCoverageError:
                 self._state.add('execution_errors')
                 raise

@@ -253,6 +253,7 @@ class UcxTransport:
                         reduction_kernel_launches=self._reductions, wall_seconds=self._seconds)
 
     def close(self):
-        if self.handle.value:
-            self.library.ruccl_ucx_destroy(self.handle)
-            self.handle = ctypes.c_void_p()
+        with self._lock:
+            if self.handle.value:
+                self.library.ruccl_ucx_destroy(self.handle)
+                self.handle = ctypes.c_void_p()

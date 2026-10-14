@@ -65,6 +65,8 @@ impl<E: ruda_tensor_tch::TchElement> FeedForward<ruda_tensor_tch::LibTorch<E>> {
 pub(super) trait Weights<B: Backend> {
     fn checkpoint(&mut self) -> &mut Checkpoint;
     fn device(&self) -> B::Device;
+    fn fp8_block(&self) -> Option<[usize; 2]>;
+    fn fp8_projection(&mut self, weight: TensorData, scales: TensorData) -> Result<Projection<B>, HuggingFaceLoadError>;
     fn mlp_projection(&mut self, prefix: &str, input: usize, output: usize, part: Option<(usize, Range<usize>)>)
         -> Result<Projection<B>, HuggingFaceLoadError>;
 }
@@ -94,7 +96,23 @@ pub(super) fn load<B: Backend>(weights: &mut impl Weights<B>, prefix: &str, conf
     let mut experts = Vec::with_capacity(moe.num_experts);
     let gate_up_name = format!("{prefix}.experts.gate_up_proj");
     let down_name = format!("{prefix}.experts.down_proj");
-    if weights.checkpoint().tensors.contains_key(&gate_up_name) || weights.checkpoint().tensors.contains_key(&down_name) {
+    let stacked_fp8 = weights.checkpoint().tensors.get(&gate_up_name).is_some_and(|tensor| tensor.dtype == DType::U8);
+    if stacked_fp8 {
+        let width = moe.moe_intermediate_size;
+        let block = weights.fp8_block().ok_or_else(|| HuggingFaceLoadError("stacked FP8 experts require block configuration".into()))?;
+        let mut gate_up = super::fp8_loading::Stacked::open(weights.checkpoint(), &gate_up_name, [moe.num_experts, 2 * width, hidden], block)?;
+        let mut down = super::fp8_loading::Stacked::open(weights.checkpoint(), &down_name, [moe.num_experts, hidden, width], block)?;
+        let range = interval(width, shard).unwrap_or(0..width);
+        for expert in 0..moe.num_experts {
+            let (matrix, scales) = gate_up.matrix(expert, range.clone(), 0..hidden)?;
+            let gate = weights.fp8_projection(matrix, scales)?;
+            let (matrix, scales) = gate_up.matrix(expert, width + range.start..width + range.end, 0..hidden)?;
+            let up = weights.fp8_projection(matrix, scales)?;
+            let (matrix, scales) = down.matrix(expert, 0..hidden, range.clone())?;
+            let down = weights.fp8_projection(matrix, scales)?;
+            experts.push(Mlp { gate, up, down });
+        }
+    } else if weights.checkpoint().tensors.contains_key(&gate_up_name) || weights.checkpoint().tensors.contains_key(&down_name) {
         let width = moe.moe_intermediate_size;
         let mut gate_up: StackedMatrixSource = weights.checkpoint().stacked_matrix_source(&gate_up_name, [moe.num_experts, 2 * width, hidden])?;
         let mut down: StackedMatrixSource = weights.checkpoint().stacked_matrix_source(&down_name, [moe.num_experts, hidden, width])?;

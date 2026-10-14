@@ -29,9 +29,12 @@ impl<R,F,I,BT> DeepseekV2Model<DeviceBackend<R,F,I,BT>>
 where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement,I:IntElement,BT:BoolElement {
     fn forward_batch_logits(&self,batch:&ScheduledBatch,cache:&mut DenseBatchCache<DeviceBackend<R,F,I,BT>>,device:&R::Device,last_only:bool)
         ->Result<Tensor<DeviceBackend<R,F,I,BT>,3>,GenerationError> {
+        self.forward_batch_features(batch,cache,device,last_only).map(|(logits,_)|logits)
+    }
+    pub(super) fn forward_batch_features(&self,batch:&ScheduledBatch,cache:&mut DenseBatchCache<DeviceBackend<R,F,I,BT>>,device:&R::Device,last_only:bool)
+        ->Result<(Tensor<DeviceBackend<R,F,I,BT>,3>,Tensor<DeviceBackend<R,F,I,BT>,3>),GenerationError> {
         cache.validate(batch,self.batch_limits(),self.layers.len())?;
         let c=&self.config;let (b,s)=(batch.batch_size(),batch.next_n());
-        let (h,rank,rd,nd,vd)=(c.num_attention_heads,c.kv_lora_rank,c.qk_rope_head_dim,c.qk_nope_head_dim,c.v_head_dim);
         let ids=Tensor::<DeviceBackend<R,F,I,BT>,1,Int>::from_data(TensorData::new(batch.token_matrix(),[b*s]),device);
         let mut hidden=self.embedding.clone().select(0,ids).reshape([b,s,c.hidden_size]);
         let dtype=hidden.dtype();let mut cosines=Vec::with_capacity(b);let mut sines=Vec::with_capacity(b);let mut scale=0.0;
@@ -41,6 +44,19 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
         }
         let cos=Tensor::cat(cosines,0);let sin=Tensor::cat(sines,0);
         for (index,layer) in self.layers.iter().enumerate() {
+            hidden=self.layer_batch_forward(layer,index,hidden,batch,cache,cos.clone(),sin.clone(),scale)?;
+        }
+        let hidden=norm(hidden,&self.norm,c.rms_norm_eps);
+        let selected=if last_only {hidden.clone().slice([0..b,s-1..s,0..c.hidden_size])} else {hidden.clone()};
+        let logits=self.head.forward(selected);
+        cache.commit(batch);Ok((logits,hidden))
+    }
+    pub(super) fn layer_batch_forward(&self,layer:&Layer<DeviceBackend<R,F,I,BT>>,index:usize,
+        mut hidden:Tensor<DeviceBackend<R,F,I,BT>,3>,batch:&ScheduledBatch,cache:&mut DenseBatchCache<DeviceBackend<R,F,I,BT>>,
+        cos:Tensor<DeviceBackend<R,F,I,BT>,4>,sin:Tensor<DeviceBackend<R,F,I,BT>,4>,scale:f64)
+        ->Result<Tensor<DeviceBackend<R,F,I,BT>,3>,GenerationError> {
+            let c=&self.config;let (b,s)=(batch.batch_size(),batch.next_n());
+            let (h,rank,rd,nd,vd)=(c.num_attention_heads,c.kv_lora_rank,c.qk_rope_head_dim,c.qk_nope_head_dim,c.v_head_dim);
             let input=norm(hidden.clone(),&layer.input_norm,c.rms_norm_eps);
             let q_input=match &layer.q_a {Some((projection,weight))=>norm(projection.forward(input.clone()),weight,1e-6),None=>input.clone()};
             let query=layer.q.forward(q_input).reshape([b,s,h,nd+rd]).swap_dims(1,2);
@@ -70,9 +86,6 @@ where R:DeviceRuntime,R::Server:ComputeServer,R::Device:DeviceOps,F:FloatElement
             hidden=hidden+layer.o.forward(context.swap_dims(1,2).reshape([b,s,h*vd]));
             let input=norm(hidden.clone(),&layer.post_norm,c.rms_norm_eps).reshape([1,b*s,c.hidden_size]);
             hidden=hidden+self.feed_forward(layer,input)?.reshape([b,s,c.hidden_size]);
-        }
-        if last_only {hidden=hidden.slice([0..b,s-1..s,0..c.hidden_size]);}
-        let logits=self.head.forward(norm(hidden,&self.norm,c.rms_norm_eps));
-        cache.commit(batch);Ok(logits)
+            Ok(hidden)
     }
 }

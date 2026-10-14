@@ -4,22 +4,63 @@ use ruda_tensor::api::{backend::Backend,DType,Int,Tensor,TensorData};
 use ruda_tensor::{DeviceOps,TensorPrimitive};
 use ruda_tensor_device::{BoolElement,DeviceBackend,DeviceRuntime,FloatElement,IntElement};
 use std::collections::{BTreeMap,BTreeSet};
+use crate::llama::rope::{RotaryHistory,RotaryDelta,RotaryState};
 
 #[derive(Clone)]
 struct Arena<B:Backend> {key:Tensor<B,4>,value:Tensor<B,4>}
 
 #[derive(Clone)]
-pub struct DenseBatchDelta<B:Backend> {start:usize,count:usize,layers:Vec<(Tensor<B,4>,Tensor<B,4>)>}
+pub struct DenseBatchDelta<B:Backend> {start:usize,count:usize,layers:Vec<(Tensor<B,4>,Tensor<B,4>)>,rotary:Vec<RotaryDelta>}
 
 #[derive(Clone)]
-pub struct DenseBatchPrefix<B:Backend> {position:usize,layers:Vec<(Tensor<B,4>,Tensor<B,4>)>}
+pub struct DenseBatchPrefix<B:Backend> {position:usize,layers:Vec<(Tensor<B,4>,Tensor<B,4>)>,rotary:Vec<RotaryHistory>}
+#[derive(serde::Serialize,serde::Deserialize)]
+struct DensePrefixRecord {
+    version:u32,position:usize,layers:Vec<(TensorData,TensorData)>,
+    #[serde(default,skip_serializing_if="Vec::is_empty")]
+    rotary:Vec<RotaryHistory>,
+}
 impl<B:Backend> DenseBatchPrefix<B> {
+    pub(crate) fn export_tensors(&self,shard:crate::PrefixShard)->Result<crate::PrefixTensors<B>,GenerationError> {
+        let mut tensors=crate::PrefixTensors::new(if self.rotary.is_empty() {"dense-kv-v1"}else{"dense-kv-v2"},self.position);
+        for (index,history) in self.rotary.iter().enumerate() {history.export(&mut tensors,index)?;}
+        for (index,(key,value)) in self.layers.iter().enumerate() {
+            let heads=shard.heads(shard.kv_heads,key.dims()[1])?;
+            tensors.push(format!("{index}/key"),key.clone(),heads.clone())?;
+            tensors.push(format!("{index}/value"),value.clone(),heads)?;
+        }
+        Ok(tensors)
+    }
+    pub(crate) fn import_tensors(tensors:&crate::PrefixTensors<B>,geometry:&[(usize,usize,usize,DType)],limit:usize,
+        shard:crate::PrefixShard,device:&B::Device)->Result<Self,GenerationError> {
+        let mut rotary=Vec::new();
+        if tensors.scalars()==0 {tensors.validate("dense-kv-v1",limit,2*geometry.len())?;}
+        else {
+            tensors.validate("dense-kv-v2",limit,2*geometry.len())?;
+            let mut fields=0;
+            for index in 0..geometry.len() {
+                let (history,count)=RotaryHistory::import(tensors,index)?;rotary.push(history);fields+=count;
+            }
+            if fields!=tensors.scalars() {return Err(GenerationError("unexpected dense prefix rotary metadata".into()));}
+        }
+        if tensors.children()!=0 {return Err(GenerationError("dense prefix has unexpected child state".into()));}
+        let mut layers=Vec::with_capacity(geometry.len());
+        for (index,&(heads,kd,vd,dtype)) in geometry.iter().enumerate() {
+            let span=shard.heads(shard.kv_heads,heads)?;
+            let key=tensors.tensor(&format!("{index}/key"),[1,heads,tensors.position,kd],dtype,span.clone(),device)?;
+            let value=tensors.tensor(&format!("{index}/value"),[1,heads,tensors.position,vd],dtype,span,device)?;
+            layers.push((key,value));
+        }
+        Ok(Self{position:tensors.position,layers,rotary})
+    }
     pub(crate) fn position(&self)->usize {self.position}
     pub(crate) fn bytes(&self)->usize {
         self.layers.iter().flat_map(|(k,v)|[k,v]).fold(0usize,|bytes,t|bytes.saturating_add(t.dims().iter().product::<usize>().saturating_mul(t.dtype().size())))
     }
     pub(crate) fn validate(&self,geometry:&[(usize,usize,usize,DType)],limit:usize)->Result<(),GenerationError> {
         if self.position==0 || self.position>limit || self.layers.len()!=geometry.len() {return Err(GenerationError("dense prefix layer count/position differs".into()));}
+        if !self.rotary.is_empty() && self.rotary.len()!=geometry.len() {return Err(GenerationError("dense prefix rotary layer count differs".into()));}
+        for history in &self.rotary {history.validate(self.position)?;}
         for ((key,value),&(heads,kd,vd,dtype)) in self.layers.iter().zip(geometry) {
             if key.dims()!=[1,heads,self.position,kd] || value.dims()!=[1,heads,self.position,vd]
                 || key.dtype()!=dtype || value.dtype()!=dtype || key.device()!=value.device() {
@@ -31,11 +72,14 @@ impl<B:Backend> DenseBatchPrefix<B> {
     pub(crate) fn encode(&self)->Result<Vec<u8>,GenerationError> {
         let layers=self.layers.iter().map(|(k,v)|Ok((k.clone().try_into_data().map_err(|e|GenerationError(e.to_string()))?,
             v.clone().try_into_data().map_err(|e|GenerationError(e.to_string()))?))).collect::<Result<Vec<_>,GenerationError>>()?;
-        rmp_serde::to_vec(&(1u32,self.position,layers)).map_err(|e|GenerationError(e.to_string()))
+        let record=DensePrefixRecord {version:if self.rotary.is_empty() {1}else{2},position:self.position,layers,rotary:self.rotary.clone()};
+        rmp_serde::to_vec(&record).map_err(|e|GenerationError(e.to_string()))
     }
     pub(crate) fn decode(bytes:&[u8],geometry:&[(usize,usize,usize,DType)],limit:usize,device:&B::Device)->Result<Self,GenerationError> {
-        let (version,position,layers):(u32,usize,Vec<(TensorData,TensorData)>)=rmp_serde::from_slice(bytes).map_err(|e|GenerationError(e.to_string()))?;
-        if version!=1 || position==0 || position>limit || layers.len()!=geometry.len() {return Err(GenerationError("invalid dense prefix record geometry".into()));}
+        let DensePrefixRecord {version,position,layers,rotary}=rmp_serde::from_slice(bytes).map_err(|e|GenerationError(e.to_string()))?;
+        if !matches!(version,1|2) || (version==1 && !rotary.is_empty()) || (version==2 && rotary.len()!=geometry.len())
+            || position==0 || position>limit || layers.len()!=geometry.len() {return Err(GenerationError("invalid dense prefix record geometry".into()));}
+        for history in &rotary {history.validate(position)?;}
         for ((key,value),&(heads,kd,vd,dtype)) in layers.iter().zip(geometry) {
             for (tensor,width) in [(key,kd),(value,vd)] {
                 if tensor.shape.as_slice()!=[1,heads,position,width] || tensor.dtype!=dtype
@@ -46,7 +90,7 @@ impl<B:Backend> DenseBatchPrefix<B> {
         }
         let layers=layers.into_iter().map(|(key,value)|{let dtype=key.dtype;
             (Tensor::from_data(key,(device,dtype)),Tensor::from_data(value,(device,dtype)))}).collect();
-        Ok(Self{position,layers})
+        Ok(Self{position,layers,rotary})
     }
 }
 
@@ -58,10 +102,22 @@ pub struct DenseBatchCache<B:Backend> {
     arenas:Vec<Option<Arena<B>>>,
     positions:BTreeMap<RequestId,usize>,
     tables:BTreeMap<RequestId,Vec<KvPageId>>,
+    rotary:BTreeMap<RequestId,Vec<RotaryHistory>>,
 }
 impl<B:Backend> DenseBatchCache<B> {
     pub(crate) fn new(config:PagedKvCacheConfig,layers:usize)->Self {
-        Self{config,arenas:(0..layers).map(|_|None).collect(),positions:BTreeMap::new(),tables:BTreeMap::new()}
+        Self{config,arenas:(0..layers).map(|_|None).collect(),positions:BTreeMap::new(),tables:BTreeMap::new(),rotary:BTreeMap::new()}
+    }
+    pub(crate) fn rotary_state(&self,id:RequestId,layer:usize,position:usize,template:&RotaryState)->Result<RotaryState,GenerationError> {
+        let empty=RotaryHistory::default();
+        let history=self.rotary.get(&id).and_then(|layers|layers.get(layer)).unwrap_or(&empty);
+        template.for_cache(history,position)
+    }
+    pub(crate) fn commit_rotary(&mut self,id:RequestId,layer:usize,end:usize,state:&RotaryState)->Result<(),GenerationError> {
+        if state.cached_length()==0 {return Ok(());}
+        let count=self.arenas.len();
+        let histories=self.rotary.entry(id).or_insert_with(||vec![RotaryHistory::default();count]);
+        histories.get_mut(layer).ok_or_else(||GenerationError("invalid dense rotary layer".into()))?.commit(state,end)
     }
     pub fn resident_requests(&self)->usize {self.positions.len()}
     pub fn sequence_length(&self,id:RequestId)->Option<usize> {self.positions.get(&id).copied()}
@@ -69,6 +125,11 @@ impl<B:Backend> DenseBatchCache<B> {
     pub(crate) fn truncate(&mut self,id:RequestId,position:usize)->Result<(),GenerationError> {
         let old=self.positions.get_mut(&id).ok_or_else(||GenerationError("unknown dense truncate request".into()))?;
         if position>*old {return Err(GenerationError("dense cache cannot truncate forward".into()));}
+        if let Some(histories)=self.rotary.get_mut(&id) {
+            let mut restored=histories.clone();
+            for history in &mut restored {history.validate(*old)?;history.truncate(position)?;}
+            *histories=restored;
+        }
         *old=position;self.tables.get_mut(&id).unwrap().truncate(position.div_ceil(self.config.block_size));Ok(())
     }
     pub(crate) fn capture_delta(&self,id:RequestId,start:usize,end:usize)->Result<DenseBatchDelta<B>,GenerationError> {
@@ -86,7 +147,9 @@ impl<B:Backend> DenseBatchCache<B> {
             };
             layers.push((extract(arena.key.clone()),extract(arena.value.clone())));
         }
-        Ok(DenseBatchDelta{start,count:end-start,layers})
+        let rotary=self.rotary.get(&id).map(|histories|histories.iter().map(|h|h.delta(start,end)).collect::<Result<Vec<_>,_>>())
+            .transpose()?.unwrap_or_default();
+        Ok(DenseBatchDelta{start,count:end-start,layers,rotary})
     }
     pub(crate) fn append_delta(&mut self,id:RequestId,table:&[KvPageId],delta:&DenseBatchDelta<B>,offset:usize)
         ->Result<(),GenerationError> {
@@ -99,6 +162,13 @@ impl<B:Backend> DenseBatchCache<B> {
             return Err(GenerationError("invalid dense lookahead delta destination".into()));
         }
         let page=table[position/block].0 as usize;let slot=position%block;
+        let mut rotary=self.rotary.get(&id).cloned().unwrap_or_else(||vec![RotaryHistory::default();self.arenas.len()]);
+        if delta.rotary.is_empty() {
+            if rotary.iter().any(RotaryHistory::is_dynamic) {return Err(GenerationError("dense delta is missing dynamic rotary history".into()));}
+        } else {
+            if delta.rotary.len()!=rotary.len() {return Err(GenerationError("dense delta rotary layer count differs".into()));}
+            for (history,delta) in rotary.iter_mut().zip(&delta.rotary) {delta.append(history,position,offset)?;}
+        }
         for (index,(key,value)) in delta.layers.iter().enumerate() {
             let arena=self.arenas[index].as_ref().ok_or_else(||GenerationError("missing dense delta destination arena".into()))?;
             let [_,h,n,kd]=key.dims();let vd=value.dims()[3];
@@ -113,6 +183,7 @@ impl<B:Backend> DenseBatchCache<B> {
             let value=arena.value.slice_assign([page..page+1,slot..slot+1,0..h,0..vd],value.clone().slice([0..1,0..h,offset..offset+1,0..vd]).swap_dims(1,2));
             self.arenas[index]=Some(Arena{key,value});
         }
+        if rotary.iter().any(RotaryHistory::is_dynamic) {self.rotary.insert(id,rotary);}
         self.positions.insert(id,position+1);self.tables.insert(id,table.to_vec());Ok(())
     }
     pub(crate) fn validate(&self,batch:&ScheduledBatch,limits:CausalModelLimits,layers:usize)->Result<(),GenerationError> {
@@ -152,6 +223,7 @@ impl<B:Backend> DenseBatchCache<B> {
     pub(crate) fn retain(&mut self,scheduler:&ContinuousBatchScheduler) {
         self.positions.retain(|id,_|scheduler.kv_cache().contains_sequence(*id));
         self.tables.retain(|id,_|self.positions.contains_key(id));
+        self.rotary.retain(|id,_|self.positions.contains_key(id));
     }
     pub(crate) fn capture_prefix(&self,id:RequestId)->Result<DenseBatchPrefix<B>,GenerationError> {
         let position=*self.positions.get(&id).ok_or_else(||GenerationError("unknown dense prefix request".into()))?;
@@ -168,7 +240,9 @@ impl<B:Backend> DenseBatchCache<B> {
             };
             layers.push((extract(arena.key.clone()),extract(arena.value.clone())));
         }
-        Ok(DenseBatchPrefix{position,layers})
+        let rotary=self.rotary.get(&id).cloned().unwrap_or_default();
+        for history in &rotary {history.validate(position)?;}
+        Ok(DenseBatchPrefix{position,layers,rotary})
     }
     pub(crate) fn restore_prefix(&mut self,id:RequestId,table:&[KvPageId],prefix:&DenseBatchPrefix<B>)->Result<(),GenerationError> {
         if self.positions.contains_key(&id) || prefix.layers.len()!=self.arenas.len() || prefix.position>self.config.max_sequence_length
@@ -177,6 +251,8 @@ impl<B:Backend> DenseBatchCache<B> {
             || self.tables.values().any(|old|old.iter().any(|p|table.contains(p))) {
             return Err(GenerationError("invalid dense prefix destination pages".into()));
         }
+        if !prefix.rotary.is_empty() && prefix.rotary.len()!=self.arenas.len() {return Err(GenerationError("dense prefix rotary layer count differs".into()));}
+        for history in &prefix.rotary {history.validate(prefix.position)?;}
         for (index,(key,value)) in prefix.layers.iter().enumerate() {
             let [_,heads,_,kd]=key.dims();let vd=value.dims()[3];let block=self.config.block_size;
             let old=self.arenas[index].take().unwrap_or_else(||Arena {
@@ -193,6 +269,7 @@ impl<B:Backend> DenseBatchCache<B> {
             }
             self.arenas[index]=Some(Arena{key:target_key,value:target_value});
         }
+        if !prefix.rotary.is_empty() {self.rotary.insert(id,prefix.rotary.clone());}
         self.positions.insert(id,prefix.position);self.tables.insert(id,table.to_vec());Ok(())
     }
 }
@@ -256,6 +333,14 @@ macro_rules! dense_prefix_model {
         where R:ruda_tensor_device::DeviceRuntime,R::Server:ruda::runtime::server::ComputeServer,R::Device:ruda_tensor::DeviceOps,
             F:ruda_tensor_device::FloatElement,I:ruda_tensor_device::IntElement,BT:ruda_tensor_device::BoolElement {
             type Prefix=crate::DenseBatchPrefix<ruda_tensor_device::DeviceBackend<R,F,I,BT>>;
+            fn prefix_tensor_transfer(&self)->bool {true}
+            fn export_prefix_tensors(&self,prefix:&Self::Prefix,shard:crate::PrefixShard)
+                ->Result<crate::PrefixTensors<ruda_tensor_device::DeviceBackend<R,F,I,BT>>,crate::GenerationError> {prefix.export_tensors(shard)}
+            fn import_prefix_tensors(&self,tensors:&crate::PrefixTensors<ruda_tensor_device::DeviceBackend<R,F,I,BT>>,shard:crate::PrefixShard,device:&R::Device)
+                ->Result<Self::Prefix,crate::GenerationError> {
+                let $this=self;let geometry=$geometry;
+                crate::DenseBatchPrefix::import_tensors(tensors,&geometry,self.batch_limits().max_sequence_length,shard,device)
+            }
             fn capture_prefix(&self,cache:&Self::Cache,id:crate::RequestId)->Result<Self::Prefix,crate::GenerationError> {cache.capture_prefix(id)}
             fn prefix_position(&self,prefix:&Self::Prefix)->usize {prefix.position()}
             fn prefix_bytes(&self,prefix:&Self::Prefix)->usize {prefix.bytes()}

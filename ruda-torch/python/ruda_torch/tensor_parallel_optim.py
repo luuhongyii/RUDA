@@ -43,7 +43,7 @@ class TensorParallelMuon(torch.optim.Optimizer):
             raise ValueError('provide nonempty unique model parameters')
         names={id(p):name for name,p in model.named_parameters()}
         layout=model_shard_layout(model)
-        self._layouts={}
+        self._layouts,self._replicas={},{}
         schema=[]
         for options in self.param_groups:
             _validate_group(options)
@@ -59,9 +59,11 @@ class TensorParallelMuon(torch.optim.Optimizer):
                 if axis is None and getattr(parameter,'_ruda_tp_sharded',False):
                     raise ValueError('TP parameter lacks its full logical matrix layout')
                 expected=list(parameter.shape)
-                if axis is not None:expected[axis]*=group.world_size
+                replicas=spec.get('tp_replicas',1)
+                if axis is not None:expected[axis]*=group.world_size//replicas
                 if expected!=list(spec['shape']):raise ValueError('parameter shard/global shape differs')
                 self._layouts[id(parameter)]=(name,tuple(spec['shape']),axis)
+                self._replicas[id(parameter)]=replicas
                 schema.append((name,tuple(spec['shape']),axis,str(parameter.dtype)))
         _overlap_check(parameters)
         self.owners=list(owners) if owners is not None else [index%group.world_size for index in range(len(parameters))]
@@ -77,13 +79,21 @@ class TensorParallelMuon(torch.optim.Optimizer):
     def _local(self,value,axis):
         return value.detach().clone() if axis is None else value.chunk(self.transport.world_size,dim=axis)[self.transport.rank].contiguous().clone()
 
-    def _full_parameter(self,value,parameter,axis):return self._full(value,axis)
+    def _full_parameter(self,value,parameter,axis):
+        full=self._full(value,axis)
+        replicas=self._replicas[id(parameter)]
+        if axis is None or replicas==1:return full
+        return torch.cat(full.chunk(self.transport.world_size,dim=axis)[::replicas],dim=axis)
 
-    def _local_parameter(self,value,parameter,axis):return self._local(value,axis)
+    def _local_parameter(self,value,parameter,axis):
+        if axis is None:return value.detach().clone()
+        replicas=self._replicas[id(parameter)]
+        return value.chunk(self.transport.world_size//replicas,dim=axis)[self.transport.rank//replicas].contiguous().clone()
 
     def _gradient_norm(self,parameters,scale):
         return distributed_grad_norm(parameters,self.transport,loss_scale=scale,
-            replicated_ids={id(p) for p in parameters if self._layouts[id(p)][2] is None})
+            replication_factors={id(p):self.transport.world_size if self._layouts[id(p)][2] is None
+                                 else self._replicas[id(p)] for p in parameters})
 
     @torch.no_grad()
     def step(self,closure=None,*,loss_scale=1.):
@@ -251,7 +261,7 @@ class MeshShardedMuon(TensorParallelMuon):
         parameters=[p for options in self.param_groups for p in options['params']]
         if not parameters or len({id(p) for p in parameters})!=len(parameters):
             raise ValueError('provide nonempty unique mesh model parameters')
-        self._layouts,self._geometry={},{}
+        self._layouts,self._geometry,self._replicas={},{},{}
         schema=[]
         for options in self.param_groups:
             _validate_group(options)
@@ -262,7 +272,8 @@ class MeshShardedMuon(TensorParallelMuon):
                 axis=None if spec.get('replicated') else spec.get('axis')
                 local_shape=tuple(spec['fsdp_shape']) if 'fsdp_shape' in spec else tuple(parameter.shape)
                 expected=list(local_shape)
-                if axis is not None:expected[axis]*=mesh.tensor.world_size
+                replicas=spec.get('tp_replicas',1)
+                if axis is not None:expected[axis]*=mesh.tensor.world_size//replicas
                 if tuple(expected)!=shape:raise ValueError('FSDP/TP physical and logical matrix shapes differ')
                 if not parameter.requires_grad or not parameter.numel() or not parameter.is_contiguous() or parameter.device.type!=mesh.device_type:
                     raise ValueError('provide contiguous trainable mesh-device parameters')
@@ -272,6 +283,7 @@ class MeshShardedMuon(TensorParallelMuon):
                 if options['use_muon'] and (len(shape)<2 or len(shape)>2 and not options['flatten']):
                     raise ValueError('Muon needs full matrices; select use_muon=False for vector groups')
                 self._layouts[id(parameter)]=(spec['name'],shape,axis)
+                self._replicas[id(parameter)]=replicas
                 self._geometry[id(parameter)]=(local_shape,'fsdp_shape' in spec)
                 schema.append((spec['name'],shape,axis,str(parameter.dtype),'fsdp_shape' in spec))
         _overlap_check(parameters)
@@ -285,10 +297,14 @@ class MeshShardedMuon(TensorParallelMuon):
     def _full_parameter(self,value,parameter,axis):
         shape,sharded=self._geometry[id(parameter)]
         local=self.mesh.data.all_gather(value)[:math.prod(shape)].view(shape) if sharded else value.detach().clone()
-        return local if axis is None else self.mesh.tensor.all_gather(local,axis=axis)
+        if axis is None:return local
+        full=self.mesh.tensor.all_gather(local,axis=axis)
+        replicas=self._replicas[id(parameter)]
+        return full if replicas==1 else torch.cat(full.chunk(self.mesh.tensor.world_size,dim=axis)[::replicas],dim=axis)
 
     def _local_parameter(self,value,parameter,axis):
-        local=value.detach() if axis is None else value.chunk(self.mesh.tensor.world_size,dim=axis)[self.mesh.tensor.rank]
+        replicas=self._replicas[id(parameter)]
+        local=value.detach() if axis is None else value.chunk(self.mesh.tensor.world_size//replicas,dim=axis)[self.mesh.tensor.rank//replicas]
         if not self._geometry[id(parameter)][1]:return local.contiguous().clone()
         result=local.new_zeros(parameter.shape)
         begin=self.mesh.data.rank*parameter.numel()
@@ -298,5 +314,5 @@ class MeshShardedMuon(TensorParallelMuon):
 
     def _gradient_norm(self,parameters,scale):
         factors={id(p):(1 if self._geometry[id(p)][1] else self.mesh.data.world_size)*
-            (self.mesh.tensor.world_size if self._layouts[id(p)][2] is None else 1) for p in parameters}
+            (self.mesh.tensor.world_size if self._layouts[id(p)][2] is None else self._replicas[id(p)]) for p in parameters}
         return distributed_grad_norm(parameters,self.transport,loss_scale=scale,replication_factors=factors)

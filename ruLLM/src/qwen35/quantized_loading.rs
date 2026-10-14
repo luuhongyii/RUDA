@@ -12,6 +12,7 @@ pub(super) fn configuration(raw: &serde_json::Value)
     if top.is_some() && nested.is_some() && top != nested {
         return Err(HuggingFaceLoadError("conflicting Qwen3.5 quantization configs".into()));
     }
+    if super::fp8_loading::configuration(raw)?.is_some() { return Ok(None); }
     top.or(nested).map(|value| {
         let config: AwqQuantizationConfig = serde_json::from_value(value.clone())
             .map_err(|e| HuggingFaceLoadError(format!(

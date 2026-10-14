@@ -252,8 +252,9 @@ impl<E: TchElement> Qwen35TextModel<Torch<E>> {
             ));
         }
         let mut hidden = self.embedding.forward(tokens);
+        let rotary = self.rotary_for(cache)?;
         let (cos, sin) = attention::text_rope(
-            &self.config,
+            &rotary,
             cache.position,
             sequence,
             hidden.dtype(),
@@ -272,6 +273,7 @@ impl<E: TchElement> Qwen35TextModel<Torch<E>> {
         }
         cache.position += sequence;
         cache.batch = Some(batch);
+        cache.rotary_length = rotary.cached_length();
         Ok(hidden)
     }
 

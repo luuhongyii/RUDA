@@ -3,6 +3,10 @@ use crate::{CausalModelLimits,GenerationError,SamplingGenerationConfig};
 use crate::batch_prefix::{Prefix,PrefixStore};
 use crate::prefix_cache::{PrefixCacheConfig,PrefixCacheStats};
 use ruda_tensor::api::{backend::Backend,FloatDType,Tensor};
+#[path="active_swap.rs"]
+mod active_swap;
+pub use active_swap::{ActiveKvSwapConfig,ActiveKvSwapStats};
+use active_swap::{ActiveKvSwap,SwapRestore};
 
 /// Complete request-local state, including recurrent/convolution state where
 /// applicable. Snapshot/restore must never reuse another live request's pages.
@@ -14,6 +18,13 @@ pub trait PrefixBatchModel<B:Backend>:DeviceBatchModel<B> {
     fn restore_prefix(&self,cache:&mut Self::Cache,id:RequestId,table:&[KvPageId],prefix:&Self::Prefix)->Result<(),GenerationError>;
     fn encode_prefix(&self,prefix:&Self::Prefix,model_id:&str)->Result<Vec<u8>,GenerationError>;
     fn decode_prefix(&self,bytes:&[u8],model_id:&str,device:&B::Device)->Result<Self::Prefix,GenerationError>;
+    fn prefix_tensor_transfer(&self)->bool {false}
+    fn export_prefix_tensors(&self,_prefix:&Self::Prefix,_shard:crate::PrefixShard)->Result<crate::PrefixTensors<B>,GenerationError> {
+        Err(GenerationError("model does not expose semantic prefix tensors".into()))
+    }
+    fn import_prefix_tensors(&self,_tensors:&crate::PrefixTensors<B>,_shard:crate::PrefixShard,_device:&B::Device)->Result<Self::Prefix,GenerationError> {
+        Err(GenerationError("model does not import semantic prefix tensors".into()))
+    }
 }
 
 pub struct PrefixBatchStep {
@@ -28,8 +39,12 @@ pub struct PrefixBatchExecutor<'a,B:Backend,M:PrefixBatchModel<B>> {
     ready:BTreeMap<RequestId,Tensor<B,3>>,
     failed:VecDeque<(RequestId,String)>,
     handoff:BTreeSet<RequestId>,
+    swap:ActiveKvSwap,
+    swap_restore:Option<SwapRestore<B,M>>,
     #[cfg(feature="serving")]
     remote:Option<crate::disaggregated::RemoteBatchNetwork>,
+    #[cfg(feature="gpu-kv")]
+    remote_gpu:Option<crate::disaggregated::GpuRemoteNetwork<B>>,
 }
 impl<'a,B:Backend,M:PrefixBatchModel<B>> PrefixBatchExecutor<'a,B,M> {
     pub fn new(model:&'a M,device:B::Device,config:ContinuousBatchConfig,kv:PagedKvCacheConfig,
@@ -39,11 +54,15 @@ impl<'a,B:Backend,M:PrefixBatchModel<B>> PrefixBatchExecutor<'a,B,M> {
         let mut inner=DeviceBatchExecutor::new(model,device,config,kv,options)?;
         inner.scheduler.prefill_chunk_tokens=store.enabled().then_some(chunk);
         Ok(Self{inner,prefixes:store,pending:BTreeMap::new(),ready:BTreeMap::new(),failed:VecDeque::new(),handoff:BTreeSet::new(),
-            #[cfg(feature="serving")] remote:None})
+            swap:ActiveKvSwap::default(),swap_restore:None,
+            #[cfg(feature="serving")] remote:None,
+            #[cfg(feature="gpu-kv")] remote_gpu:None})
     }
     #[cfg(feature="serving")]
     pub fn set_remote_prefill(&mut self,remote:crate::disaggregated::RemotePrefill)->Result<(),ContinuousBatchError> {
-        if !self.inner.is_idle() {return Err(ContinuousBatchError("configure remote prefill before submitting requests".into()));}
+        if !self.is_idle() {return Err(ContinuousBatchError("configure remote prefill before submitting requests".into()));}
+        #[cfg(feature="gpu-kv")]
+        if self.remote_gpu.is_some() {return Err(ContinuousBatchError("GPU prefill is already configured".into()));}
         let capacity=self.inner.scheduler.options.max_pending_requests
             .ok_or_else(||ContinuousBatchError("remote prefill requires a bounded pending request queue".into()))?;
         self.remote=Some(crate::disaggregated::RemoteBatchNetwork::new(remote,self.prefixes.model_id().into(),
@@ -53,19 +72,46 @@ impl<'a,B:Backend,M:PrefixBatchModel<B>> PrefixBatchExecutor<'a,B,M> {
         }
         Ok(())
     }
+    #[cfg(feature="gpu-kv")]
+    pub fn set_remote_gpu_prefill(&mut self,remote:crate::disaggregated::RemotePrefill,devices:Vec<B::Device>,gpu:crate::disaggregated::GpuKvConfig)
+        ->Result<(),ContinuousBatchError> where B:crate::GpuPrefixBackend {
+        if !self.is_idle() || self.remote.is_some() || !self.inner.model.prefix_tensor_transfer() {
+            return Err(ContinuousBatchError("configure GPU prefill on an idle semantic-prefix model without host prefill".into()));
+        }
+        let capacity=self.inner.scheduler.options.max_pending_requests
+            .ok_or_else(||ContinuousBatchError("GPU prefill requires a bounded pending request queue".into()))?;
+        self.remote_gpu=Some(crate::disaggregated::GpuRemoteNetwork::new(remote,self.prefixes.model_id().into(),
+            self.inner.model.batch_limits(),devices,gpu,capacity).map_err(|e|ContinuousBatchError(e.to_string()))?);
+        if self.inner.scheduler.prefill_chunk_tokens.is_none() {self.inner.scheduler.prefill_chunk_tokens=Some(self.inner.scheduler.config.max_batch_tokens);}
+        Ok(())
+    }
     pub fn submit(&mut self,prompt:Vec<i32>,generation:GreedyGenerationConfig)->Result<RequestId,ContinuousBatchError> {
+        self.check_swap_queue(generation.max_new_tokens)?;
         let prefix=if generation.max_new_tokens>0 {self.lookup(&prompt)?} else {None};
         let id=self.inner.submit(prompt,generation)?;
         self.stage(id,prefix)?;
         Ok(id)
     }
     pub fn submit_sampled(&mut self,prompt:Vec<i32>,generation:SamplingGenerationConfig)->Result<RequestId,ContinuousBatchError> {
+        self.check_swap_queue(generation.max_new_tokens)?;
         let prefix=if generation.max_new_tokens>0 {self.lookup(&prompt)?} else {None};
         let id=self.inner.submit_sampled(prompt,generation)?;
         self.stage(id,prefix)?;
         Ok(id)
     }
     fn stage(&mut self,id:RequestId,prefix:Option<Prefix<B,M>>)->Result<(),ContinuousBatchError> {
+        #[cfg(feature="gpu-kv")]
+        if let Some(remote)=&mut self.remote_gpu {
+            if let Some(request)=self.inner.scheduler.pending.iter().find(|r|r.id==id) {
+                if !prefix.as_ref().is_some_and(|p|p.tokens==request.prompt_token_ids) {
+                    if let Err(e)=remote.submit(id,request.prompt_token_ids.clone()) {
+                        self.inner.cancel(id)?;return Err(ContinuousBatchError(e.to_string()));
+                    }
+                    self.inner.scheduler.deferred_prefill.insert(id);return Ok(());
+                }
+                self.handoff.insert(id);
+            }
+        }
         #[cfg(feature="serving")]
         if let Some(remote)=&mut self.remote {
             if let Some(request)=self.inner.scheduler.pending.iter().find(|r|r.id==id) {
@@ -104,10 +150,29 @@ impl<'a,B:Backend,M:PrefixBatchModel<B>> PrefixBatchExecutor<'a,B,M> {
     fn lookup(&mut self,prompt:&[i32])->Result<Option<Prefix<B,M>>,ContinuousBatchError> {
         self.prefixes.lookup(self.inner.model,prompt,&self.inner.device).map_err(|e|ContinuousBatchError(e.to_string()))
     }
+    #[cfg(feature="gpu-kv")]
+    fn poll_gpu_remote(&mut self)->Result<(),ContinuousBatchError> {
+        loop {
+            let Some((id,result))=self.remote_gpu.as_mut().and_then(|r|r.poll()) else {break;};
+            let Some(request)=self.inner.scheduler.pending.iter().find(|r|r.id==id) else {continue;};
+            let result=result.and_then(|handoff|handoff.import(self.inner.model,&request.prompt_token_ids,&self.inner.device).map_err(|e|e.to_string()));
+            match result {
+                Ok(prefix)=>{
+                    if let Err(e)=self.prefixes.insert(self.inner.model,prefix.clone(),&self.inner.device) {eprintln!("GPU prefix tier write: {e}");}
+                    self.pending.insert(id,prefix);self.handoff.insert(id);self.inner.scheduler.deferred_prefill.remove(&id);
+                },
+                Err(error)=>{self.inner.cancel(id)?;self.failed.push_back((id,error));},
+            }
+        }
+        Ok(())
+    }
     fn restore_ready(&mut self)->Result<(),ContinuousBatchError> {
         if self.inner.scheduler.in_flight.is_some() {return Err(ContinuousBatchError("batch is still in flight".into()));}
         #[cfg(feature="serving")]
         self.poll_remote()?;
+        #[cfg(feature="gpu-kv")]
+        self.poll_gpu_remote()?;
+        self.resume_swapped()?;
         self.inner.scheduler.promote_pending()?;
         let active=self.pending.keys().filter(|id|self.inner.scheduler.active.contains_key(id)).copied().collect::<Vec<_>>();
         for id in active {
@@ -142,6 +207,7 @@ impl<'a,B:Backend,M:PrefixBatchModel<B>> PrefixBatchExecutor<'a,B,M> {
     pub fn step_with_logits_processor(&mut self,mut processor:impl FnMut(RequestId,&mut [f32])->Result<(),GenerationError>)
         ->Result<Option<PrefixBatchStep>,ContinuousBatchError> {
         self.restore_ready()?;
+        if self.ready.is_empty() && self.relieve_kv_pressure()? {self.restore_ready()?;}
         if !self.ready.is_empty() {
             let ids=self.ready.keys().copied().collect::<Vec<_>>();let mut tokens=Vec::with_capacity(ids.len());
             for id in ids {
@@ -177,20 +243,29 @@ impl<'a,B:Backend,M:PrefixBatchModel<B>> PrefixBatchExecutor<'a,B,M> {
         }))
     }
     pub fn cancel(&mut self,id:RequestId)->Result<Option<CancelledGeneration>,ContinuousBatchError> {
-        let result=self.inner.cancel(id)?;self.pending.remove(&id);self.ready.remove(&id);self.handoff.remove(&id);
+        self.complete_swap_restore()?;
+        let result=match self.cancel_swapped(id) {Some(result)=>Some(result),None=>self.inner.cancel(id)?};
+        self.pending.remove(&id);self.ready.remove(&id);self.handoff.remove(&id);
         #[cfg(feature="serving")]
         if let Some(remote)=&mut self.remote {remote.cancel(id);}
+        #[cfg(feature="gpu-kv")]
+        if let Some(remote)=&mut self.remote_gpu {remote.cancel(id);}
         Ok(result)
     }
     pub fn pop_failed(&mut self)->Option<(RequestId,String)> {self.failed.pop_front()}
     pub fn waiting_for_prefill(&self)->bool {
+        #[cfg(feature="gpu-kv")]
+        if let Some(remote)=&self.remote_gpu {return remote.waiting();}
         #[cfg(feature="serving")]
         if let Some(remote)=&self.remote {return remote.waiting();}
         false
     }
     pub fn pop_finished(&mut self)->Option<FinishedGeneration> {self.inner.pop_finished()}
-    pub fn is_idle(&self)->bool {self.inner.is_idle()}
-    pub fn snapshot(&self)->ContinuousBatchSnapshot {self.inner.snapshot()}
+    pub fn is_idle(&self)->bool {self.inner.is_idle() && self.swap.is_empty() && self.swap_restore.is_none()}
+    pub fn snapshot(&self)->ContinuousBatchSnapshot {
+        let mut snapshot=self.inner.snapshot();snapshot.pending_requests+=self.swap.len();
+        snapshot.has_in_flight_batch|=self.swap_restore.is_some();snapshot
+    }
     pub fn prefix_stats(&self)->PrefixCacheStats {self.prefixes.stats()}
     pub fn cache(&self)->&M::Cache {self.inner.cache()}
 }

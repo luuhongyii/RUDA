@@ -109,7 +109,8 @@ class KimiLinearModel(KimiPreTrainedModel):
     def forward(self, input_ids=None, attention_mask=None, position_ids=None,
                 past_key_values=None, inputs_embeds=None, cache_position=None,
                 use_cache=None, output_hidden_states=None, output_attentions=None,
-                return_dict=None, cu_seqlens=None, max_seqlen=None, **kwargs):
+                return_dict=None, cu_seqlens=None, max_seqlen=None,
+                ruda_context_positions=None, ruda_context_documents=None, ruda_context_valid=None, **kwargs):
         if (input_ids is None) == (inputs_embeds is None):
             raise ValueError('supply exactly one of input_ids and inputs_embeds')
         if output_attentions or (output_attentions is None and self.config.output_attentions):
@@ -133,7 +134,26 @@ class KimiLinearModel(KimiPreTrainedModel):
         if cache_position is not None and (cache_position.ndim != 1 or cache_position.shape[0] != length):
             raise ValueError('cache_position must describe the current token interval')
         documents = None
-        if cu_seqlens is not None:
+        context_group = getattr(self, '_ruda_context_group', None)
+        if context_group is not None:
+            if past_key_values is not None or use_cache or cu_seqlens is not None:
+                raise ValueError('Kimi context shards use document metadata, not a replicated decode/packed cache')
+            if (ruda_context_positions is None or ruda_context_documents is None
+                    or ruda_context_positions.shape != (batch, length) or ruda_context_documents.shape != (batch, length)):
+                raise ValueError('Kimi context shards require local global positions and document IDs')
+            valid = ruda_context_valid
+            if attention_mask is not None:
+                mask = attention_mask.to(device=hidden.device, dtype=torch.bool)
+                valid = mask if valid is None else valid & mask
+            if valid is None:
+                valid = torch.ones((batch, length), device=hidden.device, dtype=torch.bool)
+            layout = TokenLayout(batch, length, hidden.device, valid)
+            layout.context = {'group': context_group, 'key': self._ruda_context_key,
+                              'positions': ruda_context_positions, 'documents': ruda_context_documents, 'valid': valid}
+            attention = None
+        elif any(value is not None for value in (ruda_context_positions, ruda_context_documents, ruda_context_valid)):
+            raise ValueError('enable the Kimi context process group before passing context metadata')
+        elif cu_seqlens is not None:
             from .varlen_attention import _boundaries
             if batch != 1 or attention_mask is not None or past_key_values is not None or use_cache:
                 raise ValueError('packed Kimi documents require one flat stream, no padding mask and no cache')
@@ -171,9 +191,20 @@ class KimiLinearModel(KimiPreTrainedModel):
             attention = query_indices, key_indices, cu_q, cu_k
         history = () if output_hidden_states else None
         updated = []
+        sequence_group = getattr(self, '_ruda_sequence_group', None)
+        if sequence_group is not None:
+            from .parallel_training import scatter_to_tensor_parallel
+            if use_cache or past_key_values is not None or packed_flat or length % sequence_group.world_size:
+                raise ValueError('Kimi SP uses cacheless [batch,tokens] inputs divisible by its tensor group')
+            layout.sequence_group = sequence_group
+            hidden = scatter_to_tensor_parallel(hidden, sequence_group, axis=1)
         for index, layer in enumerate(self.layers):
             if output_hidden_states:
-                history += (hidden.squeeze(0) if packed_flat else hidden,)
+                recorded = hidden
+                if sequence_group is not None:
+                    from .parallel_training import gather_from_tensor_parallel
+                    recorded = gather_from_tensor_parallel(recorded, sequence_group, axis=1)
+                history += (recorded.squeeze(0) if packed_flat else recorded,)
             state = None if past_key_values is None else past_key_values.layers[index]
             if self.gradient_checkpointing and self.training:
                 hidden, state = self._gradient_checkpointing_func(layer.__call__, hidden, layout,
@@ -183,6 +214,9 @@ class KimiLinearModel(KimiPreTrainedModel):
             if use_cache:
                 updated.append(state)
         hidden = self.norm(hidden)
+        if sequence_group is not None:
+            from .parallel_training import gather_from_tensor_parallel
+            hidden = gather_from_tensor_parallel(hidden, sequence_group, axis=1)
         if packed_flat:
             hidden = hidden.squeeze(0)
         if output_hidden_states:
@@ -227,11 +261,13 @@ class KimiLinearForCausalLM(KimiPreTrainedModel, GenerationMixin):
                 cache_position=None, logits_to_keep=0, generation_mode=False,
                 cu_seqlens=None, max_seqlen=None, **loss_kwargs):
         return_dict = self.config.use_return_dict if return_dict is None else return_dict
+        context = {name: loss_kwargs.pop(name) for name in
+                   ('ruda_context_positions', 'ruda_context_documents', 'ruda_context_valid') if name in loss_kwargs}
         result = self.model(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids,
                             past_key_values=past_key_values, inputs_embeds=inputs_embeds, use_cache=use_cache,
                             output_attentions=output_attentions, output_hidden_states=output_hidden_states,
                             return_dict=True, cache_position=cache_position, cu_seqlens=cu_seqlens,
-                            max_seqlen=max_seqlen)
+                            max_seqlen=max_seqlen, **context)
         hidden = result.last_hidden_state
         if generation_mode:
             logits_to_keep = 1
@@ -328,8 +364,16 @@ def tensor_parallelize_kimi(model, group, *, vocab_parallel=True):
             plan[base + up] = {'kind': 'column', 'gather_output': False}
             plan[base + down] = {'kind': 'row', 'input_is_parallel': True}
         if hasattr(layer, 'block_sparse_moe'):
-            for expert in range(len(layer.block_sparse_moe.experts)):
-                mlp(path + f'block_sparse_moe.experts.{expert}.', True)
+            from .expert_parallel import ExpertParallelMLP
+            if isinstance(layer.block_sparse_moe.experts, ExpertParallelMLP):
+                bank = layer.block_sparse_moe.experts
+                if bank.tensor_group is None:
+                    bank.shard_tensor_parallel(group)
+                elif bank.tensor_group.group is not group.group:
+                    raise ValueError('Kimi expert tensor shards belong to another group')
+            else:
+                for expert in range(len(layer.block_sparse_moe.experts)):
+                    mlp(path + f'block_sparse_moe.experts.{expert}.', True)
             if hasattr(layer.block_sparse_moe, 'shared_experts'):
                 mlp(path + 'block_sparse_moe.shared_experts.')
         else:
