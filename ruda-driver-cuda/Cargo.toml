@@ -38,6 +38,7 @@ default = [
     "ruda-kernel/frontend-default",
 ]
 ptx-wmma = []
+ucx-bridge = ["dep:libloading"]
 direct-ptx = ["ruda-compiler/ptx"]
 std = [
     "ruda/runtime-std",
@@ -66,6 +67,10 @@ path = "tests/compiler_backend.rs"
 
 [dependencies.bytemuck]
 version = "1.16.1"
+
+[dependencies.libloading]
+version = "=0.8.9"
+optional = true
 
 [dependencies.cudarc]
 version = "0.19.0"

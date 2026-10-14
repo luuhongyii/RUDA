@@ -6,6 +6,8 @@ mod execution;
 mod device;
 mod runtime;
 mod compiler_backend;
+#[cfg(feature = "ucx-bridge")]
+pub mod ucx_bridge;
 
 pub use device::*;
 pub use runtime::*;

@@ -21,7 +21,7 @@ structured-output = ["serving", "dep:anyhow", "dep:llguidance", "dep:toktrie", "
 libtorch = ["dep:ruda-tensor-tch", "dep:tch"]
 tensor-parallel = ["ruda-tensor/distributed", "ruda-tensor-device/distributed", "ruda-tensor-tch?/distributed"]
 expert-parallel = ["tensor-parallel"]
-gpu-kv = ["serving", "nvidia", "dep:libloading"]
+gpu-kv = ["serving", "nvidia", "ruda-driver-cuda/ucx-bridge"]
 
 [dependencies]
 ruda-driver-cann = { version = "0.1.94", path = "../ruda-driver-cann", optional = true }
@@ -59,7 +59,6 @@ toktrie_hf_tokenizers = { version = "=1.2.0", optional = true }
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 libjpeg-turbo-rs = "=0.8.0"
 tokenizers = { version = "0.22.2", default-features = false, features = ["onig"] }
-libloading = { version = "=0.8.9", optional = true }
 
 [lints]
 workspace = true
