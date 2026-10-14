@@ -83,23 +83,23 @@ fn count_rows<I:Int>(ids:&Array<I>,counts:&mut Array<u32>,start:u32,chunks:u32,#
     #[unroll]
     for i in 0u32..4u32 {
         let row=chunk*128+i*32+UNIT_POS;let mut hit=0u32;
-        if (row as usize)<ids.len() {hit=u32::cast_from(i64::cast_from(ids[row])==i64::cast_from(start)+i64::cast_from(expert));}
+        if (row as usize)<ids.len() {hit=u32::cast_from(i64::cast_from(ids[row as usize])==i64::cast_from(start)+i64::cast_from(expert));}
         count+=plane_sum(hit);
     }
-    if UNIT_POS==0 {counts[expert*chunks+chunk]=count;}
+    if UNIT_POS==0 {counts[(expert*chunks+chunk) as usize]=count;}
 }
 
 #[ruda(launch)]
 fn block_prefix(counts:&mut Array<u32>,offsets:&mut Array<u32>,chunks:u32) {
     let expert=RUDA_POS_X;let mut total=0u32;let mut block=0u32;
-    while block<chunks {let n=counts[expert*chunks+block];counts[expert*chunks+block]=total;total+=n;block+=1;}
-    offsets[expert+1]=total;
+    while block<chunks {let n=counts[(expert*chunks+block) as usize];counts[(expert*chunks+block) as usize]=total;total+=n;block+=1;}
+    offsets[(expert+1) as usize]=total;
 }
 
 #[ruda(launch)]
 fn expert_prefix(offsets:&mut Array<u32>,tiles:&mut Array<u32>) {
-    let mut expert=1u32;let mut total=0u32;let mut tile=0u32;offsets[0]=0;tiles[0]=0;
-    while (expert as usize)<offsets.len() {
+    let mut expert=1usize;let mut total=0u32;let mut tile=0u32;offsets[0]=0;tiles[0]=0;
+    while expert<offsets.len() {
         let count=offsets[expert];total+=count;tile+=count/16+u32::cast_from(count%16!=0);
         offsets[expert]=total;tiles[expert]=tile;expert+=1;
     }
@@ -108,13 +108,13 @@ fn expert_prefix(offsets:&mut Array<u32>,tiles:&mut Array<u32>) {
 #[ruda(launch)]
 fn map_rows<I:Int>(ids:&Array<I>,counts:&Array<u32>,offsets:&Array<u32>,indices:&mut Array<u32>,
     start:u32,chunks:u32,#[define(I)] _dtype:StorageType) {
-    let chunk=RUDA_POS_X;let expert=RUDA_POS_Y;let mut base=offsets[expert]+counts[expert*chunks+chunk];
+    let chunk=RUDA_POS_X;let expert=RUDA_POS_Y;let mut base=offsets[expert as usize]+counts[(expert*chunks+chunk) as usize];
     #[unroll]
     for i in 0u32..4u32 {
         let row=chunk*128+i*32+UNIT_POS;let mut hit=0u32;
-        if (row as usize)<ids.len() {hit=u32::cast_from(i64::cast_from(ids[row])==i64::cast_from(start)+i64::cast_from(expert));}
+        if (row as usize)<ids.len() {hit=u32::cast_from(i64::cast_from(ids[row as usize])==i64::cast_from(start)+i64::cast_from(expert));}
         let rank=plane_exclusive_sum(hit);let count=plane_sum(hit);
-        if hit!=0 {indices[base+rank]=row;}
+        if hit!=0 {indices[(base+rank) as usize]=row;}
         base+=count;
     }
 }
@@ -171,7 +171,7 @@ fn project<F:Float>(input:&Array<F>,weights:&Sequence<Array<F>>,indices:&Array<u
     #[unroll]
     for i in 0usize..8usize {
         let t=lane+i*32;let row=begin+t/16;let column=col+t%16;
-        if row<end && column<width {output[indices[row] as usize*width+column]=F::cast_from(result[t]);}
+        if row<end && column<width {let target=indices[row] as usize*width+column;output[target]=F::cast_from(result[t]);}
     }
 }
 
@@ -183,7 +183,7 @@ fn weight_gradient<F:Float>(input:&Array<F>,gradient:&Array<F>,indices:&Array<u3
     let mut right=SharedMemory::<F>::new_aligned(256usize,32usize);
     let mut result=SharedMemory::<f32>::new_aligned(256usize,32usize);
     let acc=cmma::Matrix::<f32>::from_value(cmma::MatrixIdent::Accumulator,16usize,16usize,16usize,cmma::MatrixLayout::Undefined,0.0);
-    let mut base=offsets[expert] as usize;let end=offsets[expert+1] as usize;
+    let mut base=offsets[expert as usize] as usize;let end=offsets[expert as usize+1] as usize;
     while base<end {
         #[unroll]
         for i in 0usize..8usize {

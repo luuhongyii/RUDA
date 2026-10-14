@@ -91,7 +91,7 @@ fn scalar<F:Float>(x:&Array<F>,codes:&Array<u8>,scales:&Array<f32>,offsets:&Arra
     #[comptime] inputs:usize,#[comptime] outputs:usize,#[comptime] group:usize,#[comptime] parameters:usize,
     #[comptime] format:u32,#[comptime] indexed:bool,#[comptime] transpose:bool,#[define(F)] _dtype:StorageType) {
     let width=comptime!(if transpose {inputs}else{outputs});let inner=comptime!(if transpose {outputs}else{inputs});
-    let begin=segments[expert] as usize;let end=segments[expert+1] as usize;let mut p=ABSOLUTE_POS as usize;
+    let begin=segments[expert as usize] as usize;let end=segments[expert as usize+1] as usize;let mut p=ABSOLUTE_POS as usize;
     while p<(end-begin)*width {
         let row=indices[begin+p/width] as usize;let col=p%width;let mut sum=0.0f32;let mut k=0usize;
         while k<inner {
@@ -111,7 +111,7 @@ fn cooperative<F:Float>(x:&Array<F>,codes:&Array<u8>,scales:&Array<f32>,offsets:
     #[comptime] format:u32,#[comptime] indexed:bool,#[comptime] transpose:bool,#[define(F)] _dtype:StorageType) {
     let width=comptime!(if transpose {inputs}else{outputs});let inner=comptime!(if transpose {outputs}else{inputs});
     let col=RUDA_POS_X as usize*16;let lane=UNIT_POS as usize;
-    let mut row_base=segments[expert] as usize+RUDA_POS_Y as usize*16;let end=segments[expert+1] as usize;
+    let mut row_base=segments[expert as usize] as usize+RUDA_POS_Y as usize*16;let end=segments[expert as usize+1] as usize;
     let mut left=SharedMemory::<F>::new_aligned(256usize,32usize);let mut right=SharedMemory::<F>::new_aligned(256usize,32usize);
     let mut result=SharedMemory::<f32>::new_aligned(256usize,32usize);
     while row_base<end {

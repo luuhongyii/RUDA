@@ -100,7 +100,7 @@ pub(crate) fn prepare_product(c:&ComputeClient<CudaRuntime>,vs:&[View],ints:&[i6
 #[ruda(launch)]
 fn partial_statistics<F:Float>(value:&Array<F>,indices:&Array<u32>,offsets:&Array<u32>,out:&mut Array<f32>,
     expert:u32,width:u32,step:u32,#[comptime] routed:bool,#[comptime] enabled:bool,#[define(F)] _dtype:StorageType) {
-    let begin=offsets[expert] as usize;let count=(offsets[expert+1]-offsets[expert]) as usize;
+    let begin=offsets[expert as usize] as usize;let count=(offsets[expert as usize+1]-offsets[expert as usize]) as usize;
     let mut length=0usize;
     if comptime!(enabled) {if count!=0 {length=if comptime!(routed) {count*width as usize}else{value.len()};}}
     let mut p=RUDA_POS_X as usize*32+UNIT_POS as usize;let mut maximum=0.0f32;let mut invalid=0.0f32;
@@ -111,7 +111,7 @@ fn partial_statistics<F:Float>(value:&Array<F>,indices:&Array<u32>,offsets:&Arra
         if length-p<=step as usize {p=length;}else {p+=step as usize;}
     }
     maximum=plane_max(maximum);invalid=plane_max(invalid);
-    if UNIT_POS==0 {out[RUDA_POS_X*2]=maximum;out[RUDA_POS_X*2+1]=invalid;}
+    if UNIT_POS==0 {out[RUDA_POS_X as usize*2]=maximum;out[RUDA_POS_X as usize*2+1]=invalid;}
 }
 
 #[ruda(launch)]
@@ -120,8 +120,8 @@ fn finish_statistics(partials:&Array<f32>,offsets:&Array<u32>,out:&mut Array<f32
     while p<partials.len()/2 {maximum=f32::max(maximum,partials[p*2]);invalid=f32::max(invalid,partials[p*2+1]);p+=32;}
     maximum=plane_max(maximum);invalid=plane_max(invalid);
     if UNIT_POS==0 {
-        let at=(expert*2+role)*3;out[at]=if invalid==0.0 {maximum}else{0.0};out[at+1]=invalid;
-        out[at+2]=if comptime!(enabled) {f32::cast_from(offsets[expert+1]>offsets[expert])}else{0.0};
+        let at=((expert*2+role)*3) as usize;out[at]=if invalid==0.0 {maximum}else{0.0};out[at+1]=invalid;
+        out[at+2]=if comptime!(enabled) {f32::cast_from(offsets[expert as usize+1]>offsets[expert as usize])}else{0.0};
     }
 }
 
@@ -143,11 +143,11 @@ pub(super) fn right<F:Float>(value:&Array<F>,indices:&Array<u32>,begin:usize,col
 fn carrier_product<L:Float,R:Float>(a:&Array<L>,b:&Array<R>,indices:&Array<u32>,offsets:&Array<u32>,scales:&Array<f32>,out:&mut Array<f32>,
     expert:u32,inner:u32,columns:u32,step:u32,#[comptime] mode:u32,#[comptime] format_a:u32,#[comptime] format_b:u32,
     #[define(L)] _left:StorageType,#[define(R)] _right:StorageType) {
-    let begin=offsets[expert] as usize;let count=(offsets[expert+1]-offsets[expert]) as usize;
+    let begin=offsets[expert as usize] as usize;let count=(offsets[expert as usize+1]-offsets[expert as usize]) as usize;
     let m=if comptime!(mode==2) {columns as usize}else{count};
     let n=if comptime!(mode==0) {columns as usize}else{inner as usize};
     let k=if comptime!(mode==2) {count}else if comptime!(mode==1) {columns as usize}else{inner as usize};
-    let sa=scales[expert*2];let sb=scales[expert*2+1];let lane=UNIT_POS as usize;let col=RUDA_POS_X as usize*16;
+    let sa=scales[expert as usize*2];let sb=scales[expert as usize*2+1];let lane=UNIT_POS as usize;let col=RUDA_POS_X as usize*16;
     let mut row=RUDA_POS_Y as usize*16;
     let mut al=SharedMemory::<f16>::new_aligned(256usize,32usize);let mut bl=SharedMemory::<f16>::new_aligned(256usize,32usize);
     let mut result=SharedMemory::<f32>::new_aligned(256usize,32usize);
@@ -180,10 +180,10 @@ fn carrier_product<L:Float,R:Float>(a:&Array<L>,b:&Array<R>,indices:&Array<u32>,
 fn native_product<L:Float,R:Float,A:Float,B:Float>(a:&Array<L>,b:&Array<R>,indices:&Array<u32>,offsets:&Array<u32>,scales:&Array<f32>,out:&mut Array<f32>,
     expert:u32,inner:u32,columns:u32,step:u32,#[comptime] mode:u32,#[comptime] format_a:u32,#[comptime] format_b:u32,
     #[define(L)] _left:StorageType,#[define(R)] _right:StorageType,#[define(A)] _a_type:StorageType,#[define(B)] _b_type:StorageType) {
-    let begin=offsets[expert] as usize;let count=(offsets[expert+1]-offsets[expert]) as usize;
+    let begin=offsets[expert as usize] as usize;let count=(offsets[expert as usize+1]-offsets[expert as usize]) as usize;
     let m=if comptime!(mode==2) {columns as usize}else{count};let n=if comptime!(mode==0) {columns as usize}else{inner as usize};
     let k=if comptime!(mode==2) {count}else if comptime!(mode==1) {columns as usize}else{inner as usize};
-    let sa=scales[expert*2];let sb=scales[expert*2+1];let lane=UNIT_POS_PLANE;let col=RUDA_POS_X as usize*8;
+    let sa=scales[expert as usize*2];let sb=scales[expert as usize*2+1];let lane=UNIT_POS_PLANE;let col=RUDA_POS_X as usize*8;
     let def=cmma::MmaDefinition::<A,B,f32>::new(16usize,8usize,32usize);
     let va=def.vector_size(cmma::MatrixIdent::A);let vb=def.vector_size(cmma::MatrixIdent::B);let vc=def.vector_size(cmma::MatrixIdent::Accumulator);
     let size!(NA)=va;let size!(NB)=vb;let size!(NC)=vc;

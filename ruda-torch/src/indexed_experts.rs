@@ -100,7 +100,7 @@ fn activity<I:Int>(ids:&Array<I>,output:&mut Array<i32>,start:u32,#[define(I)] _
         row+=32;
     }
     found=plane_max(found);
-    if lane==0 {output[expert]=found;}
+    if lane==0 {output[expert as usize]=found;}
 }
 
 #[ruda(launch)]
@@ -115,7 +115,7 @@ fn expert_ranges<I:Int>(ids:&Array<I>,output:&mut Array<u32>,start:u32,#[define(
         row+=32;
     }
     first=plane_min(first);end=plane_max(end);
-    if lane==0 {output[expert*2]=u32::cast_from(first);output[expert*2+1]=u32::cast_from(end);}
+    if lane==0 {output[expert as usize*2]=u32::cast_from(first);output[expert as usize*2+1]=u32::cast_from(end);}
 }
 
 #[ruda(launch)]
@@ -147,7 +147,7 @@ fn weight_gradient<F:Float,I:Int>(input:&Array<F>,ids:&Array<I>,gradient:&Array<
     inner:u32,columns:u32,expert:u32,local_expert:u32,#[define(F)] _dtype:StorageType,#[define(I)] _id_dtype:StorageType) {
     let p=ABSOLUTE_POS;if p>=output.len() {terminate!();}
     let column=p/inner as usize;let k=p%inner as usize;
-    let mut row=ranges[local_expert*2] as usize;let end=ranges[local_expert*2+1] as usize;let mut sum=0.0f32;
+    let mut row=ranges[local_expert as usize*2] as usize;let end=ranges[local_expert as usize*2+1] as usize;let mut sum=0.0f32;
     while row<end {
         if i64::cast_from(ids[row])==i64::cast_from(expert) {
             sum=fma(f32::cast_from(input[row*inner as usize+k]),

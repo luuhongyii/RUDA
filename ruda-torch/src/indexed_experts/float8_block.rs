@@ -139,11 +139,11 @@ fn block_info(offsets:&Array<u32>,expert:u32,global_rows:u32,global_cols:u32,
     #[comptime] rows:u32,#[comptime] cols:u32,#[comptime] dynamic:u32)->(usize,usize,usize,usize) {
     let mut previous=0u32;let mut base=0usize;
     while previous<expert {
-        let count=offsets[previous+1]-offsets[previous];
+        let count=offsets[previous as usize+1]-offsets[previous as usize];
         let r=if comptime!(dynamic==0) {count}else{global_rows};let c=if comptime!(dynamic==1) {count}else{global_cols};
         base+=(r/rows+u32::cast_from(r%rows!=0)) as usize*(c/cols+u32::cast_from(c%cols!=0)) as usize;previous+=1;
     }
-    let count=offsets[expert+1]-offsets[expert];let r=if comptime!(dynamic==0) {count}else{global_rows};
+    let count=offsets[expert as usize+1]-offsets[expert as usize];let r=if comptime!(dynamic==0) {count}else{global_rows};
     let c=if comptime!(dynamic==1) {count}else{global_cols};
     (base,r as usize,c as usize,(c/cols+u32::cast_from(c%cols!=0)) as usize)
 }
@@ -153,7 +153,7 @@ fn block_statistics<F:Float>(value:&Array<F>,indices:&Array<u32>,offsets:&Array<
     expert:u32,inner:u32,columns:u32,origin_row:u32,origin_col:u32,global_rows:u32,global_cols:u32,step:u32,
     #[comptime] block_rows:u32,#[comptime] block_cols:u32,#[comptime] dynamic:u32,#[comptime] mode:u32,
     #[comptime] operand_a:bool,#[define(F)] _dtype:StorageType) {
-    let begin=offsets[expert] as usize;let count=(offsets[expert+1]-offsets[expert]) as usize;
+    let begin=offsets[expert as usize] as usize;let count=(offsets[expert as usize+1]-offsets[expert as usize]) as usize;
     let (base,height,_,groups)=block_info(offsets,expert,global_rows,global_cols,block_rows,block_cols,dynamic);
     let row_blocks=height/block_rows as usize+usize::cast_from(height%block_rows as usize!=0);
     let total=row_blocks*groups;let mut block=RUDA_POS_X as usize;let capacity=out.len()/2;
@@ -200,7 +200,7 @@ fn carrier_product<L:Float,R:Float>(a:&Array<L>,b:&Array<R>,indices:&Array<u32>,
     expert:u32,inner:u32,columns:u32,step:u32,origin_a:u32,origin_b:u32,origin_k:u32,global_a:u32,global_b:u32,global_k:u32,
     maximum_a:f32,maximum_b:f32,#[comptime] bra:u32,#[comptime] brb:u32,#[comptime] bk:u32,#[comptime] mode:u32,
     #[comptime] format_a:u32,#[comptime] format_b:u32,#[comptime] power:bool,#[define(L)] _left:StorageType,#[define(R)] _right:StorageType) {
-    let begin=offsets[expert] as usize;let count=(offsets[expert+1]-offsets[expert]) as usize;
+    let begin=offsets[expert as usize] as usize;let count=(offsets[expert as usize+1]-offsets[expert as usize]) as usize;
     let (base_a,_,_,groups)=block_info(offsets,expert,global_a,global_k,bra,bk,comptime!(if mode==2 {1u32}else{0u32}));
     let (base_b,_,_,_)=block_info(offsets,expert,global_b,global_k,brb,bk,comptime!(if mode==2 {1u32}else{2u32}));
     let m=if comptime!(mode==2) {columns as usize}else{count};let n=if comptime!(mode==0) {columns as usize}else{inner as usize};
@@ -260,7 +260,7 @@ fn native_product<L:Float,R:Float,A:Float,B:Float>(a:&Array<L>,b:&Array<R>,indic
     maximum_a:f32,maximum_b:f32,#[comptime] bra:u32,#[comptime] brb:u32,#[comptime] bk:u32,#[comptime] mode:u32,
     #[comptime] format_a:u32,#[comptime] format_b:u32,#[comptime] power:bool,#[define(L)] _left:StorageType,#[define(R)] _right:StorageType,
     #[define(A)] _a_type:StorageType,#[define(B)] _b_type:StorageType) {
-    let begin=offsets[expert] as usize;let count=(offsets[expert+1]-offsets[expert]) as usize;
+    let begin=offsets[expert as usize] as usize;let count=(offsets[expert as usize+1]-offsets[expert as usize]) as usize;
     let (base_a,_,_,groups)=block_info(offsets,expert,global_a,global_k,bra,bk,comptime!(if mode==2 {1u32}else{0u32}));
     let (base_b,_,_,_)=block_info(offsets,expert,global_b,global_k,brb,bk,comptime!(if mode==2 {1u32}else{2u32}));
     let m=if comptime!(mode==2) {columns as usize}else{count};let n=if comptime!(mode==0) {columns as usize}else{inner as usize};
