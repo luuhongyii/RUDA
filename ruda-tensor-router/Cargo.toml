@@ -58,7 +58,7 @@ default-features = false
 
 [dependencies.ruda-test-runtime]
 path = "../ruda-test-runtime"
-version = "0.1.96"
+version = "0.1.97"
 default-features = false
 optional = true
 
