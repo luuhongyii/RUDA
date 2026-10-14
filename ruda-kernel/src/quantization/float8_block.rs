@@ -98,7 +98,7 @@ pub fn quantize_blocks<F: Float>(input: &Array<F>, encoded: &mut Array<u8>, scal
     let row_begin = RUDA_POS_X / groups * block_rows;
     let col_begin = RUDA_POS_X % groups * block_cols;
     let lane = UNIT_POS;
-    let mut amax = 0.0f32; let mut invalid = 0u32;
+    let mut amax = 0.0f32; let mut invalid: u32 = 0u32;
     let mut offset = lane;
     while offset < block_rows * block_cols {
         let row = row_begin + offset / block_cols; let col = col_begin + offset % block_cols;
@@ -144,7 +144,7 @@ pub fn shard_statistics<F: Float>(input: &Array<F>, statistics: &mut Array<f32>,
     let row_start = u32::max(row_begin, origin_row);
     let col_start = u32::max(col_begin, origin_col);
     let mut maximum = 0.0f32;
-    let mut invalid = 0u32;
+    let mut invalid: u32 = 0u32;
     if row_end > row_start && col_end > col_start {
         let width = col_end - col_start;
         let count = (row_end - row_start) * width;
