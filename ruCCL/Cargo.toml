@@ -95,7 +95,7 @@ features = [ "std",]
 
 [dependencies.ruda-tensor]
 path = "../ruda-tensor"
-version = "0.21.69"
+version = "0.21.70"
 default-features = false
 features = [ "std",]
 
