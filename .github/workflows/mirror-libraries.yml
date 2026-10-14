@@ -13,8 +13,14 @@ on:
       - 'ruTENSOR/**'
       - 'ruCCL/**'
       - 'ruLLM/**'
+      - 'ruSOLVER/**'
+      - 'ruINTEGRATE/**'
       - '.github/workflows/mirror-libraries.yml'
   workflow_dispatch:
+  workflow_run:
+    workflows: [Publish crates, RUDA Torch wheels]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -26,7 +32,7 @@ concurrency:
 jobs:
   mirror:
     if: github.repository == 'shuqi2077/RUDA' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -42,6 +48,8 @@ jobs:
           - {prefix: ruTENSOR, repository: ruTENSOR, secret: MIRROR_RUTENSOR_KEY}
           - {prefix: ruCCL, repository: ruCCL, secret: MIRROR_RUCCL_KEY}
           - {prefix: ruLLM, repository: ruLLM, secret: MIRROR_RULLM_KEY}
+          - {prefix: ruSOLVER, repository: ruSOLVER, secret: MIRROR_RUSOLVER_KEY}
+          - {prefix: ruINTEGRATE, repository: ruINTEGRATE, secret: MIRROR_RUINTEGRATE_KEY}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
