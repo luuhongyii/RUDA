@@ -98,7 +98,9 @@ jobs:
           cargo test --locked -p ruda-dataset --lib dataset::sqlite::tests
           cargo test --locked -p ruda-tensor-router --lib runner::tests::
       - name: Compile native generation continuation
-        run: cargo check --locked -p ruda-llm --lib
+        run: |
+          cargo check --locked -p ruda-llm --lib
+          cargo check --locked -p ruda-llm --features nvidia-ptx,gpu-kv,expert-parallel --lib --bin ruda-serve
       - name: Compile native FFT sparse and solver tuning
         run: |
           cargo check --locked -p ruda-fft --features tensor --lib

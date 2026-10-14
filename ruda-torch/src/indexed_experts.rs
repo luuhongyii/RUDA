@@ -93,7 +93,7 @@ pub(super) fn prepare_activity(c:&ComputeClient<CudaRuntime>,vs:&[View],ints:&[i
 
 #[ruda(launch)]
 fn activity<I:Int>(ids:&Array<I>,output:&mut Array<i32>,start:u32,#[define(I)] _id_dtype:StorageType) {
-    let expert=RUDA_POS_X;let lane=UNIT_POS;let mut row=lane;let mut found=0i32;
+    let expert=RUDA_POS_X;let lane=UNIT_POS;let mut row=lane as usize;let mut found: i32=0i32;
     while row<ids.len() {
         if i64::cast_from(ids[row])==i64::cast_from(start)+i64::cast_from(expert) {found=1;}
         if ids.len()-row<=32 {break;}
@@ -105,17 +105,17 @@ fn activity<I:Int>(ids:&Array<I>,output:&mut Array<i32>,start:u32,#[define(I)] _
 
 #[ruda(launch)]
 fn expert_ranges<I:Int>(ids:&Array<I>,output:&mut Array<u32>,start:u32,#[define(I)] _id_dtype:StorageType) {
-    let expert=RUDA_POS_X;let lane=UNIT_POS;let mut row=lane;
-    let mut first=ids.len();let mut end=0u32;
+    let expert=RUDA_POS_X;let lane=UNIT_POS;let mut row=lane as usize;
+    let mut first=ids.len();let mut end=0usize;
     while row<ids.len() {
         if i64::cast_from(ids[row])==i64::cast_from(start)+i64::cast_from(expert) {
-            first=u32::min(first,row);end=u32::max(end,row+1);
+            first=usize::min(first,row);end=usize::max(end,row+1);
         }
         if ids.len()-row<=32 {break;}
         row+=32;
     }
     first=plane_min(first);end=plane_max(end);
-    if lane==0 {output[expert*2]=first;output[expert*2+1]=end;}
+    if lane==0 {output[expert*2]=u32::cast_from(first);output[expert*2+1]=u32::cast_from(end);}
 }
 
 #[ruda(launch)]

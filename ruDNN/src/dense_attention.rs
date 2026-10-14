@@ -59,10 +59,10 @@ pub fn dropout_mask<F: Float>(output: &mut Array<F>, heads: u32, queries: u32, k
     p: f32, seed_low: u32, seed_high: u32, base_low: u32, base_high: u32, #[define(F)] _dtype: StorageType) {
     let index = ABSOLUTE_POS;
     if index < output.len() {
-        let key = index % keys;
-        let query = (index / keys) % queries;
-        let head = (index / keys / queries) % heads;
-        let batch = index / keys / queries / heads;
+        let key = index % keys as usize;
+        let query = (index / keys as usize) % queries as usize;
+        let head = (index / keys as usize / queries as usize) % heads as usize;
+        let batch = index / keys as usize / queries as usize / heads as usize;
         let position = (((i64::cast_from(batch) * global_heads + head_start + i64::cast_from(head)) * global_queries
             + query_start + i64::cast_from(query)) * global_keys) + key_start + i64::cast_from(key);
         output[index] = F::cast_from(keep_global(position, seed_low, seed_high, base_low, base_high, p));

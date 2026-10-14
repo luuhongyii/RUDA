@@ -112,7 +112,7 @@ pub fn normalize<F: Float>(accumulator: &mut Array<f32>, stats: &Array<f32>, out
     width: u32, #[define(F)] _dtype: StorageType) {
     let index = ABSOLUTE_POS;
     if index < output.len() {
-        let denominator = stats[(index / width) * 2 + 1];
+        let denominator = stats[(index / width as usize) * 2 + 1];
         let mut result = 0.0f32;
         if denominator != 0.0 { result = accumulator[index] / denominator; }
         accumulator[index] = result;
