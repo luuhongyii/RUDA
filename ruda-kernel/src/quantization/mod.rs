@@ -12,6 +12,12 @@ pub use ruda_core::quant::scheme;
 #[cfg(feature = "packed-quantization")]
 pub mod packed;
 
+#[cfg(feature = "packed-quantization")]
+pub mod float8;
+
+#[cfg(feature = "packed-quantization")]
+pub mod float8_block;
+
 #[cfg(feature = "quantization-kernels")]
 pub(crate) mod utils {
     use crate::quantization::scheme::{QuantLevel, QuantScheme};

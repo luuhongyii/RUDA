@@ -1,7 +1,8 @@
-"""Packed-document attention using same-device online-softmax tiles."""
+"""Packed-document attention with fused native forward and recomputed backward."""
 from __future__ import annotations
 
 import torch
+import math
 from .block_attention import block_scaled_dot_product_attention
 
 
@@ -20,13 +21,58 @@ def varlen_scaled_dot_product_attention(query,key,value,cu_seqlens_q,cu_seqlens_
     """Attend independently within each real document, without an N-by-N mask.
 
     Payloads are [total_tokens,heads,features]. CPU boundaries are input metadata,
-    never downloaded GPU activations. Forward/backward use the existing bounded
-    block attention on the SAME device. This is not a fused varlen kernel.
+    never downloaded GPU activations. RUDA uses fused packed forward/backward;
+    explicitly selected CPU/CUDA tensors retain same-device block attention.
     Causal alignment is explicit for unequal query/key lengths (including cache).
     """
     if query.ndim!=3 or key.ndim!=3 or value.ndim!=3 or key.shape[0]!=value.shape[0]:
         raise ValueError('varlen attention requires [tokens,heads,features] operands')
     if causal_alignment not in ('upper_left','lower_right'):raise ValueError('select an explicit causal alignment')
+    if query.device.type == 'ruda':
+        if query.device != key.device or query.device != value.device or query.dtype != key.dtype or query.dtype != value.dtype:
+            raise ValueError('varlen operands must share dtype and device')
+        if query.dtype not in (torch.float32, torch.float16, torch.bfloat16):
+            raise ValueError('native varlen attention requires FP32/FP16/BF16')
+        if query.shape[-1] <= 0 or value.shape[-1] <= 0 or key.shape[-1] != query.shape[-1]:
+            raise ValueError('invalid varlen feature dimensions')
+        if type(is_causal) is not bool or type(enable_gqa) is not bool or not 0 <= dropout_p <= 1:
+            raise ValueError('invalid varlen causal/GQA/dropout policy')
+        if any(type(n) is not int or n <= 0 for n in (query_block_size, key_block_size)):
+            raise ValueError('attention tile sizes must be positive integers')
+        if window_size is not None and (not isinstance(window_size, (tuple, list)) or len(window_size) != 2 or
+                any(type(n) is not int or n < -1 or n >= 1 << 63 for n in window_size)):
+            raise ValueError('attention window must contain two int64 distances >= -1')
+        factor = query.shape[-1] ** -.5 if scale is None else float(scale)
+        if not math.isfinite(factor):
+            raise ValueError('attention scale must be finite')
+        if softcap is not None and (not math.isfinite(float(softcap)) or softcap <= 0):
+            raise ValueError('softcap must be finite and positive')
+        if enable_gqa:
+            if key.shape[1] <= 0 or key.shape[1] != value.shape[1] or query.shape[1] % key.shape[1]:
+                raise ValueError('GQA requires common KV heads dividing query heads')
+        else:
+            heads = torch.broadcast_shapes((query.shape[1],), (key.shape[1],), (value.shape[1],))[0]
+            query = query.expand(query.shape[0], heads, query.shape[2])
+            key = key.expand(key.shape[0], heads, key.shape[2])
+            value = value.expand(value.shape[0], heads, value.shape[2])
+        if query.shape[1] <= 0:
+            raise ValueError('native varlen head counts must be positive')
+        cu_seqlens_k = cu_seqlens_q if cu_seqlens_k is None else cu_seqlens_k
+        for boundaries in (cu_seqlens_q, cu_seqlens_k):
+            if not isinstance(boundaries, torch.Tensor) or boundaries.device.type != 'cpu' or boundaries.dtype not in (torch.int32, torch.int64) or boundaries.ndim != 1 or boundaries.numel() < 2:
+                raise ValueError('cu_seqlens must be explicit CPU integer metadata')
+        if cu_seqlens_q.numel() != cu_seqlens_k.numel():
+            raise ValueError('query/key document counts differ')
+        from . import _varlen_ops
+        words = [-1, 0, 0, 0, 0]
+        if generator is not None and 0 < dropout_p < 1:
+            _, blocks = _varlen_ops._schedule(query, key, cu_seqlens_q, cu_seqlens_k)
+            words = [0, *_varlen_ops.reserve(blocks, generator)]
+        rng = torch.tensor(words, dtype=torch.int64, device='cpu')
+        left, right = (-1, -1) if window_size is None else window_size
+        return _varlen_ops.forward(query.contiguous(), key.contiguous(), value.contiguous(),
+            cu_seqlens_q, cu_seqlens_k, is_causal, causal_alignment == 'lower_right', left, right,
+            factor, float(dropout_p), 0.0 if softcap is None else float(softcap), rng)[0]
     queries=_boundaries(cu_seqlens_q,query.shape[0])
     keys=_boundaries(cu_seqlens_q if cu_seqlens_k is None else cu_seqlens_k,key.shape[0])
     if len(queries)!=len(keys):raise ValueError('query/key document counts differ')

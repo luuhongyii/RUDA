@@ -1,4 +1,4 @@
-"""LoRA/NF4 tensor-parallel projections without dequantizing or requantizing bases."""
+"""LoRA and packed tensor-parallel projections without requantizing frozen bases."""
 from __future__ import annotations
 
 import math
@@ -9,6 +9,8 @@ from torch.nn import functional as F
 from .finetuning import LoRALinear,NF4Linear
 from .parallel_training import (ColumnParallelLinear,RowParallelLinear,copy_to_tensor_parallel,
     reduce_from_tensor_parallel,scatter_to_tensor_parallel,gather_from_tensor_parallel)
+from .packed_parallel import _ParallelPacked,ColumnParallelPackedLinear,RowParallelPackedLinear
+from .packed_quantization import PackedLinear,PackedEmbedding
 
 
 def _geometry(outputs,width,block,axis,world):
@@ -172,8 +174,7 @@ class ColumnParallelLoRALinear(_ParallelLoRA):
     def __init__(self,layer,group,*,gather_output=True):
         super().__init__()
         if not isinstance(layer,LoRALinear):raise TypeError('expected a LoRALinear')
-        constructor=ColumnParallelNF4Linear if isinstance(layer.base,NF4Linear) else ColumnParallelLinear
-        self.base=constructor(layer.base,group,gather_output=False)
+        self.base=parallel_linear(layer.base,group,axis=0,gather_output=False)
         self.gather_output=bool(gather_output)
         self._setup(layer,group)
         self.local_out_features=self.out_features//group.world_size
@@ -194,8 +195,7 @@ class RowParallelLoRALinear(_ParallelLoRA):
     def __init__(self,layer,group,*,input_is_parallel=False):
         super().__init__()
         if not isinstance(layer,LoRALinear):raise TypeError('expected a LoRALinear')
-        constructor=RowParallelNF4Linear if isinstance(layer.base,NF4Linear) else RowParallelLinear
-        self.base=constructor(layer.base,group,input_is_parallel=True)
+        self.base=parallel_linear(layer.base,group,axis=1,input_is_parallel=True)
         self.input_is_parallel=bool(input_is_parallel)
         self._setup(layer,group)
         self.local_in_features=self.in_features//group.world_size
@@ -211,13 +211,13 @@ class RowParallelLoRALinear(_ParallelLoRA):
 
 
 def lora_from_parallel_base(base,*,rank=16,alpha=16.,adapter_dtype=torch.float32,dropout=0.,use_rslora=False):
-    """Collectively inject adapters into an already partitioned dense/NF4 base.
+    """Collectively inject adapters into an already partitioned dense/packed base.
 
     Only adapter matrices are initialized in full; existing packed/dense base
     storage is retained. Replicated A initialization comes from TP rank zero.
     """
-    column=isinstance(base,(ColumnParallelLinear,ColumnParallelNF4Linear))
-    row=isinstance(base,(RowParallelLinear,RowParallelNF4Linear))
+    column=isinstance(base,(ColumnParallelLinear,ColumnParallelNF4Linear,ColumnParallelPackedLinear))
+    row=isinstance(base,(RowParallelLinear,RowParallelNF4Linear,RowParallelPackedLinear))
     if not (column or row):raise TypeError('expected a tensor-parallel linear base')
     if type(rank) is not int or rank<=0 or type(alpha) not in (int,float) or not math.isfinite(alpha) or alpha<=0:
         raise ValueError('adapter rank/alpha must be positive and finite')
@@ -228,7 +228,8 @@ def lora_from_parallel_base(base,*,rank=16,alpha=16.,adapter_dtype=torch.float32
     group=base.group
     group.validate_training_options((type(base).__name__,base.in_features,base.out_features,
                                      rank,alpha,str(adapter_dtype),dropout,use_rslora))
-    device=base.local.packed.device if isinstance(base,_ParallelNF4) else base.weight.device
+    device=(base.local.packed.device if isinstance(base,_ParallelNF4)
+        else base.local.codes.device if isinstance(base,_ParallelPacked) else base.weight.device)
     a=torch.empty((rank,base.in_features),device='cpu',dtype=adapter_dtype)
     nn.init.kaiming_uniform_(a,a=math.sqrt(5))
     a=a.to(device)
@@ -265,7 +266,7 @@ def lora_from_parallel_base(base,*,rank=16,alpha=16.,adapter_dtype=torch.float32
 @torch.no_grad()
 def merge_parallel_lora(layer):
     """Merge a dense adapter locally without gathering a full base weight."""
-    if not isinstance(layer,_ParallelLoRA) or layer.training or isinstance(layer.base,_ParallelNF4):
+    if not isinstance(layer,_ParallelLoRA) or layer.training or isinstance(layer.base,(_ParallelNF4,_ParallelPacked)):
         raise ValueError('merge requires an eval-mode dense TP adapter')
     base=layer.base
     result=copy.copy(base)
@@ -281,32 +282,43 @@ def merge_parallel_lora(layer):
 
 
 def parallel_linear(source,group,*,axis,**options):
-    """Choose a projection from the ACTUAL dense/NF4/LoRA layer type."""
+    """Choose a projection from the actual dense/NF4/packed/LoRA layer type."""
     if axis not in (0,1):raise ValueError('select input or output matrix shards')
     if isinstance(source,LoRALinear):
         constructor=ColumnParallelLoRALinear if axis==0 else RowParallelLoRALinear
     elif isinstance(source,NF4Linear):
         constructor=ColumnParallelNF4Linear if axis==0 else RowParallelNF4Linear
+    elif isinstance(source,PackedLinear):
+        constructor=ColumnParallelPackedLinear if axis==0 else RowParallelPackedLinear
     else:constructor=ColumnParallelLinear if axis==0 else RowParallelLinear
     return constructor(source,group,**options)
 
 
 def parameter_shards(source,replacement,axis):
-    """Original Parameter identity, destination owner/name, and logical shard axis."""
+    """Original storage identity, destination owner/name, and logical shard axis."""
+    from .float8_training import Float8Linear
     entries=[]
     if isinstance(source,LoRALinear):
         entries.extend(((source.lora_A,replacement,'lora_A',1 if axis==1 else None),
                         (source.lora_B,replacement,'lora_B',0 if axis==0 else None)))
         source,replacement=source.base,replacement.base
-    if isinstance(source,nn.Linear):
+    if isinstance(source,(nn.Linear,Float8Linear)):
         entries.append((source.weight,replacement,'weight',axis))
         if source.bias is not None:entries.append((source.bias,replacement,'bias',0 if axis==0 else None))
+    elif type(source) in (PackedLinear,PackedEmbedding):
+        signature=('packed-codes',axis,source.out_features,source.in_features,source.format)
+        entries.append((source.codes,replacement.local,'codes',signature))
+        for name in ('scales','offsets'):
+            entries.append((getattr(source,name),replacement.local,name,0 if axis==0 else None))
+        if source.group_index.numel():
+            entries.append((source.group_index,replacement.local,'group_index',None if axis==0 else 0))
+        if source.bias is not None:
+            entries.append((source.bias,replacement.local if axis==0 else replacement,'bias',0 if axis==0 else None))
     return entries
 
 
 def adapter_base_kind(layer):
-    from .packed_quantization import PackedLinear
-    if isinstance(layer.base,PackedLinear):
+    if isinstance(layer.base,(PackedLinear,_ParallelPacked)):
         return 'packed:'+layer.base.format+':'+str(layer.base.group_size)
     return 'nf4' if isinstance(layer.base,(NF4Linear,_ParallelNF4)) else 'dense'
 

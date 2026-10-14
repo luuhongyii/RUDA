@@ -17,7 +17,7 @@ fn mask_offset(mask: &Tensor<f32>, position: usize) -> usize {
 }
 
 #[ruda]
-fn keep(position: usize, seed_low: u32, seed_high: u32, base_low: u32, base_high: u32, p: f32) -> f32 {
+pub(crate) fn keep(position: usize, seed_low: u32, seed_high: u32, base_low: u32, base_high: u32, p: f32) -> f32 {
     let block = u32::cast_from(position / 4);
     let mut a = base_low + block;
     let mut b = base_high;

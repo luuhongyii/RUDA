@@ -7,6 +7,17 @@ use rudnn::moe::{RouterScoring, RouterWeightOptions,
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_router_api_version() -> u32 { 1 }
 
+pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,values:&[View],backward:bool,ints:&[i64],scalars:&[f32])
+    ->Vec<PreparedKernel<CudaRuntime>>
+{
+    use rudnn::moe::{prepare_selected_router_weights,prepare_selected_router_backward};
+    let options=RouterWeightOptions {scoring:if ints[0]==0 {RouterScoring::Softmax}else {RouterScoring::Sigmoid},
+        renormalize:ints[1]!=0,scale:scalars[0]};
+    let tensors:Vec<_>=values.iter().map(|v|{let mut t=primitives::tensor(v);t.client=c.clone();t}).collect();
+    unsafe {if backward {prepare_selected_router_backward(&tensors[0],&tensors[1],&tensors[2],&tensors[3],options)}
+        else {prepare_selected_router_weights(&tensors[0],&tensors[1],&tensors[2],options)}}.expect("router graph preparation failed")
+}
+
 /// Called only by the same-process C++ adapter. Descriptors remain valid during
 /// submission; adapter supplies fresh disjoint output and validates every input.
 /// op 0: logits, indices, weights. op 1: logits, indices, dweights, dlogits.

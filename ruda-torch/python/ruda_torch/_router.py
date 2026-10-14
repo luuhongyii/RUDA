@@ -27,25 +27,6 @@ def _options(scoring: str, renormalize: bool, scale: float) -> tuple[int, bool, 
     return int(scoring == "sigmoid"), renormalize, value
 
 
-class _SelectedRouterWeights(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, logits, indices, scoring, renormalize, scale):
-        ctx.save_for_backward(logits, indices)
-        ctx.options = (scoring, renormalize, scale)
-        ctx.set_materialize_grads(False)
-        return _C.router_weights_forward(logits, indices, *ctx.options)
-
-    @staticmethod
-    def backward(ctx, gradient):
-        if torch.is_grad_enabled():
-            raise RuntimeError("RUDA router weights support first-order gradients only")
-        if gradient is None:
-            return None, None, None, None, None
-        logits, indices = ctx.saved_tensors  # Also checks in-place version changes.
-        dx = _C.router_weights_backward(logits, indices, gradient.contiguous(), *ctx.options)
-        return dx, None, None, None, None
-
-
 def selected_router_weights(logits: torch.Tensor, indices: torch.Tensor, *,
                             scoring: str = "softmax", renormalize: bool = False,
                             scale: float = 1.0) -> torch.Tensor:
@@ -80,4 +61,5 @@ def selected_router_weights(logits: torch.Tensor, indices: torch.Tensor, *,
         raise ValueError("invalid router shapes or device")
     if not hasattr(_C, "router_weights_forward"):
         raise RuntimeError("RUDA router API 1 unavailable; rebuild Rust and C++ extensions")
-    return _SelectedRouterWeights.apply(logits, indices, *options)
+    from ._router_ops import forward
+    return forward(logits, indices, *options)

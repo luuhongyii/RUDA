@@ -1,4 +1,7 @@
 #include <ATen/EmptyTensor.h>
+#include <ATen/ExpandUtils.h>
+#include <ATen/WrapDimUtils.h>
+#include <ATen/ops/empty_strided.h>
 #include <c10/util/Float8_e4m3fn.h>
 #include <c10/util/Float8_e5m2.h>
 #include <ATen/Context.h>
@@ -230,6 +233,9 @@ struct Argument {
 #include "packed.inc"
 #include "random.inc"
 #include "dense_attention.inc"
+#include "varlen_attention.inc"
+#include "float8.inc"
+#include "sorting.inc"
 
 class PagedPlanBridge {
   void* plan_=nullptr;
@@ -357,6 +363,7 @@ class PagedPlanBridge {
 };
 
 #include "static_graph.inc"
+#include "operation_graph.inc"
 
 at::Tensor empty(c10::IntArrayRef size, std::optional<c10::ScalarType> dtype,
   std::optional<c10::Layout> layout, std::optional<c10::Device> device,
@@ -550,6 +557,15 @@ void record_tensor_stream(at::Tensor& value, c10::Stream stream) {
   stream_command(12,stream.id(),reinterpret_cast<uintptr_t>(arg.desc.allocation));
 }
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
+  m.impl("topk",topk_tensor);
+  m.impl("topk.values",topk_tensor_out);
+  m.impl("sort",sort_tensor);
+  m.impl("sort.stable",sort_stable_tensor);
+  m.impl("sort.values",sort_tensor_out);
+  m.impl("sort.values_stable",sort_stable_tensor_out);
+  m.impl("argsort",argsort_tensor);
+  m.impl("argsort.stable",argsort_stable_tensor);
+  m.impl("argsort.stable_out",argsort_stable_tensor_out);
   m.impl("index.Tensor",advanced_index);
   m.impl("index.Tensor_out",advanced_index_out);
   m.impl("set_.source_Storage", set_storage);
@@ -597,6 +613,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   #include "fft_bridge_bindings.inc"
   #include "vendor_bridge_bindings.inc"
   #include "dense_attention_bindings.inc"
+  #include "varlen_attention_bindings.inc"
+  #include "float8_bindings.inc"
   m.attr("abi_version") = 10;
   m.def("_cuda_alias", [](const at::Tensor& tensor, int64_t device_index) {
     validate(tensor.device());
@@ -652,6 +670,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("kda_forward", kda_forward);
   m.def("kda_backward", kda_backward);
   m.attr("packed_api_version") = 1;
+  m.attr("packed_matmul_api_version") = 1;
+  m.attr("packed_indexed_groups_api_version") = 1;
   m.def("initialize_packed", [](uintptr_t address) {
     TORCH_CHECK(allocate_native && address && !packed_native,"invalid or repeated packed initialization");
     packed_native=reinterpret_cast<PackedDispatch>(address);
@@ -720,6 +740,35 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.attr("graph_api_version") = 3;
   m.attr("graph_layout_api_version") = 1;
   m.attr("graph_math_api_version") = 1;
+  m.attr("graph_index_api_version") = 1;
+  m.attr("graph_factory_api_version") = 1;
+  m.attr("graph_empty_api_version") = 1;
+  m.attr("graph_root_api_version") = 1;
+  m.attr("operation_graph_api_version") = 1;
+  m.attr("sequence_graph_api_version") = 1;
+  m.attr("pointwise_graph_api_version") = 1;
+  m.attr("transform_graph_api_version") = 1;
+  m.attr("reduction_graph_api_version") = 1;
+  m.attr("router_graph_api_version") = 1;
+  m.attr("grouped_graph_api_version") = 1;
+  m.attr("scatter_graph_api_version") = 1;
+  m.attr("sorting_graph_api_version") = 1;
+  m.attr("sorting_api_version") = 1;
+  m.def("initialize_sorting",[](uintptr_t address) {
+    TORCH_CHECK(allocate_native && address && !sorting_native,"invalid or repeated sorting initialization");
+    sorting_native=reinterpret_cast<SortingDispatch>(address);
+  });
+  m.def("initialize_operation_graph",[](uintptr_t address) {
+    TORCH_CHECK(allocate_native && address && !operation_graph_native,"invalid or repeated operation graph initialization");
+    operation_graph_native=reinterpret_cast<OperationGraphCommand>(address);
+  });
+  pybind11::class_<OperationGraphBridge,std::shared_ptr<OperationGraphBridge>>(m,"NativeOperationGraph")
+    .def(pybind11::init<uint32_t,const std::vector<at::Tensor>&,const std::vector<int64_t>&,const std::vector<float>&,const std::vector<int64_t>&>())
+    .def("run",&OperationGraphBridge::run,pybind11::arg("seed")=0,pybind11::arg("counter")=0,pybind11::call_guard<pybind11::gil_scoped_release>())
+    .def("synchronize",&OperationGraphBridge::synchronize,pybind11::call_guard<pybind11::gil_scoped_release>())
+    .def("query",&OperationGraphBridge::query,pybind11::call_guard<pybind11::gil_scoped_release>())
+    .def("close",&OperationGraphBridge::close,pybind11::call_guard<pybind11::gil_scoped_release>())
+    .def_property_readonly("kernel_count",&OperationGraphBridge::kernel_count);
   m.def("initialize_graph", [](uintptr_t address) {
     TORCH_CHECK(allocate_native && address && !static_graph_native, "invalid or repeated static graph initialization");
     static_graph_native = reinterpret_cast<StaticGraphCommand>(address);

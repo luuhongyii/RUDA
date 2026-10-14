@@ -184,22 +184,6 @@ def fused_gemm(a, b, bias, *, activation="none", strategy="auto", out_dtype=None
         raise ValueError("fused GEMM output must use input storage or FP32")
     return _Fused.apply(a, b, bias, acts[activation], strategies[strategy], a.dtype if out_dtype is None else out_dtype)
 
-class _Grouped(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, weights, ids, strategy):
-        ctx.save_for_backward(x, weights, ids)
-        ctx.set_materialize_grads(False)
-        return _C.blas_grouped(x, weights, ids, strategy)
-
-    @staticmethod
-    def backward(ctx, grad):
-        _first_order()
-        if grad is None:
-            return None, None, None, None
-        x, weights, ids = ctx.saved_tensors
-        dx, dw = _C.blas_grouped_backward(x, weights, ids, grad)
-        return dx if ctx.needs_input_grad[0] else None, dw if ctx.needs_input_grad[1] else None, None, None
-
 def grouped_gemm(x, weights, row_experts, *, strategy="auto"):
     """[M,K] times selected [E,N,K] experts, arbitrary row order, int32/int64 IDs.
 
@@ -211,8 +195,9 @@ def grouped_gemm(x, weights, row_experts, *, strategy="auto"):
     strategies = {"auto": 0, "scalar": 1, "tensor_core": 2}
     if strategy not in strategies:
         raise ValueError("invalid grouped GEMM strategy")
-    return _Grouped.apply(_tensor(x, "x"), _tensor(weights, "weights"),
-                           _tensor(row_experts, "row_experts"), strategies[strategy])
+    from ._grouped_ops import forward
+    return forward(_tensor(x, "x"), _tensor(weights, "weights"),
+                   _tensor(row_experts, "row_experts"), strategies[strategy])
 
 class _Triangular(torch.autograd.Function):
     @staticmethod

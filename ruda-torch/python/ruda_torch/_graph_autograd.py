@@ -4,6 +4,7 @@ Backward recomputes from per-forward snapshots; neither CPU transfers nor a
 hidden CPU execution fallback are used. This is not native backward capture.
 """
 import torch
+import struct
 from torch.autograd.function import once_differentiable
 from ._graph_spec import NO_WEIGHT, UNARY_CODES
 
@@ -12,14 +13,32 @@ def _silu(x):
     return x / (1.0 + (-x).exp())
 
 
-def forward_values(layout, inputs):
+def forward_values(layout, inputs, device=None):
     """Storage-rounded expressions for backward recomputation, in node order."""
     values = list(inputs)
+    if device is None and inputs:device=inputs[0].device
     for i, scalar in enumerate(layout.scalars):
         op, a, b = layout.words[3*i:3*i+3]
+        if op in (160,161,172):
+            spec=layout.specs[layout.inputs+i];dtype=getattr(torch,spec.dtype)
+            target=values[a].device if a!=NO_WEIGHT else device
+            if target is None:raise ValueError('factory-root recomputation needs an explicit device')
+            if op==160:out=torch.full(spec.shape,scalar,dtype=dtype,device=target)
+            elif op==161:
+                step=b if b<2**31 else b-2**32
+                out=torch.arange(int(scalar),int(scalar)+spec.shape[0]*step,step,dtype=dtype,device=target)
+            else:
+                from . import _C
+                step=struct.unpack('<f',struct.pack('<I',b))[0]
+                out=torch.empty(spec.shape,dtype=dtype,device=target)
+                first=torch.full((),scalar,dtype=torch.float32,device=target)
+                increment=torch.full((),step,dtype=torch.float32,device=target)
+                _C.execute(108,first,increment,out,0.0)
+            values.append(out)
+            continue
         left = values[a]
         x = left.float()
-        y = None if b == NO_WEIGHT else values[b].float()
+        y = None if b == NO_WEIGHT or op==161 else values[b].float()
         if op == 0:
             out = left.clone()
         elif op == 1:
@@ -78,6 +97,40 @@ def forward_values(layout, inputs):
             elif op == 123: out = torch.fmod(x,y)
             else: out = torch.remainder(x,y)
             out = out.to(left.dtype)
+        elif op==146:
+            out=torch.masked_fill(left,values[b],scalar)
+        elif op==147:
+            out=torch.where(left,values[b],values[int(scalar)])
+        elif 148<=op<=159:
+            name=('eq','ne','lt','le','gt','ge')[(op-148)%6]
+            right=values[b] if op<154 else (int(scalar) if not left.is_floating_point() else scalar)
+            out=getattr(torch,name)(left,right)
+        elif op in (162,163):
+            out=(torch.tril if op==162 else torch.triu)(left,int(scalar))
+        elif 164<=op<=171:
+            name=('logical_not','logical_and','logical_or','logical_xor','bitwise_not','bitwise_and','bitwise_or','bitwise_xor')[op-164]
+            out=getattr(torch,name)(left) if op in (164,168) else getattr(torch,name)(left,values[b])
+        elif op in (140,141,142,143,144,145):
+            code=int(scalar);axis=code if op==142 else code&7;start=code>>3
+            shape=layout.specs[layout.inputs+i].shape
+            if op==140:out=torch.ops.aten.slice_copy.Tensor(left,axis,start,start+shape[axis],1)
+            elif op==141:out=torch.ops.aten.select_copy.int(left,axis,start)
+            elif op==142:out=torch.cat((left,values[b]),axis)
+            elif op==143:out=torch.ops.aten.slice_backward.default(left,shape,axis,start,start+left.shape[axis],1)
+            elif op==144:out=torch.ops.aten.select_backward.default(left,shape,axis,start)
+            else:out=torch.ops.aten.slice_scatter.default(left,values[b],axis,start,start+values[b].shape[axis],1)
+        elif op == 134:
+            out = torch.index_select(left,int(scalar),values[b])
+        elif op == 135:
+            out = torch.gather(left,int(scalar),values[b].long())
+        elif op == 136:
+            out = torch.ops.aten.embedding.default(left,values[b])
+        elif op in (137,138):
+            out = torch.ops.aten.embedding_dense_backward.default(left,values[b],layout.specs[layout.inputs+i].shape[0],int(scalar),op==138)
+        elif op == 139:
+            shape=layout.specs[layout.inputs+i].shape
+            source=torch.zeros(shape,dtype=left.dtype,device=left.device)
+            out = torch.ops.aten.gather_backward.default(left,source,int(scalar),values[b].long(),False)
         elif op in (129,130,131,132,133):
             stored = torch.full((),scalar,dtype=left.dtype,device=left.device).float()
             if op == 129:
@@ -100,7 +153,7 @@ def forward_values(layout, inputs):
     return values
 
 
-def backward_values(layout, inputs, grad_outputs):
+def backward_values(layout, inputs, grad_outputs, device=None):
     """First-order vector-Jacobian product, including fan-out and repeated edges.
 
     Intermediate gradients accumulate in their corresponding storage dtype.
@@ -111,15 +164,17 @@ def backward_values(layout, inputs, grad_outputs):
         # New operations use same-device autograd; the model compiler separately
         # captures these derivatives through AOTAutograd, not this bridge.
         with torch.enable_grad():
-            leaves = tuple(value.detach().requires_grad_(True) for value in inputs)
-            values = forward_values(layout, leaves)
+            leaves = tuple(value.detach().requires_grad_(value.is_floating_point()) for value in inputs)
+            values = forward_values(layout, leaves, device)
             selected = [(values[i], grad) for i, grad in
                         zip(layout.output_indices, grad_outputs, strict=True)
                         if grad is not None and values[i].requires_grad]
-            if not selected: return (None,) * len(leaves)
-            return torch.autograd.grad(tuple(v for v,g in selected), leaves,
-                tuple(g for v,g in selected), allow_unused=True)
-    values = forward_values(layout, inputs)
+            differentiable=tuple(leaf for leaf in leaves if leaf.requires_grad)
+            if not selected or not differentiable: return (None,) * len(leaves)
+            gradients=iter(torch.autograd.grad(tuple(v for v,g in selected), differentiable,
+                tuple(g for v,g in selected), allow_unused=True))
+            return tuple(next(gradients) if leaf.requires_grad else None for leaf in leaves)
+    values = forward_values(layout, inputs, device)
     gradients = [None]*len(values)
 
     def add(index, value):
@@ -177,6 +232,7 @@ class StaticGraphFunction(torch.autograd.Function):
         graph._check()
         graph._check_bindings()
         ctx.layout = graph._layout
+        ctx.device = graph._device
         ctx.input_count = len(inputs)
         ctx.set_materialize_grads(False)
         # Originals provide version guards; snapshots protect against subsequent
@@ -191,6 +247,6 @@ class StaticGraphFunction(torch.autograd.Function):
     @once_differentiable
     def backward(ctx, *grad_outputs):
         saved = ctx.saved_tensors  # Also checks the original input versions.
-        gradients = backward_values(ctx.layout, saved[ctx.input_count:], grad_outputs)
+        gradients = backward_values(ctx.layout, saved[ctx.input_count:], grad_outputs, ctx.device)
         needed = ctx.needs_input_grad[2:]
         return (None, None, *(g if use else None for g, use in zip(gradients, needed, strict=True)))

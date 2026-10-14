@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut mla_mode = DeepseekV2AttentionMode::Expanded;
     let mut draft_directory = None;
     let mut draft_id = None;
+    let mut causal_draft_tokens = None;
     let mut multimodal = false;
     let mut batch_sequences = None;
     let mut batch_tokens = None;
@@ -39,11 +40,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     while let Some(arg) = args.next() {
         if arg == "--help" {
             println!(
-                "ruda-serve --model-path DIR --model-id EXACT-WEIGHTS-IDENTITY [--served-model-name NAME] [--backend native|libtorch (default native; libtorch feature required)] [--libtorch-device cpu|cuda|mps (default cuda)] [--devices 0,1 (Qwen3 TP / DeepSeek-V2 EP)] [--draft-model-path DIR --draft-model-id EXACT-DRAFT-IDENTITY (single-device Qwen3 DFlash/DSpark)] [--mla-mode expanded|absorbed (DeepSeek-V2 only; default expanded)] [--role integrated|prefill|decode] [--prefill-address HOST:PORT (prefill listen/decode connect, TCP host KV)] [--bind 127.0.0.1:8000] [--queue-capacity N] [--multimodal (native Qwen3.5 JPEG/PNG; single-device integrated)] [--batch-max-sequences N --batch-max-tokens N --batch-kv-pages N --batch-block-tokens N (native Qwen3.5 text; single-device integrated; no prefix/offload/image batching)] [--prefix-block-tokens N] [--prefix-device-entries N] [--kv-host-bytes N] [--kv-disk-directory DIR --kv-disk-bytes N]"
+                "ruda-serve --model-path DIR --model-id EXACT-WEIGHTS-IDENTITY [--served-model-name NAME] [--backend native|libtorch (default native; libtorch feature required)] [--libtorch-device cpu|cuda|mps (default cuda)] [--devices 0,1 (Llama/Qwen2/Qwen3(dense/MoE)/Qwen3.5(dense/MoE) TP / DeepSeek-V2/V3/Kimi-K2/Kimi-Linear EP)] [--draft-model-path DIR --draft-model-id EXACT-DRAFT-IDENTITY (Qwen3 DFlash/DSpark; single device or native TP batching)] [--mla-mode expanded|absorbed (DeepSeek-V2/V3/Kimi-K2 only; default expanded)] [--role integrated|prefill|decode] [--prefill-address HOST:PORT (prefill listen/decode connect, TCP host KV)] [--bind 127.0.0.1:8000] [--queue-capacity N] [--multimodal (native Qwen3.5(dense/MoE) JPEG/PNG; single-device integrated)] [--batch-max-sequences N --batch-max-tokens N --batch-kv-pages N --batch-block-tokens N (native Llama/Qwen2/Qwen3(dense/MoE)/Qwen3.5(dense/MoE)/DeepSeek-V2/V3/Kimi-K2/Kimi-Linear text; integrated/prefill/decode; Llama/Qwen2/Qwen3(dense/MoE)/Qwen3.5(dense/MoE) TP/DeepSeek-V2/V3/Kimi-K2/Kimi-Linear EP; prefix/host/SSD cache; Qwen3 draft; no image batching)] [--prefix-block-tokens N] [--prefix-device-entries N] [--kv-host-bytes N] [--kv-disk-directory DIR --kv-disk-bytes N]"
             );
             println!(
                 "[structured-output feature: response_format JSON Schema/JSON object or grammar regex/Lark/llguidance; standard or continuous-batch serving]"
             );
+            println!("[--causal-draft-tokens N selects an independent causal draft instead of DFlash/DSpark; requires --draft-model-path/--draft-model-id and native batching; Llama/Qwen2/Qwen3(dense/MoE)/Qwen3.5(dense/MoE)/DeepSeek-V2/V3/Kimi-K2/Kimi-Linear target and draft, Llama/Qwen2/Qwen3(dense/MoE)/Qwen3.5(dense/MoE) TP/DeepSeek-V2/V3/Kimi-K2/Kimi-Linear EP targets with draft on root GPU, matching token-ID mappings/decoders]");
             println!(
                 "[Codex: --responses-max-output-tokens N enables /v1/responses and /v1/codex/models; checkpoint context window, stateless HTTP tool replay]"
             );
@@ -74,6 +76,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "--prefill-address" => prefill_address = Some(value),
             "--draft-model-path" => draft_directory = Some(PathBuf::from(value)),
             "--draft-model-id" => draft_id = Some(value),
+            "--causal-draft-tokens" => causal_draft_tokens = Some(value.parse::<usize>()?),
             "--mla-mode" => {
                 mla_mode = match value.as_str() {
                     "expanded" => DeepseekV2AttentionMode::Expanded,
@@ -171,6 +174,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let draft_directory = draft_directory
         .map(|directory| directory.canonicalize())
         .transpose()?;
+    if causal_draft_tokens.is_some_and(|n| n == 0) || (causal_draft_tokens.is_some() && draft_directory.is_none()) {
+        return Err(io::Error::other("--causal-draft-tokens requires a positive length and an explicit draft model").into());
+    }
     let batch = if let Some(max_sequences) = batch_sequences {
         Some(serving::BatchServingConfig {
             max_sequences,
@@ -190,10 +196,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     };
     if (multimodal || batch.is_some())
-        && (backend != "native" || role != "integrated" || device_indices.len() != 1)
+        && (backend != "native" || (multimodal && (role != "integrated" || device_indices.len() != 1)))
     {
         return Err(io::Error::other(
-            "batch/image serving currently requires single-device integrated native CUDA",
+            "batch/image serving requires native CUDA; images require one integrated device",
         )
         .into());
     }
@@ -211,11 +217,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             || batch.max_queued_requests == 0
     }) {
         return Err(io::Error::other("batch limits and queue capacity must be positive").into());
-    }
-    if batch.is_some()
-        && (config.host_bytes != 0 || config.disk_bytes != 0 || config.disk_directory.is_some())
-    {
-        return Err(io::Error::other("batch KV offload is not implemented; host/SSD tiers remain available in standard serving").into());
     }
     if let Some(directory) = autotune_cache_directory {
         #[cfg(feature = "stack-autotune")]
@@ -270,6 +271,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         mla_mode,
         draft_directory,
         draft_id,
+        causal_draft_tokens,
         cache: config,
         batch,
         multimodal,

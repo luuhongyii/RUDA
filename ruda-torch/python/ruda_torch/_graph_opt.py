@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import math
 
-from ._graph_spec import GraphOp, Layout, NO_WEIGHT, TensorSpec, plan_layout
+from ._graph_spec import GraphOp, Layout, NO_WEIGHT, TensorSpec, plan_layout, DTYPE_BYTES
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ class ExecutionPlan:
     @property
     def workspace_bytes(self) -> int:
         roots = set(self.storage_roots[self.layout.inputs:])
-        return sum(_bytes(self.layout.specs[i]) for i in roots)
+        return sum(_bytes(self.layout.specs[i]) for i in roots)+self.layout.auxiliary_bytes
 
     @property
     def workspace_allocations(self) -> int:
@@ -33,11 +33,11 @@ class ExecutionPlan:
 
 
 def _bytes(spec: TensorSpec) -> int:
-    return math.prod(spec.shape) * (4 if spec.dtype == 'float32' else 2)
+    return math.prod(spec.shape) * DTYPE_BYTES[spec.dtype]
 
 
 def _reads(node: GraphOp) -> tuple[str, ...]:
-    return (node.left,) if node.right is None else (node.left, node.right)
+    return tuple(name for name in (node.left,node.right,node.third) if name is not None)
 
 
 def _prune(nodes: tuple[GraphOp, ...], outputs: tuple[str, ...]):
@@ -91,8 +91,8 @@ def plan_storage(layout: Layout, *, reuse: bool = False) -> tuple[int, ...]:
     consumed = set()
     for i in range(len(layout.scalars)):
         out = layout.inputs + i
-        _, a, b = layout.words[3*i:3*i+3]
-        for value in (a, b):
+        op, a, b = layout.words[3*i:3*i+3]
+        for value in ((a,) if op in (161,172) else (a,b,int(layout.scalars[i])) if op==147 else (a,b)):
             if value != NO_WEIGHT:
                 last[value] = max(last[value], out)
                 consumed.add(value)
@@ -116,18 +116,18 @@ def plan_storage(layout: Layout, *, reuse: bool = False) -> tuple[int, ...]:
 
 
 def prepare_plan(inputs: Mapping[str, TensorSpec], nodes: Sequence[GraphOp], outputs=None,
-                 *, optimize: bool = False, reuse_workspace: bool = False,layout_api=0) -> ExecutionPlan:
+                 *, optimize: bool = False, reuse_workspace: bool = False,layout_api=0,empty_api=0,root_api=0) -> ExecutionPlan:
     if type(optimize) is not bool or type(reuse_workspace) is not bool:
         raise TypeError('optimizer options must be booleans')
     nodes = tuple(nodes)
-    original = plan_layout(inputs, nodes, outputs,layout_api=layout_api)
+    original = plan_layout(inputs, nodes, outputs,layout_api=layout_api,empty_api=empty_api,root_api=root_api)
     public_names = tuple(original.names[i] for i in original.output_indices)
     original_count = len(nodes)
     eliminated = fused = ()
     if optimize:
         nodes, eliminated = _prune(nodes, public_names)
         nodes, fused = _fuse(nodes, public_names)
-    layout = plan_layout(inputs, nodes, public_names,layout_api=layout_api)
+    layout = plan_layout(inputs, nodes, public_names,layout_api=layout_api,empty_api=empty_api,root_api=root_api)
     roots = plan_storage(layout, reuse=reuse_workspace)
     return ExecutionPlan(layout, nodes, roots, original_count,
                          original.workspace_bytes, eliminated, fused)

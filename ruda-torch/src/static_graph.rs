@@ -5,6 +5,7 @@
 use super::*;
 use super::graph_contract::{self, NodeSpec, TensorSpec, RMS_NORM, SILU_MUL, NO_WEIGHT};
 use ruda_driver_cuda::graph::CudaGraph;
+use ruda_driver_cuda::interop::{self,StreamCommand};
 use std::sync::Mutex;
 
 pub(super) static BUILDS: AtomicU64 = AtomicU64::new(0);
@@ -12,21 +13,69 @@ pub(super) static REPLAYS: AtomicU64 = AtomicU64::new(0);
 pub(super) static EAGER_RUNS: AtomicU64 = AtomicU64::new(0);
 
 struct State {
-    graph: CudaGraph,
+    graph: Option<CudaGraph>,
+    empty_completion: Option<u64>,
     client: ComputeClient<CudaRuntime>,
     stream: u64,
     tensors: Vec<View>,
     nodes: Vec<NodeSpec>,
     inputs: usize,
+    indexing: super::graph_index::IndexBuffers,
+    kernels: usize,
 }
-pub struct NativeStaticGraph { stream: u64, state: Mutex<State> }
+pub struct NativeStaticGraph { stream: u64, tracked: bool, state: Mutex<State> }
+
+impl State {
+    fn stream_command(&self,command:StreamCommand)->Result<u64,ruda::runtime::server::ServerError> {
+        interop::command(self.client.device_id(),command)
+    }
+    fn synchronize(&mut self)->Result<(),ruda::runtime::server::ServerError> {
+        if let Some(graph)=&mut self.graph {graph.synchronize()}
+        else {self.stream_command(StreamCommand::Synchronize(self.stream)).map(|_|())}
+    }
+    fn replay(&mut self)->Result<(),ruda::runtime::server::ServerError> {
+        if let Some(graph)=&mut self.graph {graph.replay()?;}
+        else if let Some(event)=self.empty_completion {
+            self.stream_command(StreamCommand::Record{stream:self.stream,event,timing:false})?;
+        }
+        Ok(())
+    }
+    fn query(&mut self)->Result<bool,ruda::runtime::server::ServerError> {
+        if let Some(graph)=&mut self.graph {graph.query()}
+        else {self.stream_command(StreamCommand::Query(self.stream)).map(|value|value!=0)}
+    }
+    fn query_completion(&mut self)->Result<bool,ruda::runtime::server::ServerError> {
+        if let Some(graph)=&mut self.graph {graph.query_completion()}
+        else {self.stream_command(StreamCommand::EventQuery(self.empty_completion.unwrap())).map(|value|value!=0)}
+    }
+    fn wait_completion(&mut self)->Result<(),ruda::runtime::server::ServerError> {
+        if let Some(graph)=&mut self.graph {graph.wait_completion()}
+        else {self.stream_command(StreamCommand::EventSynchronize(self.empty_completion.unwrap())).map(|_|())}
+    }
+    fn close(&mut self)->Result<(),ruda::runtime::server::ServerError> {
+        if let Some(graph)=&mut self.graph {graph.close()?;}
+        else {
+            self.synchronize()?;
+            if let Some(event)=self.empty_completion {
+                self.stream_command(StreamCommand::EventDestroy(event))?;
+                self.empty_completion=None;
+            }
+        }
+        Ok(())
+    }
+}
 
 fn prepare(state_client: &ComputeClient<CudaRuntime>, ts: &[View], n: &NodeSpec, output: usize)
     -> PreparedKernel<CudaRuntime>
 {
+    if let Some(kernel)=super::graph_factory::prepare(state_client,ts,n,output) {return kernel;}
     let a = &ts[n.a as usize];
     let out = &ts[output];
     let b = if n.b == NO_WEIGHT { a } else { &ts[n.b as usize] };
+    if let Some(kernel)=super::graph_index::prepare_layout(state_client,a,out,n) {return kernel;}
+    if matches!(n.op,7|30) {
+        if let Some(kernel)=super::graph_matmul::prepare(state_client,a,b,out) {return kernel;}
+    }
     macro_rules! run {
         ($dtype:ty) => {{
             if n.op == SILU_MUL {
@@ -105,6 +154,28 @@ pub extern "C" fn ruda_torch_graph_layout_api_version() -> u32 { 1 }
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_graph_math_api_version() -> u32 { 1 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_index_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_factory_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_empty_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_root_api_version() -> u32 { 1 }
+
+fn prepare_all(client:&ComputeClient<CudaRuntime>,tensors:&[View],nodes:&[NodeSpec],inputs:usize,
+    indexing:&super::graph_index::IndexBuffers)->Vec<PreparedKernel<CudaRuntime>> {
+    let mut kernels=indexing.preamble(client);
+    for (i,node) in nodes.iter().enumerate() {
+        if let Some(indexed)=indexing.prepare(client,tensors,node,i,inputs) {kernels.extend(indexed);}
+        else if tensors[inputs+i].len!=0 {kernels.push(prepare(client,tensors,node,inputs+i));}
+    }
+    kernels
+}
+
 /// Optional in-process extension API 3; base tensor ABI remains 10.
 /// 0=build, 1=replay, 2=wait, 3=query fixed queue, 4=close,
 /// 5=preallocated eager control (same kernels, one final sync policy),
@@ -140,10 +211,12 @@ pub unsafe extern "C" fn ruda_torch_graph(
                 strides:if d.rank==0 {&[]} else {&t.strides},dtype:t.dtype}).collect();
             graph_contract::validate(&specs,&nodes,input_count).expect("invalid native static graph");
             let client=client().fixed_execution_queue();
-            let prepared=nodes.iter().enumerate().map(|(i,n)|prepare(&client,&tensors,n,input_count+i)).collect();
+            let indexing=super::graph_index::IndexBuffers::new(&client,&tensors,&nodes,input_count);
+            let prepared=prepare_all(&client,&tensors,&nodes,input_count,&indexing);
+            let kernels=prepared.len();
             // SAFETY: descriptor contracts checked above and storage overlap by C++;
             // all registered kernels have explicit bindings and no hidden side effects.
-            let graph=unsafe {
+            let graph=if prepared.is_empty() {None} else {Some(unsafe {
                 match flags {
                     0=>CudaGraph::build(&client,prepared),
                     1=>CudaGraph::build_tracked(&client,prepared),
@@ -151,10 +224,15 @@ pub unsafe extern "C" fn ruda_torch_graph(
                     3=>CudaGraph::build_inferred_tracked(&client,prepared),
                     _=>unreachable!(),
                 }
-            }.expect("native static graph build failed");
-            let edges=graph.edge_count() as u64;
-            let state=State{graph,client,stream:streams::current(),tensors,nodes,inputs:input_count};
-            unsafe { *plan=Box::into_raw(Box::new(NativeStaticGraph{stream:state.stream,state:Mutex::new(state)})); *result=edges; }
+            }.expect("native static graph build failed"))};
+            let stream=client.execution_stream().value;
+            let empty_completion=if graph.is_none() && flags&1!=0 {
+                Some(interop::command(client.device_id(),StreamCommand::Record{stream,event:0,timing:false})
+                    .expect("empty graph completion event creation failed"))
+            } else {None};
+            let edges=graph.as_ref().map_or(0,|graph|graph.edge_count() as u64);
+            let state=State{graph,empty_completion,client,stream,tensors,nodes,inputs:input_count,indexing,kernels};
+            unsafe { *plan=Box::into_raw(Box::new(NativeStaticGraph{stream:state.stream,tracked:flags&1!=0,state:Mutex::new(state)})); *result=edges; }
             BUILDS.fetch_add(1,Ordering::Relaxed);
             return;
         }
@@ -162,6 +240,7 @@ pub unsafe extern "C" fn ruda_torch_graph(
         assert!(!unsafe{(*plan).is_null()},"static graph is closed");
         let native=unsafe{&**plan};
         assert!((1..=7).contains(&op), "unknown static graph command");
+        assert!(!matches!(op,6|7) || native.tracked,"tracked static graph required");
         if op==1 || op==5 {
             assert_eq!(native.stream,streams::current(),"static graph replay must use its creation stream");
         }
@@ -170,34 +249,37 @@ pub unsafe extern "C" fn ruda_torch_graph(
             // Return ordinary driver errors before dropping the lock, THEN
             // translate at the ABI boundary. A retryable close failure must not
             // poison the mutex merely because expect() ran while holding it.
-            (|| -> Result<(), ruda::runtime::server::ServerError> {
+            let result=(|| -> Result<(), ruda::runtime::server::ServerError> {
             match op {
                 1 | 5 => {
                     if op==1 {
-                        state.graph.replay()?;
+                        state.replay()?;
                         REPLAYS.fetch_add(1,Ordering::Relaxed);
                     } else {
-                        for (i,node) in state.nodes.iter().enumerate() {
-                            let prepared=prepare(&state.client,&state.tensors,node,state.inputs+i);
+                        for prepared in prepare_all(&state.client,&state.tensors,&state.nodes,state.inputs,&state.indexing) {
                             let (task,count,args,origin)=prepared.into_parts();
                             origin.launch(task,count,args);
                         }
                         EAGER_RUNS.fetch_add(1,Ordering::Relaxed);
                     }
-                    LAUNCHES.fetch_add(state.nodes.len() as u64,Ordering::Relaxed);
+                    LAUNCHES.fetch_add(state.kernels as u64,Ordering::Relaxed);
                     finish_dispatch(&state.client);
+                    if state.indexing.enabled() {state.synchronize()?;}
                 }
-                2=>state.graph.synchronize()?,
-                3=>unsafe{*result=state.graph.query()? as u64;},
-                4=>state.graph.close()?,
-                6=>unsafe{*result=state.graph.query_completion()? as u64;},
-                7=>state.graph.wait_completion()?,
+                2=>state.synchronize()?,
+                3=>unsafe{*result=state.query()? as u64;},
+                4=>state.close()?,
+                6=>unsafe{*result=state.query_completion()? as u64;},
+                7=>state.wait_completion()?,
                 _=>panic!("unknown static graph command"),
             }
             Ok(())
-            })()
+            })();
+            let indexing_result=if result.is_ok() && matches!(op,1|5) {state.indexing.check(&state.client)} else {Ok(())};
+            (result,indexing_result)
         };
-        command_result.expect("native static graph command failed");
+        command_result.0.expect("native static graph command failed");
+        command_result.1.expect("native static graph indexing failed");
         if op==4 { unsafe{drop(Box::from_raw(*plan)); *plan=std::ptr::null_mut();} }
     })
 }

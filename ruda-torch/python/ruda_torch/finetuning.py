@@ -301,8 +301,9 @@ def inject_lora(model, *, target_modules, rank=16, alpha=16., adapter_dtype=torc
         from .parallel_adapters import (_ParallelLoRA,_ParallelNF4,lora_from_parallel_base)
         from .parallel_training import ColumnParallelLinear,RowParallelLinear
         from .packed_quantization import PackedLinear, PackedEmbedding
-        parallel_types=(ColumnParallelLinear,RowParallelLinear,_ParallelNF4)
-        packed_types,embedding_types=(PackedLinear,),(PackedEmbedding,)
+        from .packed_parallel import _ParallelPacked,VocabParallelPackedEmbedding
+        parallel_types=(ColumnParallelLinear,RowParallelLinear,_ParallelNF4,_ParallelPacked)
+        packed_types,embedding_types=(PackedLinear,),(PackedEmbedding,VocabParallelPackedEmbedding)
     else:
         _ParallelLoRA=()
         parallel_types=()

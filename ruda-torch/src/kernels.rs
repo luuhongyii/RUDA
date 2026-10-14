@@ -143,13 +143,13 @@ pub fn graph_scalar_math<F: Float + RudaElement>(
 }
 
 #[ruda(launch)]
-pub fn graph_expand<F: Float + RudaElement>(a: &Tensor<F>, out: &mut Tensor<F>) {
+pub fn graph_expand<F: Numeric + RudaElement>(a: &Tensor<F>, out: &mut Tensor<F>) {
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() { out[pos] = a[broadcast_offset(a, out, pos)]; }
 }
 
 #[ruda(launch)]
-pub fn graph_permute<F: Float + RudaElement>(a: &Tensor<F>, out: &mut Tensor<F>, permutation: u32) {
+pub fn graph_permute<F: Numeric + RudaElement>(a: &Tensor<F>, out: &mut Tensor<F>, permutation: u32) {
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() {
         let mut remaining = pos;

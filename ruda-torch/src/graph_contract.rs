@@ -27,19 +27,51 @@ pub struct TensorSpec<'a> {
     pub dtype: u32,
 }
 
+fn broadcast_shape(inputs:&[&[usize]],out:&[usize])->bool {
+    let rank=inputs.iter().map(|shape|shape.len()).max().unwrap_or(0);
+    if rank!=out.len() {return false;}
+    for d in 0..rank {
+        let mut size=1;
+        for shape in inputs {
+            let value=if d+shape.len()<rank {1} else {shape[d+shape.len()-rank]};
+            if size!=1 && value!=1 && size!=value {return false;}if size==1 {size=value;}
+        }
+        if out[d]!=size {return false;}
+    }
+    true
+}
+
+fn scalar_fits(dtype:u32,value:f32)->bool {
+    match dtype {
+        0|3=>true,
+        1=>!value.is_finite() || value.abs()<=65504.0,
+        2=>!value.is_finite() || value.abs()<=f32::from_bits(0x7f7f0000),
+        4=>value.is_finite() && value.fract()==0.0 && (value as f64)>=i64::MIN as f64 && (value as f64)<9223372036854775808.0,
+        5=>value.is_finite() && value.fract()==0.0 && (value as f64)>=i32::MIN as f64 && (value as f64)<=i32::MAX as f64,
+        6=>value.is_finite() && value.fract()==0.0 && value>=i16::MIN as f32 && value<=i16::MAX as f32,
+        7=>value.is_finite() && value.fract()==0.0 && value>=i8::MIN as f32 && value<=i8::MAX as f32,
+        8=>value.is_finite() && value.fract()==0.0 && value>=0.0 && value<=255.0,
+        _=>false,
+    }
+}
+
 pub fn validate(tensors: &[TensorSpec<'_>], nodes: &[NodeSpec], inputs: usize) -> Result<(), String> {
-    if nodes.is_empty() || nodes.len() > MAX_NODES || inputs == 0
+    if nodes.is_empty() || nodes.len() > MAX_NODES
         || tensors.len() > MAX_TENSORS || inputs.checked_add(nodes.len()) != Some(tensors.len()) {
-        return Err("static graph requires 1..256 nodes, nonempty inputs, and one logical output per node (max 512 tensors)".into());
+        return Err("static graph requires 1..256 nodes and one logical output per node (max 512 tensors)".into());
     }
     for t in tensors {
-        if t.dtype > 2 || t.shape.len() > 8 || t.shape.len() != t.strides.len() {
-            return Err("static graph accepts rank 0..8 FP32/FP16/BF16 tensors".into());
+        if t.dtype > 8 || t.shape.len() > 8 || t.shape.len() != t.strides.len() {
+            return Err("static graph accepts rank 0..8 floating/integer/bool tensors".into());
         }
+        if t.shape.iter().any(|&dim|dim>u32::MAX as usize) {
+            return Err("static graph dimension exceeds 32-bit kernel indexing".into());
+        }
+        if t.shape.contains(&0) {continue;}
         let mut count = 1usize;
         for (&dim, &stride) in t.shape.iter().zip(t.strides).rev() {
-            if dim == 0 || (dim > 1 && stride != count) {
-                return Err("static graph requires nonempty contiguous storage".into());
+            if dim > 1 && stride != count {
+                return Err("static graph requires contiguous storage".into());
             }
             count = count.checked_mul(dim).ok_or("static graph shape overflow")?;
         }
@@ -47,13 +79,132 @@ pub fn validate(tensors: &[TensorSpec<'_>], nodes: &[NodeSpec], inputs: usize) -
     }
     for (i, n) in nodes.iter().enumerate() {
         let out_index = inputs + i;
-        if n.a as usize >= out_index { return Err("static graph input must precede its output".into()); }
-        let a = &tensors[n.a as usize];
         let out = &tensors[out_index];
-        if (n.op != 114 && a.dtype != out.dtype) || (!matches!(n.op, 7 | 30 | 57 | 104 | 105 | 112..=124) && a.shape != out.shape) {
+        let root=matches!(n.op,160|161|172) && n.a==NO_WEIGHT;
+        if !root && n.a as usize >= out_index { return Err("static graph input must precede its output".into()); }
+        let a = if root {out} else {&tensors[n.a as usize]};
+        if (!matches!(n.op,114|147..=161|164..=167|172) && a.dtype != out.dtype) || (!matches!(n.op, 7 | 30 | 57 | 104 | 105 | 112..=124 | 134..=172) && a.shape != out.shape) {
             return Err("static graph output shape/dtype mismatch".into());
         }
+        if (a.dtype>2 || out.dtype>2) && !matches!(n.op,0|112..=115|134..=136|140..=172) {
+            return Err("nonfloating graph tensors require a storage/layout/indexing operation".into());
+        }
         match n.op {
+            172 => {
+                if out.dtype>2 || out.shape.len()!=1 || !n.scalar.is_finite() || !f32::from_bits(n.b).is_finite() {
+                    return Err("invalid floating arange graph parameters".into());
+                }
+            }
+            162..=171 => {
+                if n.b as usize>=out_index || !n.scalar.is_finite() {return Err("invalid mask graph input/scalar".into());}
+                let b=&tensors[n.b as usize];
+                if n.op<=163 {
+                    if a.shape.len()<2 || n.b!=n.a || a.shape!=out.shape || n.scalar.fract()!=0.0
+                        || (n.scalar as f64)<i32::MIN as f64 || (n.scalar as f64)>i32::MAX as f64 {return Err("invalid triangular graph mask".into());}
+                } else {
+                    if n.scalar!=0.0 || a.dtype!=b.dtype || !broadcast_shape(&[a.shape,b.shape],out.shape)
+                        || (matches!(n.op,164|168) && n.b!=n.a) {return Err("invalid logical/bitwise graph operands".into());}
+                    if n.op<=167 {if out.dtype!=3 {return Err("logical graph output must be bool".into());}}
+                    else if a.dtype<3 {return Err("bitwise graph operands must be integer/bool".into());}
+                }
+            }
+            160|161 => {
+                if !scalar_fits(out.dtype,n.scalar) {return Err("factory scalar exceeds output dtype".into());}
+                if n.op==160 {
+                    if n.b!=n.a {return Err("full requires one device anchor".into());}
+                } else {
+                    if out.shape.len()!=1 || !(4..=8).contains(&out.dtype) || n.b as i32==0 {
+                        return Err("arange_integer requires an integer vector and nonzero signed step".into());
+                    }
+                    let end=n.scalar as i64 as i128+out.shape[0].saturating_sub(1) as i128*(n.b as i32 as i128);
+                    let (low,high)=match out.dtype {
+                        4=>(i64::MIN as i128,i64::MAX as i128),5=>(i32::MIN as i128,i32::MAX as i128),
+                        6=>(i16::MIN as i128,i16::MAX as i128),7=>(i8::MIN as i128,i8::MAX as i128),8=>(0,255),_=>unreachable!(),
+                    };
+                    if end<low || end>high {return Err("arange_integer endpoint exceeds output dtype".into());}
+                }
+            }
+            146..=159 => {
+                if n.b as usize>=out_index {return Err("predicate graph input must precede output".into());}
+                let b=&tensors[n.b as usize];
+                if n.op==146 {
+                    if b.dtype!=3 || !scalar_fits(a.dtype,n.scalar) || !broadcast_shape(&[a.shape,b.shape],out.shape) {
+                        return Err("invalid graph masked_fill dtype/broadcast/scalar".into());
+                    }
+                } else if n.op==147 {
+                    if !n.scalar.is_finite() || n.scalar.fract()!=0.0 || n.scalar<0.0 || n.scalar as usize>=out_index {
+                        return Err("where third input must precede output".into());
+                    }
+                    let c=&tensors[n.scalar as usize];
+                    if a.dtype!=3 || b.dtype!=c.dtype || out.dtype!=b.dtype || !broadcast_shape(&[a.shape,b.shape,c.shape],out.shape) {
+                        return Err("invalid graph where dtype/broadcast".into());
+                    }
+                } else {
+                    if out.dtype!=3 {return Err("graph comparison output must be bool".into());}
+                    if n.op<154 {
+                        if n.scalar.to_bits()!=0 || a.dtype!=b.dtype || !broadcast_shape(&[a.shape,b.shape],out.shape) {return Err("invalid graph comparison operands".into());}
+                    } else if n.b!=n.a || out.shape!=a.shape || !scalar_fits(a.dtype,n.scalar) || (a.dtype==3 && n.scalar!=0.0 && n.scalar!=1.0) {
+                        return Err("invalid graph scalar comparison".into());
+                    }
+                }
+            }
+            140..=145 => {
+                if n.b as usize>=out_index || !n.scalar.is_finite() || n.scalar<0.0 || n.scalar.fract()!=0.0 || n.scalar>=16777216.0 {
+                    return Err("invalid graph slice/cat encoding".into());
+                }
+                let code=n.scalar as usize;let axis=if n.op==142 {code} else {code&7};let start=code>>3;
+                let b=&tensors[n.b as usize];
+                if b.dtype!=a.dtype {return Err("slice/cat requires equal storage dtype".into());}
+                if n.op==142 {
+                    if axis>=a.shape.len() || b.shape.len()!=a.shape.len() || out.shape.len()!=a.shape.len()
+                        || a.shape.iter().enumerate().any(|(d,&size)|if d==axis {size.checked_add(b.shape[d])!=Some(out.shape[d])} else {size!=b.shape[d] || size!=out.shape[d]}) {
+                        return Err("invalid two-input graph concatenation".into());
+                    }
+                } else {
+                    let (full,part)=if n.op==143 || n.op==144 {(out,a)} else if n.op==145 {(a,b)} else {(a,out)};
+                    let selected=n.op==141 || n.op==144;
+                    if axis>=full.shape.len() || (n.op!=145 && n.a!=n.b) || (n.op==145 && a.shape!=out.shape) {
+                        return Err("invalid graph slice operands/axis".into());
+                    }
+                    let mut expected=full.shape.to_vec();
+                    if selected {if start>=expected[axis] {return Err("graph select out of bounds".into());}expected.remove(axis);}
+                    else {
+                        if part.shape.len()!=full.shape.len() || start.checked_add(part.shape[axis]).is_none_or(|end|end>full.shape[axis]) {return Err("graph slice out of bounds".into());}
+                        expected[axis]=part.shape[axis];
+                    }
+                    if part.shape!=expected.as_slice() {return Err("graph slice output shape differs".into());}
+                }
+            }
+            134..=139 => {
+                if n.b as usize>=out_index || !n.scalar.is_finite() || n.scalar.fract()!=0.0 {
+                    return Err("invalid indexing graph input/scalar".into());
+                }
+                let b=&tensors[n.b as usize];
+                if !matches!(b.dtype,4|5) {return Err("graph indices require int32/int64 storage".into());}
+                if matches!(n.op,136..=138) {
+                    let (weight,gradient)=if n.op==136 {(a,out)} else {(out,a)};
+                    let mut expected=b.shape.to_vec();
+                    if weight.shape.len()!=2 {return Err("graph embedding weight must be a matrix".into());}
+                    expected.push(weight.shape[1]);
+                    if gradient.shape!=expected.as_slice() || (n.op==136 && n.scalar.to_bits()!=0)
+                        || (n.op!=136 && (n.scalar< -1.0 || n.scalar>=weight.shape[0] as f32)) {
+                        return Err("graph embedding shape or padding differs".into());
+                    }
+                } else {
+                    let (source,indexed)=if n.op==139 {(out,a)} else {(a,out)};
+                    if n.scalar<0.0 || n.scalar as usize>=source.shape.len() || indexed.shape.len()!=source.shape.len() {
+                        return Err("invalid graph indexing axis/rank".into());
+                    }
+                    let axis=n.scalar as usize;
+                    if n.op==134 {
+                        if b.shape.len()>1 || indexed.shape.iter().enumerate().any(|(d,&size)|size!=if d==axis {b.shape.iter().product()} else {source.shape[d]}) {
+                            return Err("invalid graph index_select shape".into());
+                        }
+                    } else if b.shape!=indexed.shape || b.shape.iter().enumerate().any(|(d,&size)|d!=axis && size>source.shape[d]) {
+                        return Err("invalid graph gather shape".into());
+                    }
+                }
+            }
             112 | 114 => {
                 if n.b != n.a || n.scalar.to_bits()!=0 || (n.op==112 && a.shape.iter().product::<usize>()!=out.shape.iter().product::<usize>())
                     || (n.op==114 && a.shape!=out.shape) {
@@ -91,7 +242,7 @@ pub fn validate(tensors: &[TensorSpec<'_>], nodes: &[NodeSpec], inputs: usize) -
                 for dim in 0..rank {
                     let x=if dim+a.shape.len()<rank {1} else {a.shape[dim+a.shape.len()-rank]};
                     let y=if dim+b.shape.len()<rank {1} else {b.shape[dim+b.shape.len()-rank]};
-                    if (x!=y && x!=1 && y!=1) || out.shape[dim]!=x.max(y) {
+                    if (x!=y && x!=1 && y!=1) || out.shape[dim]!=(if x==1 {y} else {x}) {
                         return Err("invalid graph broadcast output".into());
                     }
                 }
@@ -157,7 +308,7 @@ pub fn validate(tensors: &[TensorSpec<'_>], nodes: &[NodeSpec], inputs: usize) -
                 if !n.scalar.is_finite() || n.scalar <= 0.0 { return Err("RMSNorm epsilon must be finite and positive".into()); }
                 if a.shape.is_empty() {return Err("RMSNorm requires a feature axis".into());}
                 let width = *a.shape.last().unwrap();
-                let rows = a.shape.iter().product::<usize>() / width;
+                let rows = if width==0 {0} else {a.shape.iter().product::<usize>() / width};
                 if rows > u32::MAX as usize / 32 { return Err("RMSNorm row grid exceeds 32-bit indexing".into()); }
                 if n.b != NO_WEIGHT {
                     if n.b as usize >= out_index { return Err("RMSNorm weight must precede its output".into()); }

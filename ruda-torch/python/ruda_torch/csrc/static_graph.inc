@@ -54,7 +54,7 @@ class StaticGraphBridge {
                     const std::vector<uint32_t>& words,const std::vector<float>& scalars,
                     bool tracked,bool infer):tensors_(tensors),inputs_(inputs),tracked_(tracked) {
     TORCH_CHECK(static_graph_native,"native static graph API is unavailable; rebuild Rust and C++");
-    TORCH_CHECK(inputs>0 && scalars.size()>0 && scalars.size()<=256
+    TORCH_CHECK(scalars.size()>0 && scalars.size()<=256
       && tensors.size()<=512 && tensors.size()==inputs+scalars.size()
       && words.size()==scalars.size()*3,"invalid static graph header");
     std::vector<std::unique_ptr<Argument>> args;
@@ -62,9 +62,11 @@ class StaticGraphBridge {
     for(const auto& t:tensors_) {
       validate(t.device());
       TORCH_CHECK(t.layout()==c10::Layout::Strided && t.is_contiguous()
-        && t.dim()>=0 && t.dim()<=8 && t.numel()>0 && t.numel()<=std::numeric_limits<uint32_t>::max(),
-        "static graph requires nonempty contiguous rank 0..8 tensors");
-      TORCH_CHECK(dtype_code(t.scalar_type())<=2,"static graph supports FP32/FP16/BF16 only");
+        && t.dim()>=0 && t.dim()<=8 && t.numel()<=std::numeric_limits<uint32_t>::max(),
+        "static graph requires contiguous rank 0..8 tensors");
+      for(const auto size:t.sizes()) TORCH_CHECK(size<=std::numeric_limits<uint32_t>::max(),
+        "static graph dimension exceeds 32-bit kernel indexing");
+      TORCH_CHECK(dtype_code(t.scalar_type())<=8,"unsupported static graph storage dtype");
       TORCH_CHECK(!t.requires_grad(),"static graph is inference-only");
       args.emplace_back(std::make_unique<Argument>(t));
       descriptors.push_back(args.back()->desc);
@@ -75,11 +77,143 @@ class StaticGraphBridge {
     for(size_t i=0;i<scalars.size();++i) {
       const uint32_t op=words[i*3], a=words[i*3+1], b=words[i*3+2];
       const size_t out=inputs+i;
-      TORCH_CHECK(a<out,"static graph node refers to a future input");
-      const auto& x=tensors_[a]; const auto& y=tensors_[out];
-      TORCH_CHECK((op==7 || op==30 || op==57 || op==104 || op==105 || (op>=112 && op<=124) || x.sizes()==y.sizes())
-        && (op==114 || x.scalar_type()==y.scalar_type()),"static graph output mismatch");
-      if(op==112 || op==114) {
+      const bool root=(op==160 || op==161 || op==172) && a==std::numeric_limits<uint32_t>::max();
+      TORCH_CHECK(root || a<out,"static graph node refers to a future input");
+      const auto& x=tensors_[root ? out : a]; const auto& y=tensors_[out];
+      TORCH_CHECK((op==7 || op==30 || op==57 || op==104 || op==105 || (op>=112 && op<=124) || (op>=134 && op<=172) || x.sizes()==y.sizes())
+        && (op==114 || op==172 || (op>=147 && op<=161) || (op>=164 && op<=167) || x.scalar_type()==y.scalar_type()),"static graph output mismatch");
+      TORCH_CHECK((dtype_code(x.scalar_type())<=2 && dtype_code(y.scalar_type())<=2)
+        || op==0 || (op>=112 && op<=115) || (op>=134 && op<=136) || (op>=140 && op<=172),
+        "nonfloating graph tensors require storage/layout/indexing operations");
+      if(op==172) {
+        float step;std::memcpy(&step,&b,sizeof(step));
+        TORCH_CHECK(dtype_code(y.scalar_type())<=2 && y.dim()==1 && std::isfinite(scalars[i]) && std::isfinite(step),
+          "invalid floating arange graph parameters");
+      } else if(op>=162 && op<=171) {
+        TORCH_CHECK(b<out && std::isfinite(scalars[i]),"invalid graph mask operand/scalar");
+        if(op<=163) {
+          TORCH_CHECK(b==a && x.dim()>=2 && x.sizes()==y.sizes() && std::floor(scalars[i])==scalars[i]
+            && double(scalars[i])>=-2147483648.0 && double(scalars[i])<=2147483647.0,"invalid graph triangular mask");
+        } else {
+          const auto& r=tensors_[b];const int rank=std::max(x.dim(),r.dim());
+          TORCH_CHECK(scalars[i]==0.0f && x.scalar_type()==r.scalar_type() && y.dim()==rank
+            && ((op!=164 && op!=168) || b==a),"invalid logical/bitwise graph operands");
+          for(int d=0;d<rank;++d) {
+            const int64_t lhs=d<rank-x.dim() ? 1 : x.size(d-rank+x.dim());
+            const int64_t rhs=d<rank-r.dim() ? 1 : r.size(d-rank+r.dim());
+            TORCH_CHECK((lhs==rhs || lhs==1 || rhs==1) && y.size(d)==(lhs==1 ? rhs : lhs),"invalid logical/bitwise graph broadcast");
+          }
+          TORCH_CHECK(op<=167 ? y.scalar_type()==at::kBool : dtype_code(x.scalar_type())>=3,"invalid logical/bitwise graph dtype");
+        }
+      } else if(op==160 || op==161) {
+        const double start=scalars[i];const uint32_t dtype=dtype_code(y.scalar_type());
+        double low=0,high=0;
+        if(dtype>=4) {
+          if(dtype==4){low=-9223372036854775808.0;high=9223372036854775808.0;}
+          else if(dtype==5){low=-2147483648.0;high=2147483647.0;}
+          else if(dtype==6){low=-32768.0;high=32767.0;}
+          else if(dtype==7){low=-128.0;high=127.0;}
+          else {low=0.0;high=255.0;}
+          TORCH_CHECK(std::isfinite(start) && std::floor(start)==start && start>=low
+            && (dtype==4 ? start<high : start<=high),"factory scalar exceeds integer dtype");
+        } else if(dtype==1 || dtype==2) {
+          TORCH_CHECK(!std::isfinite(start) || std::abs(start)<=(dtype==1 ? 65504.0 : double(3.38953139e38f)),"factory scalar exceeds floating dtype");
+        }
+        if(op==160) {TORCH_CHECK(b==a,"full requires one device anchor");}
+        else {
+          TORCH_CHECK(dtype>=4 && y.dim()==1 && b!=0,"arange_integer requires integer vector and nonzero signed step");
+          const int64_t step=b<=uint32_t(std::numeric_limits<int32_t>::max()) ? int64_t(b) : int64_t(b)-4294967296LL;
+          const int64_t first=int64_t(start),offset=std::max<int64_t>(y.numel()-1,0)*step;
+          TORCH_CHECK(offset>=0 ? first<=std::numeric_limits<int64_t>::max()-offset
+            : first>=std::numeric_limits<int64_t>::min()-offset,"arange_integer endpoint overflows int64");
+          const int64_t end=first+offset;
+          TORCH_CHECK(dtype==4 || (end>=int64_t(low) && end<=int64_t(high)),"arange_integer endpoint exceeds output dtype");
+        }
+      } else if(op>=146 && op<=159) {
+        TORCH_CHECK(b<out,"predicate graph input must precede output");
+        const auto& right=tensors_[b];
+        auto broadcast=[&](std::initializer_list<const at::Tensor*> values) {
+          int rank=0;for(auto value:values)rank=std::max(rank,int(value->dim()));
+          if(y.dim()!=rank)return false;
+          for(int d=0;d<rank;++d) {
+            int64_t size=1;
+            for(auto value:values) {
+              const int64_t next=d<rank-value->dim() ? 1 : value->size(d-rank+value->dim());
+              if(size!=1 && next!=1 && size!=next)return false;if(size==1)size=next;
+            }
+            if(y.size(d)!=size)return false;
+          }
+          return true;
+        };
+        auto scalar_fits=[&]() {
+          const double value=scalars[i];const uint32_t dtype=dtype_code(x.scalar_type());
+          if(dtype==0 || dtype==3)return true;
+          if(dtype==1)return !std::isfinite(value) || std::abs(value)<=65504.0;
+          if(dtype==2)return !std::isfinite(value) || std::abs(value)<=double(3.38953139e38f);
+          if(!std::isfinite(value) || std::floor(value)!=value)return false;
+          if(dtype==4)return value>=-9223372036854775808.0 && value<9223372036854775808.0;
+          if(dtype==5)return value>=-2147483648.0 && value<=2147483647.0;
+          if(dtype==6)return value>=-32768.0 && value<=32767.0;
+          if(dtype==7)return value>=-128.0 && value<=127.0;
+          return dtype==8 && value>=0.0 && value<=255.0;
+        };
+        if(op==146) {
+          TORCH_CHECK(right.scalar_type()==at::kBool && scalar_fits() && broadcast({&x,&right}),"invalid masked_fill graph inputs/scalar");
+        } else if(op==147) {
+          TORCH_CHECK(std::isfinite(scalars[i]) && scalars[i]>=0 && scalars[i]<out && std::floor(scalars[i])==scalars[i],"where third input must precede output");
+          const auto& third=tensors_[size_t(scalars[i])];
+          TORCH_CHECK(x.scalar_type()==at::kBool && right.scalar_type()==third.scalar_type() && y.scalar_type()==right.scalar_type()
+            && broadcast({&x,&right,&third}),"invalid where graph dtype/broadcast");
+        } else {
+          TORCH_CHECK(y.scalar_type()==at::kBool,"comparison graph output must be bool");
+          if(op<154) {TORCH_CHECK(scalars[i]==0.0f && !std::signbit(scalars[i]) && x.scalar_type()==right.scalar_type()
+            && broadcast({&x,&right}),"invalid graph comparison inputs");}
+          else {TORCH_CHECK(b==a && x.sizes()==y.sizes() && scalar_fits()
+            && (x.scalar_type()!=at::kBool || scalars[i]==0.0f || scalars[i]==1.0f),"invalid scalar comparison");}
+        }
+      } else if(op>=140 && op<=145) {
+        TORCH_CHECK(b<out && std::isfinite(scalars[i]) && scalars[i]>=0 && scalars[i]<16777216.0f
+          && std::floor(scalars[i])==scalars[i] && tensors_[b].scalar_type()==x.scalar_type(),"invalid transform graph parameter/input");
+        const auto code=uint32_t(scalars[i]);const int axis=op==142 ? int(code) : int(code&7u);const int64_t start=code>>3;
+        const auto& right=tensors_[b];
+        if(op==142) {
+          TORCH_CHECK(axis<x.dim() && right.dim()==x.dim() && y.dim()==x.dim(),"invalid cat rank/axis");
+          for(int d=0;d<x.dim();++d) TORCH_CHECK(d==axis ? y.size(d)==x.size(d)+right.size(d) : (x.size(d)==right.size(d) && x.size(d)==y.size(d)),"invalid cat dimensions");
+        } else {
+          const auto& full=(op==143 || op==144) ? y : x;
+          const auto& part=(op==143 || op==144) ? x : (op==145 ? right : y);
+          TORCH_CHECK(axis<full.dim() && (op==145 ? x.sizes()==y.sizes() : b==a),"invalid slice/select operands");
+          auto expected=full.sizes().vec();
+          if(op==141 || op==144) {
+            TORCH_CHECK(start<full.size(axis),"graph select out of bounds");expected.erase(expected.begin()+axis);
+          } else {
+            TORCH_CHECK(part.dim()==full.dim() && start+part.size(axis)<=full.size(axis),"graph slice out of bounds");expected[axis]=part.size(axis);
+          }
+          TORCH_CHECK(part.sizes()==c10::IntArrayRef(expected),"slice/select output mismatch");
+        }
+      } else if(op>=134 && op<=139) {
+        TORCH_CHECK(b<out && std::isfinite(scalars[i]) && std::floor(scalars[i])==scalars[i],"invalid graph indexing parameter/input");
+        const auto& indices=tensors_[b];
+        TORCH_CHECK(indices.scalar_type()==at::kLong || indices.scalar_type()==at::kInt,"graph indices require int32/int64");
+        if(op>=136 && op<=138) {
+          const auto& weight=op==136 ? x : y; const auto& gradient=op==136 ? y : x;
+          TORCH_CHECK(weight.dim()==2,"embedding weights must be a matrix");
+          auto expected=indices.sizes().vec();expected.push_back(weight.size(1));
+          TORCH_CHECK(gradient.sizes()==c10::IntArrayRef(expected)
+            && (op==136 ? scalars[i]==0.0f : (scalars[i]>=-1.0f && scalars[i]<weight.size(0))),"embedding graph shape/padding mismatch");
+        } else {
+          const auto& source=op==139 ? y : x; const auto& indexed=op==139 ? x : y;
+          TORCH_CHECK(scalars[i]>=0 && scalars[i]<source.dim() && indexed.dim()==source.dim(),"invalid indexing axis/rank");
+          const int axis=int(scalars[i]);
+          if(op==134) {
+            TORCH_CHECK(indices.dim()<=1,"index_select indices must be scalar/vector");
+            for(int d=0;d<source.dim();++d) TORCH_CHECK(indexed.size(d)==(d==axis ? indices.numel() : source.size(d)),"index_select output mismatch");
+          } else {
+            TORCH_CHECK(indices.sizes()==indexed.sizes(),"gather indices/output mismatch");
+            for(int d=0;d<source.dim();++d) TORCH_CHECK(d==axis || indices.size(d)<=source.size(d),"gather shape exceeds source");
+          }
+        }
+      } else if(op==112 || op==114) {
         TORCH_CHECK(b==a && scalars[i]==0.0f && !std::signbit(scalars[i])
           && (op==112 ? x.numel()==y.numel() : x.sizes()==y.sizes()),"invalid graph reshape/cast");
       } else if(op==113) {
@@ -102,7 +236,7 @@ class StaticGraphBridge {
         for(int d=0;d<rank;++d) {
           const auto lhs=d<rank-x.dim() ? 1 : x.size(d-rank+x.dim());
           const auto rhs=d<rank-r.dim() ? 1 : r.size(d-rank+r.dim());
-          TORCH_CHECK((lhs==rhs || lhs==1 || rhs==1) && y.size(d)==std::max(lhs,rhs),"invalid broadcast shape");
+          TORCH_CHECK((lhs==rhs || lhs==1 || rhs==1) && y.size(d)==(lhs==1 ? rhs : lhs),"invalid broadcast shape");
         }
       } else if(op==119 || op==120) {
         TORCH_CHECK(b==a && std::isfinite(scalars[i]) && scalars[i]>0 && scalars[i]<(1u<<x.dim())
@@ -141,7 +275,7 @@ class StaticGraphBridge {
           "graph reduction output mismatch");
       } else if(op==100) {
         TORCH_CHECK(x.dim()>0 && std::isfinite(scalars[i]) && scalars[i]>0.0f,"invalid RMSNorm epsilon/rank");
-        TORCH_CHECK(x.numel()/x.size(-1)<=std::numeric_limits<uint32_t>::max()/32,
+        TORCH_CHECK(x.numel()==0 || x.numel()/x.size(-1)<=std::numeric_limits<uint32_t>::max()/32,
                     "RMSNorm row grid overflow");
         if(b!=std::numeric_limits<uint32_t>::max()) {
           TORCH_CHECK(b<out && tensors_[b].dim()==1 && tensors_[b].size(0)==x.size(-1)
@@ -158,9 +292,12 @@ class StaticGraphBridge {
     for(size_t i=0;i<last.size();++i)last[i]=i;
     for(size_t i=0;i<nodes.size();++i) {
       const auto& n=nodes[i];const size_t out=inputs+i;
-      last[n.a]=std::max(last[n.a],out);consumed[n.a]=true;
-      if(n.b!=std::numeric_limits<uint32_t>::max()) {
+      if(n.a!=std::numeric_limits<uint32_t>::max()) {last[n.a]=std::max(last[n.a],out);consumed[n.a]=true;}
+      if(n.op!=161 && n.op!=172 && n.b!=std::numeric_limits<uint32_t>::max()) {
         last[n.b]=std::max(last[n.b],out);consumed[n.b]=true;
+      }
+      if(n.op==147) {
+        const size_t third=size_t(n.scalar);last[third]=std::max(last[third],out);consumed[third]=true;
       }
     }
     for(size_t i=0;i<tensors_.size();++i)

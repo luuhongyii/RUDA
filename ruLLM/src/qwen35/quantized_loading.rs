@@ -21,7 +21,7 @@ pub(super) fn configuration(raw: &serde_json::Value)
     }).transpose()
 }
 
-fn packed_tensor(checkpoint: &Checkpoint, name: &str, shape: [usize; 2], integer: bool)
+pub(super) fn packed_tensor(checkpoint: &Checkpoint, name: &str, shape: [usize; 2], integer: bool)
     -> Result<TensorData, HuggingFaceLoadError>
 {
     let snapshot = checkpoint.tensors.get(name)

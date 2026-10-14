@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass
 import torch
 from torch import nn
@@ -58,6 +59,39 @@ def _linear_backward(ctx, grad):
 _linear.register_autograd(_linear_backward, setup_context=_linear_context)
 
 
+@torch.library.custom_op('ruda::packed_linear_tensor_core', mutates_args=())
+def _tensor_core_linear(x: torch.Tensor, codes: torch.Tensor, scales: torch.Tensor,
+                        offsets: torch.Tensor, group_index: torch.Tensor, layout: list[int],
+                        transpose: bool) -> torch.Tensor:
+    import ctypes
+    from . import _native
+    if x.dtype not in (torch.float16, torch.bfloat16):
+        raise ValueError('packed Tensor Core Linear requires FP16/BF16 activations')
+    if not hasattr(_native, 'ruda_torch_packed_matmul_api_version') or getattr(_C, 'packed_matmul_api_version', None) != 1:
+        raise RuntimeError('packed Tensor Core Linear requires matching rebuilt native libraries')
+    _native.ruda_torch_packed_matmul_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_packed_matmul_api_version() != 1:
+        raise RuntimeError('packed matmul API mismatch')
+    width = layout[2] if transpose else layout[3]
+    out = x.new_empty((x.shape[0], width))
+    _C.packed_dispatch(7 if transpose else 6, [x, codes, scales, offsets, group_index, out], layout)
+    return out
+
+
+@_tensor_core_linear.register_fake
+def _tensor_core_fake(x, codes, scales, offsets, group_index, layout, transpose):
+    return x.new_empty((x.shape[0], layout[2] if transpose else layout[3]))
+
+
+def _tensor_core_backward(ctx, grad):
+    codes, scales, offsets, index = ctx.saved_tensors
+    dx = _tensor_core_linear(grad.contiguous(), codes, scales, offsets, index, ctx.layout, not ctx.transpose)
+    return dx, None, None, None, None, None, None
+
+
+_tensor_core_linear.register_autograd(_tensor_core_backward, setup_context=_linear_context)
+
+
 @torch.library.custom_op('ruda::packed_decode', mutates_args=())
 def _decode(codes: torch.Tensor, scales: torch.Tensor, offsets: torch.Tensor,
             group_index: torch.Tensor, layout: list[int], dtype: torch.dtype) -> torch.Tensor:
@@ -107,6 +141,7 @@ class PackedQuantizedTensor:
 
     Integer codes are unsigned; symmetric integers use a negative offset.
     `group_index` optionally maps each input column to a group (GPTQ act-order).
+    An explicit map may retain a larger parameter table for an input shard.
     Frozen metadata are serialized explicitly by PackedLinear.state_dict().
     """
     codes: torch.Tensor
@@ -121,15 +156,22 @@ class PackedQuantizedTensor:
         layout = _layout(self.format, self.group_size, self.shape)
         rows, width = layout[3], layout[2]
         groups = (width + self.group_size - 1) // self.group_size
+        if self.group_index is None:
+            object.__setattr__(self, 'group_index', torch.empty(0, dtype=torch.int32, device=self.codes.device))
+        if self.group_index.dtype != torch.int32 or self.group_index.shape not in ((0,), (width,)):
+            raise ValueError('group_index must be empty or I32 [input_features]')
+        if self.group_index.numel() and self.scales.ndim == 2:
+            groups = self.scales.shape[1]
+        if groups < 1 or groups > 0xffffffff or rows * groups > 0xffffffff:
+            raise ValueError('packed parameter table exceeds U32 indexing')
+        if groups != (width + self.group_size - 1) // self.group_size and self.codes.device.type == 'ruda':
+            if not getattr(sys.modules.get(__package__), '_packed_indexed_groups_available', False):
+                raise RuntimeError('packed TP parameter tables require rebuilt indexed-groups API 1 libraries')
         if self.codes.dtype != torch.uint8 or tuple(self.codes.shape) != (rows, (width * _bits(self.format) + 7) // 8):
             raise ValueError('packed code byte geometry differs from logical shape')
         for value in (self.scales, self.offsets):
             if value.dtype != torch.float32 or tuple(value.shape) != (rows, groups):
                 raise ValueError('packed scales and offsets must be FP32 [rows,groups]')
-        if self.group_index is None:
-            object.__setattr__(self, 'group_index', torch.empty(0, dtype=torch.int32, device=self.codes.device))
-        if self.group_index.dtype != torch.int32 or self.group_index.shape not in ((0,), (width,)):
-            raise ValueError('group_index must be empty or I32 [input_features]')
         for value in (self.codes, self.scales, self.offsets, self.group_index):
             if value.device != self.codes.device or not value.is_contiguous() or value.requires_grad:
                 raise ValueError('packed tensors require contiguous, frozen, same-device operands')
@@ -181,9 +223,16 @@ def quantize_packed(x, *, format='int4', group_size=128, symmetric=True,
 
 
 class PackedLinear(nn.Module):
-    """Packed frozen base with native input gradients; LoRA may wrap this module."""
-    def __init__(self, weight: PackedQuantizedTensor, bias=None):
+    """Packed frozen base with native input gradients; LoRA may wrap this module.
+
+    tensor_core decodes weight tiles into the FP16/BF16 activation dtype and
+    accumulates in FP32. scalar retains FP32 decoded-weight arithmetic.
+    """
+    def __init__(self, weight: PackedQuantizedTensor, bias=None, *, strategy='scalar'):
         super().__init__()
+        if strategy not in ('scalar', 'tensor_core'):
+            raise ValueError('packed Linear strategy must be scalar or tensor_core')
+        self.strategy = strategy
         if len(weight.shape) != 2:
             raise ValueError('PackedLinear requires [out,in] weights')
         self.out_features, self.in_features = weight.shape
@@ -205,25 +254,32 @@ class PackedLinear(nn.Module):
         super()._apply(fn, recurse)
         for name, original in metadata.items():
             setattr(self, name, original.to(device=getattr(self, name).device, dtype=torch.float32))
+        self.packed_weight
         return self
 
     def get_extra_state(self):
-        return {'version': 1, 'shape': (self.out_features, self.in_features),
-                'format': self.format, 'group_size': self.group_size}
+        state = {'version': 1, 'shape': (self.out_features, self.in_features),
+                 'format': self.format, 'group_size': self.group_size}
+        if self.strategy != 'scalar':
+            state.update(version=2, strategy=self.strategy)
+        if self.scales.shape[1] != (self.in_features + self.group_size - 1) // self.group_size:
+            state.update(version=3, parameter_groups=self.scales.shape[1])
+        return state
 
     def set_extra_state(self, state):
         if state != self.get_extra_state():
             raise ValueError('packed state layout differs from the constructed module')
 
     @classmethod
-    def from_linear(cls, linear, **kwargs):
-        return cls(quantize_packed(linear.weight, **kwargs), linear.bias)
+    def from_linear(cls, linear, *, strategy='scalar', **kwargs):
+        return cls(quantize_packed(linear.weight, **kwargs), linear.bias, strategy=strategy)
 
     def forward(self, x):
         if x.device.type != 'ruda' or x.device != self.codes.device or x.dtype not in _FLOATS or x.shape[-1] != self.in_features:
             raise ValueError('packed Linear input device/dtype/width mismatch')
         shape = x.shape[:-1] + (self.out_features,)
-        result = _linear(x.reshape(-1, self.in_features).contiguous(), self.codes, self.scales,
+        multiply = _tensor_core_linear if self.strategy == 'tensor_core' else _linear
+        result = multiply(x.reshape(-1, self.in_features).contiguous(), self.codes, self.scales,
             self.offsets, self.group_index, _layout(self.format, self.group_size, (self.out_features, self.in_features)), False).reshape(shape)
         return result if self.bias is None else result + self.bias.to(dtype=x.dtype)
 
@@ -255,11 +311,12 @@ class PackedEmbedding(PackedLinear):
         return result.reshape(*index.shape,self.embedding_dim)
 
 
-def scaled_float8_mm(a, b, scale_a, scale_b, *, out_dtype=torch.float16, bias=None):
-    """Scaled FP8 GEMM via packed weights; operands are FP8 [M,K] and [K,N].
+def scaled_float8_mm(a, b, scale_a, scale_b, *, out_dtype=torch.float16, bias=None, strategy='auto'):
+    """Scaled FP8 GEMM; operands are FP8 [M,K] and [K,N].
 
-    Scales are scalar or A [M,1], B [1,N]. FP32 accumulation uses RUDA's packed
-    kernel, including on devices without native FP8 matrix instructions.
+    Scales are scalar or A [M,1], B [1,N]. auto uses native FP8 instructions
+    or an exact FP16 Tensor Core carrier; scalar retains the packed dot kernel.
+    native requires FP8 hardware; float16 explicitly selects the carrier.
     """
     supported = (torch.float8_e4m3fn, torch.float8_e5m2)
     if a.dtype not in supported or b.dtype not in supported or a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[0]:
@@ -276,6 +333,14 @@ def scaled_float8_mm(a, b, scale_a, scale_b, *, out_dtype=torch.float16, bias=No
         raise ValueError('FP8 scale metadata must be FP32')
     if bias is not None and (bias.shape != (b.shape[1],) or bias.device != a.device or bias.dtype not in _FLOATS):
         raise ValueError('FP8 GEMM bias must be a floating [N] tensor on the operand device')
+    if strategy not in ('auto', 'native', 'float16', 'scalar'):
+        raise ValueError('FP8 GEMM strategy must be auto, native, float16 or scalar')
+    if strategy != 'scalar':
+        from .float8_training import _mm, _STRATEGIES
+        result = _mm(a, b, scale_a, scale_b, False, False, _STRATEGIES[strategy])
+        if bias is not None:
+            result = result + bias.float()
+        return result.to(out_dtype)
     weight = b.t().contiguous().view(torch.uint8)
     scales = scale_b.float().reshape(-1, 1).expand(b.shape[1], 1).contiguous()
     offsets = torch.zeros_like(scales)

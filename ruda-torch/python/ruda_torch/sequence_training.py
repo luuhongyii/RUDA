@@ -5,16 +5,13 @@ import math
 import torch
 from torch.autograd.function import once_differentiable
 from torch.utils.checkpoint import checkpoint
-from ._architecture_ops import positions, precision_context, work_dtype, positive_int
+from ._architecture_ops import precision_context, work_dtype, positive_int
 
 
 def triangular_mask(x, diagonal=0, *, upper=False):
     if x.ndim < 2:
         raise ValueError('triangular masking requires matrices')
-    row = positions(x.shape[-2], x.device).unsqueeze(-1)
-    col = positions(x.shape[-1], x.device).unsqueeze(0)
-    keep = col - row >= diagonal if upper else col - row <= diagonal
-    return torch.where(keep, x, torch.zeros_like(x))
+    return torch.triu(x, diagonal=diagonal) if upper else torch.tril(x, diagonal=diagonal)
 
 
 def _solve(a, b, upper, unitriangular):
@@ -75,7 +72,7 @@ def solve_triangular(a, b, *, upper=False, left=True, unitriangular=False):
 
 def _delta_chunk(q, k, v, beta, decay, state, scale):
     length = q.shape[-2]
-    index = positions(length, q.device)
+    index = torch.arange(length, device=q.device, dtype=torch.int64)
     lower = index.unsqueeze(-1) >= index.unsqueeze(0)
     strict = index.unsqueeze(-1) > index.unsqueeze(0)
     diagonal = index.unsqueeze(-1) == index.unsqueeze(0)
@@ -113,6 +110,85 @@ def _delta_scan(q, k, v, beta, decay, state, scale, chunk_size, checkpoint_chunk
     return torch.cat(output, -2), state
 
 
+def _delta_chunk_adjoint(q, k, v, beta, decay, state, dy, dh, scale):
+    length = q.shape[-2]
+    index = torch.arange(length, device=q.device, dtype=torch.int64)
+    lower = index[:, None] >= index[None, :]
+    strict = index[:, None] > index[None, :]
+    diagonal = index[:, None] == index[None, :]
+    cumulative = decay.cumsum(-1)
+    difference = cumulative.unsqueeze(-1) - cumulative.unsqueeze(-2)
+    factors = torch.where(lower, difference, torch.zeros_like(difference)).exp()
+    prefix = cumulative.exp()
+    tail = (cumulative[..., -1:] - cumulative).exp()
+    kb = k * beta.unsqueeze(-1)
+    kk = kb @ k.transpose(-1, -2)
+    system = torch.where(strict, kk * factors, torch.zeros_like(factors)) + diagonal.to(q.dtype)
+    rhs = torch.cat((v * beta.unsqueeze(-1), kb * prefix.unsqueeze(-1)), -1)
+    solved = solve_triangular(system, rhs, unitriangular=True)
+    u, w = solved[..., :v.shape[-1]], solved[..., v.shape[-1]:]
+    residual = u - w @ state
+    qscaled = q * scale
+    qk = qscaled @ k.transpose(-1, -2)
+    attention = torch.where(lower, qk * factors, torch.zeros_like(factors))
+    qp = q * (prefix * scale).unsqueeze(-1)
+    kt = k * tail.unsqueeze(-1)
+    final_decay = prefix[..., -1, None, None]
+
+    dqp = dy @ state.transpose(-1, -2)
+    da = dy @ residual.transpose(-1, -2)
+    dr = attention.transpose(-1, -2) @ dy + kt @ dh
+    dkt = residual @ dh.transpose(-1, -2)
+    ds = qp.transpose(-1, -2) @ dy + dh * final_decay - w.transpose(-1, -2) @ dr
+    dfinal = (dh * state).sum((-2, -1)) * prefix[..., -1]
+    dz = torch.cat((dr, -(dr @ state.transpose(-1, -2))), -1)
+    drhs = solve_triangular(system.transpose(-1, -2), dz, upper=True, unitriangular=True)
+    dsystem = -(drhs @ solved.transpose(-1, -2))
+    dvb, dkp = drhs[..., :v.shape[-1]], drhs[..., v.shape[-1]:]
+    dv = dvb * beta.unsqueeze(-1)
+    db = (dvb * v).sum(-1)
+    dkb = dkp * prefix.unsqueeze(-1)
+    dp = (dkp * kb).sum(-1)
+    dkk = torch.where(strict, dsystem * factors, torch.zeros_like(factors))
+    dfactors = torch.where(strict, dsystem * kk, torch.zeros_like(factors))
+    dkb = dkb + dkk @ k
+    dk = dkk.transpose(-1, -2) @ kb
+    dqk = torch.where(lower, da * factors, torch.zeros_like(factors))
+    dfactors = dfactors + torch.where(lower, da * qk, torch.zeros_like(factors))
+    dq = (dqk @ k) * scale + dqp * (prefix * scale).unsqueeze(-1)
+    dk = dk + dqk.transpose(-1, -2) @ qscaled + dkt * tail.unsqueeze(-1)
+    dp = dp + (dqp * q).sum(-1) * scale
+    dtail = (dkt * k).sum(-1) * tail
+    dk = dk + dkb * beta.unsqueeze(-1)
+    db = db + (dkb * k).sum(-1)
+    ddifference = torch.where(lower, dfactors * factors, torch.zeros_like(factors))
+    dc = dp * prefix + ddifference.sum(-1) - ddifference.sum(-2) - dtail
+    dlast = dtail.sum(-1) + dfinal
+    dc = dc + dlast.unsqueeze(-1) if length == 1 else torch.cat((dc[..., :-1], dc[..., -1:] + dlast.unsqueeze(-1)), -1)
+    dg = dc.flip((-1,)).cumsum(-1).flip((-1,))
+    return dq, dk, dv, db, dg, ds
+
+
+def _delta_scan_adjoint(q, k, v, beta, decay, initial, dy, dh, scale, chunk_size):
+    starts = range(0, q.shape[-2], chunk_size)
+    states = [initial]
+    for start in list(starts)[:-1]:
+        end = min(start + chunk_size, q.shape[-2])
+        _, state = _delta_chunk(q[..., start:end, :], k[..., start:end, :], v[..., start:end, :],
+                                beta[..., start:end], decay[..., start:end], states[-1], scale)
+        states.append(state)
+    chunks = [[], [], [], [], []]
+    for start in reversed(starts):
+        end = min(start + chunk_size, q.shape[-2])
+        gradients = _delta_chunk_adjoint(q[..., start:end, :], k[..., start:end, :], v[..., start:end, :],
+            beta[..., start:end], decay[..., start:end], states.pop(), dy[..., start:end, :], dh, scale)
+        for group, gradient in zip(chunks, gradients[:5]):
+            group.append(gradient)
+        dh = gradients[5]
+    result = [torch.cat(tuple(reversed(group)), -2 if i < 3 else -1) for i, group in enumerate(chunks)]
+    return (*result, dh)
+
+
 class _NativeDelta(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, beta, decay, initial, scale, chunk_size, checkpoint_chunks):
@@ -124,18 +200,11 @@ class _NativeDelta(torch.autograd.Function):
     @staticmethod
     @once_differentiable
     def backward(ctx, gy, gs):
-        with torch.enable_grad():
-            inputs = [tensor.detach().requires_grad_(needed) for tensor, needed in
-                      zip(ctx.saved_tensors, ctx.needs_input_grad[:6])]
-            output, final = _delta_scan(*inputs, *ctx.options[:2], ctx.options[2])
-            active = [tensor for tensor in inputs if tensor.requires_grad]
-            pairs = [(tensor, gradient) for tensor, gradient in ((output, gy), (final, gs))
-                     if tensor.requires_grad]
-            gradients = torch.autograd.grad(tuple(tensor for tensor, _ in pairs), active,
-                         tuple(torch.zeros_like(tensor) if gradient is None else gradient
-                               for tensor, gradient in pairs), allow_unused=True)
-            iterator = iter(gradients)
-            return tuple(next(iterator) if tensor.requires_grad else None for tensor in inputs) + (None,) * 3
+        q, k, v, beta, decay, initial = ctx.saved_tensors
+        gy = torch.zeros_like(v) if gy is None else gy
+        gs = torch.zeros_like(initial) if gs is None else gs
+        gradients = _delta_scan_adjoint(q, k, v, beta, decay, initial, gy, gs, *ctx.options[:2])
+        return tuple(g if needed else None for g, needed in zip(gradients, ctx.needs_input_grad[:6])) + (None,) * 3
 
 
 def gated_delta_rule(query, key, value, beta, log_decay, *, initial_state=None,
@@ -150,9 +219,11 @@ def gated_delta_rule(query, key, value, beta, log_decay, *, initial_state=None,
     RUDA reuses ruDNN's native chunk forward by default. The differentiable
     chunk algorithm uses FP32 state/intermediates (FP64 for explicit CPU FP64
     inputs), device GEMMs and a native triangular solve on RUDA.
-    Backward recomputes chunk intermediates through the same-device operators;
+    The first-order chunk adjoint rematerializes each chunk using same-device operators;
     this is not a standalone fused DeltaNet backward kernel. No state is
     detached between chunks. Both output and final-state gradients propagate.
+    The native-forward adjoint retains boundary states, not an autograd tape;
+    checkpoint_chunks controls the composite forward path.
     """
     positive_int(chunk_size, 'chunk_size')
     if query.ndim != 4 or key.shape != query.shape or value.ndim != 4 or value.shape[:3] != query.shape[:3]:

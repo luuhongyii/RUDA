@@ -1,6 +1,7 @@
 import ctypes
 import json
 import os
+import pickle
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import threading
@@ -42,6 +43,9 @@ class ProcessGroupRuCCL(dist.ProcessGroup):
         self._group_name = ''
         self._group_desc = ''
         self._timeout = timeout
+        self._store = store
+        self._metadata_sequence = 0
+        self._metadata_lock = threading.Lock()
         self._device = torch.cuda.current_device()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='ruccl-process-group')
         self._submit_lock = threading.Lock()
@@ -49,6 +53,19 @@ class ProcessGroupRuCCL(dist.ProcessGroup):
         self._stream = torch.cuda.Stream(device=self._device)
         library = ctypes.CDLL(os.environ['RUCCL_TORCH_LIBRARY'])
         library.ruccl_error.restype = ctypes.c_char_p
+        from ._ruccl_ucx import UcxTransport, local_host_id
+        requested = os.environ.get('RUCCL_CUDA_TRANSPORT', 'auto')
+        topology = self.gather_metadata((local_host_id(), requested))
+        if any(path != requested for _, path in topology) or requested not in ('auto', 'ipc', 'ucx'):
+            raise ValueError('ruCCL ProcessGroup needs the same auto/ipc/ucx transport on every rank')
+        same_host = len({host for host, _ in topology}) == 1
+        transport = ('ipc' if same_host else 'ucx') if requested == 'auto' else requested
+        if transport == 'ipc' and not same_host:
+            raise ValueError('CUDA IPC cannot cross hosts; select RUCCL_CUDA_TRANSPORT=ucx')
+        if transport == 'ucx':
+            self._transport = UcxTransport(library, self._device, rank, world_size,
+                self.gather_metadata, max(1, int(timeout.total_seconds()*1000)))
+            return
         library.ruccl_server.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
         if rank == 0:
             uid, port = (ctypes.c_uint8*16)(), ctypes.c_uint32()
@@ -62,6 +79,23 @@ class ProcessGroupRuCCL(dist.ProcessGroup):
 
     def getBackendName(self):
         return 'ruccl'
+
+    def gather_metadata(self, value):
+        with self._metadata_lock:
+            sequence = self._metadata_sequence
+            self._metadata_sequence += 1
+            prefix = f'ruccl/metadata/{sequence}'
+            keys = [f'{prefix}/value/{rank}' for rank in range(self._world)]
+            self._store.set(keys[self._rank], pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
+            self._store.wait(keys, self._timeout)
+            values = [pickle.loads(self._store.get(key)) for key in keys]
+            acknowledgements = [f'{prefix}/read/{rank}' for rank in range(self._world)]
+            self._store.set(acknowledgements[self._rank], b'1')
+            if self._rank == 0:
+                self._store.wait(acknowledgements, self._timeout)
+                for key in keys + acknowledgements:
+                    self._store.delete_key(key)
+            return values
 
     def _set_group_name(self, name):
         self._group_name = name

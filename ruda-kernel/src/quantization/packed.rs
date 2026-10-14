@@ -6,6 +6,7 @@ use crate::dsl as kernel_dsl;
 use crate::dsl::prelude::*;
 use crate::tensor::{RudaTensor, allocation::empty_device_contiguous_dtype};
 use ruda_core::{device::Device, tensor::{DType, Shape}};
+use ruda_core::ir::{ElemType, FloatKind, features::MmaConfig};
 
 /// Integer bit widths, or IEEE-like miniature floating-point encodings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -40,7 +41,12 @@ impl<R:Runtime> PackedTensor<R> {
     }
     pub fn width(&self)->usize { *self.shape.last().expect("packed tensor needs a feature axis") }
     pub fn rows(&self)->usize { self.shape.num_elements()/self.width() }
-    pub fn groups(&self)->usize { self.width().div_ceil(self.group_size) }
+    pub fn groups(&self)->usize {
+        if self.group_index.meta.num_elements()!=0 && self.scales.meta.num_dims()==2
+            && self.scales.meta.shape()[0]==self.rows() {
+            self.scales.meta.shape()[1]
+        } else { self.width().div_ceil(self.group_size) }
+    }
     pub fn row_bytes(&self)->usize { (self.width()*self.format.bits()).div_ceil(8) }
     pub fn validate(&self) {
         assert!(!self.shape.is_empty() && self.width()>0 && self.group_size>0);
@@ -50,7 +56,9 @@ impl<R:Runtime> PackedTensor<R> {
         assert_eq!(self.scales.dtype,DType::F32); assert_eq!(self.offsets.dtype,DType::F32);
         assert_eq!(self.group_index.dtype,DType::I32);
         assert_eq!(self.codes.meta.num_elements(),self.rows()*self.row_bytes());
+        assert!(self.groups()>0 && self.groups()<=u32::MAX as usize);
         assert_eq!(self.scales.meta.num_elements(),self.rows()*self.groups());
+        assert!(self.scales.meta.num_elements()<=u32::MAX as usize);
         assert_eq!(self.offsets.meta.num_elements(),self.scales.meta.num_elements());
         assert!(self.group_index.meta.num_elements()==0 || self.group_index.meta.num_elements()==self.width());
         for t in [&self.codes,&self.scales,&self.offsets,&self.group_index] { self.check(t); }
@@ -67,7 +75,7 @@ impl<R:Runtime> PackedTensor<R> {
             decode::launch::<R>(&out.client,grid(out.meta.num_elements()),RudaDim::new_1d(128),
                 self.codes.clone().into_array_arg(),self.scales.clone().into_array_arg(),
                 self.offsets.clone().into_array_arg(),self.group_index.clone().into_array_arg(),out.clone().into_array_arg(),
-                self.width(),self.group_size,self.format.code(),self.group_index.meta.num_elements()!=0,dtype.into());
+                self.width(),self.group_size,self.groups(),self.format.code(),self.group_index.meta.num_elements()!=0,dtype.into());
         }
         out
     }
@@ -104,8 +112,68 @@ impl<R:Runtime> PackedTensor<R> {
         if size!=0 { linear::launch::<R>(&x.client,grid(size),RudaDim::new_1d(128),
             x.clone().into_array_arg(),self.codes.clone().into_array_arg(),self.scales.clone().into_array_arg(),
             self.offsets.clone().into_array_arg(),self.group_index.clone().into_array_arg(),out.clone().into_array_arg(),
-            inputs,outputs,self.group_size,self.format.code(),transpose,self.group_index.meta.num_elements()!=0,x.dtype.into()); }
+            inputs,outputs,self.group_size,self.groups(),self.format.code(),transpose,self.group_index.meta.num_elements()!=0,x.dtype.into()); }
         out
+    }
+    pub fn linear_tensor_core(&self,x:&RudaTensor<R>,transpose:bool)->RudaTensor<R> {
+        self.validate(); self.check(x);
+        assert_eq!(self.shape.len(),2); assert_eq!(x.meta.num_dims(),2);
+        assert!(matches!(x.dtype,DType::F16|DType::BF16),"packed Tensor Core input must be FP16/BF16");
+        let (outputs,inputs)=(self.shape[0],self.shape[1]);
+        let inner=if transpose {outputs} else {inputs};
+        let columns=if transpose {inputs} else {outputs};
+        assert_eq!(x.meta.shape()[1],inner);
+        let rows=x.meta.shape()[0];
+        let size=rows.checked_mul(columns).expect("packed Tensor Core shape overflow");
+        assert!(size<=u32::MAX as usize);
+        let cfg=MmaConfig {a_type:x.dtype.into(),b_type:x.dtype.into(),
+            cd_type:ElemType::Float(FloatKind::F32).into(),m:16,n:16,k:16};
+        let hardware=&x.client.properties().hardware;
+        assert!(hardware.plane_size_min==32 && hardware.plane_size_max==32
+            && hardware.max_shared_memory_size>=2048 && x.client.features().matmul.cmma.contains(&cfg)
+            && columns.div_ceil(16)<=hardware.max_ruda_count.0 as usize
+            && rows.div_ceil(16)<=hardware.max_ruda_count.1 as usize,
+            "requested packed Tensor Core configuration is unavailable");
+        let out=empty_device_contiguous_dtype(x.client.clone(),x.device.clone(),Shape::new([rows,columns]),x.dtype);
+        if size!=0 { cooperative_linear::launch::<R>(&x.client,
+            RudaCount::Static(columns.div_ceil(16) as u32,rows.div_ceil(16) as u32,1),RudaDim::new_1d(32),
+            x.clone().into_array_arg(),self.codes.clone().into_array_arg(),self.scales.clone().into_array_arg(),
+            self.offsets.clone().into_array_arg(),self.group_index.clone().into_array_arg(),out.clone().into_array_arg(),
+            rows as u32,inputs,outputs,self.group_size,self.groups(),self.format.code(),transpose,
+            self.group_index.meta.num_elements()!=0,x.dtype.into()); }
+        out
+    }
+    pub fn prepare_linear(&self,x:&RudaTensor<R>,out:&RudaTensor<R>,transpose:bool,tensor_core:bool)->PreparedKernel<R> {
+        self.validate();self.check(x);self.check(out);
+        assert_eq!(self.shape.len(),2);assert_eq!(x.meta.num_dims(),2);
+        assert_eq!(x.dtype,out.dtype);
+        assert!(matches!(x.dtype,DType::F32|DType::F16|DType::BF16));
+        let (outputs,inputs)=(self.rows(),self.width());let rows=x.meta.shape()[0];
+        let (inner,columns)=if transpose {(outputs,inputs)} else {(inputs,outputs)};
+        assert_eq!(x.meta.shape()[1],inner);assert_eq!(out.meta.shape().as_slice(),&[rows,columns]);
+        assert!(out.meta.num_elements()>0 && out.meta.num_elements()<=u32::MAX as usize);
+        if tensor_core {
+            assert!(matches!(x.dtype,DType::F16|DType::BF16));
+            let cfg=MmaConfig{a_type:x.dtype.into(),b_type:x.dtype.into(),cd_type:ElemType::Float(FloatKind::F32).into(),m:16,n:16,k:16};
+            let h=&x.client.properties().hardware;
+            assert!(h.plane_size_min==32 && h.plane_size_max==32 && h.max_shared_memory_size>=2048
+                && x.client.features().matmul.cmma.contains(&cfg) && columns.div_ceil(16)<=h.max_ruda_count.0 as usize
+                && rows.div_ceil(16)<=h.max_ruda_count.1 as usize,"packed graph Tensor Core configuration unavailable");
+            unsafe {cooperative_linear::prepare::<R>(&x.client,RudaCount::Static(columns.div_ceil(16) as u32,rows.div_ceil(16) as u32,1),RudaDim::new_1d(32),
+                x.clone().into_array_arg(),self.codes.clone().into_array_arg(),self.scales.clone().into_array_arg(),self.offsets.clone().into_array_arg(),
+                self.group_index.clone().into_array_arg(),out.clone().into_array_arg(),rows as u32,inputs,outputs,self.group_size,self.groups(),self.format.code(),transpose,
+                self.group_index.meta.num_elements()!=0,x.dtype.into())}
+        } else {unsafe {linear::prepare::<R>(&x.client,grid(out.meta.num_elements()),RudaDim::new_1d(128),
+            x.clone().into_array_arg(),self.codes.clone().into_array_arg(),self.scales.clone().into_array_arg(),self.offsets.clone().into_array_arg(),
+            self.group_index.clone().into_array_arg(),out.clone().into_array_arg(),inputs,outputs,self.group_size,self.groups(),self.format.code(),transpose,
+            self.group_index.meta.num_elements()!=0,x.dtype.into())}}
+    }
+    pub fn prepare_decode(&self,out:&RudaTensor<R>)->PreparedKernel<R> {
+        self.validate();self.check(out);assert_eq!(self.shape.as_slice(),out.meta.shape().as_slice());
+        assert!(matches!(out.dtype,DType::F32|DType::F16|DType::BF16) && out.meta.num_elements()>0);
+        unsafe {decode::prepare::<R>(&out.client,grid(out.meta.num_elements()),RudaDim::new_1d(128),self.codes.clone().into_array_arg(),
+            self.scales.clone().into_array_arg(),self.offsets.clone().into_array_arg(),self.group_index.clone().into_array_arg(),out.clone().into_array_arg(),
+            self.width(),self.group_size,self.groups(),self.format.code(),self.group_index.meta.num_elements()!=0,out.dtype.into())}
     }
     /// Decode only selected embedding rows. Index bounds are caller-validated.
     pub fn embedding(&self,index:&RudaTensor<R>,dtype:DType)->RudaTensor<R> {
@@ -118,7 +186,7 @@ impl<R:Runtime> PackedTensor<R> {
         if out.meta.num_elements()!=0 {embedding::launch::<R>(&out.client,grid(out.meta.num_elements()),RudaDim::new_1d(128),
             index.clone().into_array_arg(),self.codes.clone().into_array_arg(),self.scales.clone().into_array_arg(),
             self.offsets.clone().into_array_arg(),self.group_index.clone().into_array_arg(),out.clone().into_array_arg(),
-            self.width(),self.group_size,self.format.code(),self.group_index.meta.num_elements()!=0,dtype.into());}
+            self.width(),self.group_size,self.groups(),self.format.code(),self.group_index.meta.num_elements()!=0,dtype.into());}
         out
     }
 }
@@ -239,6 +307,13 @@ pub fn encode_code(value:f32,#[comptime] format:u32,#[comptime] saturate:bool)->
 pub fn load(codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Array<i32>,
     row:usize,col:usize,#[comptime] width:usize,#[comptime] group:usize,
     #[comptime] format:u32,#[comptime] indexed:bool)->f32 {
+    load_grouped(codes,scales,offsets,indices,row,col,width,group,(width+group-1)/group,format,indexed)
+}
+
+#[ruda]
+fn load_grouped(codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Array<i32>,
+    row:usize,col:usize,#[comptime] width:usize,#[comptime] group:usize,
+    #[comptime] parameter_groups:usize,#[comptime] format:u32,#[comptime] indexed:bool)->f32 {
     let b=bits(format); let stride=(width*b+7)/8;
     let bit=col*b; let at=row*stride+bit/8;
     let mut word=codes[at] as u32;
@@ -246,7 +321,7 @@ pub fn load(codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Arr
     let code=(word>>(bit%8) as u32)&((1u32<<(b as u32))-1);
     let mut g=col/group;
     if comptime!(indexed) { g=indices[col] as usize; }
-    let param=row*((width+group-1)/group)+g;
+    let param=row*parameter_groups+g;
     // Separate operations preserve imported scale/offset semantics.
     decode_code(code,format)*scales[param]+offsets[param]
 }
@@ -254,9 +329,9 @@ pub fn load(codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Arr
 #[ruda(launch)]
 fn decode<F:Float>(codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Array<i32>,
     out:&mut Array<F>,#[comptime] width:usize,#[comptime] group:usize,
-    #[comptime] format:u32,#[comptime] indexed:bool,#[define(F)] _dtype:StorageType) {
+    #[comptime] parameter_groups:usize,#[comptime] format:u32,#[comptime] indexed:bool,#[define(F)] _dtype:StorageType) {
     let i=ABSOLUTE_POS as usize;
-    if i<out.len() { out[i]=F::cast_from(load(codes,scales,offsets,indices,i/width,i%width,width,group,format,indexed)); }
+    if i<out.len() { out[i]=F::cast_from(load_grouped(codes,scales,offsets,indices,i/width,i%width,width,group,parameter_groups,format,indexed)); }
 }
 
 #[ruda(launch)]
@@ -283,7 +358,7 @@ fn encode<F:Float>(x:&Array<F>,scales:&Array<f32>,offsets:&Array<f32>,out:&mut A
 #[ruda(launch)]
 fn linear<F:Float>(x:&Array<F>,codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Array<i32>,
     out:&mut Array<F>,#[comptime] inputs:usize,#[comptime] outputs:usize,#[comptime] group:usize,
-    #[comptime] format:u32,#[comptime] transpose:bool,#[comptime] indexed:bool,#[define(F)] _dtype:StorageType) {
+    #[comptime] parameter_groups:usize,#[comptime] format:u32,#[comptime] transpose:bool,#[comptime] indexed:bool,#[define(F)] _dtype:StorageType) {
     let i=ABSOLUTE_POS as usize;
     if i<out.len() {
         let inner=comptime!(if transpose {outputs} else {inputs});
@@ -293,16 +368,69 @@ fn linear<F:Float>(x:&Array<F>,codes:&Array<u8>,scales:&Array<f32>,offsets:&Arra
         for j in 0usize..inner {
             let mut wr=col; let mut wc=j;
             if comptime!(transpose) { wr=j; wc=col; }
-            sum=fma(f32::cast_from(x[batch*inner+j]),load(codes,scales,offsets,indices,wr,wc,inputs,group,format,indexed),sum);
+            sum=fma(f32::cast_from(x[batch*inner+j]),load_grouped(codes,scales,offsets,indices,wr,wc,inputs,group,parameter_groups,format,indexed),sum);
         }
         out[i]=F::cast_from(sum);
     }
 }
 
 #[ruda(launch)]
+fn cooperative_linear<F:Float>(x:&Array<F>,codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,indices:&Array<i32>,
+    out:&mut Array<F>,rows:u32,#[comptime] inputs:usize,#[comptime] outputs:usize,
+    #[comptime] group:usize,#[comptime] parameter_groups:usize,#[comptime] format:u32,#[comptime] transpose:bool,
+    #[comptime] indexed:bool,#[define(F)] _dtype:StorageType) {
+    let row_base=RUDA_POS_Y as usize*16;
+    let col_base=RUDA_POS_X as usize*16;
+    let lane=UNIT_POS as usize;
+    let inner=comptime!(if transpose {outputs} else {inputs});
+    let columns=comptime!(if transpose {inputs} else {outputs});
+    let mut left=SharedMemory::<F>::new_aligned(256usize,32usize);
+    let mut right=SharedMemory::<F>::new_aligned(256usize,32usize);
+    let mut result=SharedMemory::<f32>::new_aligned(256usize,32usize);
+    let acc=cmma::Matrix::<f32>::from_value(cmma::MatrixIdent::Accumulator,
+        16usize,16usize,16usize,cmma::MatrixLayout::Undefined,0.0);
+    let mut base=0usize;
+    while base<inner {
+        #[unroll]
+        for i in 0usize..8usize {
+            let t=lane+i*32;
+            let row=row_base+t/16;
+            let col=col_base+t%16;
+            let ka=base+t%16;
+            let kb=base+t/16;
+            let mut a=F::cast_from(0.0f32);
+            let mut b=F::cast_from(0.0f32);
+            if row<rows as usize && ka<inner {a=x[row*inner+ka];}
+            if col<columns && kb<inner {
+                let mut wr=col;let mut wc=kb;
+                if comptime!(transpose) {wr=kb;wc=col;}
+                b=F::cast_from(load_grouped(codes,scales,offsets,indices,wr,wc,inputs,group,parameter_groups,format,indexed));
+            }
+            left[t]=a;right[t]=b;
+        }
+        sync_ruda();
+        let a=cmma::Matrix::<F>::from_slice(cmma::MatrixIdent::A,
+            16usize,16usize,16usize,cmma::MatrixLayout::RowMajor,&left.to_slice(),16);
+        let b=cmma::Matrix::<F>::from_slice(cmma::MatrixIdent::B,
+            16usize,16usize,16usize,cmma::MatrixLayout::RowMajor,&right.to_slice(),16);
+        cmma::execute::<F,F,f32,f32>(&a,&b,&acc,&acc);
+        sync_ruda();
+        if inner-base<=16 {base=inner;} else {base+=16;}
+    }
+    cmma::store(&mut result.to_slice_mut(),&acc,16,cmma::MatrixLayout::RowMajor);
+    sync_ruda();
+    #[unroll]
+    for i in 0usize..8usize {
+        let t=lane+i*32;
+        let row=row_base+t/16;let col=col_base+t%16;
+        if row<rows as usize && col<columns {out[row*columns+col]=F::cast_from(result[t]);}
+    }
+}
+
+#[ruda(launch)]
 fn embedding<F:Float>(index:&Array<i64>,codes:&Array<u8>,scales:&Array<f32>,offsets:&Array<f32>,groups:&Array<i32>,
-    out:&mut Array<F>,#[comptime] width:usize,#[comptime] group:usize,#[comptime] format:u32,
+    out:&mut Array<F>,#[comptime] width:usize,#[comptime] group:usize,#[comptime] parameter_groups:usize,#[comptime] format:u32,
     #[comptime] indexed:bool,#[define(F)] _dtype:StorageType) {
     let i=ABSOLUTE_POS as usize;
-    if i<out.len() {out[i]=F::cast_from(load(codes,scales,offsets,groups,index[i/width] as usize,i%width,width,group,format,indexed));}
+    if i<out.len() {out[i]=F::cast_from(load_grouped(codes,scales,offsets,groups,index[i/width] as usize,i%width,width,group,parameter_groups,format,indexed));}
 }

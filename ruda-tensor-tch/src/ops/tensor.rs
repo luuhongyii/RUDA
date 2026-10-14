@@ -86,7 +86,7 @@ impl<E: TchElement> FloatTensorOps<Self> for LibTorch<E> {
                 let numel = tensor.tensor.numel();
                 let mut bytes = vec![0u8; numel * 2];
                 tensor.tensor.f_copy_data_u8(&mut bytes, numel)
-                    .map_err(|error| ExecutionError::Generic { reason: error.to_string() })?;
+                    .map_err(|error| ExecutionError::Generic { reason: error.to_string(), backtrace: ruda_core::backtrace::BackTrace::capture() })?;
                 TensorData::from_bytes_vec(bytes, shape, DType::BF16)
             }
             _ => panic!("Not a valid float kind"),

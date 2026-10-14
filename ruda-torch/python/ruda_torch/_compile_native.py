@@ -13,7 +13,7 @@ import torch
 from torch.fx import Graph, GraphModule, Node
 from torch.fx.node import map_arg
 
-from ._graph_spec import GraphOp, MAX_NODES, MAX_TENSORS, TensorSpec, plan_layout, UNARY_CODES
+from ._graph_spec import GraphOp, MAX_NODES, MAX_TENSORS, TensorSpec, plan_layout, UNARY_CODES, DTYPE_BYTES, INDEX_CODES, TRANSFORM_CODES, PREDICATE_CODES, FACTORY_CODES, MASK_CODES
 
 
 class NativeCoverageError(RuntimeError):
@@ -40,6 +40,25 @@ _TARGETS.update({torch.ops.aten.clone.default: 'copy', torch.ops.aten.add.Tensor
 _TARGETS.update({torch.ops.aten.view_copy.default: 'reshape_copy',
     torch.ops.aten.permute_copy.default: 'permute_copy', torch.ops.aten._to_copy.default: 'cast',
     torch.ops.aten.expand_copy.default: 'expand_copy'})
+_TARGETS.update({torch.ops.aten.rms_norm.default: 'rms_norm',
+    torch.ops.aten.softmax.int: 'softmax_public',torch.ops.aten.log_softmax.int: 'log_softmax_public'})
+_TARGETS.update({torch.ops.aten.index_select.default:'index_select',torch.ops.aten.gather.default:'gather',
+    torch.ops.aten.embedding.default:'embedding',torch.ops.aten.embedding_dense_backward.default:'embedding_backward',
+    torch.ops.aten.gather_backward.default:'gather_backward'})
+_TARGETS.update({torch.ops.aten.slice_copy.Tensor:'slice_copy',torch.ops.aten.select_copy.int:'select_copy',
+    torch.ops.aten.slice_backward.default:'slice_backward',torch.ops.aten.select_backward.default:'select_backward',
+    torch.ops.aten.slice_scatter.default:'slice_scatter',torch.ops.aten.cat.default:'cat'})
+_TARGETS.update({torch.ops.aten.masked_fill.Scalar:'masked_fill',torch.ops.aten.where.self:'where'})
+_FACTORIES={getattr(torch.ops.aten,name).default:name for name in (
+    'full','full_like','zeros','zeros_like','ones','ones_like','new_full','new_zeros','new_ones','scalar_tensor')}
+_FACTORIES.update({torch.ops.aten.arange.default:'arange',torch.ops.aten.arange.start:'arange_start',
+                   torch.ops.aten.arange.start_step:'arange_start_step'})
+_TARGETS.update(_FACTORIES)
+for _mask in MASK_CODES:
+    _TARGETS[getattr(getattr(torch.ops.aten,_mask),'Tensor' if _mask in ('bitwise_and','bitwise_or','bitwise_xor') else 'default')]=_mask
+for _comparison in ('eq','ne','lt','le','gt','ge'):
+    _TARGETS[getattr(torch.ops.aten,_comparison).Tensor]=_comparison
+    _TARGETS[getattr(torch.ops.aten,_comparison).Scalar]=_comparison+'_scalar'
 _TARGETS.update({torch.ops.aten.pow.Tensor_Tensor: 'pow',
     torch.ops.aten.pow.Tensor_Scalar: 'pow',
     torch.ops.aten.floor_divide.default: 'floor_divide',
@@ -52,6 +71,7 @@ _ALIASES={torch.ops.aten.view.default:'reshape_copy',torch.ops.aten.reshape.defa
     torch.ops.aten.t.default:'transpose_copy',torch.ops.aten.transpose.int:'transpose_copy',
     torch.ops.aten.unsqueeze.default:'reshape_copy',torch.ops.aten.squeeze.dim:'reshape_copy',
     torch.ops.aten.squeeze.default:'reshape_copy',torch.ops.aten.expand.default:'expand_copy'}
+_ALIASES.update({torch.ops.aten.slice.Tensor:'slice_copy',torch.ops.aten.select.int:'select_copy'})
 _METADATA = {torch.ops.aten.detach.default, torch.ops.aten.alias.default}
 
 
@@ -74,6 +94,72 @@ def _math_capable():
     return getattr(sys.modules.get(__package__),'_graph_math_available',False)
 
 
+def _index_capable():
+    return getattr(sys.modules.get(__package__),'_graph_index_available',False)
+
+
+def _factory_capable():
+    return getattr(sys.modules.get(__package__),'_graph_factory_available',False)
+
+
+def _empty_capable():
+    return getattr(sys.modules.get(__package__),'_graph_empty_available',False)
+
+
+def _root_capable():
+    return getattr(sys.modules.get(__package__),'_graph_root_available',False)
+
+
+def _lower_factory(node,kind,args,kwargs,value):
+    if not _factory_capable() or not isinstance(value,torch.Tensor) or value.device.type!='ruda' or value.device.index not in (None,0):return None
+    if value.layout!=torch.strided or not value.is_contiguous() or any(type(d) is not int or d<(0 if _empty_capable() else 1) for d in value.shape):return None
+    if set(kwargs)-{'dtype','layout','device','pin_memory','memory_format','step'}:return None
+    if kwargs.get('layout') not in (None,torch.strided) or kwargs.get('pin_memory') not in (None,False):return None
+    if kwargs.get('memory_format') not in (None,torch.preserve_format,torch.contiguous_format):return None
+    if 'step' in kwargs and kind!='arange_start_step':return None
+    based=kind.endswith('_like') or kind.startswith('new_')
+    if based:
+        if not args or not isinstance(args[0],Node):return None
+        anchor=args[0];args=args[1:]
+    elif _root_capable():
+        anchor=None
+    else:
+        anchors=[n for n in node.graph.nodes if n.op=='placeholder' and isinstance(n.meta.get('val'),torch.Tensor)
+                 and n.meta['val'].device==value.device and all(type(d) is int and d>=(0 if _empty_capable() else 1) for d in n.meta['val'].shape)]
+        if not anchors:return None
+        anchor=min(anchors,key=lambda n:math.prod(n.meta['val'].shape))
+    dtype=str(value.dtype).removeprefix('torch.');step=None
+    if kind.startswith('arange'):
+        expected={'arange':1,'arange_start':2,'arange_start_step':3}[kind]
+        if kind=='arange_start_step' and len(args)==2:args=(*args,kwargs.get('step',1))
+        if len(args)!=expected or any(type(v) not in (int,float) or not math.isfinite(v) for v in args):return None
+        start,end=(0,args[0]) if kind=='arange' else args[:2]
+        step=args[2] if expected==3 else 1
+        if step==0 or (step>0 and end<start) or (step<0 and end>start):return None
+        if dtype in ('float32','float16','bfloat16'):
+            if not _root_capable():return None
+            count=math.ceil((float(end)-float(start))/float(step))
+            if tuple(value.shape)!=(count,):return None
+            return GraphOp('arange_float',node.name,anchor.name if anchor is not None else None,scalar=start,shape=(count,),dtype=dtype,step=step)
+        if any(type(v) is not int for v in args):return None
+        if step==0 or dtype not in ('int64','int32','int16','int8','uint8'):return None
+        count=max(0,-((start-end)//step))
+        if tuple(value.shape)!=(count,):return None
+        return GraphOp('arange_integer',node.name,anchor.name if anchor is not None else None,scalar=start,shape=tuple(value.shape),dtype=dtype,step=step)
+    if kind.endswith('_like'):
+        if len(args)!=(1 if kind=='full_like' else 0):return None
+        fill=args[0] if args else (1 if kind=='ones_like' else 0)
+    elif kind=='scalar_tensor':
+        if len(args)!=1:return None
+        fill=args[0]
+    else:
+        if len(args)!=(2 if kind in ('full','new_full') else 1):return None
+        if not isinstance(args[0],(tuple,list)) or tuple(args[0])!=tuple(value.shape):return None
+        fill=args[1] if len(args)==2 else (1 if kind in ('ones','new_ones') else 0)
+    if type(fill) not in (int,float,bool):return None
+    return GraphOp('full',node.name,anchor.name if anchor is not None else None,scalar=int(bool(fill)) if dtype=='bool' else int(fill) if type(fill) is bool else fill,shape=tuple(value.shape),dtype=dtype)
+
+
 def _internal_alias(node, seen=None):
     """Materialize a view only when all consumers are pure, non-aliasing math.
 
@@ -87,13 +173,57 @@ def _internal_alias(node, seen=None):
         if user.op!='call_function':return False
         if user.target in _ALIASES or _native_metadata(user):
             if not _internal_alias(user,seen.copy()):return False
-        elif user.target not in _TARGETS:return False
+        elif user.target not in _TARGETS:
+            from ._compile_operations import operation
+            if operation(user) is None:return False
     return True
 
 
 def _rank(node):
     value = node.meta.get('val')
     return value.ndim if isinstance(value, torch.Tensor) else None
+
+
+def _lower_transform(node,kind,args,kwargs,value):
+    if not _index_capable() or not isinstance(value,torch.Tensor):return None
+    if kind=='cat':
+        if not 1<=len(args)<=2 or set(kwargs)-{'dim'} or not isinstance(args[0],(tuple,list)) or len(args[0])!=2:return None
+        if any(not isinstance(n,Node) for n in args[0]):return None
+        rank=_rank(args[0][0]);axis=args[1] if len(args)>1 else kwargs.get('dim',0)
+        if rank is None or type(axis) is not int or not -rank<=axis<rank:return None
+        return GraphOp(kind,node.name,args[0][0].name,args[0][1].name,axis%rank)
+    if not args or not isinstance(args[0],Node):return None
+    if kind in ('slice_backward','select_backward'):
+        required=6 if kind=='slice_backward' else 4
+        if len(args)!=required or kwargs or not isinstance(args[1],(tuple,list)) or any(type(d) is not int for d in args[1]):return None
+        full=tuple(args[1]);axis=args[2];start=args[3];end=args[4] if required==6 else None;step=args[5] if required==6 else 1
+    else:
+        scatter=kind=='slice_scatter';offset=2 if scatter else 1
+        names=('dim','index') if kind=='select_copy' else ('dim','start','end','step')
+        if len(args)>offset+len(names) or set(kwargs)-set(names):return None
+        if scatter and (len(args)<2 or not isinstance(args[1],Node)):return None
+        source=args[0].meta.get('val')
+        if not isinstance(source,torch.Tensor):return None
+        full=tuple(source.shape)
+        parameters={name:(args[offset+i] if len(args)>offset+i else kwargs.get(name)) for i,name in enumerate(names)}
+        axis=parameters['dim'];axis=0 if axis is None else axis
+        if kind=='select_copy':start=parameters['index'];end=None;step=1
+        else:start=parameters['start'];end=parameters['end'];step=parameters['step'];step=1 if step is None else step
+    rank=len(full)
+    if type(axis) is not int or not -rank<=axis<rank or type(step) is not int or step!=1:return None
+    axis%=rank;length=full[axis]
+    if type(length) is not int:return None
+    if kind.startswith('select_'):
+        if type(start) is not int or not -length<=start<length:return None
+        start%=length
+    else:
+        if start is not None and type(start) is not int or end is not None and type(end) is not int:return None
+        start,end,_=slice(start,end,1).indices(length)
+        if end<=start and not _empty_capable():return None
+    code=start*8+axis
+    if code>=2**24:return None
+    right=args[1].name if kind=='slice_scatter' else None
+    return GraphOp(kind,node.name,args[0].name,right,code,shape=tuple(value.shape))
 
 
 def _lower(node):
@@ -106,8 +236,79 @@ def _lower(node):
     if isinstance(value, torch.Tensor) and not value.is_contiguous() and not alias:
         return None  # Output stride/clone memory-format is observable to users.
     kind, args, kwargs = (_ALIASES[node.target] if alias else _TARGETS[node.target]), node.args, dict(node.kwargs)
+    if node.target in _FACTORIES:return _lower_factory(node,kind,args,kwargs,value)
+    if kind in TRANSFORM_CODES:return _lower_transform(node,kind,args,kwargs,value)
     if not args or not isinstance(args[0], Node): return None
     left = args[0].name
+    if kind in MASK_CODES:
+        if not _factory_capable():return None
+        if kind in ('tril','triu'):
+            if not 1<=len(args)<=2 or set(kwargs)-{'diagonal'}:return None
+            diagonal=args[1] if len(args)>1 else kwargs.get('diagonal',0)
+            if type(diagonal) is not int:return None
+            return GraphOp(kind,node.name,left,scalar=diagonal)
+        if kwargs or len(args)!=(1 if kind.endswith('_not') else 2):return None
+        if len(args)==2 and not isinstance(args[1],Node):return None
+        return GraphOp(kind,node.name,left,None if len(args)==1 else args[1].name)
+    if kind in PREDICATE_CODES:
+        if not _index_capable() or kwargs:return None
+        if kind=='where':
+            if len(args)!=3 or any(not isinstance(arg,Node) for arg in args):return None
+            return GraphOp(kind,node.name,left,args[1].name,third=args[2].name)
+        if kind=='masked_fill':
+            if len(args)!=3 or not isinstance(args[1],Node) or type(args[2]) not in (int,float,bool):return None
+            return GraphOp(kind,node.name,left,args[1].name,int(args[2]) if type(args[2]) is bool else args[2])
+        if len(args)!=2:return None
+        if kind.endswith('_scalar'):
+            if type(args[1]) not in (int,float,bool):return None
+            source=args[0].meta.get('val')
+            if not isinstance(source,torch.Tensor) or not source.is_floating_point() and type(args[1]) is float:return None
+            return GraphOp(kind,node.name,left,scalar=int(args[1]) if type(args[1]) is bool else args[1])
+        if not isinstance(args[1],Node):return None
+        return GraphOp(kind,node.name,left,args[1].name)
+    if kind in INDEX_CODES:
+        if not _index_capable():return None
+        if kind=='embedding':
+            if not 2<=len(args)<=5 or set(kwargs)-{'padding_idx','scale_grad_by_freq','sparse'} or not isinstance(args[1],Node):return None
+            # These parameters affect autograd, not forward lookup. AOT retains
+            # padding/frequency/sparse semantics in its separate backward graph.
+            return GraphOp(kind,node.name,left,args[1].name)
+        if kind=='embedding_backward':
+            if len(args)!=5 or kwargs or not isinstance(args[1],Node) or type(args[2]) is not int or type(args[3]) is not int or type(args[4]) is not bool:return None
+            if not isinstance(value,torch.Tensor) or tuple(value.shape)!=(args[2],args[0].meta['val'].shape[-1]):return None
+            return GraphOp(kind+('_frequency' if args[4] else ''),node.name,left,args[1].name,args[3],shape=tuple(value.shape))
+        if kind=='gather_backward':
+            if len(args)!=5 or kwargs or not isinstance(args[1],Node) or not isinstance(args[3],Node) or args[4] is not False:return None
+            rank=_rank(args[1]);axis=args[2]
+            if rank is None or type(axis) is not int or not -rank<=axis<rank:return None
+            return GraphOp(kind,node.name,left,args[3].name,axis%rank,shape=tuple(value.shape))
+        if not 3<=len(args)<=4 or set(kwargs)-{'sparse_grad'} or not isinstance(args[2],Node):return None
+        if kind=='index_select' and (len(args)!=3 or kwargs):return None
+        if kind=='gather' and (args[3] if len(args)>3 else kwargs.get('sparse_grad',False)) is not False:return None
+        rank=_rank(args[0]);axis=args[1]
+        if rank is None or type(axis) is not int or not -rank<=axis<rank:return None
+        return GraphOp(kind,node.name,left,args[2].name,axis%rank)
+    if kind=='rms_norm':
+        if not 2<=len(args)<=4 or set(kwargs)-{'weight','eps'}:return None
+        source=args[0].meta.get('val')
+        if not isinstance(source,torch.Tensor) or source.ndim==0:return None
+        normalized=args[1]
+        if not isinstance(normalized,(tuple,list)) or tuple(normalized)!=(source.shape[-1],):return None
+        weight=args[2] if len(args)>2 else kwargs.get('weight')
+        epsilon=args[3] if len(args)>3 else kwargs.get('eps')
+        if epsilon is None:
+            if source.dtype not in (torch.float32,torch.float16,torch.bfloat16):return None
+            epsilon=torch.finfo(source.dtype).eps
+        if type(epsilon) not in (int,float) or not math.isfinite(epsilon) or epsilon<=0:return None
+        if weight is not None and not isinstance(weight,Node):return None
+        return GraphOp('rms_norm',node.name,left,None if weight is None else weight.name,epsilon)
+    if kind in ('softmax_public','log_softmax_public'):
+        if not 2<=len(args)<=3 or set(kwargs)-{'dtype'}:return None
+        source=args[0].meta.get('val');rank=_rank(args[0]);axis=args[1]
+        if not isinstance(source,torch.Tensor) or rank is None or type(axis) is not int or not -rank<=axis<rank:return None
+        dtype=args[2] if len(args)>2 else kwargs.get('dtype')
+        if dtype not in (None,source.dtype):return None
+        return GraphOp(kind.removesuffix('_public'),node.name,left,scalar=axis%rank)
     if kind=='transpose_copy':
         rank=_rank(args[0])
         if rank is None or kwargs:return None
@@ -122,8 +323,9 @@ def _lower(node):
         return GraphOp('permute_copy',node.name,left,scalar=sum(d<<(3*i) for i,d in enumerate(axes)),shape=tuple(value.shape))
     if kind in ('reshape_copy','permute_copy','expand_copy','cast'):
         if not _layout_capable():return None
-        if not isinstance(value, torch.Tensor) or value.dtype not in (torch.float32,torch.float16,torch.bfloat16):
+        if not isinstance(value, torch.Tensor) or str(value.dtype).removeprefix('torch.') not in DTYPE_BYTES:
             return None
+        if value.dtype not in (torch.float32,torch.float16,torch.bfloat16) and not _index_capable():return None
         if kind == 'cast':
             if len(args) != 1 or set(kwargs)-{'dtype','device','layout','pin_memory','non_blocking','memory_format'}:
                 return None
@@ -253,10 +455,10 @@ def _stream_id():
     return current_stream().stream_id
 
 
-def _build_graph(inputs, nodes, outputs):
+def _build_graph(inputs, nodes, outputs, device=None):
     from ._graph import StaticGraph
     # AOTAutograd owns differentiation. No hand-written backward bridge is used.
-    return StaticGraph(inputs, nodes, outputs=outputs, reuse_workspace=True)
+    return StaticGraph(inputs, nodes, outputs=outputs, reuse_workspace=True, device=device)
 
 
 def _input_spec(value):
@@ -278,7 +480,7 @@ class NativeRegion(torch.nn.Module):
     forwards must never refer to native replay workspace. The reference callable
     is selected BEFORE dispatch and only for known capability/metadata limits.
     """
-    def __init__(self, reference, names, nodes, outputs, state, phase, options):
+    def __init__(self, reference, names, nodes, outputs, state, phase, options, device=None):
         super().__init__()
         self.reference = reference
         self.names = tuple(names)
@@ -287,6 +489,7 @@ class NativeRegion(torch.nn.Module):
         self.state = state
         self.phase = phase
         self.options = options
+        self.device=device
         self._cache = OrderedDict()
         self._lock = RLock()
         self._closed = False
@@ -302,7 +505,12 @@ class NativeRegion(torch.nn.Module):
             else:
                 try:
                     specs = {name: _input_spec(value) for name, value in zip(self.names, args, strict=True)}
-                    plan_layout(specs, self.nodes, self.outputs,layout_api=int(_layout_capable()))
+                    plan_layout(specs, self.nodes, self.outputs,layout_api=int(_layout_capable()),empty_api=int(_empty_capable()),root_api=int(_root_capable()))
+                    if any(node.kind in FACTORY_CODES or node.kind in MASK_CODES for node in self.nodes) and not _factory_capable():
+                        raise ValueError('native graph factory extension unavailable')
+                    if (any(node.kind in INDEX_CODES or node.kind in TRANSFORM_CODES or node.kind in PREDICATE_CODES for node in self.nodes)
+                            or any(spec.dtype not in ('float32','float16','bfloat16') for spec in specs.values())) and not _index_capable():
+                        raise ValueError('native graph index extension unavailable')
                     if any(node.kind in ('reshape_copy','permute_copy','cast','expand_copy',
                            'add_broadcast','mul_broadcast','div_broadcast','sum','mean') for node in self.nodes):
                         from . import _graph_layout_available
@@ -337,7 +545,7 @@ class NativeRegion(torch.nn.Module):
                         self.state.add('native_cache_evictions')
                     buffers = {name: torch.empty_like(t, memory_format=torch.contiguous_format)
                                for name, t in zip(self.names, args, strict=True)}
-                    graph = _build_graph(buffers, self.nodes, self.outputs)
+                    graph = _build_graph(buffers, self.nodes, self.outputs, self.device)
                     entry = graph, buffers
                     self._cache[key] = entry
                     self.state.add('native_builds')
@@ -374,12 +582,18 @@ class NativeRegion(torch.nn.Module):
 def _make_region(gm, nodes, state, phase, options):
     selected = set(nodes)
     dependencies = []
+    lowered=[_lower(n) for n in nodes]
+    by_name={n.name:n for n in gm.graph.nodes}
     for node in nodes:
         def dependency(arg):
             if arg not in selected and arg not in dependencies:
                 dependencies.append(arg)
             return arg
         map_arg((node.args, node.kwargs), dependency)
+    for op in lowered:
+        if op.kind in FACTORY_CODES and op.left is not None:
+            anchor=by_name[op.left]
+            if anchor not in selected and anchor not in dependencies:dependencies.append(anchor)
     outputs = [n for n in nodes if any(user not in selected for user in n.users)]
     if not outputs or len(dependencies) + len(nodes) > MAX_TENSORS:
         return None
@@ -391,7 +605,8 @@ def _make_region(gm, nodes, state, phase, options):
     graph.output(tuple(env[node] for node in outputs))
     reference = GraphModule(gm, graph)
     region = NativeRegion(reference, [n.name for n in dependencies],
-                          [_lower(n) for n in nodes], [n.name for n in outputs], state, phase, options)
+                          lowered, [n.name for n in outputs], state, phase, options,
+                          nodes[0].meta['val'].device if not dependencies else None)
     return region, dependencies, outputs
 
 
@@ -401,12 +616,19 @@ def partition(gm, state, phase, options):
     Conservatively consecutive grouping avoids moving work across mutations or
     RNG calls. Runtime guards also check shape/layout/dtype, not just op names.
     """
+    if options.native!='off' and _layout_capable():
+        from ._compile_normalization import expand_normalizations
+        gm=expand_normalizations(gm)
     all_nodes = list(gm.graph.nodes)
     calls = [n for n in all_nodes if n.op in ('call_function', 'call_method', 'call_module')]
-    candidates = {n for n in calls if _lower(n) is not None}
-    metadata = {n for n in calls if _native_metadata(n)}
+    from ._compile_operations import OperationRegion,operation,tuple_metadata,host_metadata_nodes
+    from ._compile_shapes import shape_guard
+    operations={n:OperationRegion(n,state,phase,options) for n in calls if options.native!='off' and operation(n) is not None}
+    candidates = {n for n in calls if n not in operations and _lower(n) is not None}
+    host_metadata=host_metadata_nodes(gm).intersection(calls) | {n for n in calls if shape_guard(n)}
+    metadata = {n for n in calls if _native_metadata(n) or tuple_metadata(n,operations)} | host_metadata
     if options.native == 'required':
-        unsupported = [f'{n.name}: {n.target}' for n in calls if n not in candidates and n not in metadata]
+        unsupported = [f'{n.name}: {n.target}' for n in calls if n not in candidates and n not in metadata and n not in operations]
         if unsupported:
             raise NativeCoverageError(f'{phase} is not entirely native: ' + '; '.join(unsupported[:12]))
     groups, pending = [], []
@@ -432,22 +654,25 @@ def partition(gm, state, phase, options):
                 raise NativeCoverageError(f'{phase}: region exceeds native tensor limits or has no outputs')
             continue
         regions.append((nodes, made))
-    covered = {n for nodes, _ in regions for n in nodes}
+    covered = {n for nodes, _ in regions for n in nodes} | operations.keys()
     record = {
         'phase': phase,
         'operator_count': len(calls),
-        'native_candidate_ops': len(candidates),
+        'native_candidate_ops': len(candidates)+len(operations),
         'planned_native_ops': len(covered),
-        'native_metadata_ops': len(metadata),
-        'native_regions': len(regions),
+        'native_metadata_ops': len(metadata-host_metadata),
+        'host_metadata_ops': len(host_metadata),
+        'native_regions': len(regions)+len(operations),
         'device_dispatch_ops': [str(n.target) for n in calls if n not in covered and n not in metadata],
         'operators': [{'node': n.name, 'target': str(n.target),
-                       'execution': 'guarded-native-region' if n in covered else
+                       'execution': 'guarded-native-operation-graph' if n in operations else
+                                    'guarded-native-region' if n in covered else
+                                    'explicit-host-metadata' if n in host_metadata else
                                     'native-storage-metadata' if n in metadata else 'device-dispatch'}
                       for n in calls],
     }
     state.record(record)
-    if not regions:
+    if not regions and not operations:
         return gm
 
     graph, env = Graph(), {}
@@ -465,7 +690,13 @@ def partition(gm, state, phase, options):
         if node.op == 'get_attr' and '.' not in str(node.target) and not hasattr(root, node.target):
             setattr(root, node.target, getattr(gm, node.target))
     for node in all_nodes:
-        if node in starts:
+        if node in operations:
+            region=operations[node];name=f'_ruda_native_operation_{len(state.regions)}'
+            while hasattr(root,name):
+                name = f'{name}_'
+            root.add_module(name,region);state.register_region(region)
+            env[node]=graph.call_module(name,tuple(env[n] for n in region.dependencies));env[node].meta=dict(node.meta)
+        elif node in starts:
             nodes, (region, dependencies, outputs) = starts[node]
             name = f'_ruda_native_region_{len(state.regions)}'
             while hasattr(root, name):

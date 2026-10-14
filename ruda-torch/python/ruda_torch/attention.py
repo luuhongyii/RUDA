@@ -5,7 +5,6 @@ import math
 import ctypes
 from threading import RLock
 import torch
-from torch.autograd.function import once_differentiable
 from ._architecture_ops import masked_softmax,positions,precision_context,work_dtype
 
 
@@ -28,40 +27,6 @@ def _initialize_dense():
     return _C
 
 
-class _DenseAttention(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx,q,k,v,mask,score_shape,mask_kind,causal,scale,p):
-        native = _initialize_dense()
-        from .random import default_generator
-        total = math.prod(score_shape)
-        seed, counter = 0, 0
-        if 0 < p < 1:
-            with default_generator.lock:
-                blocks = (total+3)//4
-                if default_generator.counter+blocks >= 1<<64:
-                    raise OverflowError('RUDA attention RNG counter exhausted')
-                seed, counter = default_generator.seed_value, default_generator.counter
-                default_generator.counter += blocks
-        out = torch.empty((*q.shape[:-1],v.shape[-1]),device=q.device,dtype=q.dtype)
-        stats = torch.empty((q.shape[0]*q.shape[1]*q.shape[2],2),device=q.device,dtype=torch.float32)
-        native.dense_attention(0,[q,k,v,mask,out,stats],mask_kind,list(score_shape),causal,scale,p,seed,counter,False)
-        ctx.save_for_backward(q,k,v,mask,stats)
-        ctx.policy = score_shape,mask_kind,causal,scale,p,seed,counter
-        return out
-
-    @staticmethod
-    @once_differentiable
-    def backward(ctx,grad):
-        q,k,v,mask,stats = ctx.saved_tensors
-        score_shape,mask_kind,causal,scale,p,seed,counter = ctx.policy
-        dq,dk,dv = torch.empty_like(q),torch.empty_like(k),torch.empty_like(v)
-        need_mask = mask_kind==2 and ctx.needs_input_grad[3]
-        dm = torch.empty_like(mask) if need_mask else torch.empty(1,device=q.device,dtype=torch.float32)
-        _initialize_dense().dense_attention(1,[q,k,v,mask,grad.contiguous(),stats,dq,dk,dv,dm],
-            mask_kind,list(score_shape),causal,scale,p,seed,counter,need_mask)
-        return dq,dk,dv,dm if need_mask else None,None,None,None,None,None
-
-
 def _fused_dense(query,key,value,mask,p,causal,scale,gqa):
     batch = torch.broadcast_shapes(query.shape[:-3],key.shape[:-3],value.shape[:-3])
     if gqa:
@@ -74,7 +39,7 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa):
         raise ValueError('attention head counts must be positive')
     kind = 0
     if mask is None:
-        mask = torch.empty(1,device=query.device,dtype=torch.float32)
+        mask = torch.zeros(1,device=query.device,dtype=torch.float32)
     else:
         if mask.device!=query.device:
             raise ValueError('attention mask must be on the input device')
@@ -96,7 +61,8 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa):
     v = value.expand(*batch,kv_heads,s,dv).contiguous().reshape(b,kv_heads,s,dv)
     shape = (*batch,heads,l,s)
     with precision_context(query):
-        result = _DenseAttention.apply(q,k,v,mask,shape,kind,causal,scale,p)
+        from ._dense_ops import forward
+        result = forward(q,k,v,mask,list(shape),kind,causal,scale,p)[0]
     return result.reshape(*batch,heads,l,dv)
 
 

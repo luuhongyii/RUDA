@@ -58,8 +58,10 @@ class ColumnParallelLinear(nn.Module):
     """Output-feature shard; optionally return a full replicated output."""
     def __init__(self, linear, group, *, gather_output=True):
         super().__init__()
-        if not isinstance(linear, nn.Linear) or linear.out_features % group.world_size:
-            raise ValueError('column parallelism requires divisible nn.Linear output features')
+        from .float8_training import Float8Linear
+        if not isinstance(linear,(nn.Linear,Float8Linear)) or linear.out_features % group.world_size:
+            raise ValueError('column parallelism requires divisible Linear output features')
+        self.float8_recipe=linear.recipe if isinstance(linear,Float8Linear) else None
         self.group, self.gather_output = group, bool(gather_output)
         self.in_features, self.out_features = linear.in_features, linear.out_features
         self.local_out_features = linear.out_features // group.world_size
@@ -73,6 +75,9 @@ class ColumnParallelLinear(nn.Module):
         if self.bias is not None:self.bias._ruda_tp_sharded=True
 
     def forward(self, value):
+        if getattr(self,'float8_recipe',None) is not None:
+            from .float8_parallel import linear_forward
+            return linear_forward(self,value,0)
         value = copy_to_tensor_parallel(value, self.group)
         output = F.linear(value, self.weight, self.bias)
         return gather_from_tensor_parallel(output, self.group) if self.gather_output else output
@@ -82,8 +87,10 @@ class RowParallelLinear(nn.Module):
     """Input-feature shard; the replicated bias is added once, after the sum."""
     def __init__(self, linear, group, *, input_is_parallel=False):
         super().__init__()
-        if not isinstance(linear, nn.Linear) or linear.in_features % group.world_size:
-            raise ValueError('row parallelism requires divisible nn.Linear input features')
+        from .float8_training import Float8Linear
+        if not isinstance(linear,(nn.Linear,Float8Linear)) or linear.in_features % group.world_size:
+            raise ValueError('row parallelism requires divisible Linear input features')
+        self.float8_recipe=linear.recipe if isinstance(linear,Float8Linear) else None
         self.group, self.input_is_parallel = group, bool(input_is_parallel)
         self.in_features, self.out_features = linear.in_features, linear.out_features
         self.local_in_features = linear.in_features // group.world_size
@@ -95,6 +102,9 @@ class RowParallelLinear(nn.Module):
         self.weight._ruda_tp_sharded=True
 
     def forward(self, value):
+        if getattr(self,'float8_recipe',None) is not None:
+            from .float8_parallel import linear_forward
+            return linear_forward(self,value,1)
         if not self.input_is_parallel:
             value = scatter_to_tensor_parallel(value, self.group)
         output = reduce_from_tensor_parallel(F.linear(value, self.weight, None), self.group)
@@ -212,6 +222,8 @@ def tensor_parallelize(model, group, plan):
     """
     modules = dict(model.named_modules(remove_duplicate=False))
     from .parallel_adapters import parallel_linear,parameter_shards
+    from .packed_quantization import PackedEmbedding
+    from .packed_parallel import VocabParallelPackedEmbedding
     replacements, weight_shards, signatures = {}, {}, {}
     error = None
     try:
@@ -231,8 +243,12 @@ def tensor_parallelize(model, group, plan):
             signatures[id(source)] = signature
             if id(source) not in replacements:
                 shard_axis = 1 if kind == 'row' else 0
-                replacement = VocabParallelEmbedding(source,group,**options) if kind=='embedding' else parallel_linear(source,group,axis=shard_axis,**options)
-                entries=[(source.weight,replacement,'weight',0)] if kind=='embedding' else parameter_shards(source,replacement,shard_axis)
+                packed_embedding = kind=='embedding' and isinstance(source,PackedEmbedding)
+                if packed_embedding:
+                    replacement = VocabParallelPackedEmbedding(source,group,**options)
+                else:
+                    replacement = VocabParallelEmbedding(source,group,**options) if kind=='embedding' else parallel_linear(source,group,axis=shard_axis,**options)
+                entries=[(source.weight,replacement,'weight',0)] if kind=='embedding' and not packed_embedding else parameter_shards(source,replacement,shard_axis)
                 for original,owner,leaf,axis in entries:
                     key=id(original)
                     parameter=getattr(owner,leaf)
@@ -248,14 +264,15 @@ def tensor_parallelize(model, group, plan):
         selected=[name for name,module in modules.items() if id(module) in replacements]
         selected_weights = set(weight_shards)
         for name, module in modules.items():
-            for parameter in module.parameters(recurse=False):
+            for parameter in (*module.parameters(recurse=False),*module.buffers(recurse=False)):
                 if id(parameter) in selected_weights and not any(name==path or name.startswith(path+'.') for path in selected):
                     raise ValueError('include every consumer of a tied weight in the parallel plan')
     except (KeyError, TypeError, ValueError) as failure:
         error = str(failure)
+    from .float8_parallel import recipe_contract
     schema=[(name,type(module).__name__,[(key,tuple(p.shape),str(p.dtype),p.requires_grad) for key,p in module.named_parameters()],
              [(key,tuple(b.shape),str(b.dtype)) for key,b in module.named_buffers()],
-             [(key,child.get_extra_state()) for key,child in module.named_modules() if type(child).get_extra_state is not nn.Module.get_extra_state])
+             [(key,child.get_extra_state()) for key,child in module.named_modules() if type(child).get_extra_state is not nn.Module.get_extra_state],recipe_contract(module))
             for name,module in modules.items() if isinstance(plan,dict) and name in plan]
     contracts = group.gather_metadata((plan,schema,error))
     for other_plan,other_schema,failure in contracts:
@@ -275,11 +292,16 @@ def tensor_parallel_state_dict(model, group):
     result = OrderedDict((name,value.detach().cpu() if isinstance(value,torch.Tensor) else copy.deepcopy(value))
                          for name,value in model.state_dict().items())
     from .parallel_adapters import _ParallelLoRA,_ParallelNF4,full_adapter_matrix,full_nf4_state
+    from .packed_parallel import _ParallelPacked,full_packed_state
     with torch.no_grad():
         for path, module in model.named_modules(remove_duplicate=False):
             prefix = path+'.' if path else ''
             if isinstance(module,_ParallelLoRA):
                 for name in ('lora_A','lora_B'):result[prefix+name]=full_adapter_matrix(module,name)
+            elif isinstance(module,_ParallelPacked):
+                for key in tuple(result):
+                    if key.startswith(prefix+'local.'):del result[key]
+                result.update((prefix+key,value) for key,value in full_packed_state(module).items())
             elif isinstance(module,_ParallelNF4):
                 for key in tuple(result):
                     if key.startswith(prefix+'local.'):del result[key]
@@ -297,12 +319,18 @@ def load_tensor_parallel_state_dict(model, state, group, *, strict=True):
     """Partition full pretrained/checkpoint tensors for the current TP topology."""
     local = dict(state)
     from .parallel_adapters import _ParallelLoRA,_ParallelNF4,local_adapter_matrix,local_nf4_state
+    from .packed_parallel import _ParallelPacked,local_packed_state
     for path, module in model.named_modules(remove_duplicate=False):
         prefix = path+'.' if path else ''
         if isinstance(module,_ParallelLoRA):
             for name in ('lora_A','lora_B'):
                 key=prefix+name
                 if key in local:local[key]=local_adapter_matrix(module,name,local[key])
+        elif isinstance(module,_ParallelPacked):
+            replacement=local_packed_state(module,state,prefix)
+            for key in ('codes','scales','offsets','group_index','bias','_extra_state'):
+                local.pop(prefix+key,None)
+            local.update(replacement)
         elif isinstance(module,_ParallelNF4):
             replacement=local_nf4_state(module,state,prefix)
             for key in ('packed','scales','codebook','bias','_extra_state'):

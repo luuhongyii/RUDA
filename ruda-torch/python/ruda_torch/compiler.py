@@ -91,6 +91,8 @@ class _State:
                 'dynamo_graphs', 'forward_calls', 'inference_calls', 'backward_calls',
                 'eager_calls', 'native_builds', 'native_replays', 'native_cache_hits',
                 'native_cache_evictions', 'native_nodes_executed', 'region_reference_runs',
+                'dynamic_specializations', 'dynamic_cache_hits', 'dynamic_cache_evictions',
+                'dynamic_specialization_failures', 'dynamic_reference_runs',
                 'execution_errors')}
             return {
                 'capture': self.options.capture,
@@ -124,9 +126,13 @@ class _State:
             raise RuntimeError('failed to release one or more native graph regions') from errors[0]
 
 
-def _check_tensors(values, device_type, label):
+def _check_tensors(values, device_type, label, *, host_metadata=False, allowed_host=()):
     flat, _ = tree_flatten(values)
     for value in flat:
+        if (isinstance(value,torch.Tensor) and device_type=='ruda' and value.device.type=='cpu'
+                and value.dtype in (torch.int32,torch.int64) and value.ndim==1
+                and (host_metadata or id(value) in allowed_host)):
+            continue
         if isinstance(value, torch.Tensor) and value.device.type != device_type:
             raise ValueError(f'{label}: tensor on {value.device}; expected {device_type}. '
                              'Move model and inputs explicitly; no CPU/device fallback is installed.')
@@ -134,10 +140,10 @@ def _check_tensors(values, device_type, label):
             raise ValueError(f'{label}: only ruda:0 is exposed by this runtime')
 
 
-def _check_module(model, device_type):
+def _check_module(model, device_type, *, allowed_host=()):
     if isinstance(model, torch.nn.Module):
         for label, values in (('parameters', tuple(model.parameters())), ('buffers', tuple(model.buffers()))):
-            _check_tensors(values, device_type, label)
+            _check_tensors(values, device_type, label,allowed_host=allowed_host)
 
 
 def _validate_decompositions(decompositions):
@@ -176,14 +182,31 @@ class RudaBackend:
         self._state.check_open()
         # example_inputs can contain FakeTensors and symbolic sizes. Never run a
         # native kernel, read tensor data or allocate native workspace here.
-        _check_tensors(example_inputs, self.options.device_type, f'{phase} graph inputs')
-        _check_module(gm, self.options.device_type)
-        lowered = partition(gm, self._state, phase, self.options)
+        from ._compile_operations import host_metadata_nodes
+        host_nodes=host_metadata_nodes(gm)
+        placeholders=[n for n in gm.graph.nodes if n.op=='placeholder']
+        host_indices={i for i,n in enumerate(placeholders) if n in host_nodes}
+        attributes=set()
+        for node in host_nodes:
+            if node.op=='get_attr':
+                value=gm
+                for part in str(node.target).split('.'):value=getattr(value,part)
+                attributes.add(id(value))
+        _check_tensors(example_inputs, self.options.device_type, f'{phase} graph inputs',
+                       allowed_host={id(value) for i,value in enumerate(example_inputs) if i in host_indices})
+        _check_module(gm, self.options.device_type,allowed_host=attributes)
+        from ._compile_shapes import needs_specialization
+        if self.options.native!='off' and self.options.device_type=='ruda' and needs_specialization(gm):
+            from ._compile_dynamic import DynamicGraph
+            lowered=DynamicGraph(gm,self._state,phase,self.options)
+        else:
+            lowered=partition(gm,self._state,phase,self.options)
         from functorch.compile import make_boxed_func
 
         def run(*args):
             self._state.check_open()
-            _check_tensors(args, self.options.device_type, f'{phase} invocation')
+            _check_tensors(args, self.options.device_type, f'{phase} invocation',
+                           allowed_host={id(value) for i,value in enumerate(args) if i in host_indices})
             self._state.add(f'{phase}_calls')
             try:
                 return lowered(*args)
@@ -194,7 +217,7 @@ class RudaBackend:
                 self._state.add('execution_errors')
                 raise GraphExecutionError(
                     f'RUDA {phase} graph failed on {self.options.device_type}: {exc}. '
-                    'No retry, host transfer or eager re-execution was performed. '
+                    'No retry, CPU tensor-computation fallback or eager re-execution was performed. '
                     'Inspect .info["graphs"] for the captured operators.'
                 ) from exc
         return make_boxed_func(run)
@@ -205,6 +228,10 @@ class RudaBackend:
         if self.options.capture != 'aot':
             raise ValueError("an RudaBackend passed to torch.compile requires capture='aot'; "
                              "use ruda_torch.compile(..., capture='eager') for eager execution")
+        if (self.options.native!='off' and self.options.device_type=='ruda'
+                and torch.ops.aten.scaled_dot_product_attention.default not in self._decompositions):
+            from ._compile_attention import route_attention
+            gm=route_attention(gm)
         with self._init_lock:
             if self._aot is None:
                 # Import lazily; incompatible PyTorch APIs fail visibly, without
@@ -272,7 +299,7 @@ class CompiledModel(torch.nn.Module):
         self._backend._state.check_open()
         _check_compiler_policy(self._backend)
         _check_module(self._original, self._backend.options.device_type)
-        _check_tensors((args, kwargs), self._backend.options.device_type, 'model inputs')
+        _check_tensors((args, kwargs), self._backend.options.device_type, 'model inputs',host_metadata=self._backend.options.capture=='aot')
         if self._backend.options.capture == 'eager':
             self._backend._state.add('eager_calls')
         return self._compiled_call(*args, **kwargs)
@@ -324,7 +351,7 @@ class CompiledFunction:
     def __call__(self, *args, **kwargs):
         self._backend._state.check_open()
         _check_compiler_policy(self._backend)
-        _check_tensors((args, kwargs), self._backend.options.device_type, 'function inputs')
+        _check_tensors((args, kwargs), self._backend.options.device_type, 'function inputs',host_metadata=self._backend.options.capture=='aot')
         if self._backend.options.capture == 'eager':
             self._backend._state.add('eager_calls')
         return self._compiled_call(*args, **kwargs)

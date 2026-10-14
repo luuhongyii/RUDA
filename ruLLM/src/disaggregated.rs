@@ -13,6 +13,11 @@ use std::{
 
 const MAGIC: &[u8; 8] = b"RUDAKV01";
 
+mod batch;
+pub use batch::run_batch_prefill_service;
+#[cfg(feature="serving")]
+pub(crate) use batch::RemoteBatchNetwork;
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrefillRequest {

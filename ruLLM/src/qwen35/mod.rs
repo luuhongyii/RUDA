@@ -1,11 +1,13 @@
 mod attention;
 mod batching;
-pub use batching::Qwen35BatchCache;
+pub use batching::{Qwen35BatchCache,Qwen35BatchDelta};
 mod cache_record;
 pub use cache_record::{Qwen35CacheRecord,Qwen35LayerCacheState};
 mod config;
 mod delta;
 mod layer;
+mod moe;
+use moe::FeedForward;
 #[cfg(feature = "libtorch")]
 mod libtorch;
 #[cfg(feature = "libtorch")]
@@ -14,6 +16,8 @@ mod loading;
 mod quantized_loading;
 mod projection;
 use projection::Projection;
+#[cfg(feature = "tensor-parallel")]
+pub(crate) mod parallel;
 mod vision;
 mod multimodal;
 pub use multimodal::{Qwen35MultimodalCache, Qwen35MultimodalModel, load_huggingface_qwen35_multimodal};
@@ -25,7 +29,7 @@ mod tests;
 
 use crate::{CausalModel, GenerationError};
 use config::LayerType;
-pub use config::{LayerType as Qwen35LayerType, Qwen35TextConfig, RopeConfig as Qwen35RopeConfig};
+pub use config::{LayerType as Qwen35LayerType, Qwen35MoeConfig, Qwen35TextConfig, RopeConfig as Qwen35RopeConfig};
 pub use loading::{LoadedQwen35Text, load_huggingface_qwen35_text, load_huggingface_qwen35_text_packed};
 use ruda::runtime::server::ComputeServer;
 use ruda_nn::{Embedding, Linear};
@@ -82,7 +86,7 @@ struct Layer<B: Backend> {
     mixer: Mixer<B>,
     input_norm: Norm<B>,
     post_norm: Norm<B>,
-    mlp: Mlp<B>,
+    mlp: FeedForward<B>,
 }
 
 pub struct Qwen35TextModel<B: Backend> {
@@ -91,7 +95,10 @@ pub struct Qwen35TextModel<B: Backend> {
     layers: Vec<Layer<B>>,
     norm: Norm<B>,
     head: Projection<B>,
+    reduction: Option<Reduction<B>>,
 }
+
+type Reduction<B: Backend> = std::sync::Arc<dyn Fn(Tensor<B, 3>) -> Tensor<B, 3> + Send + Sync>;
 
 #[derive(Clone)]
 enum LayerCache<B: Backend> {
@@ -119,6 +126,9 @@ impl<B: Backend> Qwen35Cache<B> {
 }
 
 impl<B: Backend> Qwen35TextModel<B> {
+    fn reduce(&self, value: Tensor<B, 3>) -> Tensor<B, 3> {
+        match &self.reduction { Some(reduce) => reduce(value), None => value }
+    }
     pub fn new_cache(&self) -> Qwen35Cache<B> {
         Qwen35Cache {
             layers: self
@@ -245,7 +255,7 @@ where
     ) -> Result<Tensor<DeviceBackend<R, F, I, BT>, 3>, GenerationError> {
         let [batch, sequence, _] = hidden.dims();
         for (index, (layer, state)) in self.layers.iter().zip(cache.layers.iter_mut()).enumerate() {
-            hidden = layer.forward(hidden, &self.config, cos.clone(), sin.clone(), state, cache.position)?;
+            hidden = layer.forward_reduced(hidden, &self.config, cos.clone(), sin.clone(), state, cache.position, self.reduction.as_ref())?;
             observe(index, &hidden);
         }
         cache.position += sequence;

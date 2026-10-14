@@ -1,4 +1,4 @@
-"""Single-host ruCCL GPU payload transport; Gloo carries control metadata only."""
+"""ruCCL CUDA IPC/UCX device transport; Gloo carries control metadata only."""
 import ctypes
 import os
 import time
@@ -37,10 +37,25 @@ class RucclTransport:
         self._executor = None
         self._lock = threading.Lock()
         self.ipc = False
+        self._ucx = None
         if self.backend == 'cuda':
             path = cuda_transport or os.environ.get('RUCCL_CUDA_TRANSPORT', 'auto')
-            if path not in ('auto', 'ipc', 'host'):
-                raise ValueError('RUCCL_CUDA_TRANSPORT must be auto, ipc or host')
+            if path not in ('auto', 'ipc', 'host', 'ucx'):
+                raise ValueError('RUCCL_CUDA_TRANSPORT must be auto, ipc, ucx or host')
+            if rendezvous is None and path in ('auto', 'ucx'):
+                from ._ruccl_ucx import UcxTransport, local_host_id
+                from .distributed_training import gather_process_metadata
+                gather = lambda value: gather_process_metadata(value, group)
+                topology = gather((local_host_id(), path))
+                if any(other != path for _, other in topology):
+                    raise ValueError('ruCCL transports differ across ranks')
+                if path == 'auto' and len({host for host, _ in topology}) > 1:
+                    path = 'ucx'
+                if path == 'ucx':
+                    self._ucx = UcxTransport(library, device, self.rank, self.world_size, gather, timeout_ms)
+                    return
+            elif path == 'ucx':
+                raise ValueError('UCX rendezvous uses a ProcessGroup Store, not a loopback IPC rendezvous tuple')
             self.ipc = path == 'ipc' or (path == 'auto' and sys.platform.startswith('linux'))
             if self.ipc:
                 if not hasattr(library, 'ruccl_ipc_api_version') or library.ruccl_ipc_api_version() != 1:
@@ -96,6 +111,8 @@ class RucclTransport:
             return self._collective(tensor, operation, output=output, root=root)
 
     def _collective(self, tensor, operation, *, output=None, root=0):
+        if self._ucx is not None:
+            return self._ucx.collective(tensor, operation, output=output, root=root)
         if self.ipc:
             return self._ipc_collective(tensor, operation, output=output, root=root)
         if tensor.dtype not in (torch.float32, torch.float16, torch.bfloat16):
@@ -179,6 +196,8 @@ class RucclTransport:
         return codes[tensor.dtype]
 
     def all_to_all(self, tensor, output, sends, receives):
+        if self._ucx is not None:
+            return self._ucx.all_to_all(tensor, output, sends, receives)
         if not self.ipc or not hasattr(self.library, 'ruccl_ipc_all_to_all'):
             raise RuntimeError('rebuild ruCCL bridge with CUDA IPC AllToAll')
         if (tensor.device != output.device or tensor.dtype != output.dtype or tensor.device.type != 'cuda'
@@ -198,6 +217,8 @@ class RucclTransport:
         return output
 
     def p2p(self, tensor, peer, tag, *, receive=False):
+        if self._ucx is not None:
+            return self._ucx.p2p(tensor, peer, tag, receive=receive)
         if not self.ipc or not hasattr(self.library, 'ruccl_ipc_p2p'):
             raise RuntimeError('rebuild ruCCL bridge with CUDA IPC P2P')
         if tensor.device.type != 'cuda' or tensor.device.index != self.device or not tensor.is_contiguous():
@@ -214,7 +235,7 @@ class RucclTransport:
     def sum_async(self, tensor):
         if self._executor is None:
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='ruccl-ordered')
-        if self.ipc:
+        if self.ipc or self._ucx is not None:
             event = torch.cuda.current_stream(self.device).record_event()
             if not hasattr(self, '_async_stream'):
                 self._async_stream = torch.cuda.Stream(device=self.device)
@@ -235,6 +256,8 @@ class RucclTransport:
         return Work()
 
     def stats(self):
+        if self._ucx is not None:
+            return self._ucx.stats()
         if self._tensor is not None:
             with self._lock:
                 result = self._tensor.stats()
@@ -255,6 +278,9 @@ class RucclTransport:
         if self._executor is not None:
             self._executor.shutdown(wait=True)
             self._executor = None
+        if self._ucx is not None:
+            self._ucx.close()
+            self._ucx = None
         if self._tensor is not None:
             self._tensor.close()
             self._tensor = None

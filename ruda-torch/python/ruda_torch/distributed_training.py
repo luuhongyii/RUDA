@@ -10,12 +10,23 @@ import torch
 import torch.distributed as dist
 
 
+def gather_process_metadata(value, process_group=None):
+    if str(dist.get_backend(process_group)).lower() == 'ruccl':
+        group = process_group if process_group is not None else dist.distributed_c10d._get_default_group()
+        if not hasattr(group, 'gather_metadata'):
+            group = group._get_backend(torch.device('cuda', torch.cuda.current_device()))
+        return group.gather_metadata(value)
+    result = [None] * dist.get_world_size(process_group)
+    dist.all_gather_object(result, value, group=process_group)
+    return result
+
+
 class ReplicaGroup:
     """A caller-initialized process group, with explicit device and collective order.
 
     Set RUDA_TORCH_CUDA_DEVICE before the first native operation, set the matching
-    torch.cuda device. NCCL uses an NCCL process group; ruCCL uses a Gloo
-    process group for metadata only and its own single-host tensor transport.
+    torch.cuda device. ruCCL accepts its native process group, or a Gloo
+    control group with a separately owned tensor communicator.
     Each rank keeps a full model and optimizer. This is data parallelism, not FSDP.
     """
     def __init__(self, process_group=None, *, device_type='ruda', transport='nccl', ruccl_algorithm='auto'):
@@ -31,12 +42,16 @@ class ReplicaGroup:
         self.rank = dist.get_rank(process_group)
         self.world_size = dist.get_world_size(process_group)
         self.device_type = device_type
+        self.transport = transport
+        self.backend = str(dist.get_backend(process_group)).lower()
         self.cuda_index = None
         if self.rank < 0 or self.world_size < 1:
             raise ValueError('this process must belong to the group')
-        expected = 'nccl' if device_type == 'ruda' and transport == 'nccl' else 'gloo'
-        if str(dist.get_backend(process_group)).lower() != expected:
-            raise ValueError(f'{device_type} training requires the {expected} process-group backend')
+        expected = ('ruccl', 'gloo') if transport == 'ruccl' else ('nccl',) if device_type == 'ruda' else ('gloo',)
+        if self.backend not in expected:
+            raise ValueError(f'{device_type}/{transport} training requires a {expected} process-group backend')
+        if self.backend == 'ruccl' and device_type not in ('cuda', 'ruda'):
+            raise ValueError('the ruCCL process group requires CUDA or RUDA tensors')
         if device_type == 'ruda':
             from . import _C, _native
             if not hasattr(_C, '_cuda_alias') or not hasattr(_native, 'ruda_torch_cuda_device_index'):
@@ -54,7 +69,7 @@ class ReplicaGroup:
         self._parameters = []
         self._parameter_specs = []
         self._ruccl = None
-        if transport == 'ruccl':
+        if transport == 'ruccl' and self.backend != 'ruccl':
             from .ruccl_transport import RucclTransport
             if device_type == 'mps':
                 self.cuda_index = 0
@@ -65,9 +80,7 @@ class ReplicaGroup:
 
     def gather_metadata(self, value):
         """Gather rank-ordered, trusted application metadata, not tensor payloads."""
-        result = [None] * self.world_size
-        dist.all_gather_object(result, value, group=self.group)
-        return result
+        return gather_process_metadata(value, self.group)
 
     def _alias(self, tensor):
         if tensor.device.type != self.device_type or not tensor.is_contiguous():

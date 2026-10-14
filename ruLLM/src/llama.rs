@@ -19,6 +19,9 @@ pub(crate) mod awq;
 pub(crate) mod rope;
 mod packed_training;
 mod cache_record;
+mod batching;
+#[cfg(feature = "tensor-parallel")]
+pub(crate) mod parallel;
 pub use cache_record::LlamaKvCacheRecord;
 #[cfg(test)]
 mod causal_training_tests;
@@ -645,6 +648,33 @@ struct PackedLlamaFeedForward<B: Backend> {
 impl<B: Backend> LlamaForCausalLm<B> {
     pub fn init(config: &LlamaConfig, device: &B::Device) -> Result<Self, LlamaConfigError> {
         Self::init_with_layers(config, device, LlamaDecoderLayer::init, LinearLayout::Row)
+    }
+
+    pub(crate) fn init_huggingface(config: &LlamaConfig, parameters: &rope::RopeParameters, qwen2: bool,
+        device: &B::Device) -> Result<Self, LlamaConfigError> {
+        config.validate()?;
+        let dtype = Tensor::<B, 1>::zeros([1], device).dtype();
+        let rope = parameters.init(config, device, dtype);
+        let layout = if qwen2 { LinearLayout::Col } else { LinearLayout::Row };
+        Self::init_with_layers(config, device, |config, device| {
+            let attention = LlamaAttention::init_with_options(config, qwen2, RotaryLayout::HalfSplit,
+                if qwen2 { LinearLayout::Col } else { LinearLayout::Row }, rope.clone(), device);
+            let mlp = if qwen2 { LlamaFeedForward::init_qwen2(config, device) } else { LlamaFeedForward::init(config, device) };
+            LlamaDecoderLayer::init_with_attention(config, attention, mlp, device)
+        }, layout)
+    }
+
+    pub(crate) fn restore_rope_storage(&mut self, config: &LlamaConfig, parameters: &rope::RopeParameters, device: &B::Device) {
+        let mut tables: Vec<(DType, RotaryEncoding<B>)> = Vec::new();
+        for layer in &mut self.layers {
+            let dtype = layer.self_attn.q_proj.weight.val().dtype();
+            if layer.self_attn.rope.freq_complex.dtype() == dtype { continue; }
+            let rope = match tables.iter().find(|(kind, _)| *kind == dtype) {
+                Some((_, rope)) => rope.clone(),
+                None => {let rope = parameters.init(config, device, dtype); tables.push((dtype, rope.clone())); rope},
+            };
+            layer.self_attn.rope = rope;
+        }
     }
 
     /// Initialize the Qwen2/Qwen2.5 decoder variant. It shares the

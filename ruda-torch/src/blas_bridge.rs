@@ -120,6 +120,41 @@ fn matmul_strategy(i:i64)->MatmulStrategy {match i {0=>MatmulStrategy::Ruda,1=>M
 fn grouped_strategy(i:i64)->GroupedStrategy {match i {0=>GroupedStrategy::Auto,1=>GroupedStrategy::Scalar,
     2=>GroupedStrategy::TensorCore,_=>panic!("invalid grouped strategy")}}
 
+pub(super) fn prepare_grouped(c:&ComputeClient<CudaRuntime>,views:&[View],backward:bool,integers:&[i64])
+    ->rublas::tensor_grouped::GroupedKernelPlan<CudaRuntime>
+{
+    use rublas::tensor_grouped::{GroupedKernelPlan,prepare_grouped_matmul_nt};
+    let ts:Vec<_>=views.iter().map(|v|{let mut t=primitives::tensor(v);t.client=c.clone();t}).collect();
+    let (m,k,e,n)=(views[0].shape[0],views[0].shape[1],views[1].shape[0],views[1].shape[1]);
+    let ids=empty_device_contiguous_dtype(c.clone(),ts[0].device.clone(),[m].into(),DType::U32);
+    let mut kernels=Vec::new();
+    if m!=0 {
+        let dim=RudaDim::new(c.properties(),m);
+        kernels.push(convert_ids::prepare::<CudaRuntime>(c,calculate_ruda_count_elemwise(c,m,dim),dim,
+            ts[2].clone().into_tensor_arg(),ids.clone().into_array_arg(),e as u32,ts[2].dtype.into()));
+    }
+    let mut workspace=vec![ids.clone()];
+    if backward {
+        if views[4].len!=0 {
+            let dim=RudaDim::new(c.properties(),views[4].len);
+            kernels.push(arbitrary_dinput::prepare::<CudaRuntime>(c,calculate_ruda_count_elemwise(c,views[4].len,dim),dim,
+                ts[1].clone().into_tensor_arg(),ts[3].clone().into_tensor_arg(),ids.clone().into_array_arg(),ts[4].clone().into_tensor_arg(),
+                e as u32,n as u32,k as u32,ts[0].dtype.into()));
+        }
+        if views[5].len!=0 {
+            let dim=RudaDim::new(c.properties(),views[5].len);
+            kernels.push(arbitrary_dweight::prepare::<CudaRuntime>(c,calculate_ruda_count_elemwise(c,views[5].len,dim),dim,
+                ts[0].clone().into_tensor_arg(),ts[3].clone().into_tensor_arg(),ids.into_array_arg(),ts[5].clone().into_tensor_arg(),
+                m as u32,n as u32,k as u32,ts[0].dtype.into()));
+        }
+    } else {
+        let prepared=unsafe {prepare_grouped_matmul_nt(&ts[0],&ts[1],&ids,&ts[3],grouped_strategy(integers[0]))}
+            .expect("grouped graph preparation failed");
+        kernels.extend(prepared.kernels);workspace.extend(prepared.workspace);
+    }
+    GroupedKernelPlan {kernels,workspace}
+}
+
 fn row_ids(ids:&View,experts:usize)->RudaTensor<CudaRuntime> {
     assert!(ids.dtype==4 || ids.dtype==5);assert_eq!(ids.shape.len(),1);
     let t=real_tensor(ids);let out=empty_device_contiguous_dtype(t.client.clone(),t.device.clone(),Shape::from(ids.shape.clone()),DType::U32);

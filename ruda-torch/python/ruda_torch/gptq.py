@@ -32,13 +32,15 @@ def _unpack_words(words, count, bits):
 
 def gptq_linear(state, prefix, *, in_features, out_features, bits, group_size,
                 checkpoint_format='gptq', desc_act=False, zero_point_wrap=False,
-                device='ruda:0', dtype=torch.float16, chunk_rows=128):
+                device='ruda:0', dtype=torch.float16, chunk_rows=128, strategy='scalar'):
     """Import standard packed GPTQ (not Marlin), without requantizing weights.
 
     v1 stores zero-1, v2 stores zero directly. `zero_point_wrap=True` selects
     decoders that mask v1 zero+1 modulo 2**bits; this is explicit for boundary
     zero points because legacy GPTQ implementations disagree on that case.
     """
+    if strategy not in ('scalar', 'tensor_core'):
+        raise ValueError('packed Linear strategy must be scalar or tensor_core')
     if checkpoint_format not in ('gptq', 'gptq_v2') or bits not in (2, 3, 4, 8):
         raise ValueError('expected standard GPTQ/v2 with 2/3/4/8-bit codes')
     if sys.byteorder != 'little':
@@ -88,7 +90,7 @@ def gptq_linear(state, prefix, *, in_features, out_features, bits, group_size,
     weight = PackedQuantizedTensor(packed, scale.to(device), offset.contiguous().to(device),
                                   (out_features, in_features), 'int'+str(bits), group_size, index.int().contiguous().to(device))
     bias = state.get(key('bias'))
-    return PackedLinear(weight, None if bias is None else bias.to(device=device, dtype=dtype))
+    return PackedLinear(weight, None if bias is None else bias.to(device=device, dtype=dtype), strategy=strategy)
 
 
 def _config(directory):
@@ -106,12 +108,14 @@ def _config(directory):
 
 
 def load_gptq_safetensors(model, directory, *, target_modules, config=None, device='ruda:0',
-                          dtype=torch.float16, zero_point_wrap=False, chunk_rows=128):
+                          dtype=torch.float16, zero_point_wrap=False, chunk_rows=128, strategy='scalar'):
     """Stream standard GPTQ and remaining dense tensors into a constructed model.
 
     No architecture, key renaming, remote code or download is inferred. Dynamic
     per-module bits/group_size/desc_act config overrides are resolved explicitly.
     """
+    if strategy not in ('scalar', 'tensor_core'):
+        raise ValueError('packed Linear strategy must be scalar or tensor_core')
     config = dict(_config(directory) if config is None else config)
     if config.get('quant_method', 'gptq').lower() != 'gptq' or config.get('is_marlin_format', False):
         raise ValueError('checkpoint is not standard GPTQ')
@@ -141,7 +145,7 @@ def load_gptq_safetensors(model, directory, *, target_modules, config=None, devi
             replacement = gptq_linear(source, name, in_features=layer.in_features, out_features=layer.out_features,
                 bits=cfg['bits'], group_size=cfg['group_size'], checkpoint_format=checkpoint_format,
                 desc_act=cfg.get('desc_act', False), zero_point_wrap=zero_point_wrap,
-                device=device, dtype=dtype, chunk_rows=chunk_rows)
+                device=device, dtype=dtype, chunk_rows=chunk_rows, strategy=strategy)
             if (layer.bias is None) != (replacement.bias is None):
                 raise ValueError(f'GPTQ bias presence differs from model: {name}')
             replacement.train(layer.training)

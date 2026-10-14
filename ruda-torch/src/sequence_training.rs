@@ -39,6 +39,23 @@ fn triangular<F: Float + RudaElement>(
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_sequence_api_version() -> u32 { 1 }
 
+pub(super) fn prepare_triangular(c: &ComputeClient<CudaRuntime>, a: &View, b: &View, out: &View,
+    upper: bool, unit: bool) -> Vec<PreparedKernel<CudaRuntime>>
+{
+    let rank=a.shape.len();
+    assert!(rank>=2 && b.shape.len()==rank && a.dtype<=2);
+    assert_eq!(a.dtype,b.dtype); assert_eq!(a.dtype,out.dtype); assert_eq!(b.shape,out.shape);
+    let n=a.shape[rank-1]; let columns=b.shape[rank-1];
+    assert_eq!(a.shape[rank-2],n); assert_eq!(b.shape[rank-2],n);
+    assert_eq!(a.shape[..rank-2],b.shape[..rank-2]);
+    if out.len==0 { return Vec::new(); }
+    let batches=a.len/(n*n);
+    let grid=RudaCount::Static(u32::try_from(columns.div_ceil(4)).unwrap(),u32::try_from(batches).unwrap(),1);
+    macro_rules! prepare {($f:ty)=>{triangular::prepare::<$f,CudaRuntime>(c,grid,RudaDim::new_1d(128),
+        a.arg(),b.arg(),out.arg(),n as u32,columns as u32,upper,unit)};}
+    vec![match a.dtype {0=>prepare!(f32),1=>prepare!(f16),2=>prepare!(bf16),_=>unreachable!()}]
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ruda_torch_delta_forward(
     descriptors: *const Descriptor, count: usize, scale: f32, chunk: u32,

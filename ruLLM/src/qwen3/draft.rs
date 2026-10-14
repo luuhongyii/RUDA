@@ -13,6 +13,8 @@ use ruda_tensor::api::{
 };
 use serde::Deserialize;
 use std::{collections::BTreeSet, marker::PhantomData, path::Path};
+mod batching;
+pub use batching::{Qwen3DraftBatchCache,Qwen3DraftBatchPrefix};
 
 #[derive(Deserialize)]
 struct DraftInner {
@@ -226,10 +228,7 @@ impl<B: Backend> Draft<B> {
                 .reshape([1, c.block_size, c.num_attention_heads * c.head_dim]);
             hidden = hidden + layer.o.forward(attended);
             let normalized = norm(hidden.clone(), &layer.post_norm, c.rms_norm_eps);
-            hidden = hidden
-                + layer.down.forward(
-                    silu(layer.gate.forward(normalized.clone())) * layer.up.forward(normalized),
-                );
+            hidden = hidden + layer.mlp.forward(normalized)?;
         }
         cache.draft.position = full_length;
         cache.draft.truncate(cache.position)?;
@@ -572,6 +571,11 @@ pub fn load_huggingface_qwen3_draft<B: Backend>(
     target: Qwen3Model<B>,
     directory: impl AsRef<Path>,
 ) -> Result<Qwen3Drafted<B>, HuggingFaceLoadError> {
+    load_draft_rank(target,directory,false)
+}
+
+pub(super) fn load_draft_rank<B:Backend>(target:Qwen3Model<B>,directory:impl AsRef<Path>,sharded:bool)
+    ->Result<Qwen3Drafted<B>,HuggingFaceLoadError> {
     let directory = directory
         .as_ref()
         .canonicalize()
@@ -604,7 +608,7 @@ pub fn load_huggingface_qwen3_draft<B: Backend>(
         }
     };
     let anchor_first = config.num_anchors.is_some() || config.markov_rank > 0;
-    if target.reduction.is_some()
+    if (target.reduction.is_some() && !sharded)
         || [
             config.hidden_size,
             config.intermediate_size,
@@ -646,7 +650,7 @@ pub fn load_huggingface_qwen3_draft<B: Backend>(
             .as_ref()
             .is_some_and(|v| !v.is_null())
     {
-        return Err(HuggingFaceLoadError("requires a compatible floating DFlash/vanilla DSpark drafter and a single-rank Qwen3 target".into()));
+        return Err(HuggingFaceLoadError("requires a compatible floating DFlash/vanilla DSpark drafter and Qwen3 target; sharded targets need the parallel batch loader".into()));
     }
     let device = target.embedding.device();
     let dtype = target.embedding.dtype();
@@ -696,6 +700,7 @@ pub fn load_huggingface_qwen3_draft<B: Backend>(
                 h,
                 &device,
             )?,
+            mlp: super::moe::FeedForward::Dense(super::moe::Mlp {
             gate: projection(
                 &mut checkpoint,
                 &format!("{p}.mlp.gate_proj"),
@@ -717,6 +722,7 @@ pub fn load_huggingface_qwen3_draft<B: Backend>(
                 h,
                 &device,
             )?,
+            }),
             input_norm: checkpoint.tensor(&format!("{p}.input_layernorm.weight"), [h], &device)?,
             post_norm: checkpoint.tensor(
                 &format!("{p}.post_attention_layernorm.weight"),

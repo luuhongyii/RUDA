@@ -306,7 +306,7 @@ class GGUFWeights(Mapping):
 
 
 def load_gguf(model, paths, *, name_map, device='ruda:0', dtype=torch.float16,
-              row_permutations=None, chunk_rows=64):
+              row_permutations=None, chunk_rows=64, strategy='scalar'):
     """Load a constructed model using explicit model-parameter -> GGUF-name maps.
 
     Quantized Linear/Embedding weights stay packed. Q/K RoPE row permutations,
@@ -314,6 +314,8 @@ def load_gguf(model, paths, *, name_map, device='ruda:0', dtype=torch.float16,
     Extra GGUF tensors are allowed; every model parameter requires a mapping.
     """
     from .packed_quantization import PackedEmbedding
+    if strategy not in ('scalar', 'tensor_core'):
+        raise ValueError('packed Linear strategy must be scalar or tensor_core')
     source = GGUFWeights(paths)
     row_permutations = {} if row_permutations is None else row_permutations
     originals = list(model.named_parameters(remove_duplicate=False)) + list(model.named_buffers(remove_duplicate=False))
@@ -356,7 +358,7 @@ def load_gguf(model, paths, *, name_map, device='ruda:0', dtype=torch.float16,
                         bias_name = parent+'.bias' if parent else 'bias'
                         bias = source.tensor(name_map[bias_name],device=device,dtype=dtype)
                         handled.add(bias_name)
-                    replacement = PackedLinear(weight,bias)
+                    replacement = PackedLinear(weight,bias,strategy=strategy)
                 else:
                     replacement = PackedEmbedding(weight,padding_idx=module.padding_idx,output_dtype=dtype)
                 replacement.train(module.training)

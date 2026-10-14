@@ -53,6 +53,14 @@ if hasattr(_native, "ruda_torch_indexing_api_version") and hasattr(_C, "initiali
     _C.initialize_indexing(ctypes.cast(_native.ruda_torch_advanced_index, ctypes.c_void_p).value)
     _indexing_available = True
 
+_sorting_available = False
+if hasattr(_native,'ruda_torch_sorting_api_version') and hasattr(_C,'initialize_sorting'):
+    _native.ruda_torch_sorting_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_sorting_api_version()!=1 or getattr(_C,'sorting_api_version',0)!=1:
+        raise RuntimeError('RUDA sorting API mismatch; rebuild Rust and C++ extensions')
+    _C.initialize_sorting(ctypes.cast(_native.ruda_torch_sorting,ctypes.c_void_p).value)
+    _sorting_available=True
+
 _factory_available = False
 if hasattr(_native, "ruda_torch_factory_api_version") and hasattr(_C, "initialize_factories"):
     _native.ruda_torch_factory_api_version.restype = ctypes.c_uint32
@@ -176,6 +184,7 @@ from . import _ops
 if _scientific_available:
     _scientific.register()
 from .blas import gemm, fused_gemm, grouped_gemm, triangular_solve
+from . import _grouped_ops
 from . import fft, linalg
 if hasattr(_native, 'ruda_torch_fft_api_version') and hasattr(_C, 'initialize_fft'):
     fft.register()
@@ -207,6 +216,70 @@ if _graph_available and hasattr(_native,'ruda_torch_graph_math_api_version'):
     _graph_math_available = (_native.ruda_torch_graph_math_api_version()==1
                              and getattr(_C,'graph_math_api_version',0)==1)
 from ._graph import StaticGraph, GraphOp
+_graph_index_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_index_api_version'):
+    _native.ruda_torch_graph_index_api_version.restype = ctypes.c_uint32
+    _graph_index_available = (_native.ruda_torch_graph_index_api_version()==1
+                              and getattr(_C,'graph_index_api_version',0)==1)
+_graph_factory_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_factory_api_version'):
+    _native.ruda_torch_graph_factory_api_version.restype = ctypes.c_uint32
+    _graph_factory_available = (_native.ruda_torch_graph_factory_api_version()==1
+                                and getattr(_C,'graph_factory_api_version',0)==1)
+_graph_empty_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_empty_api_version'):
+    _native.ruda_torch_graph_empty_api_version.restype = ctypes.c_uint32
+    _graph_empty_available = (_native.ruda_torch_graph_empty_api_version()==1
+                              and getattr(_C,'graph_empty_api_version',0)==1)
+_graph_root_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_root_api_version'):
+    _native.ruda_torch_graph_root_api_version.restype = ctypes.c_uint32
+    _graph_root_available = (_native.ruda_torch_graph_root_api_version()==1
+                             and getattr(_C,'graph_root_api_version',0)==1)
+_operation_graph_available = False
+if hasattr(_native,'ruda_torch_operation_graph_api_version') and hasattr(_C,'initialize_operation_graph'):
+    _native.ruda_torch_operation_graph_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_operation_graph_api_version()==1 and getattr(_C,'operation_graph_api_version',0)==1:
+        _C.initialize_operation_graph(ctypes.cast(_native.ruda_torch_operation_graph,ctypes.c_void_p).value)
+        _operation_graph_available=True
+_sequence_graph_available = False
+if _operation_graph_available and hasattr(_native,'ruda_torch_sequence_graph_api_version'):
+    _native.ruda_torch_sequence_graph_api_version.restype = ctypes.c_uint32
+    _sequence_graph_available = (_native.ruda_torch_sequence_graph_api_version()==1
+                                 and getattr(_C,'sequence_graph_api_version',0)==1)
+_pointwise_graph_available = False
+if _operation_graph_available and hasattr(_native,'ruda_torch_pointwise_graph_api_version'):
+    _native.ruda_torch_pointwise_graph_api_version.restype = ctypes.c_uint32
+    _pointwise_graph_available = (_native.ruda_torch_pointwise_graph_api_version()==1
+                                  and getattr(_C,'pointwise_graph_api_version',0)==1)
+_transform_graph_available = False
+if _operation_graph_available and hasattr(_native,'ruda_torch_transform_graph_api_version'):
+    _native.ruda_torch_transform_graph_api_version.restype = ctypes.c_uint32
+    _transform_graph_available = (_native.ruda_torch_transform_graph_api_version()==1
+                                 and getattr(_C,'transform_graph_api_version',0)==1)
+_reduction_graph_available = False
+if _operation_graph_available and hasattr(_native,'ruda_torch_reduction_graph_api_version'):
+    _native.ruda_torch_reduction_graph_api_version.restype = ctypes.c_uint32
+    _reduction_graph_available = (_native.ruda_torch_reduction_graph_api_version()==1
+                                 and getattr(_C,'reduction_graph_api_version',0)==1)
+_router_graph_available = False
+if _operation_graph_available and hasattr(_native,'ruda_torch_router_graph_api_version'):
+    _native.ruda_torch_router_graph_api_version.restype = ctypes.c_uint32
+    _router_graph_available = (_native.ruda_torch_router_graph_api_version()==1
+                              and getattr(_C,'router_graph_api_version',0)==1)
+_grouped_graph_available = False
+if _operation_graph_available and hasattr(_native,'ruda_torch_grouped_graph_api_version'):
+    _native.ruda_torch_grouped_graph_api_version.restype = ctypes.c_uint32
+    _grouped_graph_available = (_native.ruda_torch_grouped_graph_api_version()==1
+                               and getattr(_C,'grouped_graph_api_version',0)==1)
+_scatter_graph_available = False
+if _operation_graph_available and hasattr(_native,'ruda_torch_scatter_graph_api_version'):
+    _native.ruda_torch_scatter_graph_api_version.restype = ctypes.c_uint32
+    _scatter_graph_available = (_native.ruda_torch_scatter_graph_api_version()==1
+                               and getattr(_C,'scatter_graph_api_version',0)==1)
+
+_sorting_graph_available = (_operation_graph_available and _sorting_available
+                            and getattr(_C,'sorting_graph_api_version',0)==1)
 
 # Training is a separately negotiated extension. Explicit StaticGraph training
 # and model compilation remain opt-in. No CPU fallback is installed.
@@ -231,6 +304,7 @@ if hasattr(_native, "ruda_torch_router_api_version") and hasattr(_C, "initialize
     _C.initialize_router(ctypes.cast(_native.ruda_torch_router, ctypes.c_void_p).value)
     _router_available = True
 from ._router import selected_router_weights
+from . import _router_ops
 
 # Selected paged backward has an additive capability check. Old eager tensor
 # ABI 10 remains loadable, but the new autograd path never silently falls back
@@ -256,6 +330,12 @@ if hasattr(_native, 'ruda_torch_packed_api_version') and hasattr(_C, 'initialize
         raise RuntimeError('RUDA packed quantization API mismatch; rebuild both native libraries')
     _C.initialize_packed(ctypes.cast(_native.ruda_torch_packed, ctypes.c_void_p).value)
     _packed_available = True
+_packed_indexed_groups_available = False
+if hasattr(_native, 'ruda_torch_packed_indexed_groups_api_version'):
+    _native.ruda_torch_packed_indexed_groups_api_version.restype = ctypes.c_uint32
+    _packed_indexed_groups_available = (_packed_available
+        and _native.ruda_torch_packed_indexed_groups_api_version() == 1
+        and getattr(_C, 'packed_indexed_groups_api_version', None) == 1)
 _paged_quantized_available = False
 if hasattr(_native, 'ruda_torch_paged_quantized_api_version') and hasattr(_C, 'initialize_paged_quantized'):
     _native.ruda_torch_paged_quantized_api_version.restype = ctypes.c_uint32
@@ -264,6 +344,7 @@ if hasattr(_native, 'ruda_torch_paged_quantized_api_version') and hasattr(_C, 'i
     _C.initialize_paged_quantized(ctypes.cast(_native.ruda_torch_paged_quantized, ctypes.c_void_p).value)
     _paged_quantized_available = True
 from .packed_quantization import (PackedQuantizedTensor, PackedLinear, PackedEmbedding, quantize_packed, scaled_float8_mm)
+from .float8_training import Float8Recipe, Float8Linear, float8_linear, convert_to_float8_training
 from .quantization_calibration import (calibrate_quantization, QuantizationObserver, affine_fake_quantize)
 from .quantized_cache import QuantizedKVCache, quantized_paged_attention
 
@@ -330,6 +411,7 @@ from .structured_pipeline import StructuredPipelineStage,PipelineTreeSpec,Pipeli
 from .distributed_checkpoint import DistributedCheckpoint, model_shard_layout
 from .adapter_interop import load_peft_adapter, save_peft_adapter
 from .attention import scaled_dot_product_attention
+from . import _dense_ops
 from .block_attention import block_scaled_dot_product_attention
 from .parallel_loss import vocab_parallel_cross_entropy
 from .transformers_attention import register_transformers_attention
@@ -340,6 +422,8 @@ from .gptq import gptq_linear, load_gptq_safetensors
 from .gguf import GGUFWeights, GGUFTensorInfo, load_gguf
 from .parallel_adapters import (ColumnParallelLoRALinear,RowParallelLoRALinear,
     ColumnParallelNF4Linear,RowParallelNF4Linear,shard_nf4_linear)
+from .packed_parallel import (ColumnParallelPackedLinear,RowParallelPackedLinear,
+    VocabParallelPackedEmbedding,shard_packed_linear)
 from .parallel_checkpoint_io import load_tensor_parallel_safetensors,load_tensor_parallel_bnb_nf4_safetensors
 from .hybrid_parallel import DataTensorParallelGroup
 from .tensor_parallel_optim import TensorParallelMuon,MeshShardedMuon
@@ -348,6 +432,7 @@ from .pipeline_trainer import PipelineTrainer
 from .pipeline_ties import PipelineTiedParameters
 from .training_data import StatefulShardSampler,TokenBudgetBatchSampler,collate_varlen_causal_lm
 from .varlen_attention import varlen_scaled_dot_product_attention
+from . import _varlen_ops
 from .causal_finetuning import PackedCausalLMFinetuner,CausalLMTrainer
 from .training_checkpoint import training_state_dict,validate_training_state_dict,load_training_state_dict
 from .training_autotune import TrainingAutotuner,TrainingPlan,PipelineAutotuner
@@ -360,3 +445,18 @@ from .moe import (RoutingPolicy, RoutingResult, route_experts, router_load_balan
                   router_z_loss, SwiGLUExperts, MixtureOfExperts, MoEOutput)
 from .weight_loading import (TensorSource, WeightMapping, SafetensorWeights,
                              WeightLoadResult, load_safetensor_weights)
+
+
+def register_transformers_kimi(*, exist_ok=False):
+    from .transformers_kimi import register_transformers_kimi as register
+    return register(exist_ok=exist_ok)
+
+
+def tensor_parallelize_kimi(model, group, *, vocab_parallel=True):
+    from .transformers_kimi import tensor_parallelize_kimi as parallelize
+    return parallelize(model, group, vocab_parallel=vocab_parallel)
+
+
+def enable_transformers_qwen35(model):
+    from .transformers_qwen35 import enable_transformers_qwen35 as enable
+    return enable(model)

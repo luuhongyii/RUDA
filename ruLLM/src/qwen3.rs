@@ -14,10 +14,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 mod draft;
+mod batching;
+mod moe;
+pub use moe::Qwen3MoeConfig;
 #[cfg(feature = "tensor-parallel")]
 pub mod parallel;
 pub use draft::{
     Qwen3DraftCache, Qwen3DraftCacheRecord, Qwen3Drafted, load_huggingface_qwen3_draft,
+    Qwen3DraftBatchCache,Qwen3DraftBatchPrefix,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -61,7 +65,7 @@ impl Qwen3Config {
         }
     }
     fn validate(&self) -> Result<(), HuggingFaceLoadError> {
-        if self.model_type != "qwen3"
+        if !matches!(self.model_type.as_str(), "qwen3" | "qwen3_moe")
             || [
                 self.vocab_size,
                 self.hidden_size,
@@ -84,7 +88,6 @@ impl Qwen3Config {
             || self.rope_theta <= 0.0
             || self.attention_dropout != 0.0
             || self.use_sliding_window
-            || self.rope_scaling.as_ref().is_some_and(|v| !v.is_null())
             || self
                 .quantization_config
                 .as_ref()
@@ -94,14 +97,42 @@ impl Qwen3Config {
                 types.len() != self.num_hidden_layers || types.iter().any(|v| v != "full_attention")
             })
         {
-            return Err(HuggingFaceLoadError("requires dense full-attention Qwen3, native floating weights, unscaled RoPE and SiLU".into()));
+            return Err(HuggingFaceLoadError("requires full-attention Qwen3 dense/MoE, native floating weights and SiLU".into()));
         }
         self.num_attention_heads
             .checked_mul(self.head_dim)
             .and_then(|n| n.checked_mul(self.hidden_size))
             .ok_or_else(|| HuggingFaceLoadError("Qwen3 projection shape overflow".into()))?;
+        self.rotary_parameters()?;
         Ok(())
     }
+
+    fn rotary_parameters(&self) -> Result<crate::llama::rope::RopeParameters, HuggingFaceLoadError> {
+        crate::huggingface::rope::static_parameters(self.head_dim, self.max_position_embeddings, self.rope_theta,
+            None, 1.0, self.rope_scaling.as_ref())
+    }
+}
+
+fn read_config(directory: &Path) -> Result<(Qwen3Config, Option<Qwen3MoeConfig>), HuggingFaceLoadError> {
+    let mut source: serde_json::Value = serde_json::from_slice(&std::fs::read(directory.join("config.json"))
+        .map_err(|e| HuggingFaceLoadError(e.to_string()))?).map_err(|e| HuggingFaceLoadError(e.to_string()))?;
+    let mut rotary = source.get("rope_parameters").filter(|v| !v.is_null()).cloned()
+        .or_else(|| source.get("rope_scaling").filter(|v| !v.is_null()).cloned()).unwrap_or_else(|| serde_json::json!({}));
+    let object = rotary.as_object_mut().ok_or_else(|| HuggingFaceLoadError("Qwen3 RoPE parameters must be an object".into()))?;
+    if let Some(original) = source.get("original_max_position_embeddings").filter(|v| !v.is_null()) {
+        object.insert("original_max_position_embeddings".into(), original.clone());
+    }
+    if let Some(partial) = source.get("partial_rotary_factor").filter(|v| !v.is_null()) {
+        object.entry("partial_rotary_factor").or_insert_with(|| partial.clone());
+    }
+    if let Some(theta) = object.get("rope_theta") { source["rope_theta"] = theta.clone(); }
+    source["rope_scaling"] = rotary;
+    let config: Qwen3Config = serde_json::from_value(source.clone()).map_err(|e| HuggingFaceLoadError(e.to_string()))?;
+    let moe = if config.model_type == "qwen3_moe" {
+        let moe: Qwen3MoeConfig = serde_json::from_value(source).map_err(|e| HuggingFaceLoadError(e.to_string()))?;
+        moe.validate(&config)?; Some(moe)
+    } else { None };
+    Ok((config, moe))
 }
 
 struct Projection<B: Backend> {
@@ -123,9 +154,7 @@ struct Layer<B: Backend> {
     k: Projection<B>,
     v: Projection<B>,
     o: Projection<B>,
-    gate: Projection<B>,
-    up: Projection<B>,
-    down: Projection<B>,
+    mlp: moe::FeedForward<B>,
     input_norm: Tensor<B, 1>,
     post_norm: Tensor<B, 1>,
     q_norm: Tensor<B, 1>,
@@ -134,10 +163,12 @@ struct Layer<B: Backend> {
 
 pub struct Qwen3Model<B: Backend> {
     pub config: Qwen3Config,
+    pub moe_config: Option<Qwen3MoeConfig>,
     embedding: Tensor<B, 2>,
     layers: Vec<Layer<B>>,
     norm: Tensor<B, 1>,
     head: Projection<B>,
+    rotary: crate::llama::rope::RopeParameters,
     reduction: Option<Arc<dyn Fn(Tensor<B, 3>) -> Tensor<B, 3> + Send + Sync>>,
 }
 pub struct LoadedQwen3<B: Backend> {
@@ -216,9 +247,7 @@ impl<B: Backend> Qwen3Model<B> {
             .select(0, tokens.reshape([sequence]))
             .reshape([1, sequence, c.hidden_size]);
         let dtype = hidden.dtype();
-        let inverse = (0..c.head_dim / 2)
-            .map(|i| 1.0f32 / (c.rope_theta as f32).powf((2 * i) as f32 / c.head_dim as f32))
-            .collect::<Vec<_>>();
+        let inverse = self.rotary.inverse_frequencies.clone();
         let frequencies = Tensor::<B, 2>::from_data(
             TensorData::new(
                 (start..start + sequence)
@@ -233,8 +262,8 @@ impl<B: Backend> Qwen3Model<B> {
         );
         let frequencies = Tensor::cat(vec![frequencies.clone(), frequencies], 1)
             .reshape([1, 1, sequence, c.head_dim]);
-        let cos = frequencies.clone().cos().cast(dtype);
-        let sin = frequencies.sin().cast(dtype);
+        let cos = (frequencies.clone().cos() * self.rotary.attention_factor).cast(dtype);
+        let sin = (frequencies.sin() * self.rotary.attention_factor).cast(dtype);
         let mut features = Vec::with_capacity(tapped_layers.len());
         for (index, (layer, state)) in self.layers.iter().zip(&mut cache.layers).enumerate() {
             if state.sequence_length() != start {
@@ -305,8 +334,7 @@ impl<B: Backend> Qwen3Model<B> {
             };
             hidden = hidden + attention;
             let input = norm(hidden.clone(), &layer.post_norm, c.rms_norm_eps);
-            let mlp = silu(layer.gate.forward(input.clone())) * layer.up.forward(input);
-            let mlp = layer.down.forward(mlp);
+            let mlp = layer.mlp.forward(input)?;
             let mlp = match &self.reduction {
                 Some(reduce) => reduce(mlp),
                 None => mlp,
@@ -390,17 +418,16 @@ fn load_rank<B: Backend>(
     let directory = directory
         .canonicalize()
         .map_err(|e| HuggingFaceLoadError(e.to_string()))?;
-    let mut config: Qwen3Config = serde_json::from_slice(
-        &std::fs::read(directory.join("config.json"))
-            .map_err(|e| HuggingFaceLoadError(e.to_string()))?,
-    )
-    .map_err(|e| HuggingFaceLoadError(e.to_string()))?;
+    let (mut config, mut moe_config) = read_config(&directory)?;
     config.validate()?;
+    let rotary = config.rotary_parameters()?;
     if let Some(s) = &shard {
         if s.world == 0
             || s.rank >= s.world
             || !config.num_attention_heads.is_multiple_of(s.world)
-            || !config.intermediate_size.is_multiple_of(s.world)
+            || ((0..config.num_hidden_layers).any(|i| moe_config.as_ref().is_none_or(|m| !m.sparse(i)))
+                && !config.intermediate_size.is_multiple_of(s.world))
+            || moe_config.as_ref().is_some_and(|m| (0..config.num_hidden_layers).any(|i| m.sparse(i)) && !m.moe_intermediate_size.is_multiple_of(s.world))
             || !(config.num_key_value_heads.is_multiple_of(s.world)
                 || s.world.is_multiple_of(config.num_key_value_heads))
         {
@@ -483,10 +510,6 @@ fn load_rank<B: Backend>(
                 head * config.head_dim..(head + 1) * config.head_dim
             }
         });
-        let mlp = shard.as_ref().map(|s| {
-            let width = config.intermediate_size / s.world;
-            s.rank * width..(s.rank + 1) * width
-        });
         let q = projection(
             &format!("{p}.self_attn.q_proj"),
             config.hidden_size,
@@ -515,41 +538,19 @@ fn load_rank<B: Backend>(
             config.attention_bias,
             query.map(|range| (1, range)),
         )?;
-        let gate = projection(
-            &format!("{p}.mlp.gate_proj"),
-            config.hidden_size,
-            config.intermediate_size,
-            false,
-            mlp.clone().map(|range| (0, range)),
-        )?;
-        let up = projection(
-            &format!("{p}.mlp.up_proj"),
-            config.hidden_size,
-            config.intermediate_size,
-            false,
-            mlp.clone().map(|range| (0, range)),
-        )?;
-        let down = projection(
-            &format!("{p}.mlp.down_proj"),
-            config.intermediate_size,
-            config.hidden_size,
-            false,
-            mlp.map(|range| (1, range)),
-        )?;
-        layers.push((q, k, v, o, gate, up, down, p));
+        let mlp = moe::load(&format!("{p}.mlp"), &config, moe_config.as_ref(), i, shard.as_ref(), &mut projection)?;
+        layers.push((q, k, v, o, mlp, p));
     }
     drop(projection);
     let layers = layers
         .into_iter()
-        .map(|(q, k, v, o, gate, up, down, p)| {
+        .map(|(q, k, v, o, mlp, p)| {
             Ok(Layer {
                 q,
                 k,
                 v,
                 o,
-                gate,
-                up,
-                down,
+                mlp,
                 input_norm: checkpoint.tensor(
                     &format!("{p}.input_layernorm.weight"),
                     [config.hidden_size],
@@ -680,15 +681,22 @@ fn load_rank<B: Backend>(
     if let Some(s) = shard {
         config.num_attention_heads /= s.world;
         config.num_key_value_heads = (config.num_key_value_heads / s.world).max(1);
-        config.intermediate_size /= s.world;
+        if (0..config.num_hidden_layers).any(|i| moe_config.as_ref().is_none_or(|m| !m.sparse(i))) {
+            config.intermediate_size /= s.world;
+        }
+        if let Some(moe) = &mut moe_config {
+            if (0..config.num_hidden_layers).any(|i| moe.sparse(i)) { moe.moe_intermediate_size /= s.world; }
+        }
     }
     Ok(LoadedQwen3 {
         model: Qwen3Model {
             config,
+            moe_config,
             embedding,
             layers,
             norm,
             head,
+            rotary,
             reduction,
         },
         eos_token_ids,

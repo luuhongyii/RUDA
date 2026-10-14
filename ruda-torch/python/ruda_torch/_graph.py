@@ -4,7 +4,7 @@ from threading import RLock
 import torch
 import sys
 from . import _C
-from ._graph_spec import GraphOp, TensorSpec, MATH_BINARY_CODES, MATH_SCALAR_CODES
+from ._graph_spec import GraphOp, TensorSpec, MATH_BINARY_CODES, MATH_SCALAR_CODES, INDEX_CODES, TRANSFORM_CODES, PREDICATE_CODES, FACTORY_CODES, MASK_CODES
 from ._graph_opt import prepare_plan
 
 class StaticGraph:
@@ -45,7 +45,7 @@ class StaticGraph:
         return compile(model, **options)
 
     def __init__(self, inputs, nodes, *, outputs=None, infer_dependencies=False,
-                 track_completion=False, optimize=False, reuse_workspace=False, training=False):
+                 track_completion=False, optimize=False, reuse_workspace=False, training=False, device=None):
         from . import _graph_available
         if not _graph_available:
             raise RuntimeError('native static graph API unavailable; rebuild Rust and C++ extensions')
@@ -61,11 +61,26 @@ class StaticGraph:
             if t.layout!=torch.strided or not t.is_contiguous():
                 raise ValueError('StaticGraph requires contiguous dense tensors')
             metadata[name]=TensorSpec(tuple(t.shape),str(t.dtype).removeprefix('torch.'))
+        if device is None:
+            if not inputs:raise ValueError('a graph without inputs requires an explicit ruda:0 device')
+            device=next(iter(inputs.values())).device
+        device=torch.device(device)
+        if device.type!='ruda' or device.index not in (None,0):raise ValueError('StaticGraph requires ruda:0')
+        device=torch.device('ruda:0')
         if type(infer_dependencies) is not bool or type(track_completion) is not bool:
             raise TypeError('graph options must be booleans')
         layout_api=int(getattr(sys.modules[__package__],'_graph_layout_available',False))
-        plan=prepare_plan(metadata,nodes,outputs,optimize=optimize,reuse_workspace=reuse_workspace,layout_api=layout_api)
+        empty_api=int(getattr(sys.modules[__package__],'_graph_empty_available',False))
+        root_api=int(getattr(sys.modules[__package__],'_graph_root_available',False))
+        plan=prepare_plan(metadata,nodes,outputs,optimize=optimize,reuse_workspace=reuse_workspace,layout_api=layout_api,empty_api=empty_api,root_api=root_api)
         layout=plan.layout
+        if any(code in (*FACTORY_CODES.values(),*MASK_CODES.values()) for code in layout.words[::3]):
+            if not getattr(sys.modules[__package__],'_graph_factory_available',False):
+                raise RuntimeError('native graph factory API 1 required; rebuild Rust and C++ extensions')
+        if (any(code in (*INDEX_CODES.values(),*TRANSFORM_CODES.values(),*PREDICATE_CODES.values()) for code in layout.words[::3])
+                or any(spec.dtype not in ('float32','float16','bfloat16') for spec in layout.specs)):
+            if not getattr(sys.modules[__package__],'_graph_index_available',False):
+                raise RuntimeError('native graph index API 1 required; rebuild Rust and C++ extensions')
         if any(code>=112 for code in layout.words[::3]) or any(not spec.shape for spec in layout.specs):
             from . import _graph_layout_available
             if not _graph_layout_available:
@@ -80,7 +95,7 @@ class StaticGraph:
         self._replay_lock=RLock()
         # Native handles are fixed-address detached views, not new allocations.
         tensors=[t.detach() for t in self._inputs] if training else list(self._inputs)
-        device=tensors[0].device
+        self._device=device
         for i in range(layout.inputs,len(layout.specs)):
             spec=layout.specs[i]
             root=plan.storage_roots[i]

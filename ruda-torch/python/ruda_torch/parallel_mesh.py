@@ -5,7 +5,7 @@ from datetime import timedelta
 from itertools import product
 import torch
 import torch.distributed as dist
-from .distributed_training import ReplicaGroup
+from .distributed_training import ReplicaGroup, gather_process_metadata
 
 
 class ParallelMesh:
@@ -16,7 +16,7 @@ class ParallelMesh:
     guess hardware ordinals. CPU/Gloo remains an explicit reference selection.
     """
     def __init__(self, *, data_parallel=1, tensor_parallel=1, pipeline_parallel=1,
-                 device_type='ruda', timeout_seconds=1800):
+                 device_type='ruda', timeout_seconds=1800, transport='nccl'):
         shape=(data_parallel,pipeline_parallel,tensor_parallel)
         if any(type(size) is not int or size<1 for size in shape) or timeout_seconds<=0:
             raise ValueError('parallel dimensions and timeout must be positive')
@@ -24,18 +24,29 @@ class ParallelMesh:
             raise ValueError('parallel mesh must cover the initialized global process group')
         if device_type not in ('ruda','cpu'):
             raise ValueError('select native RUDA or the explicit CPU reference')
+        if transport not in ('nccl', 'ruccl') or (device_type == 'cpu' and transport == 'ruccl'):
+            raise ValueError('select nccl or ruccl transport for native devices')
+        if transport == 'ruccl':
+            from .process_group import register_ruccl_backend
+            register_ruccl_backend()
         self.rank=dist.get_rank()
         self.shape,self.device_type=shape,device_type
+        self.transport=transport
         self.coordinates=(self.rank//(pipeline_parallel*tensor_parallel),
                           (self.rank//tensor_parallel)%pipeline_parallel,self.rank%tensor_parallel)
-        contracts=[None]*dist.get_world_size()
-        dist.all_gather_object(contracts,(shape,device_type,timeout_seconds))
-        if any(value!=(shape,device_type,timeout_seconds) for value in contracts):
+        contract=(shape,device_type,timeout_seconds,transport)
+        contracts=gather_process_metadata(contract)
+        if any(value!=contract for value in contracts):
             raise ValueError('global ranks supplied different mesh configurations')
-        self.world=ReplicaGroup(device_type=device_type)
         self.groups={}
         self._owned=[]
-        backend='nccl' if device_type=='ruda' else 'gloo'
+        backend=transport if device_type=='ruda' else 'gloo'
+        world_group=None
+        if str(dist.get_backend()).lower()!=backend:
+            world_group=dist.new_group(list(range(dist.get_world_size())),backend=backend,
+                timeout=timedelta(seconds=timeout_seconds))
+            self._owned.append(world_group)
+        self.world=ReplicaGroup(world_group,device_type=device_type,transport=transport)
         names=('data','pipeline','tensor')
         for axis,name in enumerate(names):
             other=[d for d in range(3) if d!=axis]
@@ -49,14 +60,14 @@ class ParallelMesh:
                     ranks.append((d*pipeline_parallel+p)*tensor_parallel+t)
                 process_group=dist.new_group(ranks,backend=backend,timeout=timedelta(seconds=timeout_seconds))
                 if self.rank in ranks:
-                    self.groups[name]=ReplicaGroup(process_group,device_type=device_type)
+                    self.groups[name]=ReplicaGroup(process_group,device_type=device_type,transport=transport)
                     self._owned.append(process_group)
         for pipeline_rank in range(pipeline_parallel):
             ranks=[(d*pipeline_parallel+pipeline_rank)*tensor_parallel+t
                    for d in range(data_parallel) for t in range(tensor_parallel)]
             process_group=dist.new_group(ranks,backend=backend,timeout=timedelta(seconds=timeout_seconds))
             if self.rank in ranks:
-                self.groups['stage']=ReplicaGroup(process_group,device_type=device_type)
+                self.groups['stage']=ReplicaGroup(process_group,device_type=device_type,transport=transport)
                 self._owned.append(process_group)
 
     @property
@@ -86,6 +97,7 @@ class _StageMesh:
         self.parent=parent
         self.shape=(parent.shape[0],1,parent.shape[2])
         self.device_type=parent.device_type
+        self.transport=parent.transport
         self.world,self.data,self.tensor=parent.stage,parent.data,parent.tensor
         self.rank=self.world.rank
         self.coordinates=(parent.coordinates[0],0,parent.coordinates[2])

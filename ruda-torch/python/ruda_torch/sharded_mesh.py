@@ -67,6 +67,13 @@ def _logical_shape(spec):
     shape=spec['shape']
     if spec.get('transform')=='nf4-packed':return ((math.prod(shape)+1)//2,)
     if spec.get('transform')=='nf4-scales':return ((math.prod(shape)+spec['block_size']-1)//spec['block_size'],)
+    if spec.get('transform')=='packed-codes':
+        from .packed_quantization import _bits
+        return (shape[0],(shape[1]*_bits(spec['format'])+7)//8)
+    if spec.get('transform') in ('packed-scales','packed-offsets'):
+        return (shape[0],spec['parameter_groups'])
+    if spec.get('transform')=='packed-group_index':
+        return (shape[1] if spec['indexed'] else 0,)
     return tuple(shape)
 
 

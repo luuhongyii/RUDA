@@ -8,13 +8,20 @@ use crate::{
 };
 use ruda_tensor::api::{
     DType, IndexingUpdateOp, Int, Tensor, TensorData,
-    activation::{silu, softmax},
+    activation::{sigmoid, silu, softmax},
     backend::Backend,
 };
 use serde::Deserialize;
 use std::{collections::BTreeSet, path::Path, sync::Arc};
 
 mod cache;
+mod batching;
+mod routing;
+mod feed_forward;
+mod kimi_linear;
+pub use kimi_linear::*;
+mod weights;
+pub use weights::{MlaFp8Backend, MlaFp8Projection, load_huggingface_mla};
 pub use cache::{DeepseekV2Cache, DeepseekV2CacheRecord};
 #[cfg(feature = "tensor-parallel")]
 pub mod parallel;
@@ -53,6 +60,7 @@ pub struct DeepseekV2Config {
     pub attention_bias: bool,
     pub attention_dropout: f64,
     pub tie_word_embeddings: bool,
+    #[serde(default = "one")]
     pub pretraining_tp: usize,
     pub eos_token_id: Option<serde_json::Value>,
     #[serde(default)]
@@ -61,7 +69,7 @@ pub struct DeepseekV2Config {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct DeepseekV2Yarn {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "rope_type")]
     pub kind: String,
     pub factor: f64,
     pub original_max_position_embeddings: usize,
@@ -79,7 +87,7 @@ impl DeepseekV2Config {
         }
     }
     fn validate(&self) -> Result<(), HuggingFaceLoadError> {
-        if self.model_type != "deepseek_v2"
+        if !matches!(self.model_type.as_str(), "deepseek_v2" | "deepseek_v3" | "kimi_k2")
             || [
                 self.vocab_size,
                 self.hidden_size,
@@ -105,10 +113,7 @@ impl DeepseekV2Config {
             || self.num_key_value_heads != self.num_attention_heads
             || !self.qk_rope_head_dim.is_multiple_of(2)
             || self.hidden_act != "silu"
-            || self.scoring_func != "softmax"
-            || self.topk_method != "greedy"
-            || self.n_group != 1
-            || self.topk_group != 1
+            || !routing::valid(self)
             || self.pretraining_tp != 1
             || self.attention_dropout != 0.0
             || self.tie_word_embeddings
@@ -118,10 +123,7 @@ impl DeepseekV2Config {
             || self.rope_theta <= 1.0
             || !self.routed_scaling_factor.is_finite()
             || self.routed_scaling_factor <= 0.0
-            || self
-                .quantization_config
-                .as_ref()
-                .is_some_and(|v| !v.is_null())
+            || weights::block_config(self.quantization_config.as_ref()).is_err()
             || self.rope_scaling.as_ref().is_some_and(|s| {
                 s.kind != "yarn"
                     || !s.factor.is_finite()
@@ -137,7 +139,7 @@ impl DeepseekV2Config {
                     || s.mscale_all_dim < 0.0
             })
         {
-            return Err(HuggingFaceLoadError("requires floating DeepSeek-V2 MLA, SiLU, greedy softmax routing, and unscaled/YaRN RoPE".into()));
+            return Err(HuggingFaceLoadError("incompatible DeepSeek/Kimi MLA geometry, routing, quantization or RoPE configuration".into()));
         }
         self.qk_nope_head_dim
             .checked_add(self.qk_rope_head_dim)
@@ -149,17 +151,30 @@ impl DeepseekV2Config {
     }
 }
 
-struct Projection<B: Backend> {
-    weight: Tensor<B, 2>,
-    bias: Option<Tensor<B, 1>>,
+fn one() -> usize { 1 }
+
+enum Projection<B: Backend> {
+    Dense { weight: Tensor<B, 2>, bias: Option<Tensor<B, 1>> },
+    Packed { forward: Arc<dyn Fn(Tensor<B, 3>) -> Tensor<B, 3> + Send + Sync>,
+        materialize: Arc<dyn Fn() -> Tensor<B, 2> + Send + Sync>, dtype: DType },
 }
 impl<B: Backend> Projection<B> {
     fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
-        let output = input.matmul(self.weight.clone().transpose().unsqueeze::<3>());
-        match &self.bias {
+        let Self::Dense { weight, bias } = self else {
+            let Self::Packed { forward, .. } = self else { unreachable!() };
+            return forward(input);
+        };
+        let output = input.matmul(weight.clone().transpose().unsqueeze::<3>());
+        match bias {
             Some(bias) => output + bias.clone().unsqueeze::<3>(),
             None => output,
         }
+    }
+    fn weight(&self) -> Tensor<B, 2> {
+        match self { Self::Dense { weight, .. } => weight.clone(), Self::Packed { materialize, .. } => materialize() }
+    }
+    fn dtype(&self) -> DType {
+        match self { Self::Dense { weight, .. } => weight.dtype(), Self::Packed { dtype, .. } => *dtype }
     }
 }
 struct Mlp<B: Backend> {
@@ -177,6 +192,7 @@ enum FeedForward<B: Backend> {
     Dense(Mlp<B>),
     Experts {
         router: Tensor<B, 2>,
+        correction: Option<Tensor<B, 1>>,
         experts: Vec<(usize, Mlp<B>)>,
         shared: Option<Mlp<B>>,
     },
@@ -186,7 +202,7 @@ struct Layer<B: Backend> {
     q_a: Option<(Projection<B>, Tensor<B, 1>)>,
     kv_a: Projection<B>,
     kv_norm: Tensor<B, 1>,
-    kv_b: Tensor<B, 2>,
+    kv_b: Projection<B>,
     o: Projection<B>,
     input_norm: Tensor<B, 1>,
     post_norm: Tensor<B, 1>,
@@ -212,6 +228,7 @@ pub struct LoadedDeepseekV2<B: Backend> {
     pub model: DeepseekV2Model<B>,
     pub eos_token_ids: Vec<i32>,
     pub report: HuggingFaceLoadReport,
+    pub auxiliary_tensors: Vec<String>,
 }
 
 fn norm<B: Backend, const D: usize>(
@@ -310,95 +327,8 @@ impl<B: Backend> DeepseekV2Model<B> {
         )
     }
 
-    fn feed_forward(
-        &self,
-        layer: &Layer<B>,
-        input: Tensor<B, 3>,
-    ) -> Result<Tensor<B, 3>, GenerationError> {
-        let FeedForward::Experts {
-            router,
-            experts,
-            shared,
-        } = &layer.mlp
-        else {
-            let FeedForward::Dense(mlp) = &layer.mlp else {
-                unreachable!()
-            };
-            return Ok(mlp.forward(input));
-        };
-        let [_, sequence, hidden] = input.dims();
-        let device = input.device();
-        let dtype = input.dtype();
-        let c = &self.config;
-        let flat = input.clone().reshape([sequence, hidden]);
-        let logits = flat
-            .clone()
-            .cast(DType::F32)
-            .matmul(router.clone().cast(DType::F32).transpose());
-        let (mut weights, indices) = softmax(logits, 1).topk_with_indices(c.num_experts_per_tok, 1);
-        if c.num_experts_per_tok > 1 && c.norm_topk_prob {
-            weights = weights.clone() / (weights.sum_dim(1) + 1e-20);
-        } else {
-            weights = weights * c.routed_scaling_factor;
-        }
-        let ids = indices
-            .try_into_data()
-            .map_err(|e| GenerationError(e.to_string()))?
-            .iter::<i32>()
-            .collect::<Vec<_>>();
-        if ids.len() != sequence * c.num_experts_per_tok
-            || ids
-                .iter()
-                .any(|&id| id < 0 || id as usize >= c.n_routed_experts)
-        {
-            return Err(GenerationError(
-                "DeepSeek router returned invalid expert assignments".into(),
-            ));
-        }
-        let weights = weights.reshape([sequence * c.num_experts_per_tok, 1]);
-        let mut routed = Tensor::<B, 2>::zeros([sequence, hidden], (&device, DType::F32));
-        for (expert_id, expert) in experts {
-            let assignments = ids
-                .iter()
-                .enumerate()
-                .filter(|(_, id)| **id as usize == *expert_id)
-                .map(|(slot, _)| slot)
-                .collect::<Vec<_>>();
-            if assignments.is_empty() {
-                continue;
-            }
-            let rows = assignments
-                .iter()
-                .map(|&slot| (slot / c.num_experts_per_tok) as i32)
-                .collect::<Vec<_>>();
-            let slots = assignments
-                .iter()
-                .map(|&slot| i32::try_from(slot).map_err(|e| GenerationError(e.to_string())))
-                .collect::<Result<Vec<_>, _>>()?;
-            let count = rows.len();
-            let rows = Tensor::<B, 1, Int>::from_data(TensorData::new(rows, [count]), &device);
-            let slots = Tensor::<B, 1, Int>::from_data(TensorData::new(slots, [count]), &device);
-            let selected = flat
-                .clone()
-                .select(0, rows.clone())
-                .reshape([1, count, hidden]);
-            let output = expert
-                .forward(selected)
-                .reshape([count, hidden])
-                .cast(DType::F32)
-                * weights.clone().select(0, slots);
-            routed = routed.select_assign(0, rows, output, IndexingUpdateOp::Add);
-        }
-        let routed = routed.reshape([1, sequence, hidden]);
-        let routed = match &self.reduction {
-            Some(reduce) => reduce(routed),
-            None => routed,
-        };
-        let mut routed = routed.cast(dtype);
-        if let Some(shared) = shared {
-            routed = routed + shared.forward(input);
-        }
-        Ok(routed)
+    fn feed_forward(&self, layer: &Layer<B>, input: Tensor<B, 3>) -> Result<Tensor<B, 3>, GenerationError> {
+        layer.mlp.run(input, &self.config, self.reduction.as_ref())
     }
 
     fn forward_block(
@@ -494,39 +424,23 @@ impl<B: Backend> DeepseekV2Model<B> {
                 .clone()
                 .slice([0..1, 0..1, 0..end, 0..c.kv_lora_rank]);
             let position = history.slice([0..1, 0..1, 0..end, c.kv_lora_rank..width]);
-            let expanded_weights = layer.kv_b.clone().reshape([
-                1,
-                c.num_attention_heads,
-                c.qk_nope_head_dim + c.v_head_dim,
-                c.kv_lora_rank,
-            ]);
-            let key_weights = expanded_weights.clone().slice([
-                0..1,
-                0..c.num_attention_heads,
-                0..c.qk_nope_head_dim,
-                0..c.kv_lora_rank,
-            ]);
-            let value_weights = expanded_weights
-                .slice([
-                    0..1,
-                    0..c.num_attention_heads,
-                    c.qk_nope_head_dim..c.qk_nope_head_dim + c.v_head_dim,
-                    0..c.kv_lora_rank,
-                ])
-                .swap_dims(2, 3);
-            let (mut scores, values) = match self.attention_mode {
+            let (mut scores, values, value_weights) = match self.attention_mode {
                 DeepseekV2AttentionMode::Absorbed => {
+                    let weights = layer.kv_b.weight().reshape([1, c.num_attention_heads,
+                        c.qk_nope_head_dim + c.v_head_dim, c.kv_lora_rank]);
+                    let key_weights = weights.clone().slice([0..1, 0..c.num_attention_heads,
+                        0..c.qk_nope_head_dim, 0..c.kv_lora_rank]);
+                    let value_weights = weights.slice([0..1, 0..c.num_attention_heads,
+                        c.qk_nope_head_dim..c.qk_nope_head_dim + c.v_head_dim, 0..c.kv_lora_rank]).swap_dims(2, 3);
                     let query = mla_absorb_query(&ops(), content_query, key_weights);
                     (
                         mla_scores(&ops(), query, position_query, latent.clone(), position),
                         None,
+                        Some(value_weights),
                     )
                 }
                 DeepseekV2AttentionMode::Expanded => {
-                    let expanded = latent
-                        .clone()
-                        .reshape([1, end, c.kv_lora_rank])
-                        .matmul(layer.kv_b.clone().transpose().unsqueeze::<3>())
+                    let expanded = layer.kv_b.forward(latent.clone().reshape([1, end, c.kv_lora_rank]))
                         .reshape([
                             1,
                             end,
@@ -551,7 +465,7 @@ impl<B: Backend> DeepseekV2Model<B> {
                         vec![content_key, position.repeat_dim(1, c.num_attention_heads)],
                         3,
                     );
-                    (gqa_scores(&ops(), query, key), Some(value))
+                    (gqa_scores(&ops(), query, key), Some(value), None)
                 }
             };
             scores = scores * scale;
@@ -576,7 +490,7 @@ impl<B: Backend> DeepseekV2Model<B> {
             let probabilities = softmax(scores.cast(DType::F32), 3).cast(dtype);
             let context = match values {
                 Some(values) => probabilities.matmul(values),
-                None => mla_value_product(&ops(), probabilities, latent, value_weights),
+                None => mla_value_product(&ops(), probabilities, latent, value_weights.expect("absorbed value weights")),
             };
             hidden = hidden
                 + layer.o.forward(context.swap_dims(1, 2).reshape([
@@ -634,7 +548,7 @@ impl<B: Backend> SpeculativeModel<B> for DeepseekV2Model<B> {
 }
 
 fn projection<B: Backend>(
-    checkpoint: &mut Checkpoint,
+    checkpoint: &mut weights::Weights<B>,
     prefix: &str,
     input: usize,
     output: usize,
@@ -642,6 +556,7 @@ fn projection<B: Backend>(
     device: &B::Device,
     dtype: DType,
 ) -> Result<Projection<B>, HuggingFaceLoadError> {
+    if checkpoint.is_fp8(prefix) { return checkpoint.packed_projection(prefix, input, output, bias, device, dtype); }
     let weight = checkpoint.tensor(&format!("{prefix}.weight"), [output, input], device)?;
     let bias = if bias {
         Some(checkpoint.tensor(&format!("{prefix}.bias"), [output], device)?)
@@ -653,10 +568,10 @@ fn projection<B: Backend>(
             "mixed storage dtype for {prefix}"
         )));
     }
-    Ok(Projection { weight, bias })
+    Ok(Projection::Dense { weight, bias })
 }
 fn load_mlp<B: Backend>(
-    checkpoint: &mut Checkpoint,
+    checkpoint: &mut weights::Weights<B>,
     prefix: &str,
     hidden: usize,
     intermediate: usize,
@@ -712,14 +627,21 @@ fn load_rank<B: Backend>(
     shard: Option<ExpertShard>,
     reduction: Option<Arc<dyn Fn(Tensor<B, 3>) -> Tensor<B, 3> + Send + Sync>>,
 ) -> Result<LoadedDeepseekV2<B>, HuggingFaceLoadError> {
+    load_rank_with(directory, device, shard, reduction, None)
+}
+
+fn load_rank_with<B: Backend>(directory: &Path, device: &B::Device, shard: Option<ExpertShard>,
+    reduction: Option<Arc<dyn Fn(Tensor<B, 3>) -> Tensor<B, 3> + Send + Sync>>,
+    packed: Option<weights::Loader<B>>) -> Result<LoadedDeepseekV2<B>, HuggingFaceLoadError> {
     let directory = directory
         .canonicalize()
         .map_err(|e| HuggingFaceLoadError(e.to_string()))?;
-    let config: DeepseekV2Config = serde_json::from_slice(
+    let source: serde_json::Value = serde_json::from_slice(
         &std::fs::read(directory.join("config.json"))
             .map_err(|e| HuggingFaceLoadError(e.to_string()))?,
     )
     .map_err(|e| HuggingFaceLoadError(e.to_string()))?;
+    let config: DeepseekV2Config = serde_json::from_value(source.clone()).map_err(|e| HuggingFaceLoadError(e.to_string()))?;
     config.validate()?;
     if shard.as_ref().is_some_and(|s| {
         s.world == 0 || s.rank >= s.world || !config.n_routed_experts.is_multiple_of(s.world)
@@ -728,7 +650,7 @@ fn load_rank<B: Backend>(
             "EP requires equal nonempty native expert shards".into(),
         ));
     }
-    let mut checkpoint = Checkpoint::open(&directory)?;
+    let mut checkpoint = weights::Weights::open(&directory, &config, packed)?;
     let embedding = checkpoint.tensor(
         "model.embed_tokens.weight",
         [config.vocab_size, config.hidden_size],
@@ -782,14 +704,9 @@ fn load_rank<B: Backend>(
             [config.kv_lora_rank],
             device,
         )?;
-        let kv_b = checkpoint.tensor(
-            &format!("{attention}.kv_b_proj.weight"),
-            [
-                config.num_attention_heads * (config.qk_nope_head_dim + config.v_head_dim),
-                config.kv_lora_rank,
-            ],
-            device,
-        )?;
+        let kv_b = projection(&mut checkpoint, &format!("{attention}.kv_b_proj"),
+            config.kv_lora_rank, config.num_attention_heads * (config.qk_nope_head_dim + config.v_head_dim),
+            false, device, dtype)?;
         let o = projection(
             &mut checkpoint,
             &format!("{attention}.o_proj"),
@@ -806,6 +723,10 @@ fn load_rank<B: Backend>(
                     [config.n_routed_experts, config.hidden_size],
                     device,
                 )?;
+                let correction = if config.topk_method == "noaux_tc" {
+                    Some(checkpoint.tensor(&format!("{p}.mlp.gate.e_score_correction_bias"),
+                        [config.n_routed_experts], device)?)
+                } else { None };
                 let mut experts = Vec::new();
                 for expert in 0..config.n_routed_experts {
                     let prefix = format!("{p}.mlp.experts.{expert}");
@@ -839,16 +760,7 @@ fn load_rank<B: Backend>(
                                 [config.hidden_size, config.moe_intermediate_size],
                             ),
                         ] {
-                            let name = format!("{prefix}.{projection}.weight");
-                            let snapshot = checkpoint.tensors.get(&name).ok_or_else(|| {
-                                HuggingFaceLoadError(format!("missing expert tensor {name}"))
-                            })?;
-                            if snapshot.shape != shape.into() || snapshot.dtype != dtype {
-                                return Err(HuggingFaceLoadError(format!(
-                                    "incompatible remote expert tensor {name}"
-                                )));
-                            }
-                            excluded.insert(name);
+                            checkpoint.exclude_projection(&format!("{prefix}.{projection}"), shape, dtype, &mut excluded)?;
                         }
                     }
                 }
@@ -872,6 +784,7 @@ fn load_rank<B: Backend>(
                         .transpose()?;
                 FeedForward::Experts {
                     router,
+                    correction,
                     experts,
                     shared,
                 }
@@ -906,7 +819,8 @@ fn load_rank<B: Backend>(
             || q_a
                 .as_ref()
                 .is_some_and(|(_, weight)| weight.dtype() != dtype)
-            || matches!(&mlp, FeedForward::Experts {router, ..} if router.dtype() != dtype)
+            || matches!(&mlp, FeedForward::Experts {router, ..}
+                if router.dtype() != dtype && router.dtype() != DType::F32)
         {
             return Err(HuggingFaceLoadError(
                 "DeepSeek-V2 normalization/router storage dtypes differ".into(),
@@ -939,10 +853,23 @@ fn load_rank<B: Backend>(
         device,
         dtype,
     )?;
+    let nextn = match source.get("num_nextn_predict_layers") {
+        None => 0,
+        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| HuggingFaceLoadError("invalid num_nextn_predict_layers".into()))?,
+    };
+    let auxiliary_end = config.num_hidden_layers.checked_add(nextn)
+        .ok_or_else(|| HuggingFaceLoadError("MTP layer range overflow".into()))?;
+    let auxiliary_tensors = checkpoint.tensors.keys().filter(|name| {
+        name.strip_prefix("model.layers.").and_then(|rest| rest.split('.').next())
+            .and_then(|layer| layer.parse::<usize>().ok())
+            .is_some_and(|layer| (config.num_hidden_layers..auxiliary_end).contains(&layer))
+    }).cloned().collect::<Vec<_>>();
+    let auxiliary = auxiliary_tensors.iter().collect::<BTreeSet<_>>();
     let unused = checkpoint
         .tensors
         .keys()
-        .filter(|name| !checkpoint.consumed.contains(*name) && !excluded.contains(*name))
+        .filter(|name| !checkpoint.consumed.contains(*name) && !excluded.contains(*name) && !auxiliary.contains(name))
         .cloned()
         .collect::<Vec<_>>();
     if !unused.is_empty() {
@@ -987,7 +914,7 @@ fn load_rank<B: Backend>(
     B::sync(device).map_err(|e| HuggingFaceLoadError(e.to_string()))?;
     let report = HuggingFaceLoadReport {
         config_path: directory.join("config.json"),
-        weight_files: checkpoint.files,
+        weight_files: checkpoint.files.clone(),
         applied_tensors: checkpoint.consumed.len(),
         tied_word_embeddings: false,
     };
@@ -1003,5 +930,6 @@ fn load_rank<B: Backend>(
         },
         eos_token_ids,
         report,
+        auxiliary_tensors,
     })
 }

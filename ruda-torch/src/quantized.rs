@@ -4,6 +4,12 @@ use ruda_kernel::{dsl as kernel_dsl, quantization::packed::{PackedTensor,PackedF
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_packed_api_version()->u32 { 1 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_packed_matmul_api_version()->u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_packed_indexed_groups_api_version()->u32 { 1 }
+
 /// Six descriptors: x, codes, scales, offsets, group_index, destination.
 /// Four layout words: format, group_size, logical_width, logical_rows.
 #[unsafe(no_mangle)]
@@ -31,6 +37,7 @@ pub unsafe extern "C" fn ruda_torch_packed(op:u32,descriptors:*const Descriptor,
             let result=match op {
                 1=>packed.dequantize(primitives::tensor(&v[5]).dtype),
                 2|3=>packed.linear(&primitives::tensor(&v[0]),op==3),
+                6|7=>packed.linear_tensor_core(&primitives::tensor(&v[0]),op==7),
                 4=>{
                     primitives::check_indices(&v[0],rows,false);
                     packed.embedding(&primitives::tensor(&v[0]),primitives::tensor(&v[5]).dtype)
