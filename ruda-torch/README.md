@@ -33,30 +33,32 @@ python -m pip install --no-build-isolation --no-deps -e ./ruda-torch/python
 
 The loader uses a packaged native library when present, otherwise `target/debug/ruda_torch_native.dll` on Windows or `target/debug/libruda_torch_native.so` on Linux. Set `RUDA_TORCH_LIBRARY` before import to select a release build or another location. On Windows, `RUDA_TORCH_DLL_DIR` accepts semicolon-separated dependency directories.
 
-### v0.1.95 release wheels
+### Release wheels
 
-[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) includes wheels with the Python package, C++ extension and Rust native library (ABI 10). These do not require a local Rust/C++ build. Use CPython 3.13 and the matching PyTorch build:
+[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) includes wheels with the Python package, C++ extension and optimized Rust `release` library (ABI 10). These do not require a local Rust/C++ build. Use CPython 3.13 and the matching PyTorch build:
 
 | Platform | Wheel | Required PyTorch |
 | --- | --- | --- |
-| Linux x86_64, built on Ubuntu 24.04 | `ruda_torch-0.1.0-cp313-cp313-linux_x86_64.whl` | `2.10.0+cu126` |
-| Windows x86_64 | `ruda_torch-0.1.0-cp313-cp313-win_amd64.whl` | `2.13.0+cu130` |
+| Linux x86_64, built on Ubuntu 24.04 | `ruda_torch-0.1.1-cp313-cp313-linux_x86_64.whl` | `2.10.0+cu126` |
+| Windows x86_64 | `ruda_torch-0.1.1-cp313-cp313-win_amd64.whl` | `2.13.0+cu130` |
 
-Download the matching wheel and `SHA256SUMS` from the release, and compare the wheel's SHA-256 digest with its entry. Install from the download directory on Linux:
+Download the matching wheel and `SHA256SUMS` from the release, and compare the wheel's SHA-256 digest with its entry (`sha256sum <wheel>` on Linux or `Get-FileHash <wheel> -Algorithm SHA256` on Windows). `manifest.json` records the source revision and each wheel's Python, PyTorch, platform, native ABI and build profile. Install from the download directory on Linux:
 
 ```sh
-python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu126
-python -m pip install --no-deps ./ruda_torch-0.1.0-cp313-cp313-linux_x86_64.whl
+python -m pip install 'torch==2.10.0+cu126' --index-url https://download.pytorch.org/whl/cu126
+python -m pip install ./ruda_torch-0.1.1-cp313-cp313-linux_x86_64.whl --index-url https://download.pytorch.org/whl/cu126
 ```
 
 On Windows:
 
 ```powershell
-python -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130
-python -m pip install --no-deps ./ruda_torch-0.1.0-cp313-cp313-win_amd64.whl
+python -m pip install 'torch==2.13.0+cu130' --index-url https://download.pytorch.org/whl/cu130
+python -m pip install ./ruda_torch-0.1.1-cp313-cp313-win_amd64.whl --index-url https://download.pytorch.org/whl/cu130
 ```
 
-The overall release is v0.1.95; the Python subpackage retains version 0.1.0 and other crates retain independent versions. A compatible NVIDIA GPU/driver and the runtime dependencies of the selected compiler path are still required. The Linux wheel is not tagged manylinux; Ubuntu 24.04 is its build environment, not a promise of compatibility with older distributions. Other Python/PyTorch versions require a source build. Do not mix these wheels with another revision's Python sources or a stale `RUDA_TORCH_LIBRARY` override. Select PTX/NVRTC before execution as above.
+The overall release is v0.1.96; the Python subpackage uses version 0.1.1 and other crates retain independent versions. A compatible NVIDIA GPU/driver and the runtime dependencies of the selected compiler path are still required. The Linux wheel is not tagged manylinux; Ubuntu 24.04 is its build environment, not a promise of compatibility with older distributions. Other Python/PyTorch versions require a source build. Do not mix these wheels with another revision's Python sources or a stale `RUDA_TORCH_LIBRARY` override. Select PTX/NVRTC before execution as above.
+
+Wheel metadata requires Python `>=3.13,<3.14` and the exact PyTorch version, including its CUDA suffix. The compiler, C++ headers and Rust toolchain are not needed to install a wheel; NVIDIA driver and compiler-path runtime requirements still apply. License texts are included under `ruda_torch/licenses/`. Source builds record the Python minor version and PyTorch version used to compile the extension rather than claiming cross-version binary compatibility. To upgrade from the v0.1.95 wheels, use the matching 0.1.1 wheel in the commands above and start a new Python process before importing it.
 
 The [build workflow](https://github.com/shuqi2077/RUDA/actions/workflows/ruda-torch-windows.yml) also provides CI wheel artifacts, retained for seven days; release assets are a separate download source.
 

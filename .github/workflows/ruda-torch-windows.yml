@@ -1,4 +1,4 @@
-name: RUDA Torch Windows build
+name: RUDA Torch wheels
 
 on:
   push:
@@ -26,6 +26,10 @@ on:
         description: Build without running tests or runtime checks
         type: boolean
         default: false
+      release_tag:
+        description: Optional new GitHub Release tag matching the workspace version
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -42,6 +46,8 @@ env:
   CARGO_BUILD_JOBS: '2'
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_RELEASE_DEBUG: '0'
+  CARGO_PROFILE_RELEASE_STRIP: debuginfo
   CARGO_TERM_COLOR: never
   RUST_MIN_STACK: '16777216'
   PYTHONUNBUFFERED: '1'
@@ -51,7 +57,7 @@ jobs:
   native:
     name: Windows Rust DLL
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -78,20 +84,20 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: torch-win-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+            target/release
+          key: torch-win-release-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            torch-win-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}-
-            torch-win-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
-            torch-win-rust-1.97.1-
+            torch-win-release-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}-
+            torch-win-release-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
+            torch-win-release-rust-1.97.1-
       - name: Build native DLL
-        timeout-minutes: 12
-        run: cargo build --locked -p ruda-torch-native
+        timeout-minutes: 30
+        run: cargo build --release --locked -p ruda-torch-native
       - name: Save native DLL
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ruda-torch-native-win-amd64-abi9-${{ github.sha }}
-          path: target/debug/ruda_torch_native.dll
+          name: ruda-torch-native-win-amd64-abi10-${{ github.sha }}
+          path: target/release/ruda_torch_native.dll
           if-no-files-found: error
           retention-days: 7
       - name: Save Rust build cache
@@ -101,13 +107,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            target/release
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   linux:
     name: Colab-compatible Linux native and Torch 2.10 wheel
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -139,17 +145,16 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: torch-linux-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+            target/release
+          key: torch-linux-release-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            torch-linux-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
-            torch-linux-rust-1.97.1-
-            Linux-rust-1.97.1-v36-native-
+            torch-linux-release-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
+            torch-linux-release-rust-1.97.1-
       - name: Build native library and compile CUDA attention tests without execution
         run: |
-          cargo build --locked -p ruda-torch-native
-          cargo check --locked -p ruDNN --lib --tests --features tensor-paged-attention,ruda-test-runtime/cuda
-          cp target/debug/libruda_torch_native.so ruda-torch/python/ruda_torch/
+          cargo build --release --locked -p ruda-torch-native
+          cargo check --release --locked -p ruDNN --lib --tests --features tensor-paged-attention,ruda-test-runtime/cuda
+          cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
       - name: Save Linux build cache
         if: always() && steps.linux-cache.outcome == 'success'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -157,7 +162,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            target/release
           key: ${{ steps.linux-cache.outputs.cache-primary-key }}
       - name: Install Colab-matching Torch and build dependencies
         run: |
@@ -208,7 +213,7 @@ jobs:
       - name: Restore native DLL
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: ruda-torch-native-win-amd64-abi9-${{ github.sha }}
+          name: ruda-torch-native-win-amd64-abi10-${{ github.sha }}
           path: ruda-torch/python/ruda_torch
       - name: Check Python syntax and registered ATen schemas (no GPU execution)
         working-directory: ruda-torch/python
@@ -239,7 +244,94 @@ jobs:
       - name: Save installable wheel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ruda-torch-win-amd64-cp313-torch2.13.0-cu130-abi9-${{ github.sha }}
+          name: ruda-torch-win-amd64-cp313-torch2.13.0-cu130-abi10-${{ github.sha }}
           path: ruda-torch/python/dist/*.whl
           if-no-files-found: error
           retention-days: 7
+
+  publish:
+    name: Publish release wheels
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    needs: [linux, wheel]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: ruda-torch-*-cp313-*-abi10-${{ github.sha }}
+          path: release
+          merge-multiple: true
+      - name: Assemble wheel compatibility manifest and checksums
+        run: |
+          python3 - <<'PY'
+          import email
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import tomllib
+          import zipfile
+
+          tag = os.environ['RELEASE_TAG']
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          if tag != f'v{version}':
+              raise SystemExit('Release tag must match the workspace version')
+          directory = Path('release')
+          matrix = {
+              'linux_x86_64': ('2.10.0+cu126', 'libruda_torch_native.so', '.so', 'Ubuntu 24.04'),
+              'win_amd64': ('2.13.0+cu130', 'ruda_torch_native.dll', '.pyd', 'Windows 2022'),
+          }
+          wheels = sorted(directory.glob('*.whl'))
+          if len(wheels) != len(matrix):
+              raise SystemExit('Expected one Linux and one Windows wheel')
+          packages = []
+          for platform, (torch, library, extension, build_os) in matrix.items():
+              wheel, = [p for p in wheels if p.name.endswith(f'-cp313-cp313-{platform}.whl')]
+              with zipfile.ZipFile(wheel) as archive:
+                  names = archive.namelist()
+                  metadata_name, = [n for n in names if n.endswith('.dist-info/METADATA')]
+                  metadata = email.message_from_bytes(archive.read(metadata_name))
+                  if metadata['Name'] != 'ruda-torch' or metadata['Version'] != '0.1.1':
+                      raise SystemExit(f'Unexpected package metadata in {wheel.name}')
+                  if set(metadata['Requires-Python'].split(',')) != {'>=3.13', '<3.14'}:
+                      raise SystemExit(f'Unexpected Python requirement in {wheel.name}')
+                  if f'torch=={torch}' not in metadata.get_all('Requires-Dist', []):
+                      raise SystemExit(f'Unexpected Torch requirement in {wheel.name}')
+                  required = ['ruda_torch/__init__.py', f'ruda_torch/{library}']
+                  required += [f'ruda_torch/licenses/{n}' for n in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSE.fla')]
+                  if any(n not in names for n in required) or not any(n.startswith('ruda_torch/_C.') and n.endswith(extension) for n in names):
+                      raise SystemExit(f'Missing packaged component in {wheel.name}')
+              packages.append({'file': wheel.name, 'package_version': metadata['Version'],
+                               'python': 'CPython 3.13', 'torch': torch, 'platform': platform,
+                               'build_os': build_os, 'native_profile': 'release', 'native_abi': 10})
+          manifest = {'release': tag, 'source_revision': os.environ['GITHUB_SHA'], 'wheels': packages}
+          (directory / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          files = sorted([*wheels, directory / 'manifest.json'])
+          (directory / 'SHA256SUMS').write_text(''.join(f'{hashlib.file_digest(p.open("rb"), "sha256").hexdigest()}  {p.name}\n' for p in files), encoding='utf-8')
+          PY
+      - name: Publish a new GitHub Release
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Existing releases are not overwritten.'
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" release/*.whl release/manifest.json release/SHA256SUMS \
+            --target "$GITHUB_SHA" --draft --title "RUDA $RELEASE_TAG" \
+            --notes "RUDA source release with ruda-torch 0.1.1 binary wheels. The wheels include the Python package, C++ extension, optimized Rust release library and license notices (native ABI 10).
+
+          CPython 3.13: Linux x86_64 / PyTorch 2.10.0+cu126 (Ubuntu 24.04 build); Windows x86_64 / PyTorch 2.13.0+cu130. These builds are not interchangeable. SHA256SUMS and manifest.json describe the downloads.
+
+          [Installation and compatibility](https://github.com/$GH_REPO/blob/$GITHUB_SHA/ruda-torch/README.md#release-wheels) · [中文安装](https://github.com/$GH_REPO/blob/$GITHUB_SHA/docs/zh/native-pytorch-quickstart.md)"
+          gh release edit "$RELEASE_TAG" --draft=false --latest

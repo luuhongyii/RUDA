@@ -10,7 +10,7 @@
 | --- | --- |
 | 运行第一个 GPU Kernel | [安装与快速开始](getting-started.md) → [编程指南](programming-guide.md) |
 | 在 `ruda:0` 上使用 PyTorch | [原生 PyTorch 快速上手](native-pytorch-quickstart.md) → [原生 API](native-pytorch-api.md) |
-| 安装 v0.1.95 wheel 或使用压缩量化 | [Release 安装](../../ruda-torch/README.md#v0195-release-wheels) → [GPTQ／GGUF 与量化 KV](native-pytorch-api.md#packed-量化与权重导入) |
+| 安装 v0.1.96 wheel 或使用压缩量化 | [Release 安装](../../ruda-torch/README.md#release-wheels) → [GPTQ／GGUF 与量化 KV](native-pytorch-api.md#packed-量化与权重导入) |
 | 使用矩阵、稀疏或神经网络算子 | [计算库](libraries/README.md) → [张量与框架](tensor-framework.md) |
 | 训练模型、累积梯度与保存状态 | [训练与状态保存](training.md) |
 | 使用 LoRA 或 NF4 微调本地模型 | [微调与恢复](finetuning.md) |
