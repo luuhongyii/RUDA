@@ -26,6 +26,26 @@ on:
         description: Build without running tests or runtime checks
         type: boolean
         default: false
+      python_version:
+        description: CPython version to build both platform wheels for
+        type: string
+        default: '3.13.7'
+      linux_torch_version:
+        description: Exact Linux PyTorch version including its CUDA suffix
+        type: string
+        default: '2.10.0+cu126'
+      linux_torch_index:
+        description: PyTorch wheel index for the Linux build
+        type: string
+        default: 'https://download.pytorch.org/whl/cu126'
+      windows_torch_version:
+        description: Exact Windows PyTorch version including its CUDA suffix
+        type: string
+        default: '2.13.0+cu130'
+      windows_torch_index:
+        description: PyTorch wheel index for the Windows build
+        type: string
+        default: 'https://download.pytorch.org/whl/cu130'
       release_tag:
         description: Optional new GitHub Release tag matching the workspace version
         type: string
@@ -111,22 +131,29 @@ jobs:
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   linux:
-    name: Colab-compatible Linux native and Torch 2.10 wheel
+    name: Linux native and Python wheel
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    outputs:
+      python_version: ${{ steps.compatibility.outputs.python_version }}
+      python_tag: ${{ steps.compatibility.outputs.python_tag }}
+      abi_tag: ${{ steps.compatibility.outputs.abi_tag }}
+      torch_version: ${{ steps.compatibility.outputs.torch_version }}
     defaults:
       run:
         shell: bash
     env:
       CXX: clang++
       CARGO_PROFILE_TEST_DEBUG: '0'
+      TORCH_VERSION: ${{ inputs.linux_torch_version || '2.10.0+cu126' }}
+      TORCH_INDEX: ${{ inputs.linux_torch_index || 'https://download.pytorch.org/whl/cu126' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.13.7'
+          python-version: ${{ inputs.python_version || '3.13.7' }}
       - name: Inspect runner resources
         run: |
           date -u
@@ -164,10 +191,14 @@ jobs:
             ~/.cargo/git
             target/release
           key: ${{ steps.linux-cache.outputs.cache-primary-key }}
-      - name: Install Colab-matching Torch and build dependencies
+      - name: Install selected Torch and build dependencies
         run: |
-          python -m pip install setuptools==80.9.0 wheel==0.45.1
-          python -m pip install 'torch==2.10.0+cu126' --index-url https://download.pytorch.org/whl/cu126
+          python -m pip install setuptools==80.9.0 wheel==0.45.1 packaging==25.0
+          python -m pip install "torch==$TORCH_VERSION" --index-url "$TORCH_INDEX"
+      - name: Record wheel build ABI
+        id: compatibility
+        run: |
+          python -c "import sys, torch; from packaging.tags import sys_tags; tag = next(sys_tags()); print('python_version=%d.%d' % sys.version_info[:2]); print('python_tag=' + tag.interpreter); print('abi_tag=' + tag.abi); print('torch_version=' + torch.__version__)" >> "$GITHUB_OUTPUT"
       - name: Check Python syntax and build Linux wheel
         working-directory: ruda-torch/python
         run: |
@@ -178,7 +209,7 @@ jobs:
       - name: Save Linux wheel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ruda-torch-linux-x86_64-cp313-torch2.10.0-cu126-abi10-${{ github.sha }}
+          name: ruda-torch-linux-x86_64-${{ steps.compatibility.outputs.python_tag }}-${{ steps.compatibility.outputs.abi_tag }}-torch${{ steps.compatibility.outputs.torch_version }}-abi10-${{ github.sha }}
           path: ruda-torch/python/dist/*.whl
           if-no-files-found: error
           retention-days: 7
@@ -188,13 +219,21 @@ jobs:
     needs: native
     runs-on: windows-2022
     timeout-minutes: 20
+    outputs:
+      python_version: ${{ steps.compatibility.outputs.python_version }}
+      python_tag: ${{ steps.compatibility.outputs.python_tag }}
+      abi_tag: ${{ steps.compatibility.outputs.abi_tag }}
+      torch_version: ${{ steps.compatibility.outputs.torch_version }}
+    env:
+      TORCH_VERSION: ${{ inputs.windows_torch_version || '2.13.0+cu130' }}
+      TORCH_INDEX: ${{ inputs.windows_torch_index || 'https://download.pytorch.org/whl/cu130' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.13.7'
+          python-version: ${{ inputs.python_version || '3.13.7' }}
           architecture: x64
       - name: Inspect runner resources
         run: |
@@ -206,9 +245,14 @@ jobs:
       - name: Install matching PyTorch and build dependencies
         timeout-minutes: 8
         run: |
-          python -m pip install setuptools==80.9.0 wheel==0.45.1
+          python -m pip install setuptools==80.9.0 wheel==0.45.1 packaging==25.0
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python -m pip install 'torch==2.13.0+cu130' --index-url https://download.pytorch.org/whl/cu130
+          python -m pip install "torch==$env:TORCH_VERSION" --index-url "$env:TORCH_INDEX"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Record wheel build ABI
+        id: compatibility
+        run: |
+          python -c "import sys, torch; from packaging.tags import sys_tags; tag = next(sys_tags()); print('python_version=%d.%d' % sys.version_info[:2]); print('python_tag=' + tag.interpreter); print('abi_tag=' + tag.abi); print('torch_version=' + torch.__version__)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Restore native DLL
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -244,7 +288,7 @@ jobs:
       - name: Save installable wheel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ruda-torch-win-amd64-cp313-torch2.13.0-cu130-abi10-${{ github.sha }}
+          name: ruda-torch-win-amd64-${{ steps.compatibility.outputs.python_tag }}-${{ steps.compatibility.outputs.abi_tag }}-torch${{ steps.compatibility.outputs.torch_version }}-abi10-${{ github.sha }}
           path: ruda-torch/python/dist/*.whl
           if-no-files-found: error
           retention-days: 7
@@ -264,13 +308,21 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ inputs.release_tag }}
+      LINUX_PYTHON_VERSION: ${{ needs.linux.outputs.python_version }}
+      LINUX_PYTHON_TAG: ${{ needs.linux.outputs.python_tag }}
+      LINUX_ABI_TAG: ${{ needs.linux.outputs.abi_tag }}
+      LINUX_TORCH_VERSION: ${{ needs.linux.outputs.torch_version }}
+      WINDOWS_PYTHON_VERSION: ${{ needs.wheel.outputs.python_version }}
+      WINDOWS_PYTHON_TAG: ${{ needs.wheel.outputs.python_tag }}
+      WINDOWS_ABI_TAG: ${{ needs.wheel.outputs.abi_tag }}
+      WINDOWS_TORCH_VERSION: ${{ needs.wheel.outputs.torch_version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          pattern: ruda-torch-*-cp313-*-abi10-${{ github.sha }}
+          pattern: ruda-torch-*-torch*-abi10-${{ github.sha }}
           path: release
           merge-multiple: true
       - name: Assemble wheel compatibility manifest and checksums
@@ -290,23 +342,32 @@ jobs:
               raise SystemExit('Release tag must match the workspace version')
           directory = Path('release')
           matrix = {
-              'linux_x86_64': ('2.10.0+cu126', 'libruda_torch_native.so', '.so', 'Ubuntu 24.04'),
-              'win_amd64': ('2.13.0+cu130', 'ruda_torch_native.dll', '.pyd', 'Windows 2022'),
+              'linux_x86_64': ('LINUX', 'libruda_torch_native.so', '.so', 'Ubuntu 24.04'),
+              'win_amd64': ('WINDOWS', 'ruda_torch_native.dll', '.pyd', 'Windows 2022'),
           }
           wheels = sorted(directory.glob('*.whl'))
           if len(wheels) != len(matrix):
               raise SystemExit('Expected one Linux and one Windows wheel')
           packages = []
-          for platform, (torch, library, extension, build_os) in matrix.items():
-              wheel, = [p for p in wheels if p.name.endswith(f'-cp313-cp313-{platform}.whl')]
+          for platform, (prefix, library, extension, build_os) in matrix.items():
+              python = os.environ[f'{prefix}_PYTHON_VERSION']
+              python_tag = os.environ[f'{prefix}_PYTHON_TAG']
+              abi_tag = os.environ[f'{prefix}_ABI_TAG']
+              torch = os.environ[f'{prefix}_TORCH_VERSION']
+              major, minor = map(int, python.split('.'))
+              wheel, = [p for p in wheels if p.name.endswith(f'-{python_tag}-{abi_tag}-{platform}.whl')]
               with zipfile.ZipFile(wheel) as archive:
                   names = archive.namelist()
                   metadata_name, = [n for n in names if n.endswith('.dist-info/METADATA')]
                   metadata = email.message_from_bytes(archive.read(metadata_name))
                   if metadata['Name'] != 'ruda-torch' or metadata['Version'] != '0.1.1':
                       raise SystemExit(f'Unexpected package metadata in {wheel.name}')
-                  if set(metadata['Requires-Python'].split(',')) != {'>=3.13', '<3.14'}:
+                  if set(metadata['Requires-Python'].split(',')) != {f'>={python}', f'<{major}.{minor + 1}'}:
                       raise SystemExit(f'Unexpected Python requirement in {wheel.name}')
+                  wheel_metadata_name, = [n for n in names if n.endswith('.dist-info/WHEEL')]
+                  wheel_metadata = email.message_from_bytes(archive.read(wheel_metadata_name))
+                  if f'{python_tag}-{abi_tag}-{platform}' not in wheel_metadata.get_all('Tag', []):
+                      raise SystemExit(f'Unexpected wheel ABI tag in {wheel.name}')
                   if f'torch=={torch}' not in metadata.get_all('Requires-Dist', []):
                       raise SystemExit(f'Unexpected Torch requirement in {wheel.name}')
                   required = ['ruda_torch/__init__.py', f'ruda_torch/{library}']
@@ -314,7 +375,8 @@ jobs:
                   if any(n not in names for n in required) or not any(n.startswith('ruda_torch/_C.') and n.endswith(extension) for n in names):
                       raise SystemExit(f'Missing packaged component in {wheel.name}')
               packages.append({'file': wheel.name, 'package_version': metadata['Version'],
-                               'python': 'CPython 3.13', 'torch': torch, 'platform': platform,
+                               'python': f'CPython {python}', 'python_tag': python_tag, 'python_abi': abi_tag,
+                               'torch': torch, 'platform': platform,
                                'build_os': build_os, 'native_profile': 'release', 'native_abi': 10})
           manifest = {'release': tag, 'source_revision': os.environ['GITHUB_SHA'], 'wheels': packages}
           (directory / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
@@ -331,7 +393,7 @@ jobs:
             --target "$GITHUB_SHA" --draft --title "RUDA $RELEASE_TAG" \
             --notes "RUDA source release with ruda-torch 0.1.1 binary wheels. The wheels include the Python package, C++ extension, optimized Rust release library and license notices (native ABI 10).
 
-          CPython 3.13: Linux x86_64 / PyTorch 2.10.0+cu126 (Ubuntu 24.04 build); Windows x86_64 / PyTorch 2.13.0+cu130. These builds are not interchangeable. SHA256SUMS and manifest.json describe the downloads.
+          Linux x86_64 / CPython $LINUX_PYTHON_VERSION ($LINUX_ABI_TAG) / PyTorch $LINUX_TORCH_VERSION (Ubuntu 24.04 build); Windows x86_64 / CPython $WINDOWS_PYTHON_VERSION ($WINDOWS_ABI_TAG) / PyTorch $WINDOWS_TORCH_VERSION. These builds are not interchangeable. SHA256SUMS and manifest.json describe the downloads.
 
           [Installation and compatibility](https://github.com/$GH_REPO/blob/$GITHUB_SHA/ruda-torch/README.md#release-wheels) · [中文安装](https://github.com/$GH_REPO/blob/$GITHUB_SHA/docs/zh/native-pytorch-quickstart.md)"
           gh release edit "$RELEASE_TAG" --draft=false --latest

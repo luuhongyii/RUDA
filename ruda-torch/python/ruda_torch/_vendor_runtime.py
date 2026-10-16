@@ -21,11 +21,13 @@ def _load(name):
         override = os.environ.get('RUDA_TORCH_' + name.upper() + '_LIBRARY')
         if sys.platform == 'win32':
             names = {'cuda': ['nvcuda.dll'], 'cublas': ['cublas64_13.dll', 'cublas64_12.dll'],
+                     'cublaslt': ['cublasLt64_13.dll', 'cublasLt64_12.dll'],
                      'cufft': ['cufft64_12.dll', 'cufft64_11.dll'],
                      'cusolver': ['cusolver64_12.dll', 'cusolver64_11.dll']}[name]
             loader = ct.WinDLL
         else:
             names = {'cuda': ['libcuda.so.1'], 'cublas': ['libcublas.so.13', 'libcublas.so.12'],
+                     'cublaslt': ['libcublasLt.so.13', 'libcublasLt.so.12'],
                      'cufft': ['libcufft.so.12', 'libcufft.so.11'],
                      'cusolver': ['libcusolver.so.12', 'libcusolver.so.11']}[name]
             loader = ct.CDLL
@@ -92,6 +94,19 @@ def invoke(op,tensors,ints,scalars=(),*,prefix=None,stream=None):
         symbols['cublas'] = ['cublasCreate_v2','cublasDestroy_v2','cublasSetStream_v2','cublasSetPointerMode_v2']
         symbols['cublas'].append('cublasGemmStridedBatchedEx' if op==0 else
                                 ('cublasDtrsm_v2' if ints[4]==8 else 'cublasStrsm_v2'))
+    elif op==15:
+        dtype, conjugate = ints[3:5]
+        symbol = {0:'cublasSdot_v2', 1:'cublasDdot_v2', 2:'cublasDotEx', 14:'cublasDotEx',
+                  4:'cublasCdotc_v2' if conjugate else 'cublasCdotu_v2',
+                  5:'cublasZdotc_v2' if conjugate else 'cublasZdotu_v2'}[dtype]
+        symbols['cublas'] = ['cublasCreate_v2','cublasDestroy_v2','cublasSetStream_v2','cublasSetPointerMode_v2',symbol]
+    elif op in (16,17):
+        symbols['cublaslt'] = ['cublasLtCreate','cublasLtDestroy','cublasLtMatmulDescCreate','cublasLtMatmulDescDestroy',
+                               'cublasLtMatrixLayoutCreate','cublasLtMatrixLayoutDestroy','cublasLtMatmul']
+        if op==17:
+            symbols['cublaslt'].extend(('cublasLtMatmulDescSetAttribute','cublasLtMatmulPreferenceCreate',
+                                       'cublasLtMatmulPreferenceDestroy','cublasLtMatmulPreferenceSetAttribute',
+                                       'cublasLtMatmulAlgoGetHeuristic'))
     elif 2<=op<=11:
         routine = {2:'getrf',3:'getrs',4:'potrf',5:'potrs',6:'geqrf',7:'orgqr',8:'ormqr',9:'syevd',10:'gesvdj',11:'gesvd'}[op]
         symbols['cusolver'] = ['cusolverDnCreate','cusolverDnDestroy','cusolverDnSetStream',prefix+routine]
@@ -100,12 +115,16 @@ def invoke(op,tensors,ints,scalars=(),*,prefix=None,stream=None):
         if op==10:
             symbols['cusolver'].extend(('cusolverDnCreateGesvdjInfo','cusolverDnDestroyGesvdjInfo'))
     elif op==12:
-        symbols['cufft'] = ['cufftCreate','cufftDestroy','cufftSetAutoAllocation','cufftSetStream','cufftMakePlanMany64','cufftSetWorkArea']
+        symbols['cufft'] = ['cufftCreate','cufftDestroy','cufftSetAutoAllocation','cufftSetStream',
+                            'cufftXtMakePlanMany' if ints[2]==2 else 'cufftMakePlanMany64','cufftSetWorkArea']
     elif op==13:
-        kind,double = ints[1:]
-        suffix = ({0:'Z2Z',1:'Z2Z',2:'D2Z',3:'Z2D'} if double else
-                  {0:'C2C',1:'C2C',2:'R2C',3:'C2R'})[kind]
-        symbols['cufft'] = ['cufftSetStream','cufftExec'+suffix]
+        kind,precision = ints[1:]
+        if precision==2:
+            symbols['cufft'] = ['cufftSetStream','cufftXtExec']
+        else:
+            suffix = ({0:'Z2Z',1:'Z2Z',2:'D2Z',3:'Z2D'} if precision else
+                      {0:'C2C',1:'C2C',2:'R2C',3:'C2R'})[kind]
+            symbols['cufft'] = ['cufftSetStream','cufftExec'+suffix]
     elif op==14:
         symbols['cufft'] = ['cufftDestroy']
     else:

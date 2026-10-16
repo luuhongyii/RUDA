@@ -144,10 +144,11 @@ fn byte_indices(indices:&View,width:usize)->View {
 }
 
 /// Gather/select/assignment preserve interleaved storage byte-for-byte. Add
-/// updates use the existing lane-owned serial-axis F32/F64 kernels: duplicate
+/// updates use the existing lane-owned serial-axis F16/F32/F64 kernels: duplicate
 /// indices are accumulated in their input order, without atomics or CPU data.
 fn wide_index(op:u32,a:&View,b:&View,out:&View,scalar:f32) {
-    assert!(matches!(a.dtype,9|10|11) && a.dtype==out.dtype);
+    assert!(matches!(a.dtype,9|10|11|14) && a.dtype==out.dtype);
+    assert!(a.dtype!=14 || op!=104,"CUDA scatter_add does not dispatch complex32");
     assert!(scalar>=0.0 && scalar.fract()==0.0);
     let axis=scalar as usize;
     assert!(axis<a.shape.len() && axis<out.shape.len());

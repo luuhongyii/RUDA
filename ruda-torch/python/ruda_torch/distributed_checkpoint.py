@@ -50,7 +50,7 @@ def model_shard_layout(model):
     from .parallel_training import ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding
     from .parallel_adapters import _ParallelNF4,_ParallelLoRA,nf4_layout
     from .packed_parallel import _ParallelPacked,packed_layout
-    from .expert_parallel import ExpertParallelMLP
+    from .expert_parallel import ExpertParallelMLP, _SeparateExpertParallelMLP
     layout = {}
     for path, module in model.named_modules(remove_duplicate=False):
         prefix = path+'.' if path else ''
@@ -70,6 +70,16 @@ def model_shard_layout(model):
                     layout[prefix+key]['aliases'].append(prefix+name)
                 else:
                     layout[prefix+key]=spec
+        elif isinstance(module, _SeparateExpertParallelMLP):
+            for expert_id, column, name, layer in module.projection_items():
+                key = f'{prefix}{expert_id}.{name}.weight'
+                shape = ([module.intermediate_size, module.hidden_size] if column < 2
+                         else [module.hidden_size, module.intermediate_size])
+                layout[key] = {'name': key, 'aliases': [], 'shape': shape, 'axis': None,
+                               'partition': 'expert-owned', 'expert_id': expert_id,
+                               'num_experts': module.num_experts}
+                if module.tensor_group is not None:
+                    layout[key]['expert_tensor_axis'] = 0 if column < 2 else 1
         elif isinstance(module, ExpertParallelMLP):
             for name in ('gate_up_proj', 'down_proj'):
                 shape = ([module.num_experts, 2 * module.intermediate_size, module.hidden_size]
@@ -148,6 +158,20 @@ def _optimizer_description(model, optimizer, layout):
             'class': type(actual).__module__+'.'+type(actual).__qualname__}
 
 
+def _logical_checkpoint(state):
+    from ._expert_ownership import logical_layout
+    layout = state['layout']
+    model = {layout.get(name, {}).get('name', name): value for name, value in state['model'].items()}
+    description = state['optimizer']
+    optimizer_layout = description['layout']
+    names = lambda name: optimizer_layout.get(name, {}).get('name', name)
+    groups = [dict(group, params=[names(name) for name in group['params']]) for group in description['groups']]
+    description = dict(description, groups=groups,
+        states={names(name): value for name, value in description['states'].items()},
+        layout=logical_layout(optimizer_layout))
+    return dict(state, model=model, layout=logical_layout(layout), optimizer=description)
+
+
 class DistributedCheckpoint:
     """Shared-filesystem, all-rank commit at a completed optimizer boundary.
 
@@ -161,8 +185,10 @@ class DistributedCheckpoint:
 
     def save(self, model, optimizer, *, step, application_state=None, scheduler=None, scaler=None):
         from .float8_parallel import recipe_contract
+        from ._expert_ownership import merge_layouts
         layout = _checkpoint_layout(model,self.group)
-        self.group.validate_training_options((step, layout))
+        self.group.validate_training_options(step)
+        merge_layouts(self.group.gather_metadata(layout))
         if type(step) is not int or step < 0:
             raise ValueError('checkpoint step must be a nonnegative integer')
         generations = self.group.gather_metadata(uuid.uuid4().hex if self.group.rank == 0 else None)
@@ -285,50 +311,73 @@ class DistributedCheckpoint:
         Memory is the full checkpoint plus the rank-local input checkpoints.
         This is explicit, never automatically run inside a training step.
         """
+        from ._expert_ownership import owned, owning_ranks, merge_layouts
         folder, manifest = self._manifest(generation)
         ranks = [torch.load(folder/name, map_location='cpu', weights_only=True) for name in manifest['files']]
         first = ranks[0]
         for rank, state in enumerate(ranks):
             if state.get('float8_recipe') != first.get('float8_recipe'):
                 raise ValueError('rank FP8 recipes differ')
-            if (state['version'], state['rank'], state['world_size'], state['step'], state['layout']) != (
-                    1, rank, manifest['world_size'], manifest['step'], first['layout']):
+            if (state['version'], state['rank'], state['world_size'], state['step']) != (
+                    1, rank, manifest['world_size'], manifest['step']):
                 raise ValueError('rank checkpoint identities differ')
+        ranks = [_logical_checkpoint(state) for state in ranks]
+        first = ranks[0]
+        layout = merge_layouts([state['layout'] for state in ranks])
         model = {}
-        for key in first['model']:
-            spec = first['layout'].get(key)
-            value = _join([state['model'][key] for state in ranks], spec)
+        for key in dict.fromkeys(key for state in ranks for key in state['model']):
+            spec = layout.get(key)
+            expected = owning_ranks(spec, len(ranks))
+            if [rank for rank, state in enumerate(ranks) if key in state['model']] != expected:
+                raise ValueError('model checkpoint tensor ownership differs: ' + key)
+            value = _join([state['model'].get(key) for state in ranks], spec)
             name = key if spec is None else spec['name']
             model[name] = value
             for alias in () if spec is None else spec['aliases']:
                 model[alias] = value
         descriptions = [state['optimizer'] for state in ranks]
         base = descriptions[0]
-        if any(not _equal((d['groups'], d['extra'], d['class'], d['layout']),
-                          (base['groups'], base['extra'], base['class'], base['layout'])) for d in descriptions):
+        if any(not _equal((d['extra'], d['class']), (base['extra'], base['class']))
+               or len(d['groups']) != len(base['groups']) for d in descriptions):
             raise ValueError('optimizer rank descriptions differ')
+        optimizer_layout = merge_layouts([description['layout'] for description in descriptions])
+        groups = []
+        for index, group in enumerate(base['groups']):
+            options = {key: value for key, value in group.items() if key != 'params'}
+            peers = [description['groups'][index] for description in descriptions]
+            if any(not _equal(options, {key: value for key, value in peer.items() if key != 'params'}) for peer in peers):
+                raise ValueError('optimizer group options differ between ranks')
+            members = merge_layouts([{name: optimizer_layout.get(name, {'replicated': True})
+                                     for name in peer['params']} for peer in peers])
+            groups.append(dict(options, params=[optimizer_layout.get(name, {}).get('name', name) for name in members]))
         states = {}
         for name in set().union(*(d['states'] for d in descriptions)):
             values = [d['states'].get(name) for d in descriptions]
-            if any(value is None for value in values):
+            spec = optimizer_layout.get(name)
+            owners = owning_ranks(spec, len(ranks))
+            if [rank for rank, value in enumerate(values) if value is not None] != owners:
                 raise ValueError('optimizer state missing on some shards')
-            spec = base['layout'].get(name)
             global_name = name if spec is None else spec['name']
-            local_parameter = first['model'].get(name)
+            local_parameter = ranks[owners[0]]['model'].get(name)
             fields = {}
-            for key, value in values[0].items():
+            source = values[owners[0]]
+            if any(entry.keys() != source.keys() for entry in values if entry is not None):
+                raise ValueError('optimizer state fields differ between owning ranks')
+            for key, value in source.items():
                 shape = None if spec is None else spec['shape']
                 is_parameter_state = isinstance(value, torch.Tensor) and shape is not None and key != 'step' and (
                     (spec.get('transform')=='zero2-tp-flat' or spec.get('data_flat')) and value.ndim==1 or
                     local_parameter is not None and value.shape == local_parameter.shape or
                     spec.get('axis') is None and value.ndim == 1 and value.numel() == math.ceil(math.prod(shape)/len(ranks)))
-                fields[key] = _join([entry[key] for entry in values], spec if is_parameter_state else None)
+                if is_parameter_state:
+                    fields[key] = _join([None if entry is None else entry[key] for entry in values], spec)
+                else:
+                    fields[key] = _join([values[rank][key] for rank in owners], None)
             states[global_name] = fields
-        groups = [dict(group, params=[base['layout'].get(name, {}).get('name', name) for name in group['params']])
-                  for group in base['groups']]
+        owned_parameters = [spec['name'] for spec in optimizer_layout.values() if owned(spec)]
         return {'version': 1, 'step': first['step'], 'model': model,
                 'float8_recipe': first.get('float8_recipe'),
-                'optimizer': dict(base, groups=groups, states=states, layout={}),
+                'optimizer': dict(base, groups=groups, states=states, layout={}, owned_parameters=owned_parameters),
                 'rank_states': [{'application': state['application'], 'torch_rng': state['torch_rng'],
                                  'cuda_rng': state.get('cuda_rng'),'ruda_rng':state.get('ruda_rng')} for state in ranks],
                 'scheduler': first['scheduler'], 'scaler': first['scaler']}
@@ -365,6 +414,15 @@ def _join(values, spec):
     if spec is not None and 'model_mesh' in spec:
         from .model_parallel_checkpoint import join_model_mesh_field
         return join_model_mesh_field(values, spec)
+    if spec is not None and spec.get('partition') == 'expert-owned':
+        from ._expert_ownership import owning_ranks
+        owners = owning_ranks(spec, len(values))
+        if any(value is not None for rank, value in enumerate(values) if rank not in owners):
+            raise ValueError('an unowned expert checkpoint contains storage')
+        result = values[owners[0]]
+        if not isinstance(result, torch.Tensor) or tuple(result.shape) != tuple(spec['shape']):
+            raise ValueError('separate expert checkpoint shape differs')
+        return result
     if spec is not None and 'mesh' in spec:
         from .hybrid_parallel import join_mesh_field
         return join_mesh_field(values,spec)
@@ -399,6 +457,11 @@ def _slice(value, spec, rank, world):
     if spec is not None and 'model_mesh' in spec:
         from .model_parallel_checkpoint import slice_model_mesh_field
         return slice_model_mesh_field(value, spec, rank, world)
+    if spec is not None and spec.get('partition') == 'expert-owned':
+        from ._expert_ownership import owning_ranks
+        if rank not in owning_ranks(spec, world):
+            raise ValueError('target rank does not own this expert checkpoint field')
+        return value
     if spec is not None and 'mesh' in spec:
         from .hybrid_parallel import slice_mesh_field
         return slice_mesh_field(value,spec,rank,world)
@@ -448,7 +511,11 @@ def _restore_optimizer(model, optimizer, description, layout, group, *, consolid
     for named, indexed, saved in zip(live_description['groups'], live['param_groups'], saved_groups, strict=True):
         specs = live_description['layout']
         logical = [specs.get(name, {}).get('name', name) for name in named['params']]
-        if (logical if consolidated else named['params']) != saved['params']:
+        expected = saved['params']
+        if consolidated:
+            owned_names = set(description.get('owned_parameters', ()))
+            expected = [name for name in expected if name not in owned_names or name in logical]
+        if (logical if consolidated else named['params']) != expected:
             raise ValueError('optimizer parameter paths differ')
         groups.append(dict(saved, params=indexed['params']))
         for name, global_name, identity, parameter in zip(named['params'], logical, indexed['params'],

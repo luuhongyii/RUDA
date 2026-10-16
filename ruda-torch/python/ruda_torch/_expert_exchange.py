@@ -44,6 +44,15 @@ def _counts(tensor, world, total=None):
     return counts
 
 
+@torch.compiler.disable
+def backward_participation(rows, trainable, group_key):
+    enabled = torch.is_grad_enabled()
+    peers = _group(group_key).gather_metadata((enabled, rows.requires_grad or trainable))
+    if any(mode != enabled for mode, _ in peers):
+        raise ValueError('expert ranks must use the same autograd mode')
+    return enabled and any(needed for _, needed in peers)
+
+
 @torch.library.custom_op('ruda::expert_exchange', mutates_args=())
 def exchange(rows: torch.Tensor, ids: torch.Tensor, sends: torch.Tensor,
              group_key: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

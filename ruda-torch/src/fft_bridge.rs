@@ -24,20 +24,21 @@ fn spec(xs:&[i64],rank:usize)->(FftNormalization,Vec<usize>,Vec<usize>) {
     (norm(xs[0]),axes,lengths)
 }
 fn parts(x:&View)->(DeviceTensor,DeviceTensor) {
-    if x.dtype==10 || x.dtype==11 { complex_parts(x) }
+    if matches!(x.dtype,10|11|14) { complex_parts(x) }
     else {
-        assert!(x.dtype==0 || x.dtype==9,"FFT bridge expects F32/F64 or complex storage");
+        assert!(matches!(x.dtype,0|1|9),"FFT bridge expects F16/F32/F64 or complex storage");
         let real=real_tensor(x);
         let imag=layout::zeros(&real,real.meta.shape().clone()).expect("FFT imaginary allocation");
         (real,imag)
     }
 }
 fn write(re:&DeviceTensor,im:&DeviceTensor,out:&View) {
-    if out.dtype==10 || out.dtype==11 { copy_complex(re,im,out); }
-    else { assert!(out.dtype==0 || out.dtype==9); copy_real(re,out); }
+    if matches!(out.dtype,10|11|14) { copy_complex(re,im,out); }
+    else { assert!(matches!(out.dtype,0|1|9)); copy_real(re,out); }
 }
 fn output_dtype(input:u32,op:u32)->u32 {
-    assert!(matches!(input,0|9|10|11));
+    assert!(matches!(input,0|1|9|10|11|14));
+    if matches!(input,1|14) { return if op==3 || op==4 {1} else {14}; }
     let double=input==9 || input==11;
     if op==3 || op==4 {if double {9} else {0}} else {if double {11} else {10}}
 }
@@ -138,8 +139,8 @@ pub unsafe extern "C" fn ruda_torch_fft(op:u32,ds:*const Descriptor,count:usize,
             let (norm,axes,lengths)=spec(args,views[0].shape.len());
             if op>=20 {backward(op-20,&views[0],&views[1],&axes,&lengths,norm);}
             else {
-                if op==2 || op==5 {assert!(views[0].dtype==0 || views[0].dtype==9);}
-                if op==3 || op==4 {assert!(matches!(views[0].dtype,0|9|10|11));}
+                if op==2 || op==5 {assert!(matches!(views[0].dtype,0|1|9));}
+                if op==3 || op==4 {assert!(matches!(views[0].dtype,0|1|9|10|11|14));}
                 assert_eq!(views[1].dtype,output_dtype(views[0].dtype,op));
                 let (re,im)=parts(&views[0]);
                 let (re,im)=transform(op,&re,&im,&axes,&lengths,norm);
@@ -191,7 +192,7 @@ pub unsafe extern "C" fn ruda_torch_fft_plan(op:u32,handle:*mut *mut std::ffi::c
             let args=unsafe {crate::abi::slice(ints,ni)};
             let kind=u32::try_from(args[0]).expect("negative FFT plan kind"); assert!(kind<=5);
             let view=unsafe {crate::abi::view(ds)};
-            if kind==2 || kind==5 {assert!(view.dtype==0 || view.dtype==9);}
+            if kind==2 || kind==5 {assert!(matches!(view.dtype,0|1|9));}
             let (norm,axes,lengths)=spec(&args[1..],view.shape.len());
             let (re,_)=parts(&view);
             let k=match kind {0=>NdFftKind::ComplexForward,1=>NdFftKind::ComplexInverse,

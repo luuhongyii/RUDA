@@ -140,6 +140,6 @@ class ExpertParallelGroup:
         for spec in layout.values():
             if spec.get('expert_tensor_axis') is not None:
                 raise ValueError('EP/TP expert checkpoints use ModelParallelTrainingGroup')
-            if spec.get('partition') != 'expert' and not spec.get('replicated'):
+            if spec.get('partition') not in ('expert', 'expert-owned') and not spec.get('replicated'):
                 raise ValueError('combined EP/TP/FSDP checkpointing requires an explicit multi-axis mesh layout')
         return layout

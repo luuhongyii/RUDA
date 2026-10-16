@@ -1,7 +1,6 @@
 """RUDA-native random filling with serializable seed/counter and dropout."""
 from __future__ import annotations
 
-import math
 import secrets
 import struct
 from threading import RLock
@@ -43,54 +42,32 @@ class Generator:
         return self
 
     def fill_(self, tensor, distribution, first, second):
-        from . import _C, _random_available
-        if not _random_available:
-            raise RuntimeError('native random API 1 required; rebuild Rust and C++ libraries')
-        if tensor.device.type!='ruda' or tensor.dtype not in (torch.float32,torch.float16,torch.bfloat16):
-            raise ValueError('native random filling requires floating RUDA storage')
-        if not math.isfinite(first) or not math.isfinite(second):
-            raise ValueError('random distribution parameters must be finite')
-        target = tensor if tensor.is_contiguous() else torch.empty(tensor.shape,device=tensor.device,dtype=tensor.dtype)
-        blocks = (target.numel()+3)//4
-        with self.lock:
-            if self.counter+blocks >= 1<<64:
-                raise OverflowError('RUDA random counter exhausted')
-            counter = self.counter
-            # Reservation precedes dispatch; a failed device operation is never
-            # retried with reused random numbers and possibly partial writes.
-            self.counter += blocks
-            with torch.no_grad():
-                _C.random_fill_(target,self.seed_value,counter,distribution,float(first),float(second))
-                if target is not tensor:
-                    tensor.copy_(target)
-        return tensor
+        if distribution == 0:
+            return uniform_(tensor, first, second, generator=self)
+        if distribution == 1:
+            return normal_(tensor, first, second, generator=self)
+        if distribution == 2:
+            return bernoulli_(tensor, first, generator=self)
+        raise ValueError('unknown RUDA random distribution')
 
 
 default_generator = Generator()
 
 
-def _generator(generator):
-    if generator is not None and not isinstance(generator,Generator):
-        raise TypeError('use a RUDA Generator or the default generator, not a CPU/CUDA generator')
-    return default_generator if generator is None else generator
-
-
 def uniform_(tensor, from_=0., to=1., *, generator=None):
-    if from_>to:
-        raise ValueError('uniform bounds are reversed')
-    return _generator(generator).fill_(tensor,0,from_,to)
+    from ._random_base import uniform_ as fill
+    return fill(tensor, from_, to, generator=generator)
 
 
 def normal_(tensor, mean=0., std=1., *, generator=None):
-    if std<0:
-        raise ValueError('normal standard deviation must be nonnegative')
-    return _generator(generator).fill_(tensor,1,mean,std)
+    from ._random_base import normal_ as fill
+    return fill(tensor, mean, std, generator=generator)
 
 
 def bernoulli_(tensor, p=.5, *, generator=None):
-    if not 0<=p<=1:
-        raise ValueError('Bernoulli probability must be in [0,1]')
-    return _generator(generator).fill_(tensor,2,p,0.)
+    from ._random_base import bernoulli_, bernoulli_tensor
+    fill = bernoulli_tensor if isinstance(p, torch.Tensor) else bernoulli_
+    return fill(tensor, p, generator=generator)
 
 
 def native_dropout(input, p, train=True):
@@ -99,28 +76,16 @@ def native_dropout(input, p, train=True):
     if train is None:train=True
     if not train or p==0:
         return input.clone(),torch.ones_like(input,dtype=torch.bool)
-    if p==1:
-        mask=torch.zeros_like(input,dtype=torch.bool)
-        return torch.where(mask,input,torch.zeros_like(input)),mask
-    random = torch.empty(input.shape,dtype=torch.float32,device=input.device)
-    uniform_(random)
-    mask = random >= p
-    return input*mask.to(input.dtype)/(1-p),mask
+    return torch.ops.aten.native_dropout.default(input, p, train)
 
 
 def register_random_ops():
     from ._ops import _registry
+    from ._random_base import bernoulli_tensor, register
+    from ._random_activation import register as register_activations
     _registry.impl('uniform_',lambda tensor,from_=0.,to=1.,generator=None: uniform_(tensor,from_,to,generator=generator))
     _registry.impl('normal_',lambda tensor,mean=0.,std=1.,generator=None: normal_(tensor,mean,std,generator=generator))
     _registry.impl('bernoulli_.float',lambda tensor,p=.5,generator=None: bernoulli_(tensor,p,generator=generator))
-    def bernoulli_tensor(tensor,p,generator=None):
-        if p.device!=tensor.device or not p.is_floating_point() or ((p<0)|(p>1)|torch.isnan(p)).any().item():
-            raise ValueError('Bernoulli probabilities must be finite and in [0,1] on the output device')
-        probabilities=p.expand(tensor.shape)
-        random=torch.empty(tensor.shape,dtype=torch.float32,device=p.device)
-        uniform_(random,generator=generator)
-        tensor.copy_((random<probabilities).to(tensor.dtype))
-        return tensor
     _registry.impl('bernoulli_.Tensor',bernoulli_tensor)
-    _registry.impl('native_dropout',native_dropout)
-    _registry.impl('native_dropout_backward',lambda grad,mask,scale: grad*mask.to(grad.dtype)*scale)
+    register(_registry)
+    register_activations(_registry)

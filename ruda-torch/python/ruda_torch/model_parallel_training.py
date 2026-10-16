@@ -55,8 +55,12 @@ class ModelParallelTrainingGroup:
         for failure in self.gather_metadata(error):
             if failure:
                 raise ValueError(failure)
-        self.validate_training_options((self.mesh.shape, initialize, broadcast_buffers, self._layout,
-            [(name, str(p.dtype), p.requires_grad) for name, p in self._parameters]))
+        from ._expert_ownership import merge_layouts
+        self.validate_training_options((self.mesh.shape, initialize, broadcast_buffers))
+        merge_layouts(self.gather_metadata(self._layout))
+        schema = {name: dict(self._layout[name], dtype=str(p.dtype), trainable=p.requires_grad)
+                  for name, p in self._parameters}
+        merge_layouts(self.gather_metadata(schema))
         if initialize:
             self.initialize(broadcast_buffers=broadcast_buffers)
 
@@ -77,11 +81,11 @@ class ModelParallelTrainingGroup:
 
     @staticmethod
     def _expert_field(spec):
-        return spec.get('partition') == 'expert'
+        return spec.get('partition') in ('expert', 'expert-owned')
 
     @staticmethod
     def _tensor_field(spec):
-        if spec.get('partition') == 'expert':
+        if spec.get('partition') in ('expert', 'expert-owned'):
             return spec.get('expert_tensor_axis') is not None
         return not spec.get('replicated', False)
 
@@ -148,10 +152,11 @@ class ModelParallelTrainingGroup:
         if missing not in ('zero', 'error'):
             raise ValueError('missing gradients must use zero or error')
         error = None
-        flags = []
+        names = {id(parameter): self._fields[id(parameter)]['name'] for _, parameter in self._parameters}
+        flags = {}
         for parameter in parameters:
             gradient = parameter.grad
-            flags.append(gradient is not None)
+            flags[names[id(parameter)]] = gradient is not None
             if gradient is not None and (gradient.is_sparse or gradient.shape != parameter.shape
                     or gradient.device != parameter.device or gradient.dtype != parameter.dtype):
                 error = 'model mesh gradient storage differs from its parameter'
@@ -161,9 +166,15 @@ class ModelParallelTrainingGroup:
         for failure, present in peers:
             if failure:
                 raise ValueError(failure)
-            if len(present) != len(flags):
-                raise ValueError('model mesh parameter participation schemas differ')
-        return [any(present[index] for _, present in peers) for index in range(len(flags))]
+        tensor_world, expert_world = self.tensor.world_size, self.expert.world_size
+        expert_rank = self.rank // tensor_world % expert_world
+        result = []
+        for parameter in parameters:
+            name, spec = names[id(parameter)], self._fields[id(parameter)]
+            ranks = (range(len(peers)) if not self._expert_field(spec) else
+                     [rank for rank in range(len(peers)) if rank // tensor_world % expert_world == expert_rank])
+            result.append(any(peers[rank][1].get(name, False) for rank in ranks))
+        return result
 
     @torch.no_grad()
     def _reduce(self, *, local_weight, normalized, missing, skip_data=False):
@@ -227,7 +238,8 @@ class ModelParallelTrainingGroup:
         mapping = {id(shard): original for original, shard in optimizer.entries} if zero else {}
         originals = [mapping[id(p)] for p in parameters] if zero else parameters
         names = {id(p): name for name, p in self._parameters}
-        self.validate_training_options([names[id(p)] for p in originals])
+        from ._expert_ownership import merge_layouts
+        merge_layouts(self.gather_metadata({names[id(p)]: self._fields[id(p)] for p in originals}))
         if isinstance(actual, Muon) and any(self._tensor_field(self._fields[id(p)]) or
                 self._fields[id(p)].get('data_flat') for p in originals):
             raise ValueError('partitioned matrices require the complete-matrix distributed Muon optimizer')
@@ -265,6 +277,6 @@ class ModelParallelTrainingGroup:
         for path, state in iter_float8_states(model):
             owner = path.removesuffix('.scale_state') if path != 'scale_state' else ''
             prefix = owner + '.' if owner else ''
-            expert = any(spec['name'].startswith(prefix) and spec.get('partition') == 'expert'
+            expert = any(spec['name'].startswith(prefix) and self._expert_field(spec)
                          for spec in self._layout.values())
             state.advance(group=self.mesh.expert_replica if expert else self.mesh.dense_replica)

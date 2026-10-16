@@ -5,7 +5,23 @@ struct IndexMetadata {
   at::Tensor source;
   std::vector<at::Tensor> indices;
   std::vector<int64_t> sizes, strides;
+  int64_t before = 0;
+  std::vector<int64_t> replacement;
 };
+
+template <typename Expand>
+std::vector<at::Tensor> expand_indices_on_device(Expand expand, const at::Tensor& source,
+    const c10::List<std::optional<at::Tensor>>& original) {
+  if constexpr (requires { expand(source, original, true); }) {
+    return expand(source, original, true);
+  } else {
+    auto indices = expand(source, original);
+    for (auto& index : indices) {
+      if (index.defined() && index.device() != source.device()) index = index.to(source.device());
+    }
+    return indices;
+  }
+}
 
 IndexMetadata index_metadata(at::Tensor source,const c10::List<std::optional<at::Tensor>>& original) {
   TORCH_CHECK_INDEX(original.size()<=size_t(source.dim()),"too many indices for tensor of dimension ",source.dim());
@@ -15,7 +31,7 @@ IndexMetadata index_metadata(at::Tensor source,const c10::List<std::optional<at:
                 "indices should be either on cpu or on the same device as the indexed tensor");
   }
   at::native::checkIndexTensorTypes(original,true);
-  auto indices=at::native::expandTensors(source,original,true);
+  auto indices=expand_indices_on_device(&at::native::expandTensors,source,original);
   try {
     indices=at::expand_outplace(indices);
   } catch (const std::exception&) {
@@ -47,6 +63,8 @@ IndexMetadata index_metadata(at::Tensor source,const c10::List<std::optional<at:
   shape.insert(shape.begin()+before,replacement.begin(),replacement.end());
   strides.insert(strides.begin()+before,replacement.size(),0);
   info.source=source.as_strided(shape,strides);
+  info.before=before;
+  info.replacement=replacement;
   for (auto& index:indices) {
     if (!index.defined()) continue;
     std::vector<int64_t> index_shape(before,1);

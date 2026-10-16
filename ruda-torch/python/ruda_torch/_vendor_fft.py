@@ -5,6 +5,17 @@ import torch
 from ._vendor_runtime import invoke
 
 
+def _real_dtype(dtype):
+    if dtype in (torch.float16, torch.complex32):
+        return torch.float16
+    return torch.float64 if dtype in (torch.float64, torch.complex128) else torch.float32
+
+
+def _complex_dtype(dtype):
+    return {torch.float16: torch.complex32, torch.float32: torch.complex64,
+            torch.float64: torch.complex128}[_real_dtype(dtype)]
+
+
 def _resize(input, shape):
     if tuple(input.shape) == tuple(shape):
         return input
@@ -30,6 +41,10 @@ class _AxisPlan:
     def __init__(self, length, batches, dtype, kind, stream):
         self.length, self.batches, self.kind, self.stream = length,batches,kind,stream
         self.double = dtype in (torch.float64,torch.complex128)
+        self.half = dtype in (torch.float16,torch.complex32)
+        self.dtype = dtype
+        if self.half and (length <= 0 or length & (length-1)):
+            raise ValueError('cuFFT half transforms require power-of-two lengths')
         self.handle, self.workspace, self.bytes = 0,0,0
         self._create()
 
@@ -37,7 +52,7 @@ class _AxisPlan:
         if self.handle or not self.batches:
             return
         self.handle,self.workspace,self.bytes = invoke(12,[],
-            [self.length,self.batches,int(self.double),self.kind],stream=self.stream)
+            [self.length,self.batches,2 if self.half else int(self.double),self.kind],stream=self.stream)
 
     def execute(self, input, axis):
         self._create()
@@ -55,12 +70,11 @@ class _AxisPlan:
             if self.length%2==0:
                 components[...,-1,1].zero_()
         out_shape = (*packed.shape[:-1], self.length//2+1 if self.kind == 2 else self.length)
-        dtype = (torch.float64 if self.double else torch.float32) if self.kind == 3 else (
-            torch.complex128 if self.double else torch.complex64)
+        dtype = _real_dtype(self.dtype) if self.kind == 3 else _complex_dtype(self.dtype)
         output = torch.empty(out_shape,device=input.device,dtype=dtype)
         if not self.batches:
             return output.permute(inverse)
-        invoke(13,[packed,output],[self.handle,self.kind,int(self.double)],stream=self.stream)
+        invoke(13,[packed,output],[self.handle,self.kind,2 if self.half else int(self.double)],stream=self.stream)
         return output.permute(inverse)
 
     def clear_workspace(self):
@@ -95,8 +109,7 @@ class VendorFFTPlan:
                 batches = math.prod(shape[:axis]+shape[axis+1:])
                 self.steps.append((axis,_AxisPlan(length,batches,dtype,step,self.stream)))
                 shape[axis] = length//2+1 if step == 2 else length
-                dtype = (torch.float64 if dtype in (torch.float64,torch.complex128) else torch.float32) if step == 3 else (
-                    torch.complex128 if dtype in (torch.float64,torch.complex128) else torch.complex64)
+                dtype = _real_dtype(dtype) if step == 3 else _complex_dtype(dtype)
         except BaseException:
             self.close()
             raise
@@ -113,8 +126,8 @@ class VendorFFTPlan:
             value = input.resolve_conj().resolve_neg()
             if self.kind == 4:
                 value = value.conj().resolve_conj()
-            if self.kind in (0,1) and not value.is_complex():
-                value = value.to(torch.complex128 if value.dtype == torch.float64 else torch.complex64)
+            if self.kind in (0,1,3,4) and not value.is_complex():
+                value = value.to(_complex_dtype(value.dtype))
             for axis,plan in self.steps:
                 value = plan.execute(value,axis)
             if self.kind == 5:
@@ -161,7 +174,7 @@ def _complex_transform(input,axes,lengths,inverse):
     shape = list(input.shape)
     for axis,length in zip(axes,lengths):
         shape[axis] = length
-    dtype = torch.complex128 if input.dtype in (torch.float64,torch.complex128) else torch.complex64
+    dtype = _complex_dtype(input.dtype)
     output = torch.empty(shape,device=input.device,dtype=dtype)
     transform(input,1 if inverse else 0,axes,lengths,3,output)
     return output
@@ -189,7 +202,7 @@ def adjoint(grad,kind,axes,lengths,norm,shape,dtype,output):
             result.narrow(last,1,interior).mul_(2)
         if kind == 4:
             result = result.conj().resolve_conj()
-    if dtype in (torch.float32,torch.float64) and result.is_complex():
+    if dtype in (torch.float16,torch.float32,torch.float64) and result.is_complex():
         result = result.real
     result = _resize(result,shape)
     if scale != 1:

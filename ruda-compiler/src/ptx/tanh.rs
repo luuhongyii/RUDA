@@ -12,6 +12,12 @@ impl Emitter {
             return Err(invalid("tanh operand types differ"));
         }
         let ty = Scalar::of(out.ty)?;
+        if ty == Scalar::F64 {
+            let source = self.value(input)?;
+            let destination = self.destination(out)?;
+            self.tanh_f64(&destination, &source);
+            return Ok(());
+        }
         if ty != Scalar::F32 && !ty.half() {
             return Err(unsupported("tanh requires F32, F16 or BF16 storage"));
         }

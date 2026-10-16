@@ -22,6 +22,8 @@ mod plane;
 mod numeric;
 mod fast_math;
 mod math;
+mod binary_math;
+mod double_math;
 mod trigonometry;
 mod exp;
 mod expm1;
@@ -34,6 +36,7 @@ mod hyperbolic;
 mod power;
 mod remainder;
 mod erf;
+mod erf_f64;
 mod vector;
 mod half;
 mod fp8;
@@ -102,7 +105,7 @@ impl fmt::Display for PtxKernel {
 pub struct PtxCompiler;
 
 impl PtxCompiler {
-    pub const CACHE_VERSION: u32 = 42;
+    pub const CACHE_VERSION: u32 = 43;
 }
 
 impl Compiler for PtxCompiler {

@@ -6,7 +6,6 @@ import sys
 from dataclasses import dataclass
 import torch
 from torch import nn
-from . import _C
 
 FORMATS = {'int2': 2, 'int3': 3, 'int4': 4, 'int5': 5, 'int6': 6,
            'int8': 8, 'fp4_e2m1': 14, 'fp8_e4m3': 18, 'fp8_e5m2': 19}
@@ -33,6 +32,7 @@ def _layout(format, group_size, shape):
 def _linear(x: torch.Tensor, codes: torch.Tensor, scales: torch.Tensor,
             offsets: torch.Tensor, group_index: torch.Tensor, layout: list[int],
             transpose: bool) -> torch.Tensor:
+    from . import _C
     width = layout[2] if transpose else layout[3]
     out = torch.empty((x.shape[0], width), device=x.device, dtype=x.dtype)
     _C.packed_dispatch(3 if transpose else 2, [x, codes, scales, offsets, group_index, out], layout)
@@ -64,7 +64,7 @@ def _tensor_core_linear(x: torch.Tensor, codes: torch.Tensor, scales: torch.Tens
                         offsets: torch.Tensor, group_index: torch.Tensor, layout: list[int],
                         transpose: bool) -> torch.Tensor:
     import ctypes
-    from . import _native
+    from . import _C, _native
     if x.dtype not in (torch.float16, torch.bfloat16):
         raise ValueError('packed Tensor Core Linear requires FP16/BF16 activations')
     if not hasattr(_native, 'ruda_torch_packed_matmul_api_version') or getattr(_C, 'packed_matmul_api_version', None) != 1:
@@ -95,6 +95,7 @@ _tensor_core_linear.register_autograd(_tensor_core_backward, setup_context=_line
 @torch.library.custom_op('ruda::packed_decode', mutates_args=())
 def _decode(codes: torch.Tensor, scales: torch.Tensor, offsets: torch.Tensor,
             group_index: torch.Tensor, layout: list[int], dtype: torch.dtype) -> torch.Tensor:
+    from . import _C
     out = torch.empty((layout[3], layout[2]), device=codes.device, dtype=dtype)
     _C.packed_dispatch(1, [codes, codes, scales, offsets, group_index, out], layout)
     return out
@@ -108,6 +109,7 @@ def _decode_fake(codes, scales, offsets, group_index, layout, dtype):
 @torch.library.custom_op('ruda::packed_encode', mutates_args=())
 def _encode(x: torch.Tensor, scales: torch.Tensor, offsets: torch.Tensor,
             layout: list[int]) -> torch.Tensor:
+    from . import _C
     bits = 4 if layout[0] == 14 else 8 if layout[0] >= 18 else layout[0]
     out = torch.empty((layout[3], (layout[2] * bits + 7) // 8), device=x.device, dtype=torch.uint8)
     index = torch.empty(0, device=x.device, dtype=torch.int32)
@@ -125,6 +127,7 @@ def _encode_fake(x, scales, offsets, layout):
 def _embedding(index: torch.Tensor, codes: torch.Tensor, scales: torch.Tensor,
                offsets: torch.Tensor, group_index: torch.Tensor, layout: list[int],
                dtype: torch.dtype) -> torch.Tensor:
+    from . import _C
     out = torch.empty((index.numel(),layout[2]),device=index.device,dtype=dtype)
     _C.packed_dispatch(4,[index,codes,scales,offsets,group_index,out],layout)
     return out
@@ -355,23 +358,25 @@ def scaled_float8_mm(a, b, scale_a, scale_b, *, out_dtype=torch.float16, bias=No
 
 
 def _aten_scaled_mm(a,b,scale_a,scale_b,bias=None,scale_result=None,out_dtype=None,use_fast_accum=False):
-    dtype = a.dtype if out_dtype is None else out_dtype
-    if dtype not in _FLOATS:
-        raise NotImplementedError('RUDA _scaled_mm currently requires explicit FP16/BF16/FP32 output')
-    if scale_result is not None:
-        raise ValueError('scale_result applies to FP8 output, not a floating accumulation output')
-    # FP32 accumulation is used for either precision preference.
-    return scaled_float8_mm(a,b,scale_a,scale_b,out_dtype=dtype,bias=bias)
+    from ._scaled_mm import scaled_mm
+    return scaled_mm(a,b,scale_a,scale_b,bias,scale_result,out_dtype,use_fast_accum)
 
 
 def _aten_scaled_mm_out(a,b,scale_a,scale_b,bias=None,scale_result=None,out_dtype=None,use_fast_accum=False,*,out):
-    result = _aten_scaled_mm(a,b,scale_a,scale_b,bias,scale_result,out.dtype if out_dtype is None else out_dtype,use_fast_accum)
-    if out.dtype != result.dtype or out.device != result.device:
-        raise ValueError('scaled_mm out dtype/device mismatch')
-    _C.prepare_index_output(out,list(result.shape))
-    return out.copy_(result)
+    from ._scaled_mm import scaled_mm
+    return scaled_mm(a,b,scale_a,scale_b,bias,scale_result,out_dtype,use_fast_accum,out=out)
+
+
+def _aten_scaled_mm_v2(a,b,scale_a,recipe_a,swizzle_a,scale_b,recipe_b,swizzle_b,
+                       bias,out_dtype,contraction_dim=(),use_fast_accum=False,*,out=None):
+    from ._scaled_mm_v2 import scaled_mm_v2
+    return scaled_mm_v2(a,b,scale_a,recipe_a,swizzle_a,scale_b,recipe_b,swizzle_b,
+                        bias,out_dtype,contraction_dim,use_fast_accum,out=out)
 
 
 _aten_quantization = torch.library.Library('aten','IMPL','PrivateUse1')
 _aten_quantization.impl('_scaled_mm',_aten_scaled_mm)
 _aten_quantization.impl('_scaled_mm.out',_aten_scaled_mm_out)
+if hasattr(torch.ops.aten, '_scaled_mm_v2'):
+    _aten_quantization.impl('_scaled_mm_v2',_aten_scaled_mm_v2)
+    _aten_quantization.impl('_scaled_mm_v2.out',_aten_scaled_mm_v2)

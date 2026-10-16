@@ -25,6 +25,12 @@ impl Emitter {
     pub(super) fn trigonometry(&mut self, out: Variable, input: Variable, cosine: bool) -> Result<()> {
         if input.ty != out.ty { return Err(invalid("trigonometric operand types differ")); }
         let ty = Scalar::of(out.ty)?;
+        if ty == Scalar::F64 {
+            let source = self.value(input)?;
+            let destination = self.destination(out)?;
+            self.trigonometry_f64(&destination, &source, cosine);
+            return Ok(());
+        }
         if ty != Scalar::F32 && !ty.half() {
             return Err(unsupported("trigonometry requires F32, F16 or BF16 storage"));
         }

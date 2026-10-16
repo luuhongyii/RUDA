@@ -18,11 +18,20 @@ mod operation_transform;
 mod operation_reduce;
 mod operation_scatter;
 mod operation_sort;
+mod ordering;
+mod statistics;
 mod paged;
 mod dense_attention;
 mod varlen_attention;
 mod ring_attention;
 mod scientific;
+mod special;
+mod gamma;
+mod bessel;
+mod elementary;
+mod floating;
+mod activation;
+mod loss;
 mod blas_bridge;
 mod indexed_experts;
 mod linalg_bridge;
@@ -39,11 +48,122 @@ mod quantized;
 mod float8;
 mod float8_shard;
 mod random;
+mod random_extra;
+mod random_base;
+mod random_activation;
+mod rnn_cell;
+mod weight_norm;
+mod foreach_unary;
+mod foreach_copy;
+mod foreach_binary;
+mod foreach_ternary;
+mod foreach_reduce;
+mod vector_norm;
+mod nan_log_reduce;
+mod variance_reduce;
+mod unique_ops;
+mod mask_compact;
+mod scatter_reduce_ops;
+mod embedding_ops;
+mod indexed_data;
+mod indexed_write;
+mod advanced_index;
+mod logical_reduce;
+mod product_reduce;
+mod additive_reduce;
+mod elementwise_extrema;
+mod conditional_select;
+mod predicate_ops;
+mod arithmetic_ops;
+mod division_ops;
+mod power_log;
+mod power_ops;
+mod unary_basic;
+mod exponential_ops;
+mod trigonometric_ops;
+mod inverse_trig;
+mod logarithmic_ops;
+mod kaiser_window;
+mod rank_one;
+mod linear_combination;
+mod blas_accumulate;
+mod dot_ops;
+mod int_matmul;
+mod scaled_matmul;
+mod fp4_matmul;
+mod grouped_matmul;
+mod sparse_coo;
+mod sparse_algebra;
+mod sparse_product;
+mod sparse_reduce;
+mod sparse_softmax;
+mod sparse_compressed;
+mod sparse_blocks;
+mod compressed_matmul;
+mod sampled_matmul;
+mod compressed_spgemm;
+mod compressed_add;
+mod compressed_reduce;
+mod spmm_reduce;
+mod sparse_triangular;
+mod sparse_indexing;
+mod sparse_batched_hybrid;
+mod sparse_solve;
+mod fake_quant_affine;
+mod affine_quantized;
+mod quantized_activation;
+mod quantized_arithmetic;
+mod quantized_extended;
+mod quantized_normalization;
+mod quantized_pooling;
+mod quantized_linear;
+mod quantized_convolution;
+mod quantized_resize;
+mod quantized_selection;
+mod quantized_reduce;
+mod quantized_index;
+mod quantized_assignment;
+mod quantized_embedding;
+mod amp_ops;
+mod fused_optim_ops;
+mod multinomial_ops;
+mod randperm_ops;
+mod poisson_ops;
+mod distribution_ops;
+mod distribution_grad;
 mod training_kernels;
 mod matmul;
 mod pointwise;
 mod softmax;
 mod normalization;
+mod normalization_ops;
+mod pooling_ops;
+mod padding_ops;
+mod resize_ops;
+mod grid_ops;
+mod lanczos_ops;
+mod rearrange_ops;
+mod distance_ops;
+mod embedding_bag_ops;
+mod indexed_ops;
+mod histogram_ops;
+mod selection_ops;
+mod ctc_ops;
+mod margin_ops;
+mod log_scan_ops;
+mod segment_ops;
+mod polynomial_ops;
+mod gamma_extra;
+mod math_extra;
+mod complex_classify;
+mod complex32_ops;
+mod bitwise_ops;
+mod ternary_ops;
+mod membership_ops;
+mod cumulative_ops;
+mod activation_extra;
+mod triangular_indices;
+mod logspace;
 mod primitives;
 mod spatial;
 mod factories;
@@ -88,7 +208,7 @@ pub struct Descriptor {
 struct View { handle: Handle, shape: Vec<usize>, strides: Vec<usize>, len: usize, dtype: u32 }
 
 fn element_bytes(dtype: u32) -> usize {
-    match dtype { 0 | 5 => 4, 1 | 2 | 6 => 2, 3 | 7 | 8 | 12 | 13 => 1, 4 | 9 | 10 => 8, 11 => 16, _ => panic!("unsupported RUDA dtype") }
+    match dtype { 0 | 5 | 14 => 4, 1 | 2 | 6 => 2, 3 | 7 | 8 | 12 | 13 | 15 | 16 => 1, 4 | 9 | 10 => 8, 11 => 16, _ => panic!("unsupported RUDA dtype") }
 }
 
 impl View {
@@ -207,7 +327,7 @@ pub unsafe extern "C" fn ruda_torch_fill(out: *const Descriptor, bits: u64) -> i
 fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
     if out.len == 0 { return; }
     if op == 0 { convert(a, out); return; }
-    if op != 108 && ((9..=11).contains(&a.dtype) || (9..=11).contains(&b.dtype) || (9..=11).contains(&out.dtype)) {
+    if op != 108 && (matches!(a.dtype,9..=11|14) || matches!(b.dtype,9..=11|14) || matches!(out.dtype,9..=11|14)) {
         if (102..=106).contains(&op) { primitives::launch(op,a,b,out,scalar); }
         else { scientific::launch(op,a,b,out,scalar as f64); }
         finish_dispatch(&client());return;
@@ -421,8 +541,11 @@ fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
 
 fn convert(a: &View, out: &View) {
     assert_eq!(a.shape, out.shape);
+    if a.dtype == 16 || out.dtype == 16 { quantized::copy_fp4(a, out); return; }
     if out.len == 0 { return; }
-    if a.dtype>=12 || out.dtype>=12 { quantized::convert(a,out);return; }
+    if matches!(a.dtype,12|13|15) || matches!(out.dtype,12|13|15) {
+        quantized::convert(a,out);return;
+    }
     if a.dtype >= 9 || out.dtype >= 9 { scientific::convert(a,out);finish_dispatch(&client());return; }
     let client = client();
     let byte_work = a.dtype >= 3 && out.dtype >= 3;

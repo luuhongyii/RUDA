@@ -6100,6 +6100,7 @@ dependencies = [
 name = "ruda-solver"
 version = "0.1.97"
 dependencies = [
+ "half",
  "ruCCL",
  "ruSPARSE",
  "ruda-core",

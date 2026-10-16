@@ -237,9 +237,12 @@ def command(op,tensors,ints=()):
         inverse,info = cholesky_solve(a,_identity(a),flag(0))
         singular = _zero_diagonal_info(a)
         values = inverse,torch.where(info!=0,info,singular)
+    elif op==14:
+        result,_ = _form_q(a,tensors[1],a.shape[-1])
+        values = (result,)
     else:
         raise ValueError(f'unsupported NVIDIA linalg command {op}')
-    begin = {0:1,1:3,2:1,3:2,4:2,5:1,6:2,7:1,8:1,9:1,10:1,11:3,12:1,13:1}[op]
+    begin = {0:1,1:3,2:1,3:2,4:2,5:1,6:2,7:1,8:1,9:1,10:1,11:3,12:1,13:1,14:2}[op]
     targets = tensors[begin:]
     if len(values)!=len(targets):
         raise RuntimeError('NVIDIA linalg output contract mismatch')

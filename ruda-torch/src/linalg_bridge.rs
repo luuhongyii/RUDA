@@ -7,6 +7,14 @@ use ruda_kernel::tensor::{
 };
 use rusolver::tensor as solver;
 type Tensor = RudaTensor<CudaRuntime>;
+#[path = "complex_linalg.rs"]
+mod complex;
+#[path = "ldl_linalg.rs"]
+mod ldl;
+#[path = "general_eig_linalg.rs"]
+mod general_eig;
+#[path = "matrix_exp_linalg.rs"]
+mod matrix_exp;
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_linalg_api_version() -> u32 {
     1
@@ -123,7 +131,10 @@ fn jacobi_options(dtype: DType, scalars: &[f64], ints: &[i64]) -> solver::Device
 /// 0 LU factor; 1 LU reuse solve; 2 Cholesky factor; 3 triangular solve;
 /// 4 Cholesky reuse solve; 5 QR; 6 QR least squares; 7 eigh; 8 SVD;
 /// 9 inverse; 10 determinant; 11 apply stored Q; 12 geqrf; 13 Cholesky inverse;
+/// 14 form a Householder product; 16 LDL factor; 17 LDL reuse solve;
 /// 15 unpack LU factors and inverse permutation;
+/// 18 general complex eigenvalues and right eigenvectors;
+/// 19 matrix exponential;
 /// 255 synchronizes/reads only the small integer info tensor.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ruda_torch_linalg(
@@ -155,6 +166,26 @@ pub unsafe extern "C" fn ruda_torch_linalg(
         if op == 255 {
             assert_eq!(count, 1);
             check_info(&vs[0]);
+            return;
+        }
+        if op == 19 {
+            matrix_exp::dispatch(&vs);
+            finish_dispatch(&client());
+            return;
+        }
+        if op == 18 {
+            general_eig::dispatch(&vs, flag(0, true));
+            finish_dispatch(&client());
+            return;
+        }
+        if matches!(op, 16 | 17) {
+            ldl::dispatch(op, &vs, p);
+            finish_dispatch(&client());
+            return;
+        }
+        if matches!(vs[0].dtype, 10 | 11) {
+            complex::dispatch(op, &vs, p, f);
+            finish_dispatch(&client());
             return;
         }
         let a = matrix(&vs[0]);
@@ -337,6 +368,13 @@ pub unsafe extern "C" fn ruda_torch_linalg(
                 copy_real(&r.solution, &vs[1]);
                 copy_real(&r.info, &vs[2]);
                 LAUNCHES.fetch_add(r.submitted_kernels as u64, Ordering::Relaxed);
+            }
+            14 => {
+                assert_eq!(count, 3);
+                let tau = into_contiguous(real_tensor(&vs[1]));
+                let result = solver::qr_form_q(&a, &tau, n).expect("Householder product");
+                copy_real(&result, &vs[2]);
+                LAUNCHES.fetch_add(u64::from(batch != 0 && n != 0), Ordering::Relaxed);
             }
             15 => {
                 assert_eq!(count, 5);

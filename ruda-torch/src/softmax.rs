@@ -3,6 +3,50 @@ use super::{bf16, f16, client, finish_dispatch, kernels, CudaRuntime, View, LAUN
     WARP_SOFTMAX_CALLS, SCALAR_SOFTMAX_CALLS, Ordering};
 use ruda_kernel::dsl::prelude::*;
 
+#[ruda]
+fn wide_offset(tensor:&Tensor<f64>,row:usize,#[comptime] axis:usize)->usize {
+    let mut remaining=row;let mut offset=0usize;let mut d=tensor.rank();
+    while d>0 {d-=1;if d!=axis {offset+=(remaining%tensor.shape(d))*tensor.stride(d);remaining/=tensor.shape(d);}}
+    offset
+}
+
+#[ruda(launch)]
+fn wide_softmax(a:&Tensor<f64>,b:&Tensor<f64>,out:&mut Tensor<f64>,#[comptime] axis:usize,#[comptime] backward:bool,#[comptime] logarithmic:bool) {
+    let row=RUDA_POS_X as usize;let lane=UNIT_POS as usize;let width=a.shape(axis);
+    let ab=wide_offset(a,row,axis);let bb=wide_offset(b,row,axis);let ob=wide_offset(out,row,axis);
+    let mut shared=SharedMemory::<f64>::new(256usize);let mut maximum=f64::cast_from(f64::NEG_INFINITY);
+    if comptime!(!backward) {
+        let mut i=lane;
+        while i<width {let x=a[ab+i*a.stride(axis)];if x>maximum || x!=x {maximum=x;}i+=256;}
+        shared[lane]=maximum;sync_ruda();let mut stride=128usize;
+        while stride>0 {if lane<stride {let other=shared[lane+stride];if other>shared[lane] || other!=other {shared[lane]=other;}}sync_ruda();stride/=2;}
+        maximum=shared[0];sync_ruda();
+    }
+    let mut sum=0.0f64;let mut i=lane;
+    while i<width {
+        let x=a[ab+i*a.stride(axis)];
+        if comptime!(backward) {if comptime!(logarithmic) {sum+=x;}else {sum+=x*b[bb+i*b.stride(axis)];}}
+        else {sum+=(x-maximum).exp();}i+=256;
+    }
+    shared[lane]=sum;sync_ruda();let mut stride=128usize;
+    while stride>0 {if lane<stride {shared[lane]=shared[lane]+shared[lane+stride];}sync_ruda();stride/=2;}
+    let total=shared[0];let mut i=lane;
+    while i<width {
+        let x=a[ab+i*a.stride(axis)];let mut y=0.0f64;
+        if comptime!(backward) {let value=b[bb+i*b.stride(axis)];if comptime!(logarithmic) {y=x-value.exp()*total;}else {y=value*(x-total);}}
+        else {let shifted=x-maximum;if comptime!(logarithmic) {y=shifted-total.ln();}else {y=shifted.exp()/total;}}
+        out[ob+i*out.stride(axis)]=y;i+=256;
+    }
+}
+
+pub(super) fn wide_launch(op:u32,a:&View,b:&View,out:&View,axis:usize) {
+    assert!(axis<a.shape.len());assert_eq!(a.dtype,9);assert_eq!(b.dtype,9);assert_eq!(out.dtype,9);
+    assert_eq!(a.shape,b.shape);assert_eq!(a.shape,out.shape);if out.len==0 {return;}
+    let c=client();let rows=out.len/a.shape[axis];
+    unsafe {wide_softmax::launch::<CudaRuntime>(&c,RudaCount::Static(u32::try_from(rows).expect("softmax grid overflow"),1,1),RudaDim::new_1d(256),a.arg(),b.arg(),out.arg(),axis,op>=307,op==306 || op==308);}
+    LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);
+}
+
 fn use_warp(width: usize) -> bool {
     match std::env::var("RUDA_TORCH_SOFTMAX") {
         Ok(value) => match value.as_str() {

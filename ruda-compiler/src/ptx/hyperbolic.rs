@@ -13,6 +13,12 @@ impl Emitter {
             return Err(invalid("hyperbolic operand types differ"));
         }
         let ty = Scalar::of(out.ty)?;
+        if ty == Scalar::F64 {
+            let source = self.value(input)?;
+            let destination = self.destination(out)?;
+            self.hyperbolic_f64(&destination, &source, cosine);
+            return Ok(());
+        }
         if ty != Scalar::F32 && !ty.half() {
             return Err(unsupported("sinh/cosh requires F32, F16 or BF16 storage"));
         }

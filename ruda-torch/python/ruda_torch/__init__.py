@@ -61,6 +61,22 @@ if hasattr(_native,'ruda_torch_sorting_api_version') and hasattr(_C,'initialize_
     _C.initialize_sorting(ctypes.cast(_native.ruda_torch_sorting,ctypes.c_void_p).value)
     _sorting_available=True
 
+_ordering_available = False
+if hasattr(_native, 'ruda_torch_ordering_api_version') and hasattr(_C, 'initialize_ordering'):
+    _native.ruda_torch_ordering_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_ordering_api_version() != 1 or getattr(_C, 'ordering_api_version', 0) != 1:
+        raise RuntimeError('RUDA ordering API mismatch; rebuild Rust and C++ extensions')
+    _C.initialize_ordering(ctypes.cast(_native.ruda_torch_ordering, ctypes.c_void_p).value)
+    _ordering_available = True
+
+_statistics_available = False
+if hasattr(_native, 'ruda_torch_statistics_api_version') and hasattr(_C, 'initialize_statistics'):
+    _native.ruda_torch_statistics_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_statistics_api_version() != 1 or getattr(_C, 'statistics_api_version', 0) != 1:
+        raise RuntimeError('RUDA statistics API mismatch; rebuild Rust and C++ extensions')
+    _C.initialize_statistics(ctypes.cast(_native.ruda_torch_statistics, ctypes.c_void_p).value)
+    _statistics_available = True
+
 _factory_available = False
 if hasattr(_native, "ruda_torch_factory_api_version") and hasattr(_C, "initialize_factories"):
     _native.ruda_torch_factory_api_version.restype = ctypes.c_uint32
@@ -193,6 +209,8 @@ if _linalg_available:
     linalg.install(_ops._registry)
 from .random import register_random_ops
 register_random_ops()
+from ._random_extra import register as _register_random_extra
+_register_random_extra(_ops._registry)
 
 from ._streams import Stream, Event, stream, current_stream, default_stream, record_stream, get_stream_priority_range
 from ._paged import PagedAttentionPlan
@@ -385,6 +403,20 @@ if hasattr(_native, 'ruda_torch_packed_api_version') and hasattr(_C, 'initialize
         raise RuntimeError('RUDA packed quantization API mismatch; rebuild both native libraries')
     _C.initialize_packed(ctypes.cast(_native.ruda_torch_packed, ctypes.c_void_p).value)
     _packed_available = True
+_mxfp8_available = False
+if hasattr(_native, 'ruda_torch_mxfp8_api_version') and hasattr(_C, 'initialize_mxfp8'):
+    _native.ruda_torch_mxfp8_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_mxfp8_api_version() != 1 or getattr(_C, 'mxfp8_api_version', None) != 1:
+        raise RuntimeError('RUDA MXFP8 API mismatch; rebuild both native libraries')
+    _C.initialize_mxfp8(1)
+    _mxfp8_available = True
+_fp4_available = False
+if hasattr(_native, 'ruda_torch_fp4_api_version') and hasattr(_C, 'initialize_fp4'):
+    _native.ruda_torch_fp4_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_fp4_api_version() != 1 or getattr(_C, 'fp4_api_version', None) != 1:
+        raise RuntimeError('RUDA FP4 API mismatch; rebuild both native libraries')
+    _C.initialize_fp4(1)
+    _fp4_available = True
 _packed_indexed_groups_available = False
 if hasattr(_native, 'ruda_torch_packed_indexed_groups_api_version'):
     _native.ruda_torch_packed_indexed_groups_api_version.restype = ctypes.c_uint32

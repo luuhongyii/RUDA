@@ -8,6 +8,51 @@ _types = {torch.float32: 0, torch.float64: 1, torch.float16: 2,
           torch.bfloat16: 14, torch.complex64: 4, torch.complex128: 5}
 
 
+def dot(a, b, *, conjugate=False):
+    if (a.dtype not in _types or a.dtype != b.dtype or a.device != b.device
+            or a.ndim != 1 or b.ndim != 1 or a.shape != b.shape):
+        raise ValueError('cuBLAS dot requires matching vector operands')
+    out = torch.empty((), dtype=a.dtype, device=a.device)
+    if a.numel() == 0:
+        return out.zero_()
+    n = integer(a.numel())
+    incx = integer(a.stride(0)) if n != 1 else 1
+    incy = integer(b.stride(0)) if n != 1 else 1
+    invoke(15, [a, b, out], [n, incx, incy, _types[a.dtype], int(conjugate and a.is_complex())])
+    return out
+
+
+def int_mm(a, b):
+    if a.dtype != torch.int8 or b.dtype != torch.int8 or a.device != b.device or a.ndim != 2 or b.ndim != 2:
+        raise ValueError('cuBLASLt integer GEMM requires matching int8 matrices')
+    m, k, n = a.shape[0], a.shape[1], b.shape[1]
+    if b.shape[0] != k:
+        raise ValueError('cuBLASLt integer GEMM contraction dimensions differ')
+    result = torch.empty((m, n), dtype=torch.int32, device=a.device)
+    invoke(16, [a.contiguous(), b.contiguous(), result], [integer(m), integer(n), integer(k)])
+    return result
+
+
+def scaled_mm(a, b, scale_a, scale_b, bias, dtype, mode_a, mode_b, fast, *, alpha=None):
+    types = {**_types, torch.float8_e4m3fn: 28, torch.float8_e5m2: 29, torch.float4_e2m1fn_x2: 33}
+    m, k, n = a.shape[0], a.shape[1], b.shape[1]
+    if a.dtype == torch.float4_e2m1fn_x2:
+        k *= 2
+    left, right = a.contiguous(), column(b)
+    scale_a = column(scale_a) if mode_a in (2, 4, 5) else scale_a.contiguous()
+    scale_b = column(scale_b) if mode_b in (3, 4, 5) else scale_b.contiguous()
+    result = torch.empty((m, n), dtype=dtype, device=a.device)
+    tensors = [left, right, scale_a, scale_b, result]
+    if bias is not None:
+        tensors.append(bias)
+    if alpha is not None:
+        tensors.extend((alpha.reshape(1).contiguous(), torch.zeros(1, dtype=torch.float32, device=a.device)))
+    bias_type = types[bias.dtype] if bias is not None else 2 if dtype in (torch.float8_e4m3fn, torch.float8_e5m2) else types[dtype]
+    invoke(17, tensors, [integer(m), integer(n), integer(k), types[a.dtype], types[b.dtype], types[dtype],
+                         bias_type, mode_a, mode_b, int(fast), int(bias is not None), int(alpha is not None)])
+    return result
+
+
 def gemm(a, b, c=None, *, alpha=1, beta=0, ta=False, tb=False, ca=False, cb=False,
          math=0, strategy=0, out_dtype=None):
     if strategy != 0:

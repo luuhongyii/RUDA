@@ -2,11 +2,17 @@
 use super::*;
 
 #[ruda]
-fn philox_word(counter_low: u32, counter_high: u32, seed_low: u32, seed_high: u32, lane: u32) -> u32 {
+pub(super) fn philox_word(counter_low: u32, counter_high: u32, seed_low: u32, seed_high: u32, lane: u32) -> u32 {
+    philox_word_full(counter_low, counter_high, 0u32, 0u32, seed_low, seed_high, lane)
+}
+
+#[ruda]
+pub(super) fn philox_word_full(counter_low: u32, counter_high: u32, sequence_low: u32,
+    sequence_high: u32, seed_low: u32, seed_high: u32, lane: u32) -> u32 {
     let mut a = counter_low;
     let mut b = counter_high;
-    let mut c = 0u32;
-    let mut d = 0u32;
+    let mut c = sequence_low;
+    let mut d = sequence_high;
     let mut key_a = seed_low;
     let mut key_b = seed_high;
     for _round in 0..10 {

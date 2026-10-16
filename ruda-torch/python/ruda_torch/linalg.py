@@ -26,9 +26,12 @@ def available():
     return _available
 
 
-def _matrix(a, *, square=False):
-    if a.device.type != torch._C._get_privateuse1_backend_name() or a.dtype not in (torch.float32, torch.float64):
-        raise RuntimeError('RUDA linalg requires real float32/float64 tensors on the RUDA device')
+def _matrix(a, *, square=False, complex_ok=False, low_precision=False):
+    dtypes = (torch.float32, torch.float64) + ((torch.complex64, torch.complex128) if complex_ok else ())
+    if low_precision:
+        dtypes += (torch.float16, torch.bfloat16) + ((torch.complex32,) if complex_ok else ())
+    if a.device.type != torch._C._get_privateuse1_backend_name() or a.dtype not in dtypes:
+        raise RuntimeError(f'RUDA linalg requires {dtypes} tensors on the RUDA device')
     if a.ndim < 2 or square and a.shape[-2] != a.shape[-1]:
         raise RuntimeError('linalg requires a matrix' + (' with square final dimensions' if square else ''))
     return a
@@ -83,7 +86,7 @@ def _rhs(a, b, *, left=True, vector=False):
 
 
 def lu_factor_ex(A, *, pivot=True, check_errors=False):
-    _matrix(A)
+    _matrix(A, complex_ok=True)
     LU = _empty(A, A.shape)
     pivots = _empty(A, A.shape[:-2] + (min(A.shape[-2:]),), torch.int32)
     info = _info(A)
@@ -102,18 +105,18 @@ def _pivots(LU, pivots, batch):
 
 
 def lu_solve(LU, pivots, B, *, left=True, adjoint=False):
-    _matrix(LU, square=True)
+    _matrix(LU, square=True, complex_ok=True)
     a, b, batch, _ = _rhs(LU, B, left=left)
     p = _pivots(LU, pivots, batch)
-    rhs = b if left else b.transpose(-2, -1)
+    rhs = b if left else b.mH
     x = _empty(B, rhs.shape)
     info = _info(LU, batch)
     _call(1, [a, p, rhs, x, info], [int(bool(adjoint) != (not left))])
-    return x if left else x.transpose(-2, -1)
+    return x if left else x.mH
 
 
 def solve_ex(A, B, *, left=True, check_errors=False):
-    _matrix(A, square=True)
+    _matrix(A, square=True, complex_ok=True)
     a, b, batch, vector = _rhs(A, B, left=left, vector=True)
     LU, pivots, info = lu_factor_ex(A)
     if check_errors:
@@ -125,7 +128,7 @@ def solve_ex(A, B, *, left=True, check_errors=False):
 
 
 def cholesky_ex(self, *, upper=False, check_errors=False):
-    _matrix(self, square=True)
+    _matrix(self, square=True, complex_ok=True)
     factor, info = _empty(self, self.shape), _info(self)
     _call(2, [self, factor, info], [int(upper)])
     if check_errors:
@@ -134,7 +137,7 @@ def cholesky_ex(self, *, upper=False, check_errors=False):
 
 
 def cholesky_solve(self, input2, upper=False):
-    _matrix(input2, square=True)
+    _matrix(input2, square=True, complex_ok=True)
     a, b, batch, _ = _rhs(input2, self)
     x, info = _empty(self, b.shape), _info(input2, batch)
     _call(4, [a, b, x, info], [int(upper)])
@@ -142,7 +145,7 @@ def cholesky_solve(self, input2, upper=False):
 
 
 def cholesky_inverse(self, upper=False):
-    _matrix(self, square=True)
+    _matrix(self, square=True, complex_ok=True)
     inverse, info = _empty(self, self.shape), _info(self)
     _call(13, [self, inverse, info], [int(upper)])
     _check_errors(info, 'cholesky_inverse')
@@ -150,7 +153,7 @@ def cholesky_inverse(self, upper=False):
 
 
 def solve_triangular(self, B, *, upper, left=True, unitriangular=False):
-    _matrix(self, square=True)
+    _matrix(self, square=True, complex_ok=True)
     a, b, batch, _ = _rhs(self, B, left=left)
     rhs = b if left else b.transpose(-2, -1)
     x, info = _empty(B, rhs.shape), _info(self, batch)
@@ -159,7 +162,7 @@ def solve_triangular(self, B, *, upper, left=True, unitriangular=False):
 
 
 def triangular_solve(self, A, upper=True, transpose=False, unitriangular=False):
-    _matrix(A, square=True)
+    _matrix(A, square=True, complex_ok=True)
     a, b, batch, _ = _rhs(A, self)
     x, info = _empty(self, b.shape), _info(A, batch)
     _call(3, [a, b, x, info], [int(upper), int(transpose), int(unitriangular)])
@@ -167,7 +170,7 @@ def triangular_solve(self, A, upper=True, transpose=False, unitriangular=False):
 
 
 def qr(A, mode='reduced'):
-    _matrix(A)
+    _matrix(A, complex_ok=True)
     if mode not in ('reduced', 'complete', 'r'):
         raise RuntimeError("qr mode must be 'reduced', 'complete', or 'r'")
     batch, m, n = A.shape[:-2], A.shape[-2], A.shape[-1]
@@ -180,7 +183,7 @@ def qr(A, mode='reduced'):
 
 
 def geqrf(self):
-    _matrix(self)
+    _matrix(self, complex_ok=True)
     packed = _empty(self, self.shape)
     tau = _empty(self, self.shape[:-2] + (min(self.shape[-2:]),))
     info = _info(self)
@@ -189,28 +192,92 @@ def geqrf(self):
 
 
 def ormqr(self, input2, input3, left=True, transpose=False):
-    _matrix(self)
+    _matrix(self, complex_ok=True)
     _matching(self, input2)
     _matching(self, input3)
-    if input2.ndim < 1 or input2.shape[-1] > min(self.shape[-2:]):
-        raise RuntimeError('ormqr tau must contain at most min(m,n) reflectors')
-    if input3.ndim < 2 or input3.shape[-2 if left else -1] != self.shape[-2]:
+    if input2.ndim != self.ndim - 1 or input2.shape[-1] != min(self.shape[-2:]):
+        raise RuntimeError('ormqr tau must have input.ndim - 1 dimensions and min(m,n) reflectors')
+    if input3.ndim != self.ndim or input3.shape[-2 if left else -1] != self.shape[-2]:
         raise RuntimeError('ormqr matrix dimensions do not match the order of Q')
-    batch = torch.broadcast_shapes(self.shape[:-2], input2.shape[:-1], input3.shape[:-2])
-    a = self.expand(batch + self.shape[-2:])
-    tau = input2.expand(batch + (input2.shape[-1],))
-    b = input3.expand(batch + input3.shape[-2:])
-    rhs = b if left else b.transpose(-2, -1)
+    if self.shape[:-2] != input2.shape[:-1] or self.shape[:-2] != input3.shape[:-2]:
+        raise RuntimeError('ormqr batch dimensions must match exactly')
+    rhs = input3 if left else input3.mH
     x = _empty(self, rhs.shape)
-    _call(11, [a, tau, rhs, x], [int(bool(transpose) != (not left))])
-    return x if left else x.transpose(-2, -1)
+    _call(11, [self, input2, rhs, x], [int(bool(transpose) != (not left))])
+    return x if left else x.mH
+
+
+def householder_product(input, tau):
+    _matrix(input, complex_ok=True)
+    _matching(input, tau)
+    m, n = input.shape[-2:]
+    if m < n or tau.ndim != input.ndim - 1 or tau.shape[-1] > n:
+        raise RuntimeError('linalg.householder_product requires m >= n >= k and input.ndim == tau.ndim + 1')
+    if input.shape[:-2] != tau.shape[:-1]:
+        raise RuntimeError('linalg.householder_product batch dimensions must match exactly')
+    result = _empty(input, input.shape)
+    _call(14, [input, tau, result])
+    return result
+
+
+def ldl_factor_ex(self, *, hermitian=False, check_errors=False):
+    _matrix(self, square=True, complex_ok=True)
+    LD = _empty(self, self.shape)
+    pivots, info = _empty(self, self.shape[:-1], torch.int32), _info(self)
+    _call(16, [self, LD, pivots, info], [int(hermitian)])
+    if check_errors:
+        _check_errors(info, 'linalg.ldl_factor_ex')
+    return LD, pivots, info
+
+
+def ldl_solve(LD, pivots, B, *, hermitian=False):
+    _matrix(LD, square=True, complex_ok=True)
+    if pivots.device != LD.device or tuple(pivots.shape) != tuple(LD.shape[:-1]):
+        raise RuntimeError('linalg.ldl_solve pivots must match LD.shape[:-1] and device')
+    if pivots.dtype not in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64, torch.uint16, torch.uint32, torch.uint64):
+        raise RuntimeError('linalg.ldl_solve requires integer pivots, excluding bool')
+    a, b, batch, _ = _rhs(LD, B)
+    p = pivots.to(dtype=torch.int32).expand(batch + (LD.shape[-1],))
+    result, info = _empty(B, b.shape), _info(LD, batch)
+    _call(17, [a, p, b, result, info], [int(hermitian)])
+    return result
+
+
+def matrix_exp(self):
+    _matrix(self, square=True, complex_ok=True, low_precision=True)
+    if self.shape[-1] == 0:
+        return self.clone()
+    if self.shape[-1] == 1:
+        return self.exp()
+    result = _empty(self, self.shape)
+    _call(19, [self, result])
+    return result
+
+
+def _eig(self, compute_v):
+    _matrix(self, square=True, complex_ok=True)
+    dtype = torch.complex128 if self.dtype in (torch.float64, torch.complex128) else torch.complex64
+    values = _empty(self, self.shape[:-1], dtype)
+    vectors = _empty(self, self.shape if compute_v else (0,), dtype)
+    info = _info(self)
+    _call(18, [self, values, vectors, info], [int(compute_v)])
+    _check_errors(info, 'linalg.eig' if compute_v else 'linalg.eigvals')
+    return values, vectors
+
+
+def eig(self):
+    return _eig(self, True)
+
+
+def eigvals(self):
+    return _eig(self, False)[0]
 
 
 def eigh(A, UPLO='L', compute_v=True):
-    _matrix(A, square=True)
+    _matrix(A, square=True, complex_ok=True)
     if UPLO not in ('L', 'U', 'l', 'u'):
         raise RuntimeError("eigh UPLO must be 'L' or 'U'")
-    values = _empty(A, A.shape[:-1])
+    values = _empty(A, A.shape[:-1], A.real.dtype)
     vectors = _empty(A, A.shape if compute_v else (0,))
     info = _info(A)
     _call(7, [A, values, vectors, info], [int(UPLO.upper() == 'U'), int(compute_v)])
@@ -219,7 +286,7 @@ def eigh(A, UPLO='L', compute_v=True):
 
 
 def svd(A, full_matrices=False, compute_uv=True, *, driver=None):
-    _matrix(A)
+    _matrix(A, complex_ok=True)
     if _nvidia() and driver not in (None,'gesvdj','gesvd'):
         raise RuntimeError('NVIDIA SVD supports only gesvdj and gesvd')
     if not _nvidia() and driver is not None:
@@ -227,7 +294,7 @@ def svd(A, full_matrices=False, compute_uv=True, *, driver=None):
     batch, m, n = A.shape[:-2], A.shape[-2], A.shape[-1]
     k = min(m, n)
     U = _empty(A, batch + (m, m if full_matrices else k) if compute_uv else (0,))
-    S = _empty(A, batch + (k,))
+    S = _empty(A, batch + (k,), A.real.dtype)
     Vh = _empty(A, batch + (n if full_matrices else k, n) if compute_uv else (0,))
     info = _info(A)
     options = [int(full_matrices),int(compute_uv)]
@@ -239,7 +306,7 @@ def svd(A, full_matrices=False, compute_uv=True, *, driver=None):
 
 
 def inv_ex(A, *, check_errors=False):
-    _matrix(A, square=True)
+    _matrix(A, square=True, complex_ok=True)
     inverse, LU, pivots, info = _empty(A, A.shape), _empty(A, A.shape), _empty(A, A.shape[:-1], torch.int32), _info(A)
     _call(9, [A, inverse, LU, pivots, info])
     if check_errors:
@@ -248,9 +315,10 @@ def inv_ex(A, *, check_errors=False):
 
 
 def _determinants(A):
-    _matrix(A, square=True)
+    _matrix(A, square=True, complex_ok=True)
     LU, pivots = _empty(A, A.shape), _empty(A, A.shape[:-1], torch.int32)
-    det, sign, logabs = (_empty(A, A.shape[:-2]) for _ in range(3))
+    det, sign = (_empty(A, A.shape[:-2]) for _ in range(2))
+    logabs = _empty(A, A.shape[:-2], A.real.dtype)
     _call(10, [A, LU, pivots, det, sign, logabs])
     return det, sign, logabs, LU, pivots
 
@@ -266,7 +334,7 @@ def slogdet(A):
 
 
 def lstsq(self, b, rcond=None, *, driver=None):
-    _matrix(self)
+    _matrix(self, complex_ok=True)
     if not 0 <= self.ndim - b.ndim <= 1:
         raise RuntimeError('linalg.lstsq requires input.ndim >= b.ndim and input.ndim - b.ndim <= 1')
     if isinstance(driver, str):
@@ -276,15 +344,15 @@ def lstsq(self, b, rcond=None, *, driver=None):
     a, rhs, batch, vector = _rhs(self, b, vector=True)
     m, n, nrhs = self.shape[-2], self.shape[-1], rhs.shape[-1]
     solution = _empty(self, batch + (n, nrhs))
-    residuals = _empty(self, batch + (nrhs,) if m > n else (0,))
+    residuals = _empty(self, batch + (nrhs,) if m > n else (0,), self.real.dtype)
     info = _info(self, batch)
     _call(6, [a, rhs, solution, residuals, info])
     _check_errors(info, 'linalg.lstsq')
-    return (solution.squeeze(-1) if vector else solution), residuals, _empty(self, (0,), torch.int64), _empty(self, (0,))
+    return (solution.squeeze(-1) if vector else solution), residuals, _empty(self, (0,), torch.int64), _empty(self, (0,), self.real.dtype)
 
 
 def lu_unpack(LU_data, LU_pivots, unpack_data=True, unpack_pivots=True):
-    _matrix(LU_data)
+    _matrix(LU_data, complex_ok=True)
     batch, m, n = LU_data.shape[:-2], LU_data.shape[-2], LU_data.shape[-1]
     k = min(m, n)
     pivots = _pivots(LU_data, LU_pivots, batch)
@@ -336,6 +404,11 @@ def install(registry=None):
         'linalg_qr': (qr, 'out', ('Q', 'R')),
         'geqrf': (geqrf, 'a', ('a', 'tau')),
         'ormqr': (ormqr, 'out', ('out',)),
+        'linalg_householder_product': (householder_product, 'out', ('out',)),
+        'linalg_ldl_factor_ex': (ldl_factor_ex, 'out', ('LD', 'pivots', 'info')),
+        'linalg_ldl_solve': (ldl_solve, 'out', ('out',)),
+        'linalg_eig': (eig, 'out', ('eigenvalues', 'eigenvectors')),
+        'linalg_matrix_exp': (matrix_exp, 'out', ('out',)),
         '_linalg_eigh': (eigh, 'eigenvalues', ('eigenvalues', 'eigenvectors')),
         '_linalg_svd': (svd, 'U', ('U', 'S', 'Vh')),
         'linalg_inv_ex': (inv_ex, 'inverse', ('inverse', 'info')),
@@ -348,5 +421,7 @@ def install(registry=None):
         registry.impl(name, function)
         registry.impl(name + '.' + overload, _out(function, names))
     registry.impl('_linalg_check_errors', _check_errors)
+    registry.impl('_linalg_eigvals', eigvals)
+    registry.impl('linalg_eigvals.out', _out(eigvals, ('out',)))
     _installed = True
     return True

@@ -1,5 +1,6 @@
 import math
 import numbers
+from functools import partial
 import torch
 from torch._prims_common import suggest_memory_format
 from . import _C
@@ -10,7 +11,10 @@ _dtypes = (torch.float32, torch.float16, torch.bfloat16, torch.float64)
 _numeric_dtypes = _dtypes + (torch.complex64, torch.complex128)
 _wide_dtypes = (torch.float64, torch.complex64, torch.complex128)
 _integral_dtypes = (torch.bool, torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8)
-_storage_dtypes = _numeric_dtypes + _integral_dtypes + (torch.float8_e4m3fn, torch.float8_e5m2)
+_storage_dtypes = _numeric_dtypes + _integral_dtypes + (torch.float8_e4m3fn, torch.float8_e5m2, torch.complex32)
+
+def _has_complex32(*values):
+    return any(isinstance(value, torch.Tensor) and value.dtype == torch.complex32 for value in values)
 
 def _out(shape, tensor):
     return torch.empty(shape, device=tensor.device, dtype=tensor.dtype)
@@ -23,7 +27,7 @@ def _apply(op, a, b=None, *, out=None, scalar=0.0):
         out = _out(a.shape, a)
     if out.shape != a.shape:
         raise RuntimeError("RUDA output shape mismatch")
-    if a.dtype in _wide_dtypes or b.dtype in _wide_dtypes or out.dtype in _wide_dtypes:
+    if a.dtype in _wide_dtypes or b.dtype in _wide_dtypes or out.dtype in _wide_dtypes or _has_complex32(a, b, out):
         from ._scientific import execute
         execute(op, a, b, out, scalar)
     else:
@@ -43,6 +47,11 @@ def fill_(tensor, value):
     return tensor
 
 def _binary(op, a, b, *, scalar=0.0, inplace=False):
+    if _has_complex32(a, b):
+        from ._complex32_ops import binary
+        if op == 50:
+            return binary(b, a, op=1, alpha=scalar, out=a if inplace else None)
+        return binary(a, b, op={1: 0, 2: 2, 8: 3}[op], alpha=scalar if op == 1 else 1, inplace=inplace)
     if op in (1, 2) and (a.dtype not in _numeric_dtypes or isinstance(b, torch.Tensor) and b.dtype not in _numeric_dtypes):
         return _integral_arithmetic(op, a, b, alpha=scalar if op == 1 else 1, inplace=inplace)
     if a.dtype not in _numeric_dtypes:
@@ -75,25 +84,40 @@ def _binary(op, a, b, *, scalar=0.0, inplace=False):
     return result
 
 
-def add(a, b, *, alpha=1):
-    return _binary(1, a, b, scalar=alpha)
+def add(a, b, alpha=1):
+    from ._arithmetic import arithmetic
+    return arithmetic(a, b, op=0, alpha=alpha)
 
-def add_(a, b, *, alpha=1):
-    return _binary(1, a, b, inplace=True, scalar=alpha)
+def add_(a, b, alpha=1):
+    from ._arithmetic import arithmetic
+    return arithmetic(a, b, op=0, alpha=alpha, inplace=True)
 
 def mul(a, b):
-    return _binary(2, a, b)
+    from ._arithmetic import arithmetic
+    return arithmetic(a, b, op=2)
 
 def mul_(a, b):
-    return _binary(2, a, b, inplace=True)
+    from ._arithmetic import arithmetic
+    return arithmetic(a, b, op=2, inplace=True)
 
 
 def mul_out(a, b, *, out):
-    if a.device.type == 'cpu' and a.ndim == 0:
-        a, b = b, a.item()
-    elif isinstance(b, torch.Tensor) and b.device.type == 'cpu' and b.ndim == 0:
-        b = b.item()
-    return _math_out(mul(a, b), out)
+    from ._arithmetic import arithmetic
+    return arithmetic(a, b, op=2, out=out)
+
+def _basic_binary_out(a, b, alpha=1, *, op, rounding_mode=None, out):
+    if op <= 2:
+        if not isinstance(b, torch.Tensor) and out.dtype != torch.result_type(a, b):
+            raise RuntimeError('Scalar_out requires the functional result dtype')
+        from ._arithmetic import arithmetic
+        return arithmetic(a, b, op=op, alpha=alpha, out=out)
+    from ._division import divide
+    return divide(a, b, rounding_mode=rounding_mode, out=out)
+
+
+def _neg_out(a, *, out):
+    from ._arithmetic import arithmetic
+    return arithmetic(a, op=3, out=out)
 
 def _division_op(rounding_mode):
     if rounding_mode is None:
@@ -106,23 +130,13 @@ def _division_op(rounding_mode):
     raise RuntimeError("rounding_mode must be None, 'trunc' or 'floor'")
 
 
-def div(a, b, *, rounding_mode=None):
-    if rounding_mode is None and (a.dtype in _wide_dtypes or isinstance(b, torch.Tensor) and b.dtype in _wide_dtypes or isinstance(b, complex)):
-        return _binary(8, a, b)
-    if rounding_mode in ('floor', 'trunc'):
-        return _typed_division(a, b, rounding_mode=rounding_mode)
-    if rounding_mode is None and (a.dtype not in _dtypes or isinstance(b, torch.Tensor) and b.dtype not in _dtypes):
-        return _true_division(a, b)
-    return _binary(_division_op(rounding_mode), a, b)
+def div(a, b, *, rounding_mode=None, out=None):
+    from ._division import divide
+    return divide(a, b, rounding_mode=rounding_mode, out=out)
 
 def div_(a, b, *, rounding_mode=None):
-    if rounding_mode is None and (a.dtype in _wide_dtypes or isinstance(b, torch.Tensor) and b.dtype in _wide_dtypes or isinstance(b, complex)):
-        return _binary(8, a, b, inplace=True)
-    if rounding_mode in ('floor', 'trunc'):
-        return _typed_division(a, b, rounding_mode=rounding_mode, inplace=True)
-    if rounding_mode is None and (a.dtype not in _dtypes or isinstance(b, torch.Tensor) and b.dtype not in _dtypes):
-        return _true_division(a, b, inplace=True)
-    return _binary(_division_op(rounding_mode), a, b, inplace=True)
+    from ._division import divide
+    return divide(a, b, rounding_mode=rounding_mode, inplace=True)
 
 def mm(a, b):
     _scalar(b, a)
@@ -178,72 +192,47 @@ def _dimension(dim, rank):
         raise IndexError("dimension out of range")
     return dim % rank if rank else 0
 
-def softmax(a, dim, half_to_float=False, *, logarithmic=False):
+def softmax(a, dim, half_to_float=False, *, logarithmic=False, out=None):
+    if a.dtype not in _dtypes:
+        raise RuntimeError('softmax requires real floating input')
     if half_to_float:
         if a.dtype != torch.float16:
             raise RuntimeError("half_to_float requires float16 input")
     dim = _dimension(dim, a.ndim)
-    out = torch.empty(a.shape, device=a.device, dtype=torch.float32 if half_to_float else a.dtype)
-    _C.execute(33 if logarithmic else 31, a, a, out, float(dim))
-    return out
+    x = a.resolve_neg().reshape((1,)) if a.ndim == 0 else a.resolve_neg()
+    value = torch.empty(x.shape, device=a.device, dtype=torch.float32 if half_to_float else a.dtype)
+    if a.dtype == torch.float64:
+        _C.scientific_call(306 if logarithmic else 305, [x, x, value], [dim], [])
+    else:
+        _C.execute(33 if logarithmic else 31, x, x, value, float(dim))
+    from ._ordering import _output
+    return _output(value.reshape(a.shape), out, (a,))
 
-def softmax_backward(grad, output, dim, input_dtype, *, logarithmic=False):
+def softmax_backward(grad, output, dim, input_dtype, *, logarithmic=False, out=None):
     if input_dtype not in _dtypes or grad.shape != output.shape:
         raise RuntimeError("RUDA softmax backward requires supported dtypes and matching shapes")
     dim = _dimension(dim, output.ndim)
-    out = torch.empty(output.shape, device=output.device, dtype=input_dtype)
-    _C.execute(34 if logarithmic else 32, grad, output, out, float(dim))
-    return out
+    if grad.dtype != output.dtype or grad.device != output.device:
+        raise RuntimeError('softmax gradient and output must share dtype and device')
+    if (input_dtype == torch.float64) != (output.dtype == torch.float64):
+        raise RuntimeError('float64 softmax backward requires float64 output and input')
+    shape = output.shape or (1,)
+    g, y = grad.resolve_neg().reshape(shape), output.resolve_neg().reshape(shape)
+    value = torch.empty(shape, device=output.device, dtype=input_dtype)
+    if input_dtype == torch.float64:
+        _C.scientific_call(308 if logarithmic else 307, [g, y, value], [dim], [])
+    else:
+        _C.execute(34 if logarithmic else 32, g, y, value, float(dim))
+    from ._ordering import _output
+    return _output(value.reshape(output.shape), out, (grad, output))
 
 def sum_dim(a, dim=None, keepdim=False, *, dtype=None):
-    if a.dtype in _wide_dtypes or dtype in _wide_dtypes:
-        from ._scientific import reduce
-        return reduce(a,dim,keepdim,dtype=dtype)
-    if a.dtype not in _dtypes or dtype is not None and dtype not in _dtypes:
-        return _primitive_reduce(99, a, dim, keepdim, dtype=dtype)
-    if dtype is not None:
-        if dtype not in _dtypes:
-            raise NotImplementedError("RUDA sum supports float32, float16 and bfloat16")
-        a = a.to(dtype)
-    rank = a.ndim
-    if dim is None or len(dim) == 0:
-        dimensions = tuple(range(rank))
-    else:
-        if any(d < -max(rank, 1) or d >= max(rank, 1) for d in dim):
-            raise IndexError("sum dimension out of range")
-        dimensions = tuple(d % rank if rank else 0 for d in dim)
-        if len(set(dimensions)) != len(dimensions):
-            raise RuntimeError("duplicate sum dimension")
-    shape = tuple(1 if i in dimensions else d for i, d in enumerate(a.shape))
-    out = _out(shape, a)
-    _C.execute(6, a, a, out, 0.0)
-    return out if keepdim else out.view(tuple(d for i, d in enumerate(a.shape) if i not in dimensions))
+    from ._additive_reduce import sum_reduce
+    return sum_reduce(a, dim, keepdim, dtype=dtype)
 
 def mean_dim(a, dim=None, keepdim=False, *, dtype=None):
-    if a.dtype in _wide_dtypes or dtype in _wide_dtypes:
-        from ._scientific import reduce
-        return reduce(a,dim,keepdim,dtype=dtype,mean=True)
-    if getattr(_C, "storage_mean_api", 0) != 1:
-        raise RuntimeError("RUDA storage-mean API requires the v25 native library; rebuild both sides")
-    if dtype is not None:
-        if dtype not in _dtypes:
-            raise NotImplementedError("RUDA mean supports float32, float16 and bfloat16")
-        a = a.to(dtype)
-    if a.dtype not in _dtypes:
-        raise RuntimeError("RUDA mean requires a floating input or floating dtype")
-    rank = a.ndim
-    if dim is None or len(dim) == 0:
-        dimensions = tuple(range(rank))
-    else:
-        dimensions = tuple(_dimension(d, rank) for d in dim)
-        if len(set(dimensions)) != len(dimensions):
-            raise RuntimeError("duplicate mean dimension")
-    shape = tuple(1 if i in dimensions else d for i, d in enumerate(a.shape))
-    out = _out(shape, a)
-    # Divide the FP32 accumulator BEFORE narrowing the result. Storing a half
-    # sum first can overflow even when the true mean is representable.
-    _C.execute(107, a, a, out, 0.0)
-    return out if keepdim else out.view(tuple(d for i, d in enumerate(a.shape) if i not in dimensions))
+    from ._additive_reduce import mean_reduce
+    return mean_reduce(a, dim, keepdim, dtype=dtype)
 
 def _norm_axes(a, normalized_shape, weight, bias):
     normalized_shape = tuple(normalized_shape)
@@ -341,34 +330,9 @@ def layer_norm_backward(grad, a, normalized_shape, mean, rstd, weight, bias, out
         db = sum_dim(grad, leading) if leading else clone(grad)
     return dx, dw, db
 
-def pow_scalar(a, exponent):
-    if a.dtype in _wide_dtypes:
-        if isinstance(exponent, int) and not isinstance(exponent, bool):
-            return _apply(96, a, _typed_value(exponent, torch.int64, a.device))
-        return _apply(121,a,_typed_value(exponent,a.dtype,a.device))
-    if exponent == 3:
-        if a.dtype != torch.float32:
-            return pow_scalar(a.float(), exponent).to(a.dtype)
-        return mul(mul(a, a), a)
-    if exponent == 2:
-        return mul(a, a)
-    if exponent == 1:
-        return clone(a)
-    if exponent == 0:
-        return fill_(_out(a.shape, a), 1)
-    if isinstance(exponent, int) and not isinstance(exponent, bool) and a.dtype in _dtypes:
-        indices = _typed_value(exponent, torch.int64, a.device).expand(a.shape)
-        return _apply(96, a, indices)
-    if a.dtype not in _dtypes or not isinstance(exponent, numbers.Real):
-        raise RuntimeError('RUDA real power requires a supported floating base and real exponent')
-    if exponent == 0.5:
-        return _apply(11, a)
-    if exponent == -0.5:
-        return _apply(12, a)
-    if exponent == -1:
-        return _apply(27, a)
-    _require_math()
-    return _apply(121, a, _typed_value(exponent, a.dtype, a.device))
+def pow_scalar(a, exponent, *, out=None):
+    from ._power import power
+    return power(a, exponent, out=out)
 
 
 def _require_math():
@@ -377,27 +341,14 @@ def _require_math():
         raise RuntimeError('this operation requires the RUDA native math extension; rebuild the native library')
 
 
-def pow_tensor(a, exponent):
-    if not isinstance(exponent, torch.Tensor) or exponent.device != a.device:
-        raise RuntimeError('RUDA tensor power requires an exponent tensor on the base device')
-    dtype = torch.result_type(a, exponent)
-    if dtype not in _numeric_dtypes:
-        raise RuntimeError('RUDA tensor power requires a supported floating result dtype')
-    base = a.to(dtype)
-    if exponent.dtype in (torch.int64, torch.int32, torch.int16, torch.int8):
-        return _apply(96, base, exponent)
-    _require_math()
-    return _apply(121, base, exponent.to(dtype))
+def pow_tensor(a, exponent, *, out=None):
+    from ._power import power
+    return power(a, exponent, out=out)
 
 
-def pow_scalar_base(base, exponent):
-    if not isinstance(base, numbers.Number):
-        raise RuntimeError('RUDA scalar-base power requires a numeric scalar')
-    dtype = torch.result_type(exponent, base)
-    if dtype not in _numeric_dtypes:
-        raise RuntimeError('RUDA scalar-base power requires a supported floating result dtype')
-    tensor = _typed_value(base, dtype, exponent.device)
-    return pow_tensor(tensor, exponent)
+def pow_scalar_base(base, exponent, *, out=None):
+    from ._power import power
+    return power(base, exponent, out=out)
 
 
 def _math_out(result, out):
@@ -409,26 +360,18 @@ def _math_out(result, out):
 
 
 def _power_inplace(a, exponent):
-    _C.check_inplace(a, exponent if isinstance(exponent, torch.Tensor) else a)
-    result = pow_tensor(a, exponent) if isinstance(exponent, torch.Tensor) else pow_scalar(a, exponent)
-    return _primitive_result(result, a, True)
+    from ._power import power
+    return power(a, exponent, inplace=True)
 
 
-def _floating_modulus(a, b, *, floor, inplace=False):
-    _require_math()
-    if inplace:
-        _C.check_inplace(a, b if isinstance(b, torch.Tensor) else a)
-    left, right, dtype = _primitive_operands(a, b)
-    if dtype == torch.bool:
-        raise RuntimeError('RUDA modulus is not defined for a bool result')
-    op = (124 if floor else 123) if dtype in _dtypes else (127 if floor else 128)
-    result = _apply(op, left, right)
-    return _primitive_result(result, a, inplace)
+def _floating_modulus(a, b, *, floor, inplace=False, out=None):
+    from ._division import modulus
+    return modulus(a, b, floor=floor, inplace=inplace, out=out)
 
 
-def _scalar_modulus(a, b, *, floor):
-    dtype = torch.result_type(b, a)
-    return _floating_modulus(_typed_value(a, dtype, b.device), b, floor=floor)
+def _scalar_modulus(a, b, *, floor, out=None):
+    from ._division import modulus
+    return modulus(a, b, floor=floor, out=out)
 
 
 def _typed_division(a, b, *, rounding_mode, inplace=False):
@@ -437,7 +380,7 @@ def _typed_division(a, b, *, rounding_mode, inplace=False):
     if rounding_mode == 'floor':
         _require_math()
     left, right, dtype = _primitive_operands(a, b)
-    if dtype == torch.bool or dtype in (torch.complex64, torch.complex128):
+    if dtype == torch.bool or dtype in (torch.complex32, torch.complex64, torch.complex128):
         raise RuntimeError('RUDA rounded division is not defined for bool or complex results')
     if dtype in _dtypes:
         op = 122 if rounding_mode == 'floor' else 57
@@ -461,16 +404,12 @@ def _true_division(a, b, *, inplace=False):
         raise RuntimeError('RUDA in-place true division cannot change shape or cast the floating result to the input dtype')
     return _primitive_result(_apply(8, left, right), a, inplace)
 
-def activation_backward(grad, output, *, tanh=False):
-    if output.dtype == torch.float32:
-        return _apply(18 if tanh else 16, grad, output)
-    one = fill_(_out((), output), 1)
-    if tanh:
-        return mul(grad, add(one, mul(output, output), alpha=-1))
-    return mul(mul(grad, add(one, output, alpha=-1)), output)
+def activation_backward(grad, output, *, tanh=False, grad_input=None):
+    from ._exponential import backward
+    return backward(grad, output, tanh=tanh, grad_input=grad_input)
 
 def clone(a, *, memory_format=torch.preserve_format):
-    if a.is_conj() or a.is_neg():
+    if (a.is_conj() or a.is_neg()) and not torch._is_zerotensor(a):
         return _C.scientific_resolve(a)
     out = torch.empty_like(a, memory_format=memory_format)
     return out.copy_(a)
@@ -498,46 +437,29 @@ def log_sigmoid_backward(grad, a, buffer):
     return _apply(48, grad, a)
 
 
-def _ternary(op, a, b, c, *, value=1, inplace=False, dtype=None):
-    for tensor in (a, b, c):
-        if tensor.device != a.device or tensor.dtype not in _numeric_dtypes:
-            raise RuntimeError("RUDA ternary inputs must use supported floating dtypes on the same device")
-    if dtype is None:
-        dtype = torch.promote_types(torch.promote_types(a.dtype, b.dtype), c.dtype)
-    shape = torch.broadcast_shapes(a.shape, b.shape, c.shape)
-    if inplace and a.shape != shape:
-        raise RuntimeError("RUDA in-place output cannot change shape through broadcasting")
-    if inplace:
-        if not torch.can_cast(dtype, a.dtype):
-            raise RuntimeError('in-place ternary operation cannot cast the result dtype')
-        result = a
-    else:
-        result = torch.empty(shape, device=a.device, dtype=dtype)
-        result.copy_(a)
-    _apply(op, b.expand(shape), c.expand(shape), out=result, scalar=value)
-    return result
-
-
 def addcmul(a, tensor1, tensor2, *, value=1):
-    return _ternary(28, a, tensor1, tensor2, value=value)
+    from ._ternary_ops import addc
+    return addc(a, tensor1, tensor2, value=value)
 
 
 def addcmul_(a, tensor1, tensor2, *, value=1):
-    return _ternary(28, a, tensor1, tensor2, value=value, inplace=True)
+    from ._ternary_ops import addc
+    return addc(a, tensor1, tensor2, value=value, inplace=True)
 
 
 def addcdiv(a, tensor1, tensor2, *, value=1):
-    return _ternary(29, a, tensor1, tensor2, value=value)
+    from ._ternary_ops import addc
+    return addc(a, tensor1, tensor2, value=value, divide=True)
 
 
 def addcdiv_(a, tensor1, tensor2, *, value=1):
-    return _ternary(29, a, tensor1, tensor2, value=value, inplace=True)
+    from ._ternary_ops import addc
+    return addc(a, tensor1, tensor2, value=value, divide=True, inplace=True)
 
 
 def lerp(a, end, weight, *, inplace=False):
-    _scalar(end, a)
-    weight = _scalar(weight, a)
-    return _ternary(49, a, end, weight, inplace=inplace, dtype=a.dtype)
+    from ._ternary_ops import lerp as native_lerp
+    return native_lerp(a, end, weight, inplace=inplace)
 
 
 def cat(tensors, dim=0):
@@ -596,48 +518,45 @@ def stack(tensors, dim=0):
 
 
 def mv(matrix, vector):
-    if matrix.ndim != 2 or vector.ndim != 1 or matrix.shape[1] != vector.shape[0]:
-        raise RuntimeError("mv requires a matrix and a compatible vector")
-    return mm(matrix, vector.unsqueeze(1)).squeeze(1)
+    from ._blas_accumulate import mv as native_mv
+    return native_mv(matrix, vector)
 
 
 def dot(a, b):
-    if a.ndim != 1 or b.ndim != 1 or a.shape != b.shape:
-        raise RuntimeError("dot requires vectors with the same length")
-    return mm(a.unsqueeze(0), b.unsqueeze(1)).view(())
+    from ._dot import dot as native_dot
+    return native_dot(a, b)
 
 
 def vdot(a, b):
-    return dot(a.conj() if a.is_complex() else a, b)
+    from ._dot import dot as native_dot
+    return native_dot(a, b, conjugate=True)
 
 
-def absolute(a, *, inplace=False):
-    if a.is_complex():
-        if inplace:
-            raise RuntimeError('in-place abs is not supported for complex tensors')
-        from ._scientific import absolute as complex_absolute
-        return complex_absolute(a)
-    return _apply(21, a, out=a if inplace else None)
+def _basic_unary(a, *, op, inplace=False, out=None):
+    from ._unary_basic import unary
+    return unary(a, op=op, inplace=inplace, out=out)
 
 
-def sgn(a, *, inplace=False):
-    if a.is_complex():
-        from ._scientific import sign
-        return sign(a, out=a if inplace else None)
-    return _apply(22, a, out=a if inplace else None)
+def _exponential_unary(a, *, op, inplace=False, out=None):
+    from ._exponential import unary
+    return unary(a, op=op, inplace=inplace, out=out)
+
+
+def absolute(a, *, inplace=False, out=None):
+    return _basic_unary(a, op=0, inplace=inplace, out=out)
+
+
+def sgn(a, *, inplace=False, out=None):
+    return _basic_unary(a, op=2, inplace=inplace, out=out)
 
 
 def outer(a, b):
-    if a.ndim != 1 or b.ndim != 1:
-        raise RuntimeError("outer requires one-dimensional tensors")
-    if a.device != b.device or a.dtype not in _numeric_dtypes or b.dtype not in _numeric_dtypes:
-        raise RuntimeError("RUDA outer requires supported floating tensors on the same device")
-    dtype = torch.promote_types(a.dtype, b.dtype)
-    return mul(a.to(dtype).unsqueeze(1), b.to(dtype).unsqueeze(0))
+    return torch.ops.aten.outer.default(a, b)
 
 
 def rsub(a, b, alpha=1):
-    return _binary(50, a, b, scalar=alpha)
+    from ._arithmetic import arithmetic
+    return arithmetic(b, a, op=1, alpha=alpha)
 
 
 def constant_pad_nd(a, pad, value=0):
@@ -675,49 +594,19 @@ def constant_pad_nd(a, pad, value=0):
     return result
 
 
-def _matrix_bias(result, bias, beta, alpha):
-    if alpha != 1:
-        mul_(result, alpha)
-    if beta != 0:
-        add_(result, bias, alpha=beta)
-    return result
-
-
 def addmv(bias, matrix, vector, *, beta=1, alpha=1):
-    _scalar(vector, matrix)
-    _scalar(bias, matrix)
-    if matrix.ndim != 2 or vector.ndim != 1 or matrix.shape[1] != vector.shape[0]:
-        raise RuntimeError("addmv requires a matrix and a compatible vector")
-    shape = (matrix.shape[0],)
-    if torch.broadcast_shapes(bias.shape, shape) != shape:
-        raise RuntimeError("addmv bias cannot broadcast to the output shape")
-    if matrix.dtype != torch.float32:
-        return addmv(bias.float(), matrix.float(), vector.float(), beta=beta, alpha=alpha).to(matrix.dtype)
-    return _matrix_bias(mv(matrix, vector), bias, beta, alpha)
-
-
-def _batch_matrix_bias(bias, a, b, beta, alpha, reduce_batch):
-    _scalar(b, a)
-    _scalar(bias, a)
-    if a.ndim != 3 or b.ndim != 3 or a.shape[0] != b.shape[0] or a.shape[2] != b.shape[1]:
-        raise RuntimeError("batched matrix inputs must have compatible batch and matrix dimensions")
-    shape = (a.shape[1], b.shape[2]) if reduce_batch else (a.shape[0], a.shape[1], b.shape[2])
-    if torch.broadcast_shapes(bias.shape, shape) != shape:
-        raise RuntimeError("batched matrix bias cannot broadcast to the output shape")
-    if a.dtype != torch.float32:
-        return _batch_matrix_bias(bias.float(), a.float(), b.float(), beta, alpha, reduce_batch).to(a.dtype)
-    result = bmm(a, b)
-    if reduce_batch:
-        result = sum_dim(result, (0,))
-    return _matrix_bias(result, bias, beta, alpha)
+    from ._blas_accumulate import addmv as native_addmv
+    return native_addmv(bias, matrix, vector, beta=beta, alpha=alpha)
 
 
 def addbmm(bias, a, b, *, beta=1, alpha=1):
-    return _batch_matrix_bias(bias, a, b, beta, alpha, True)
+    from ._blas_accumulate import batched
+    return batched(bias, a, b, beta=beta, alpha=alpha, reduce_batch=True)
 
 
 def baddbmm(bias, a, b, *, beta=1, alpha=1):
-    return _batch_matrix_bias(bias, a, b, beta, alpha, False)
+    from ._blas_accumulate import batched
+    return batched(bias, a, b, beta=beta, alpha=alpha)
 
 
 def hardtanh(a, min_val=-1, max_val=1, *, inplace=False):
@@ -880,22 +769,13 @@ def _glu_halves(a, dim):
 
 
 def glu(a, dim=-1):
-    left, gate, _ = _glu_halves(a, dim)
-    if left.numel() == 0:
-        return _out(left.shape, a)
-    return _apply(71, left, gate)
+    from ._activation_extra import glu as native_glu
+    return native_glu(a, dim)
 
 
 def glu_backward(grad, a, dim):
-    _scalar(grad, a)
-    left, gate, dim = _glu_halves(a, dim)
-    if grad.shape != left.shape:
-        raise RuntimeError("glu gradient shape must match the forward output")
-    if a.numel() == 0:
-        return _out(a.shape, a)
-    grad_left = _apply(71, grad, gate)
-    grad_gate = _ternary(72, grad, left, gate, dtype=a.dtype)
-    return cat((grad_left, grad_gate), dim)
+    from ._activation_extra import glu_backward as native_glu_backward
+    return native_glu_backward(grad, a, dim)
 
 
 def _adaptive_avg_pool(a, output_size, spatial_dims):
@@ -1002,69 +882,24 @@ def arange(start, end=None, step=1, *, dtype=None, layout=None, device=None,
     return out
 
 
-def _comparison(op, a, b, *, inplace=False):
-    dtype = torch.result_type(a, b)
-    left = _typed_value(a, dtype, a.device)
-    if isinstance(b, int) and dtype not in _dtypes:
-        right = _typed_value(b, torch.int64, a.device).to(dtype)
-    else:
-        right = _typed_value(b, dtype, a.device)
-    left, right = torch.broadcast_tensors(left, right)
-    if inplace and left.shape != a.shape:
-        raise RuntimeError("in-place comparison cannot change the input shape")
-    result = torch.empty(left.shape, dtype=torch.bool, device=a.device)
-    _apply(op, left, right, out=result)
-    if inplace:
-        a.copy_(result)
-        return a
-    return result
+def _comparison(op, a, b, *, inplace=False, out=None):
+    from ._predicates import predicate
+    return predicate(a, b, op=op, inplace=inplace, out=out)
 
 
-def _logical(op, a, b=None, *, inplace=False):
-    if a.dtype not in _storage_dtypes:
-        raise RuntimeError("RUDA logical operations require a supported dtype")
-    if b is None:
-        b = a
-    if b.device != a.device or b.dtype not in _storage_dtypes:
-        raise RuntimeError("RUDA logical operands must use supported dtypes on the same device")
-    left, right = torch.broadcast_tensors(a.to(torch.bool), b.to(torch.bool))
-    if inplace and left.shape != a.shape:
-        raise RuntimeError("in-place logical operation cannot change the input shape")
-    result = torch.empty(left.shape, dtype=torch.bool, device=a.device)
-    _C.execute(op, left, right, result, 0.0)
-    if inplace:
-        a.copy_(result)
-        return a
-    return result
+def _logical(op, a, b=None, *, inplace=False, out=None):
+    from ._predicates import predicate
+    return predicate(a, b, op=op, inplace=inplace, out=out)
 
 
-def where(condition, a, b):
-    if condition.dtype != torch.bool:
-        raise RuntimeError("where requires a boolean condition")
-    dtype = torch.result_type(a, b)
-    left = _typed_value(a, dtype, condition.device)
-    right = _typed_value(b, dtype, condition.device)
-    condition, left, right = torch.broadcast_tensors(condition, left, right)
-    result = torch.empty(left.shape, dtype=dtype, device=condition.device)
-    result.copy_(right)
-    _apply(84, condition, left, out=result)
-    return result
+def where(condition, a, b, *, out=None):
+    from ._conditional_select import where as native_where
+    return native_where(condition, a, b, out=out)
 
 
 def masked_fill(a, mask, value, *, inplace=False):
-    if mask.dtype != torch.bool or mask.device != a.device:
-        raise RuntimeError("masked_fill requires a boolean mask on the input device")
-    if isinstance(value, torch.Tensor) and value.ndim != 0:
-        raise RuntimeError("masked_fill requires a zero-dimensional value tensor")
-    shape = torch.broadcast_shapes(a.shape, mask.shape)
-    if inplace and shape != a.shape:
-        raise RuntimeError("in-place masked_fill cannot change the input shape")
-    replacement = _typed_value(value, a.dtype, a.device)
-    result = where(mask, replacement, a)
-    if inplace:
-        a.copy_(result)
-        return a
-    return result
+    from ._conditional_select import masked_fill as native_masked_fill
+    return native_masked_fill(a, mask, value, inplace=inplace)
 
 
 def _primitive_operands(a, b):
@@ -1111,35 +946,19 @@ def _integral_arithmetic(op, a, b, *, alpha=1, inplace=False):
     return _primitive_result(result, a, inplace)
 
 
-def sub(a, b, *, alpha=1, inplace=False):
-    if a.dtype == torch.bool or isinstance(b, bool) or isinstance(b, torch.Tensor) and b.dtype == torch.bool:
-        raise RuntimeError("Subtraction with a bool operand is not supported")
-    if isinstance(alpha, bool):
-        raise RuntimeError("Boolean alpha only supported for Boolean results")
-    if a.dtype not in _numeric_dtypes or isinstance(b, torch.Tensor) and b.dtype not in _numeric_dtypes:
-        return _integral_arithmetic(94, a, b, alpha=alpha, inplace=inplace)
-    return _binary(1, a, b, scalar=-alpha, inplace=inplace)
+def sub(a, b, alpha=1, *, inplace=False):
+    from ._arithmetic import arithmetic
+    return arithmetic(a, b, op=1, alpha=alpha, inplace=inplace)
 
 
 def neg(a, *, inplace=False):
-    if a.dtype == torch.bool:
-        raise RuntimeError("Negation of a bool tensor is not supported")
-    return _binary(2, a, -1, inplace=inplace)
+    from ._arithmetic import arithmetic
+    return arithmetic(a, op=3, inplace=inplace)
 
 
 def bitwise(op, a, b=None, *, inplace=False):
-    if inplace:
-        _C.check_inplace(a, b if isinstance(b, torch.Tensor) else a)
-    if b is None:
-        left, right, dtype = a, a, a.dtype
-    else:
-        left, right, dtype = _primitive_operands(a, b)
-    if dtype not in _integral_dtypes:
-        raise RuntimeError("RUDA bitwise operations require bool or integral tensors")
-    if inplace and (left.shape != a.shape or not torch.can_cast(dtype, a.dtype)):
-        raise RuntimeError("RUDA in-place result cannot change shape or cast to the input dtype")
-    result = _logical(op - 4, left, right) if dtype == torch.bool else _apply(op, left, right)
-    return _primitive_result(result, a, inplace)
+    from ._bitwise import elementwise
+    return elementwise(a, b, op=op, inplace=inplace)
 
 
 def flip(a, dims):
@@ -1186,35 +1005,25 @@ def _primitive_reduce(op, a, dim=None, keepdim=False, *, dtype=None):
 
 
 def prod(a, dim=None, keepdim=False, *, dtype=None):
-    if a.dtype in _wide_dtypes or dtype in _wide_dtypes:
-        from ._scientific import reduce
-        return reduce(a,dim,keepdim,dtype=dtype,product=True)
-    return _primitive_reduce(98, a, dim, keepdim, dtype=dtype)
+    from ._product_reduce import product_reduce
+    return product_reduce(a, dim, keepdim, dtype=dtype)
 
 
 def _boolean_reduce(a, dim=None, keepdim=False, *, every):
-    result = _primitive_reduce(98 if every else 99, a.to(torch.bool).to(torch.int64), dim, keepdim)
-    return result.to(torch.bool).to(torch.uint8 if a.dtype == torch.uint8 else torch.bool)
+    from ._logical_reduce import boolean_reduce
+    return boolean_reduce(a, dim, keepdim, every=every)
 
 
 def _cumulative(op, a, dim, *, dtype=None):
-    axis = _dimension(dim, a.ndim)
-    dtype = dtype or (a.dtype if a.dtype in _numeric_dtypes else torch.int64)
-    if dtype not in _storage_dtypes or dtype == torch.bool:
-        raise NotImplementedError("RUDA cumulative operations require a supported numeric output dtype")
-    value = a.to(dtype)
-    if dtype in (torch.float16, torch.bfloat16):
-        value = value.float()
-    if a.ndim == 0:
-        return clone(value).to(dtype)
-    return _apply(op, value, scalar=float(axis)).to(dtype)
+    from ._cumulative import cumulative
+    return cumulative(a, dim, dtype=dtype, product=op == 101)
 
 
 for name, function in {
     "fill_.Scalar": fill_, "zero_": lambda a: fill_(a, 0),
     "fill_.Tensor": fill_tensor_, "fill.Scalar": fill, "fill.Tensor": fill,
     "zero": lambda a: fill(a, 0),
-    "where.self": where, "where.ScalarSelf": where, "where.ScalarOther": where, "where.Scalar": where,
+    "where.self": where, "where.self_out": where,
     "masked_fill.Scalar": masked_fill, "masked_fill.Tensor": masked_fill,
     "masked_fill_.Scalar": lambda a, mask, value: masked_fill(a, mask, value, inplace=True),
     "masked_fill_.Tensor": lambda a, mask, value: masked_fill(a, mask, value, inplace=True),
@@ -1222,114 +1031,108 @@ for name, function in {
     "logical_or": lambda a, b: _logical(86, a, b),
     "logical_xor": lambda a, b: _logical(87, a, b),
     "logical_not": lambda a: _logical(88, a),
+    "logical_and.out": lambda a, b, *, out: _logical(85, a, b, out=out),
+    "logical_or.out": lambda a, b, *, out: _logical(86, a, b, out=out),
+    "logical_xor.out": lambda a, b, *, out: _logical(87, a, b, out=out),
+    "logical_not.out": lambda a, *, out: _logical(88, a, out=out),
     "logical_and_": lambda a, b: _logical(85, a, b, inplace=True),
     "logical_or_": lambda a, b: _logical(86, a, b, inplace=True),
     "logical_xor_": lambda a, b: _logical(87, a, b, inplace=True),
     "logical_not_": lambda a: _logical(88, a, inplace=True),
     "add.Tensor": add, "add.Scalar": add, "add_.Tensor": add_, "add_.Scalar": add_,
+    "add.out": partial(_basic_binary_out, op=0), "add.Scalar_out": partial(_basic_binary_out, op=0),
     "mul.Tensor": mul, "mul.Scalar": mul, "mul_.Tensor": mul_, "mul_.Scalar": mul_,
     "mul.out": mul_out,
+    "mul.Scalar_out": partial(_basic_binary_out, op=2),
     "addcmul": addcmul, "addcmul_": addcmul_, "addcdiv": addcdiv, "addcdiv_": addcdiv_,
     "lerp.Scalar": lerp, "lerp.Tensor": lerp,
     "lerp_.Scalar": lambda a, end, weight: lerp(a, end, weight, inplace=True),
     "lerp_.Tensor": lambda a, end, weight: lerp(a, end, weight, inplace=True),
     "div.Tensor": div, "div.Scalar": div, "div.Tensor_mode": div, "div.Scalar_mode": div,
     "div_.Tensor": div_, "div_.Scalar": div_, "div_.Tensor_mode": div_, "div_.Scalar_mode": div_,
+    "div.out": partial(_basic_binary_out, op=3), "div.Scalar_out": partial(_basic_binary_out, op=3),
+    "div.out_mode": partial(_basic_binary_out, op=3), "div.Scalar_mode_out": partial(_basic_binary_out, op=3),
     "sub.Tensor": sub, "sub.Scalar": sub,
     "sub_.Tensor": lambda a, b, alpha=1: sub(a, b, alpha=alpha, inplace=True),
     "sub_.Scalar": lambda a, b, alpha=1: sub(a, b, alpha=alpha, inplace=True),
+    "sub.out": partial(_basic_binary_out, op=1), "sub.Scalar_out": partial(_basic_binary_out, op=1),
     "rsub.Tensor": rsub, "rsub.Scalar": rsub,
     "neg": neg,
     "neg_": lambda a: neg(a, inplace=True),
+    "neg.out": _neg_out,
     "mm": mm, "addmm": addmm, "bmm": bmm,
     "mv": mv, "dot": dot, "outer": outer, "cat": cat, "stack": stack,
     "cat.out": lambda tensors, dim=0, *, out: _math_out(cat(tensors, dim), out),
     "ger": outer, "vdot": vdot,
     "addmv": addmv, "addbmm": addbmm, "baddbmm": baddbmm,
     "constant_pad_nd": constant_pad_nd,
-    "_adaptive_avg_pool2d": adaptive_avg_pool2d, "_adaptive_avg_pool2d_backward": adaptive_avg_pool2d_backward,
-    "_adaptive_avg_pool3d": adaptive_avg_pool3d, "_adaptive_avg_pool3d_backward": adaptive_avg_pool3d_backward,
     "relu": lambda a: _apply(3, a),
     "relu_": lambda a: _apply(3, a, out=a),
-    "threshold_backward": threshold_backward,
     "sum": lambda a, dtype=None: sum_dim(a, dtype=dtype), "sum.dim_IntList": sum_dim,
     "mean": lambda a, dtype=None: mean_dim(a, dtype=dtype), "mean.dim": mean_dim,
-    "exp": lambda a: _apply(9, a), "log": lambda a: _apply(10, a),
-    "exp_": lambda a: _apply(9, a, out=a), "log_": lambda a: _apply(10, a, out=a),
-    "sqrt": lambda a: _apply(11, a), "rsqrt": lambda a: _apply(12, a),
-    "sqrt_": lambda a: _apply(11, a, out=a), "rsqrt_": lambda a: _apply(12, a, out=a),
-    "sigmoid": lambda a: _apply(13, a), "sigmoid_backward": activation_backward,
-    "sigmoid_": lambda a: _apply(13, a, out=a),
-    "silu": lambda a: _apply(14, a), "silu_": lambda a: _apply(14, a, out=a),
-    "silu_backward": lambda grad, a: _apply(15, grad, a),
-    "tanh": lambda a: _apply(17, a), "tanh_backward": lambda grad, y: activation_backward(grad, y, tanh=True),
-    "tanh_": lambda a: _apply(17, a, out=a),
-    "sin": lambda a: _apply(19, a), "sin_": lambda a: _apply(19, a, out=a),
-    "cos": lambda a: _apply(20, a), "cos_": lambda a: _apply(20, a, out=a),
+    "exp": partial(_exponential_unary, op=0), "log": partial(_exponential_unary, op=1),
+    "exp_": partial(_exponential_unary, op=0, inplace=True), "log_": partial(_exponential_unary, op=1, inplace=True),
+    "exp.out": partial(_exponential_unary, op=0), "log.out": partial(_exponential_unary, op=1),
+    "sqrt": partial(_basic_unary, op=7), "rsqrt": partial(_basic_unary, op=8),
+    "sqrt_": partial(_basic_unary, op=7, inplace=True), "rsqrt_": partial(_basic_unary, op=8, inplace=True),
+    "sqrt.out": partial(_basic_unary, op=7), "rsqrt.out": partial(_basic_unary, op=8),
+    "sigmoid": partial(_exponential_unary, op=3), "sigmoid_backward": activation_backward,
+    "sigmoid_backward.grad_input": activation_backward,
+    "sigmoid_": partial(_exponential_unary, op=3, inplace=True),
+    "sigmoid.out": partial(_exponential_unary, op=3),
+    "tanh_backward": partial(activation_backward, tanh=True),
+    "tanh_backward.grad_input": partial(activation_backward, tanh=True),
     "abs": absolute, "abs_": lambda a: absolute(a, inplace=True),
-    "abs.out": lambda a, *, out: _math_out(absolute(a), out),
-    "sgn.out": lambda a, *, out: _math_out(sgn(a), out),
-    "sign": lambda a: _apply(22, a), "sign_": lambda a: _apply(22, a, out=a),
+    "abs.out": absolute,
+    "sgn.out": sgn,
+    "sign": partial(_basic_unary, op=1), "sign_": partial(_basic_unary, op=1, inplace=True),
+    "sign.out": partial(_basic_unary, op=1),
     "sgn": sgn, "sgn_": lambda a: sgn(a, inplace=True),
-    "floor": lambda a: _apply(23, a), "floor_": lambda a: _apply(23, a, out=a),
-    "ceil": lambda a: _apply(24, a), "ceil_": lambda a: _apply(24, a, out=a),
-    "trunc": lambda a: _apply(25, a), "trunc_": lambda a: _apply(25, a, out=a),
-    "round": lambda a: _apply(26, a), "round_": lambda a: _apply(26, a, out=a),
-    "reciprocal": lambda a: _apply(27, a), "reciprocal_": lambda a: _apply(27, a, out=a),
-    "log1p": lambda a: _apply(35, a), "log1p_": lambda a: _apply(35, a, out=a),
-    "sinh": lambda a: _apply(36, a), "sinh_": lambda a: _apply(36, a, out=a),
-    "cosh": lambda a: _apply(37, a), "cosh_": lambda a: _apply(37, a, out=a),
-    "asinh": lambda a: _apply(38, a), "acosh": lambda a: _apply(39, a), "atanh": lambda a: _apply(40, a),
-    "leaky_relu": leaky_relu, "leaky_relu_": leaky_relu_, "leaky_relu_backward": leaky_relu_backward,
-    "hardsigmoid": lambda a: _apply(43, a), "hardsigmoid_": lambda a: _apply(43, a, out=a),
-    "hardsigmoid_backward": lambda grad, a: _apply(44, grad, a),
-    "hardswish": lambda a: _apply(45, a), "hardswish_": lambda a: _apply(45, a, out=a),
-    "hardswish_backward": lambda grad, a: _apply(46, grad, a),
-    "hardtanh": hardtanh, "hardtanh_": lambda a, min_val=-1, max_val=1: hardtanh(a, min_val, max_val, inplace=True),
-    "hardtanh_backward": hardtanh_backward,
-    "softplus": softplus, "softplus_backward": softplus_backward,
-    "hardshrink": hardshrink, "softshrink": softshrink,
-    "hardshrink_backward": shrink_backward, "softshrink_backward": shrink_backward,
-    "threshold": threshold,
-    "threshold_": lambda a, threshold_value, value: threshold(a, threshold_value, value, inplace=True),
-    "_prelu_kernel": prelu_kernel, "_prelu_kernel_backward": prelu_kernel_backward,
-    "mish": lambda a: _apply(69, a), "mish_": lambda a: _apply(69, a, out=a),
-    "mish_backward": lambda grad, a: _apply(70, grad, a),
+    "floor": partial(_basic_unary, op=3), "floor_": partial(_basic_unary, op=3, inplace=True),
+    "floor.out": partial(_basic_unary, op=3),
+    "ceil": partial(_basic_unary, op=4), "ceil_": partial(_basic_unary, op=4, inplace=True),
+    "ceil.out": partial(_basic_unary, op=4),
+    "trunc": partial(_basic_unary, op=5), "trunc_": partial(_basic_unary, op=5, inplace=True),
+    "trunc.out": partial(_basic_unary, op=5),
+    "round": partial(_basic_unary, op=6), "round_": partial(_basic_unary, op=6, inplace=True),
+    "round.out": partial(_basic_unary, op=6),
+    "reciprocal": partial(_basic_unary, op=9), "reciprocal_": partial(_basic_unary, op=9, inplace=True),
+    "reciprocal.out": partial(_basic_unary, op=9),
+    "log1p": partial(_exponential_unary, op=2), "log1p_": partial(_exponential_unary, op=2, inplace=True),
+    "log1p.out": partial(_exponential_unary, op=2),
     "glu": glu, "glu_backward": glu_backward,
-    "mse_loss": mse_loss, "mse_loss_backward": mse_loss_backward,
-    "smooth_l1_loss": smooth_l1_loss, "smooth_l1_loss_backward": smooth_l1_loss_backward,
-    "huber_loss": huber_loss, "huber_loss_backward": huber_loss_backward,
-    "log_sigmoid_forward": log_sigmoid_forward, "log_sigmoid_backward": log_sigmoid_backward,
     "_softmax": softmax, "_softmax_backward_data": softmax_backward,
-    "_log_softmax": lambda a, dim, half_to_float=False: softmax(a, dim, half_to_float, logarithmic=True),
-    "_log_softmax_backward_data": lambda grad, y, dim, dtype: softmax_backward(grad, y, dim, dtype, logarithmic=True),
-    "native_layer_norm": layer_norm, "native_layer_norm_backward": layer_norm_backward,
-    "rms_norm": rms_norm,
+    "_softmax.out": softmax,
+    "_softmax_backward_data.out": lambda grad, y, dim, dtype, *, grad_input: softmax_backward(grad, y, dim, dtype, out=grad_input),
+    "_log_softmax": lambda a, dim, half_to_float=False, **kw: softmax(a, dim, half_to_float, logarithmic=True, **kw),
+    "_log_softmax.out": lambda a, dim, half_to_float=False, **kw: softmax(a, dim, half_to_float, logarithmic=True, **kw),
+    "_log_softmax_backward_data": lambda grad, y, dim, dtype, **kw: softmax_backward(grad, y, dim, dtype, logarithmic=True, **kw),
+    "_log_softmax_backward_data.out": lambda grad, y, dim, dtype, **kw: softmax_backward(grad, y, dim, dtype, logarithmic=True, **kw),
     "pow.Tensor_Scalar": pow_scalar, "pow.Tensor_Tensor": pow_tensor, "pow.Scalar": pow_scalar_base,
     "pow_.Scalar": _power_inplace, "pow_.Tensor": _power_inplace,
-    "pow.Tensor_Scalar_out": lambda a, exponent, *, out: _math_out(pow_scalar(a, exponent), out),
-    "pow.Tensor_Tensor_out": lambda a, exponent, *, out: _math_out(pow_tensor(a, exponent), out),
-    "pow.Scalar_out": lambda base, exponent, *, out: _math_out(pow_scalar_base(base, exponent), out),
+    "pow.Tensor_Scalar_out": pow_scalar,
+    "pow.Tensor_Tensor_out": pow_tensor,
+    "pow.Scalar_out": pow_scalar_base,
     "floor_divide": lambda a, b: div(a, b, rounding_mode='floor'),
     "floor_divide.Scalar": lambda a, b: div(a, b, rounding_mode='floor'),
     "floor_divide_.Tensor": lambda a, b: div_(a, b, rounding_mode='floor'),
     "floor_divide_.Scalar": lambda a, b: div_(a, b, rounding_mode='floor'),
-    "floor_divide.out": lambda a, b, *, out: _math_out(div(a, b, rounding_mode='floor'), out),
-    "floor_divide.Scalar_out": lambda a, b, *, out: _math_out(div(a, b, rounding_mode='floor'), out),
+    "floor_divide.out": lambda a, b, *, out: div(a, b, rounding_mode='floor', out=out),
+    "floor_divide.Scalar_out": lambda a, b, *, out: div(a, b, rounding_mode='floor', out=out),
     "remainder.Tensor": lambda a, b: _floating_modulus(a, b, floor=True),
     "remainder.Scalar": lambda a, b: _floating_modulus(a, b, floor=True),
     "remainder.Scalar_Tensor": lambda a, b: _scalar_modulus(a, b, floor=True),
     "remainder_.Tensor": lambda a, b: _floating_modulus(a, b, floor=True, inplace=True),
     "remainder_.Scalar": lambda a, b: _floating_modulus(a, b, floor=True, inplace=True),
-    "remainder.Tensor_out": lambda a, b, *, out: _math_out(_floating_modulus(a, b, floor=True), out),
-    "remainder.Scalar_out": lambda a, b, *, out: _math_out(_floating_modulus(a, b, floor=True), out),
-    "remainder.Scalar_Tensor_out": lambda a, b, *, out: _math_out(_scalar_modulus(a, b, floor=True), out),
+    "remainder.Tensor_out": lambda a, b, *, out: _floating_modulus(a, b, floor=True, out=out),
+    "remainder.Scalar_out": lambda a, b, *, out: _floating_modulus(a, b, floor=True, out=out),
+    "remainder.Scalar_Tensor_out": lambda a, b, *, out: _scalar_modulus(a, b, floor=True, out=out),
     "fmod.Tensor": lambda a, b: _floating_modulus(a, b, floor=False),
     "fmod.Scalar": lambda a, b: _floating_modulus(a, b, floor=False),
     "fmod_.Tensor": lambda a, b: _floating_modulus(a, b, floor=False, inplace=True),
     "fmod_.Scalar": lambda a, b: _floating_modulus(a, b, floor=False, inplace=True),
-    "fmod.Tensor_out": lambda a, b, *, out: _math_out(_floating_modulus(a, b, floor=False), out),
-    "fmod.Scalar_out": lambda a, b, *, out: _math_out(_floating_modulus(a, b, floor=False), out),
+    "fmod.Tensor_out": lambda a, b, *, out: _floating_modulus(a, b, floor=False, out=out),
+    "fmod.Scalar_out": lambda a, b, *, out: _floating_modulus(a, b, floor=False, out=out),
     "clone": clone,
     "flip": flip, "prod": prod, "prod.dim_int": prod,
     "all": lambda a: _boolean_reduce(a, every=True),
@@ -1350,6 +1153,7 @@ for name, op in (("eq", 78), ("ne", 79), ("lt", 80), ("le", 81), ("gt", 82), ("g
     for overload in ("Tensor", "Scalar"):
         _registry.impl(f"{name}.{overload}", lambda a, b, op=op: _comparison(op, a, b))
         _registry.impl(f"{name}_.{overload}", lambda a, b, op=op: _comparison(op, a, b, inplace=True))
+        _registry.impl(f"{name}.{overload}_out", lambda a, b, *, out, op=op: _comparison(op, a, b, out=out))
 
 for name, op in (("bitwise_and", 89), ("bitwise_or", 90), ("bitwise_xor", 91)):
     for overload in ("Tensor", "Scalar"):
@@ -1364,6 +1168,10 @@ _registry.impl("arange.out", lambda end, *, out: arange(0, end, out=out))
 _registry.impl("arange.start_out", arange)
 
 from . import _indexing
+from . import _ordering
+from . import _scatter_reduce
+from . import _statistics
 from . import _spatial
-from . import _batch_norm
-from . import _max_pool
+from . import _logical_reduce
+from . import _product_reduce
+from . import _additive_reduce

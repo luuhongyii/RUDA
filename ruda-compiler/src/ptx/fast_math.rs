@@ -10,6 +10,14 @@ impl Emitter {
         }
         let flags = instruction.modes.fp_math_mode;
         match operation {
+            Arithmetic::InverseSqrt(op) if flags.contains(FastMath::ReducedPrecision) => {
+                if op.input.ty != out.ty {
+                    return Err(invalid("fast inverse square root operand types differ"));
+                }
+                let input = self.value(op.input)?;
+                let dst = self.destination(out)?;
+                self.line(format!("rsqrt.approx.f32 {dst}, {input};"));
+            }
             Arithmetic::Div(op) if flags.is_superset(
                 FastMath::AllowReciprocal | FastMath::ReducedPrecision | FastMath::UnsignedZero | FastMath::NotInf,
             ) => {

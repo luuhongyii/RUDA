@@ -7,6 +7,7 @@ impl Emitter {
         if out.ty != op.lhs.ty || out.ty != op.rhs.ty {
             return Err(invalid("floating power operand types differ"));
         }
+        if ty == Scalar::F64 { return self.floating_power_f64(out, op); }
         if ty != Scalar::F32 && !ty.half() {
             return Err(super::unsupported("floating power requires F32, F16 or BF16 storage"));
         }

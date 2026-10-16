@@ -19,7 +19,11 @@ def _plain(spec):
 
 def _tensor_spec(spec, expert_rank, expert_world):
     result = _plain(spec)
-    if result.get('partition') == 'expert':
+    if result.get('partition') == 'expert-owned':
+        result.pop('partition')
+        result['axis'] = result.pop('expert_tensor_axis', None)
+        result['replicated'] = result['axis'] is None
+    elif result.get('partition') == 'expert':
         result['shape'] = list(result['shape'])
         count = result['shape'][0]
         result['shape'][0] = count * (expert_rank + 1) // expert_world - count * expert_rank // expert_world
@@ -70,6 +74,7 @@ def _slice_tensor(value, spec, rank, world):
 
 def join_model_mesh_field(values, spec):
     from .distributed_checkpoint import _equal
+    from ._expert_ownership import owned, owning_ranks
     data, context, experts, tensors = _geometry(spec)
     if len(values) != data * context * experts * tensors:
         raise ValueError('model checkpoint rank count differs from its mesh')
@@ -81,8 +86,14 @@ def join_model_mesh_field(values, spec):
             raise ValueError('replicated model checkpoint fields differ: ' + spec['name'])
         return copies[0]
 
+    selected = list(range(experts))
+    if owned(spec):
+        owners = owning_ranks(spec, len(values))
+        if any(value is not None for rank, value in enumerate(values) if rank not in owners):
+            raise ValueError('an unowned expert checkpoint contains storage')
+        selected = [owners[0] // tensors % experts]
     pieces = []
-    for expert in range(experts):
+    for expert in selected:
         tensor_pieces = []
         for tensor in range(tensors):
             contexts = []
@@ -108,12 +119,15 @@ def join_model_mesh_field(values, spec):
 
 
 def slice_model_mesh_field(value, spec, rank, world):
+    from ._expert_ownership import owned, owning_ranks
     data, context, experts, tensors = _geometry(spec)
     if world != data * context * experts * tensors or not 0 <= rank < world:
         raise ValueError('target checkpoint rank count differs from its mesh')
     tensor = rank % tensors
     expert = rank // tensors % experts
     dp = rank // (context * experts * tensors)
+    if owned(spec) and rank not in owning_ranks(spec, world):
+        raise ValueError('target rank does not own this expert checkpoint field')
     if spec.get('model_extra') is not None:
         return _slice_extra(value, spec, rank, world)
     if spec.get('partition') == 'expert':
@@ -202,6 +216,38 @@ def _extra_field(spec, name):
     return dict(source, model_mesh=spec['model_mesh'])
 
 
+def _extra_schema_contract(spec):
+    from .sharded_mesh import _logical_shape
+    extra = spec['model_extra']
+    canonical, schema = {}, {}
+    for name, index, dtype, trainable in extra['schema']:
+        canonical.setdefault(index, name)
+        field = _extra_field(spec, name)
+        schema[name] = dict(field, dtype=dtype, trainable=trainable,
+                            canonical=canonical[index], shape=list(_logical_shape(field)))
+    buffers = {name: dict(_extra_field(spec, name), shape=list(_logical_shape(_extra_field(spec, name))))
+               for name in extra['buffers'].values()}
+    return schema, buffers
+
+
+def merge_extra_contracts(specs):
+    from ._expert_ownership import merge_layouts
+    first = specs[0]
+    header = {key: value for key, value in first.items() if key != 'model_extra'}
+    if any({key: value for key, value in spec.items() if key != 'model_extra'} != header for spec in specs):
+        raise ValueError('FSDP checkpoint mesh headers differ')
+    contracts = [_extra_schema_contract(spec) for spec in specs]
+    schema = merge_layouts([entry[0] for entry in contracts])
+    buffers = merge_layouts([entry[1] for entry in contracts])
+    fields = merge_layouts([{name: _extra_field(spec, name) for name in spec['model_extra']['fields']}
+                           for spec in specs])
+    modules = first['model_extra']['modules']
+    if any(spec['model_extra']['modules'] != modules for spec in specs):
+        raise ValueError('FSDP module extra-state ownership differs between expert ranks')
+    return dict(first, model_extra_ranked=[spec['model_extra'] for spec in specs],
+                model_extra_contract=dict(schema=schema, buffers=buffers, fields=fields))
+
+
 def _local_extra_schema(spec, rank):
     _, _, experts, tensors = _geometry(spec)
     expert, tensor = rank // tensors % experts, rank % tensors
@@ -216,7 +262,8 @@ def _local_extra_schema(spec, rank):
 def _join_extra(values, spec):
     extra = spec['model_extra']
     for rank, value in enumerate(values):
-        schema, buffers = _local_extra_schema(spec, rank)
+        local = dict(spec, model_extra=spec['model_extra_ranked'][rank]) if 'model_extra_ranked' in spec else spec
+        schema, buffers = _local_extra_schema(local, rank)
         if value['version'] != 1 or value['schema'] != schema or value['buffer_shards'] != buffers:
             raise ValueError('FSDP rank template does not match the model mesh')
         if set(value['module_extra']) != set(extra['modules']):
@@ -225,6 +272,13 @@ def _join_extra(values, spec):
     for path in extra['modules']:
         key = path + '._extra_state' if path else '_extra_state'
         modules[path] = join_model_mesh_field([value['module_extra'][path] for value in values], _extra_field(spec, key))
+    if 'model_extra_contract' in spec:
+        contract = spec['model_extra_contract']
+        schema = {name: {key: value for key, value in field.items()
+                         if key in ('shape', 'dtype', 'trainable', 'canonical')}
+                  for name, field in contract['schema'].items()}
+        buffers = {name: field['shape'] for name, field in contract['buffers'].items()}
+        return dict(version=4, schema=schema, buffers=buffers, module_extra=modules)
     from .sharded_mesh import _logical_shape
     schema = tuple((name, index, _logical_shape(extra['fields'][name]), dtype, trainable)
                    for name, index, dtype, trainable in extra['schema'])
@@ -235,6 +289,22 @@ def _join_extra(values, spec):
 def _slice_extra(value, spec, rank, world):
     from .sharded_mesh import _logical_shape
     extra = spec['model_extra']
+    if value['version'] == 4:
+        schema_contract, buffer_contract = _extra_schema_contract(spec)
+        for name, field in schema_contract.items():
+            expected = {key: item for key, item in field.items() if key in ('shape', 'dtype', 'trainable', 'canonical')}
+            if value['schema'].get(name) != expected:
+                raise ValueError('consolidated independent-expert FSDP parameter differs: ' + name)
+        for name, field in buffer_contract.items():
+            if value['buffers'].get(name) != field['shape']:
+                raise ValueError('consolidated independent-expert FSDP buffer differs: ' + name)
+        schema, local_buffers = _local_extra_schema(spec, rank)
+        if set(value['module_extra']) != set(extra['modules']):
+            raise ValueError('consolidated FSDP module extra-state paths differ')
+        modules = {path: slice_model_mesh_field(value['module_extra'][path],
+                    _extra_field(spec, path + '._extra_state' if path else '_extra_state'), rank, world)
+                   for path in extra['modules']}
+        return dict(version=1, schema=schema, buffer_shards=local_buffers, module_extra=modules)
     expected = tuple((name, index, _logical_shape(extra['fields'][name]), dtype, trainable)
                      for name, index, dtype, trainable in extra['schema'])
     buffers = {key: _logical_shape(extra['fields'][name]) for key, name in extra['buffers'].items()}

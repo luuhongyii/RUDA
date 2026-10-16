@@ -2,7 +2,7 @@ use super::{CudaRuntime, View, primitives::{store, tensor}};
 use ruda_core::tensor::{Shape, spatial::{ConvOptions, ConvTransposeOptions}};
 use ruda_kernel::tensor::{RudaTensor, reshape::reshape};
 use rudnn::convolution::tensor::{conv_forward, conv_data_backward, conv_weight_backward,
-    conv_transpose2d, conv_transpose3d};
+    conv_transpose2d, conv_transpose3d, ConvStrategy, ConvTranspose2dStrategy};
 use ruda_kernel::dsl::prelude::{RudaCount, RudaDim};
 use super::{client, finish_dispatch, kernels, LAUNCHES, Ordering, bf16, f16};
 
@@ -20,15 +20,17 @@ fn convolution<const N: usize>(op: u32, a: &View, b: &View, out: &View, p: &[i64
     let dilation = array::<N>(&p[2 * N..]);
     let options = ConvOptions::new(stride, padding, dilation,
         usize::try_from(p[4 * N]).expect("negative convolution groups"));
+    let strategy = if a.dtype == 9 { ConvStrategy::Direct } else { Default::default() };
     match op {
-        0 => conv_forward::<_, N>(tensor(a), tensor(b), None, options, Default::default())
+        0 => conv_forward::<_, N>(tensor(a), tensor(b), None, options, strategy)
             .expect("RUDA convolution failed"),
-        1 => conv_data_backward::<_, N>(tensor(a), tensor(b), Shape::from(out.shape.clone()), options, Default::default())
+        1 => conv_data_backward::<_, N>(tensor(a), tensor(b), Shape::from(out.shape.clone()), options, strategy)
             .expect("RUDA convolution data gradient failed"),
-        2 => conv_weight_backward::<_, N>(tensor(a), tensor(b), Shape::from(out.shape.clone()), options, Default::default())
+        2 => conv_weight_backward::<_, N>(tensor(a), tensor(b), Shape::from(out.shape.clone()), options, strategy)
             .expect("RUDA convolution weight gradient failed"),
         3 => {
             let output_padding = array::<N>(&p[3 * N..]);
+            let strategy = if a.dtype == 9 { ConvTranspose2dStrategy::Direct } else { Default::default() };
             if N == 3 {
                 conv_transpose3d(tensor(a), tensor(b), None, ConvTransposeOptions::new(
                     array::<3>(p), array::<3>(&p[N..]), array::<3>(&p[3 * N..]),
@@ -36,7 +38,7 @@ fn convolution<const N: usize>(op: u32, a: &View, b: &View, out: &View, p: &[i64
             } else if N == 2 {
                 conv_transpose2d(tensor(a), tensor(b), None, ConvTransposeOptions::new(
                     array::<2>(p), array::<2>(&p[N..]), array::<2>(&p[3 * N..]),
-                    array::<2>(&p[2 * N..]), options.groups), Default::default())
+                    array::<2>(&p[2 * N..]), options.groups), strategy)
                     .expect("RUDA transposed convolution failed")
             } else {
                 let mut a_shape = a.shape.clone();
@@ -46,7 +48,7 @@ fn convolution<const N: usize>(op: u32, a: &View, b: &View, out: &View, p: &[i64
                 let result = conv_transpose2d(reshape(tensor(a), a_shape.into()),
                     reshape(tensor(b), b_shape.into()), None, ConvTransposeOptions::new(
                         [stride[0], 1], [padding[0], 0], [output_padding[0], 0],
-                        [dilation[0], 1], options.groups), Default::default())
+                        [dilation[0], 1], options.groups), strategy)
                     .expect("RUDA transposed convolution failed");
                 reshape(result, out.shape.clone().into())
             }
@@ -56,7 +58,7 @@ fn convolution<const N: usize>(op: u32, a: &View, b: &View, out: &View, p: &[i64
 }
 
 pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, p: &[i64]) {
-    assert!(a.dtype <= 2);
+    assert!(a.dtype <= 2 || (a.dtype == 9 && matches!(op, 0..=3 | 8)));
     assert_eq!(a.dtype, out.dtype);
     if op == 8 {
         assert_eq!(p, &[0]);
@@ -66,11 +68,12 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, p: &[i64]) {
         let client = client();
         let count = u32::try_from(out.len.div_ceil(128)).expect("bias gradient grid overflow");
         macro_rules! launch {
-            ($dtype:ty) => { kernels::transposed_bias_backward::launch::<$dtype, CudaRuntime>(
+            ($dtype:ty, $acc:ty) => { kernels::transposed_bias_backward::launch::<$dtype, $acc, CudaRuntime>(
                 &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128), a.arg(), out.arg()) };
         }
         unsafe { match a.dtype {
-            0 => launch!(f32), 1 => launch!(f16), 2 => launch!(bf16), _ => unreachable!(),
+            0 => launch!(f32, f32), 1 => launch!(f16, f32), 2 => launch!(bf16, f32),
+            9 => launch!(f64, f64), _ => unreachable!(),
         } }
         finish_dispatch(&client);
         LAUNCHES.fetch_add(1, Ordering::Relaxed);

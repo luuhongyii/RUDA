@@ -1078,15 +1078,15 @@ pub fn reduce_sum_storage<F: Float + RudaElement, O: Float + RudaElement>(
 }
 
 #[ruda(launch)]
-pub fn transposed_bias_backward<F: Float + RudaElement>(a: &Tensor<F>, out: &mut Tensor<F>) {
+pub fn transposed_bias_backward<F: Float + RudaElement, A: Float + RudaElement>(a: &Tensor<F>, out: &mut Tensor<F>) {
     let channel = ABSOLUTE_POS as usize;
     if channel < out.len() {
         let mut spatial_size = 1usize;
         for dim in 2..a.rank() { spatial_size *= a.shape(dim); }
-        let mut value = 0.0f32;
+        let mut value = A::new(0.0);
         for batch in 0..a.shape(0) {
             let base = batch * a.stride(0) + channel * a.stride(1);
-            let mut partial = 0.0f32;
+            let mut partial = A::new(0.0);
             for position in 0..spatial_size {
                 let mut remaining = position;
                 let mut source = base;
@@ -1096,7 +1096,7 @@ pub fn transposed_bias_backward<F: Float + RudaElement>(a: &Tensor<F>, out: &mut
                     source += (remaining % a.shape(dim)) * a.stride(dim);
                     remaining /= a.shape(dim);
                 }
-                partial += f32::cast_from(a[source]);
+                partial += A::cast_from(a[source]);
             }
             value += partial;
         }

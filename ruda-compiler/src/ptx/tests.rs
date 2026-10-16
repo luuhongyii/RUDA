@@ -212,13 +212,7 @@ fn unsupported_ir_is_not_sent_to_nvrtc() {
         Err(CompilationError::UnsupportedInstruction { .. })
     ));
     let mut k = kernel("unsupported");
-    let ty = Type::scalar(ElemType::Float(FloatKind::F64));
-    k.body.instructions.push(Instruction::new(
-        Arithmetic::Exp(UnaryOperator {
-            input: Variable::constant(ConstantValue::Float(1.0), ty),
-        }),
-        local(0, ty),
-    ));
+    k.body.instructions.push(Instruction::no_out(Synchronization::SyncAsyncProxyShared));
     assert!(matches!(
         compile(k, ExecutionMode::Checked, UIntKind::U32),
         Err(CompilationError::UnsupportedInstruction { .. })

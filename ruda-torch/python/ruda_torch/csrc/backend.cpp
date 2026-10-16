@@ -2,11 +2,58 @@
 #define NOMINMAX
 #endif
 #include <ATen/EmptyTensor.h>
+#include <ATen/SparseCsrTensorImpl.h>
+#include <ATen/quantized/QTensorImpl.h>
+#include <ATen/native/quantized/AffineQuantizer.h>
+#include <ATen/native/layer_norm.h>
+#include <ATen/native/MaxPooling.h>
+#include <ATen/native/quantized/PackedParams.h>
+#include <ATen/native/quantized/cpu/EmbeddingPackedParams.h>
+#include <ATen/native/ConvUtils.h>
+#include <ATen/native/UpSample.h>
+#include <ATen/native/Padding.h>
+#include <ATen/ops/eq_native.h>
+#include <ATen/ops/ne_native.h>
+#include <ATen/ops/gt_native.h>
+#include <ATen/ops/ge_native.h>
+#include <ATen/ops/lt_native.h>
+#include <ATen/ops/le_native.h>
+#include <ATen/ops/max_native.h>
+#include <ATen/ops/min_native.h>
+#include <ATen/ops/mean.h>
+#include <ATen/ops/std.h>
+#include <torch/custom_class.h>
+#include <ATen/ops/_choose_qparams_per_tensor_native.h>
+#include <ATen/ops/quantize_per_tensor_dynamic_native.h>
+#include <ATen/core/List.h>
+#include <ATen/native/TensorShape.h>
+#include <ATen/ops/prelu.h>
+#include <ATen/ops/softmax.h>
+#include <ATen/ops/quantize_per_tensor_native.h>
+#include <ATen/ops/quantize_per_channel_native.h>
+#include <ATen/ops/dequantize_native.h>
+#include <ATen/ops/_empty_affine_quantized_native.h>
+#include <ATen/ops/_empty_per_channel_affine_quantized_native.h>
+#include <ATen/ops/empty_quantized_native.h>
+#include <ATen/ops/_make_per_tensor_quantized_tensor_native.h>
+#include <ATen/ops/_make_per_channel_quantized_tensor_native.h>
+#include <ATen/ops/int_repr_native.h>
+#include <ATen/ops/q_scale_native.h>
+#include <ATen/ops/q_zero_point_native.h>
+#include <ATen/ops/q_per_channel_scales_native.h>
+#include <ATen/ops/q_per_channel_zero_points_native.h>
+#include <ATen/ops/q_per_channel_axis_native.h>
+#include <ATen/ops/qscheme_native.h>
+#include <ATen/ops/squeeze_native.h>
+#include <ATen/ops/set_native.h>
+#include <ATen/Dispatch.h>
 #include <ATen/ExpandUtils.h>
 #include <ATen/WrapDimUtils.h>
 #include <ATen/ops/empty_strided.h>
 #include <c10/util/Float8_e4m3fn.h>
 #include <c10/util/Float8_e5m2.h>
+#include <c10/util/Float8_e8m0fnu.h>
+#include <c10/util/complex.h>
 #include <ATen/Context.h>
 #include <ATen/autocast_mode.h>
 #include <ATen/MemoryOverlap.h>
@@ -15,7 +62,118 @@
 #include <ATen/CPUGeneratorImpl.h>
 #include <ATen/native/Resize.h>
 #include <ATen/native/RangeUtils.h>
+#include <ATen/native/TensorFactories.h>
+#include <ATen/native/DistributionTemplates.h>
+#include <ATen/native/ForeachUtils.h>
+#if __has_include(<ATen/ops/_foreach_clone_native.h>)
+#include <ATen/ops/_foreach_clone_native.h>
+#endif
+#if __has_include(<ATen/ops/_foreach_powsum_native.h>)
+#include <ATen/ops/_foreach_powsum_native.h>
+#endif
+#if __has_include(<ATen/ops/linalg__powsum_native.h>)
+#include <ATen/ops/linalg__powsum_native.h>
+#endif
+#include <ATen/native/BinaryOps.h>
+#include <ATen/native/UnaryOps.h>
+#include <ATen/native/LinearAlgebra.h>
+#include <ATen/ops/addr_native.h>
+#include <ATen/ops/abs_native.h>
+#include <ATen/ops/angle_native.h>
+#include <ATen/ops/asin_native.h>
+#include <ATen/ops/asinh_native.h>
+#include <ATen/ops/atan_native.h>
+#include <ATen/ops/atanh_native.h>
+#include <ATen/ops/ceil_native.h>
+#include <ATen/ops/deg2rad_native.h>
+#include <ATen/ops/erf_native.h>
+#include <ATen/ops/erfinv_native.h>
+#include <ATen/ops/expm1_native.h>
+#include <ATen/ops/floor_native.h>
+#include <ATen/ops/frac_native.h>
+#include <ATen/ops/isinf_native.h>
+#include <ATen/ops/isnan_native.h>
+#include <ATen/ops/isneginf_native.h>
+#include <ATen/ops/isposinf_native.h>
+#include <ATen/ops/log1p_native.h>
+#include <ATen/ops/nan_to_num_native.h>
+#include <ATen/ops/rad2deg_native.h>
+#include <ATen/ops/round_native.h>
+#include <ATen/ops/sign_native.h>
+#include <ATen/ops/signbit_native.h>
+#include <ATen/ops/sgn_native.h>
+#include <ATen/ops/sin_native.h>
+#include <ATen/ops/sinh_native.h>
+#include <ATen/ops/sqrt_native.h>
+#include <ATen/ops/tan_native.h>
+#include <ATen/ops/tanh_native.h>
+#include <ATen/ops/trunc_native.h>
+#include <ATen/ops/relu_native.h>
+#include <ATen/ops/normal_native.h>
+#include <ATen/ops/threshold_backward_native.h>
+#include <ATen/ops/_conj_physical_native.h>
+#include <ATen/ops/_sparse_coo_tensor_with_dims_native.h>
+#include <ATen/ops/_sparse_coo_tensor_with_dims_and_tensors_native.h>
+#include <ATen/ops/_indices_native.h>
+#include <ATen/ops/_values_native.h>
+#include <ATen/ops/_nnz_native.h>
+#include <ATen/ops/_coalesced_native.h>
+#include <ATen/ops/indices_native.h>
+#include <ATen/ops/values_native.h>
+#include <ATen/ops/crow_indices_native.h>
+#include <ATen/ops/col_indices_native.h>
+#include <ATen/ops/ccol_indices_native.h>
+#include <ATen/ops/row_indices_native.h>
+#include <ATen/ops/resize_native.h>
+#include <ATen/ops/_to_sparse_native.h>
+#include <ATen/ops/_to_sparse_csr_native.h>
+#include <ATen/ops/_to_sparse_csc_native.h>
+#include <ATen/ops/_to_sparse_bsr_native.h>
+#include <ATen/ops/_to_sparse_bsc_native.h>
+#include <ATen/ops/_to_dense_native.h>
+#include <ATen/ops/sparse_dim_native.h>
+#include <ATen/ops/dense_dim_native.h>
+#include <ATen/ops/is_coalesced_native.h>
+#include <ATen/ops/sparse_resize_native.h>
+#include <ATen/ops/sparse_mask_native.h>
+#include <ATen/ops/fill_native.h>
+#include <ATen/ops/sparse_resize_and_clear_native.h>
+#include <ATen/ops/resize_as_sparse_native.h>
+#include <ATen/ops/clone_native.h>
+#include <ATen/ops/empty_native.h>
+#include <ATen/ops/empty_like_native.h>
+#include <ATen/ops/copy_native.h>
+#include <ATen/ops/copy_sparse_to_sparse_native.h>
+#include <ATen/ops/zero_native.h>
+#include <ATen/ops/zeros_native.h>
+#include <ATen/ops/is_pinned_native.h>
+#include <ATen/ops/add_native.h>
+#include <ATen/ops/mul_native.h>
+#include <ATen/ops/sub_native.h>
+#include <ATen/ops/neg_native.h>
+#include <ATen/ops/div_native.h>
+#include <ATen/ops/floor_divide_native.h>
+#include <ATen/ops/pow_native.h>
+#include <ATen/ops/conj_physical_native.h>
+#include <ATen/ops/mv_native.h>
+#include <ATen/ops/permute_native.h>
+#include <ATen/ops/unsqueeze_native.h>
+#include <ATen/ops/_sparse_broadcast_to_native.h>
+#include <ATen/ops/cat_native.h>
+#include <ATen/ops/narrow_copy_native.h>
+#include <ATen/ops/select_native.h>
+#include <ATen/ops/select_copy_native.h>
+#include <ATen/ops/sum_native.h>
+#include <ATen/ops/any_native.h>
+#include <ATen/ops/norm_native.h>
+#include <ATen/ops/native_norm_native.h>
+#include <ATen/native/Math.h>
+#include <ATen/OpMathType.h>
+#include <ATen/TensorIterator.h>
+#include <ATen/native/TypeProperties.h>
+#include <ATen/ScalarOps.h>
 #include <ATen/native/IndexingUtils.h>
+#include <ATen/native/TensorAdvancedIndexingUtils.h>
 #include <ATen/ops/as_strided_native.h>
 #include <ATen/ops/view_native.h>
 #include <ATen/ops/_reshape_alias_native.h>
@@ -91,7 +249,17 @@ void validate(c10::Device device) {
               "RUDA currently exposes only ruda:0");
 }
 bool fp8_storage_available=false;
+bool mxfp8_storage_available=false;
+bool fp4_storage_available=false;
 uint32_t dtype_code(c10::ScalarType dtype) {
+  if(dtype==at::ScalarType::Float4_e2m1fn_x2) {
+    TORCH_CHECK(fp4_storage_available,"packed FP4 storage requires matching rebuilt FP4 API 1 libraries");
+    return 16;
+  }
+  if(dtype==at::ScalarType::Float8_e8m0fnu) {
+    TORCH_CHECK(mxfp8_storage_available,"E8M0 storage requires matching rebuilt MXFP8 API 1 libraries");
+    return 15;
+  }
   if (dtype == at::kFloat) return 0;
   if (dtype == at::kHalf) return 1;
   if (dtype == at::kBFloat16) return 2;
@@ -105,9 +273,9 @@ uint32_t dtype_code(c10::ScalarType dtype) {
     TORCH_CHECK(fp8_storage_available,"FP8 storage requires matching packed API 1 native libraries");
     return dtype == at::ScalarType::Float8_e4m3fn ? 12 : 13;
   }
-  if (dtype == at::kDouble || dtype == at::kComplexFloat || dtype == at::kComplexDouble) {
+  if (dtype == at::kDouble || dtype == at::kComplexFloat || dtype == at::kComplexDouble || dtype == at::kComplexHalf) {
     TORCH_CHECK(scientific_native,"RUDA scientific storage API 1 requires matching rebuilt native libraries");
-    return dtype==at::kDouble ? 9 : dtype==at::kComplexFloat ? 10 : 11;
+    return dtype==at::kDouble ? 9 : dtype==at::kComplexFloat ? 10 : dtype==at::kComplexDouble ? 11 : 14;
   }
   TORCH_CHECK(false, "RUDA native storage supports float32, float16, bfloat16, bool, int64, int32, int16, int8 and uint8");
 }
@@ -218,7 +386,7 @@ struct Argument {
     TORCH_CHECK(tensor.storage().data_ptr().get_deleter() == release, "tensor is not allocated by RUDA");
     for (auto d : tensor.sizes()) { TORCH_CHECK(d >= 0); shape.push_back(d); }
     for (auto d : tensor.strides()) { TORCH_CHECK(d >= 0); strides.push_back(d); }
-    desc = {tensor.storage().data_ptr().get_context(), size_t(tensor.storage_offset()) * tensor.element_size(),
+    desc = {tensor.storage().data_ptr().get_context(), tensor.numel() ? size_t(tensor.storage_offset()) * tensor.element_size() : 0,
             shape.size(), shape.data(), strides.data(), dtype_code(tensor.scalar_type())};
   }
 };
@@ -242,6 +410,8 @@ struct Argument {
 #include "ring_attention.inc"
 #include "float8.inc"
 #include "sorting.inc"
+#include "ordering.inc"
+#include "statistics.inc"
 
 class PagedPlanBridge {
   void* plan_=nullptr;
@@ -389,6 +559,18 @@ at::Tensor empty_strided(c10::IntArrayRef size, c10::IntArrayRef stride,
   return at::detail::empty_strided_generic(size, stride, &allocator,
       c10::DispatchKeySet(c10::DispatchKey::PrivateUse1), c10::dtype_or_default(dtype));
 }
+at::Tensor efficient_zero(c10::SymIntArrayRef size, std::optional<c10::ScalarType> dtype,
+  std::optional<c10::Layout> layout, std::optional<c10::Device> device, std::optional<bool> pin) {
+  auto target = c10::device_or_default(device);
+  validate(target);
+  if (!target.has_index()) target = c10::Device(c10::DeviceType::PrivateUse1, 0);
+  dtype_code(c10::dtype_or_default(dtype));
+  TORCH_CHECK(c10::layout_or_default(layout) == c10::Layout::Strided && !c10::pinned_memory_or_default(pin));
+  at::native::ZeroTensorAllocator zero_allocator(target);
+  return at::detail::empty_generic_symint(size, &zero_allocator,
+      c10::DispatchKeySet(c10::DispatchKey::PrivateUse1) | c10::DispatchKeySet(c10::DispatchKey::ZeroTensor),
+      c10::dtype_or_default(dtype), std::nullopt);
+}
 void execute(uint32_t op, const at::Tensor& a, const at::Tensor& b, at::Tensor out, float scalar) {
   at::assert_no_internal_overlap(out);
   if (op == 7 || op == 30) {
@@ -483,6 +665,8 @@ void fill(at::Tensor out, const at::Scalar& value) {
     case 9: bits = scalar_bits<double>(value); break;
     case 12: { c10::Float8_e4m3fn v(value.toFloat()); bits=v.x; break; }
     case 13: { c10::Float8_e5m2 v(value.toFloat()); bits=v.x; break; }
+    case 15: { c10::Float8_e8m0fnu v(value.toFloat()); bits=v.x; break; }
+    case 16: TORCH_CHECK(false,"scalar fill is not defined for packed Float4_e2m1fn_x2; use a packed byte view");
     case 10: {
       auto number=value.toComplexDouble();
       float pair[2]={float(number.real()),float(number.imag())};
@@ -494,13 +678,27 @@ void fill(at::Tensor out, const at::Scalar& value) {
       scientific_fill(out,number.real(),number.imag());
       return;
     }
+    case 14: {
+      auto number=value.toComplexDouble();
+      at::Half pair[2]={at::Half(static_cast<float>(number.real())),at::Half(static_cast<float>(number.imag()))};
+      std::memcpy(&bits,pair,sizeof(pair));
+      break;
+    }
   }
   check(fill_native(&ov.desc, bits));
 }
 
+at::Tensor quantized_copy_from(const at::Tensor& source, const at::Tensor& dest, bool non_blocking);
+
 at::Tensor copy_from(const at::Tensor& source, const at::Tensor& dest, bool non_blocking) {
+  if (source.is_quantized() || dest.is_quantized()) return quantized_copy_from(source, dest, non_blocking);
+  TORCH_CHECK(!dest._is_zerotensor(), "ZeroTensors are immutable. Please materialize using .clone() before mutation.");
+  if (source._is_zerotensor()) return const_cast<at::Tensor&>(dest).zero_();
   dtype_code(source.scalar_type());
   dtype_code(dest.scalar_type());
+  if(source.scalar_type()==at::ScalarType::Float4_e2m1fn_x2 || dest.scalar_type()==at::ScalarType::Float4_e2m1fn_x2) {
+    TORCH_CHECK(source.scalar_type()==dest.scalar_type(),"packed FP4 copy does not perform numeric conversion");
+  }
   at::assert_no_internal_overlap(dest);
   if(source.is_same(dest))return dest;
   if(!dest.device().is_cpu() && (dest.is_conj() || dest.is_neg())) {
@@ -511,6 +709,10 @@ at::Tensor copy_from(const at::Tensor& source, const at::Tensor& dest, bool non_
   }
   auto resolved=source.device().is_cpu()?source.resolve_conj().resolve_neg():scientific_resolve(source);
   auto input=resolved.expand(dest.sizes());
+  if (dest.numel()!=0 && source.is_complex() &&
+      (dest.scalar_type()==at::ScalarType::Float8_e4m3fn || dest.scalar_type()==at::ScalarType::Float8_e5m2 || dest.scalar_type()==at::ScalarType::Float8_e8m0fnu)) {
+    TORCH_WARN_ONCE("Casting complex values to real discards the imaginary part");
+  }
   if (source.device().is_cpu()) {
     auto packed = input.contiguous();
     auto staging = source.scalar_type() == dest.scalar_type() ? dest : at::empty(dest.sizes(), dest.options().dtype(source.scalar_type()));
@@ -532,6 +734,14 @@ at::Tensor copy_from(const at::Tensor& source, const at::Tensor& dest, bool non_
 }
 at::Tensor& copy_(at::Tensor& dest, const at::Tensor& source, bool non_blocking) { copy_from(source, dest, non_blocking); return dest; }
 #include "factories.inc"
+#include "rank_one.inc"
+#include "random_extra.inc"
+#include "fused_optim.inc"
+#include "foreach_unary.inc"
+#include "foreach_binary.inc"
+#include "power.inc"
+#include "foreach_ternary.inc"
+#include "foreach_reduce.inc"
 template <typename T>
 T read_scalar(const at::Tensor& value) {
   T result{};
@@ -543,6 +753,7 @@ at::Scalar scalar(const at::Tensor& value) {
   TORCH_CHECK(value.numel() == 1);
   if(value.is_conj() || value.is_neg())return scalar(scientific_resolve(value));
   switch (dtype_code(value.scalar_type())) {
+    case 16: TORCH_CHECK(false,"item() is not defined for packed Float4_e2m1fn_x2");
     case 3: return read_scalar<uint8_t>(value) != 0;
     case 4: return read_scalar<int64_t>(value);
     case 5: return int64_t(read_scalar<int32_t>(value));
@@ -552,6 +763,10 @@ at::Scalar scalar(const at::Tensor& value) {
     case 9: return read_scalar<double>(value);
     case 10: return read_scalar<c10::complex<float>>(value);
     case 11: return read_scalar<c10::complex<double>>(value);
+    case 14: {
+      auto number=read_scalar<c10::complex<at::Half>>(value);
+      return c10::complex<double>(static_cast<float>(number.real()),static_cast<float>(number.imag()));
+    }
   }
   auto converted = value.scalar_type() == at::kFloat ? value : value.to(at::kFloat);
   return read_scalar<float>(converted);
@@ -564,6 +779,8 @@ void record_tensor_stream(at::Tensor& value, c10::Stream stream) {
   stream_command(12,stream.id(),reinterpret_cast<uintptr_t>(arg.desc.allocation));
 }
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
+  m.impl("addr", TORCH_FN(at::native::addr));
+  m.impl("addr.out", TORCH_FN(at::native::addr_out));
   m.impl("topk",topk_tensor);
   m.impl("topk.values",topk_tensor_out);
   m.impl("sort",sort_tensor);
@@ -580,8 +797,12 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("resize_", resize_tensor);
   m.impl("normal_", normal_);
   m.impl("arange.start_out", arange_out);
+  m.impl("range.out", range_out);
+  m.impl("linspace.out", linspace_out);
+  m.impl("logspace.out", logspace_out);
   m.impl("record_stream",record_tensor_stream);
   m.impl("empty.memory_format", empty);
+  m.impl("_efficientzerotensor", efficient_zero);
   m.impl("empty_strided", empty_strided);
   m.impl("as_strided", at::native::as_strided_tensorimpl);
   m.impl("as_strided_", at::native::as_strided__symint);
@@ -593,6 +814,10 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("_reshape_alias", at::native::_reshape_alias);
   m.impl("copy_", copy_);
   m.impl("_copy_from", copy_from);
+  m.impl("_foreach_copy_", foreach_copy_);
+#if __has_include(<ATen/ops/_foreach_clone_native.h>)
+  m.impl("_foreach_clone", foreach_clone);
+#endif
   m.impl("_local_scalar_dense", scalar);
   m.impl("view_as_real",at::native::view_as_real);
   m.impl("view_as_complex",at::native::view_as_complex);
@@ -600,6 +825,21 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
 TORCH_LIBRARY_IMPL(_, PrivateUse1, m) {
   m.fallback(torch::CppFunction::makeFromBoxedFunction<&unsupported>());
 }
+#include "sparse_bridge.inc"
+#include "quantized_bridge.inc"
+#include "quantized_activation.inc"
+#include "quantized_arithmetic.inc"
+#include "quantized_extended.inc"
+#include "quantized_normalization.inc"
+#include "quantized_pooling.inc"
+#include "quantized_linear.inc"
+#include "quantized_convolution.inc"
+#include "quantized_resize.inc"
+#include "quantized_selection.inc"
+#include "quantized_reduce.inc"
+#include "quantized_index.inc"
+#include "quantized_assignment.inc"
+#include "quantized_embedding.inc"
 // AMP for the compute-heavy dense projections. The wrapper redispatches below
 // AutocastPrivateUse1, so the existing RUDA kernels remain the execution path.
 // Normalization is intentionally not force-cast here: RUDA's native training
@@ -611,6 +851,17 @@ TORCH_LIBRARY_IMPL(aten, AutocastPrivateUse1, m) {
   KERNEL_PRIVATEUSEONE(addmm, lower_precision_fp)
   KERNEL_PRIVATEUSEONE(linear, lower_precision_fp)
 }
+}
+
+namespace at::native {
+REGISTER_PRIVATEUSE1_DISPATCH(kaiser_window_stub, &::kaiser_window_kernel);
+REGISTER_PRIVATEUSE1_DISPATCH(addr_stub, &::addr_kernel_ruda);
+REGISTER_PRIVATEUSE1_DISPATCH(quantize_tensor_per_tensor_affine_stub, &::quantize_scalar_ruda);
+REGISTER_PRIVATEUSE1_DISPATCH(dequantize_tensor_per_tensor_affine_stub, &::dequantize_scalar_ruda);
+REGISTER_PRIVATEUSE1_DISPATCH(quantize_tensor_per_channel_affine_stub, &::quantize_channel_ruda);
+REGISTER_PRIVATEUSE1_DISPATCH(dequantize_tensor_per_channel_affine_stub, &::dequantize_channel_ruda);
+REGISTER_PRIVATEUSE1_DISPATCH(quantize_tensor_per_channel_float_qparams_stub, &::quantize_float_channel_ruda);
+REGISTER_PRIVATEUSE1_DISPATCH(dequantize_tensor_per_channel_float_qparams_stub, &::dequantize_float_channel_ruda);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -660,6 +911,23 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     random_fill_native=reinterpret_cast<RandomFill>(address);
   });
   m.def("random_fill_",random_fill);
+  m.def("random_bounds",random_bounds);
+  m.def("uniform_parameters",uniform_parameters);
+  m.def("random_launch_seed",random_launch_seed);
+  m.def("randperm_prepare",randperm_prepare);
+  m.def("fused_optimizer_check",fused_optimizer_check);
+  m.def("fused_optimizer_cpu_lr",fused_optimizer_cpu_lr);
+  m.def("foreach_unary_fast",foreach_unary_fast);
+  m.def("foreach_unary_bump",foreach_unary_bump);
+  m.def("foreach_unary_slow",foreach_unary_slow);
+#if __has_include(<ATen/ops/linalg__powsum_native.h>)
+  m.def("powsum_slow", [](const at::Tensor& self, const at::Scalar& ord,
+                          const std::optional<std::vector<int64_t>>& dims, bool keepdim,
+                          std::optional<at::ScalarType> dtype) {
+    if (dims) return at::native::linalg__powsum_slow(self, ord, at::IntArrayRef(*dims), keepdim, dtype);
+    return at::native::linalg__powsum_slow(self, ord, std::nullopt, keepdim, dtype);
+  });
+#endif
   m.attr("sequence_api_version") = 1;
   m.def("initialize_sequence", [](std::vector<uintptr_t> addresses) {
     TORCH_CHECK(allocate_native && addresses.size()==2 && addresses[0] && addresses[1] && !triangular_native,
@@ -679,6 +947,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("kda_forward", kda_forward);
   m.def("kda_backward", kda_backward);
   m.attr("packed_api_version") = 1;
+  m.attr("mxfp8_api_version") = 1;
+  m.attr("fp4_api_version") = 1;
+  m.def("initialize_fp4", [](uint32_t version) {
+    TORCH_CHECK(version==1 && allocate_native && scientific_native && mxfp8_storage_available && !fp4_storage_available,
+                "invalid or repeated FP4 initialization");
+    fp4_storage_available=true;
+  });
+  m.def("initialize_mxfp8", [](uint32_t version) {
+    TORCH_CHECK(version==1 && allocate_native && scientific_native && fp8_storage_available && !mxfp8_storage_available,
+                "invalid or repeated MXFP8 initialization");
+    mxfp8_storage_available=true;
+  });
   m.attr("packed_matmul_api_version") = 1;
   m.attr("packed_indexed_groups_api_version") = 1;
   m.def("initialize_packed", [](uintptr_t address) {
@@ -765,6 +1045,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.attr("block_float8_graph_api_version") = 1;
   m.attr("delayed_float8_graph_api_version") = 1;
   m.attr("sorting_api_version") = 1;
+  m.attr("ordering_api_version") = 1;
+  m.def("initialize_ordering",[](uintptr_t address) {
+    TORCH_CHECK(allocate_native && address && !ordering_native,"invalid or repeated ordering initialization");
+    ordering_native=reinterpret_cast<OrderingDispatch>(address);
+  });
+  m.def("ordering_call",ordering_call);
+  m.attr("statistics_api_version") = 1;
+  m.def("initialize_statistics",[](uintptr_t address) {
+    TORCH_CHECK(allocate_native && address && !statistics_native,"invalid or repeated statistics initialization");
+    statistics_native=reinterpret_cast<StatisticsDispatch>(address);
+  });
+  m.def("statistics_call",statistics_call);
   m.def("initialize_sorting",[](uintptr_t address) {
     TORCH_CHECK(allocate_native && address && !sorting_native,"invalid or repeated sorting initialization");
     sorting_native=reinterpret_cast<SortingDispatch>(address);
@@ -811,6 +1103,199 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("layer_norm", layer_norm);
   m.def("rms_norm", rms_norm);
   m.def("spatial", spatial);
+  m.def("extrema_result_type", [](const std::vector<at::Tensor>& inputs) {
+    at::native::ResultTypeState state{};
+    for (const auto& input : inputs) state = at::native::update_result_type_state(input, state);
+    return at::native::result_type(state);
+  });
+  m.def("where_condition", [](const at::Tensor& condition) {
+    if (condition.scalar_type() == at::kByte) {
+      TORCH_WARN_ONCE("where received a uint8 condition tensor. This behavior is deprecated and will be removed in a future version of PyTorch. Use a boolean condition instead.");
+      return condition.to(at::kBool);
+    }
+    TORCH_CHECK(condition.scalar_type() == at::kBool, "where expected condition to be a boolean tensor");
+    return condition;
+  });
+  m.def("predicate_scalar", [](pybind11::object value, at::ScalarType dtype, at::Device device) {
+    static torch::PythonArgParser parser({"predicate_scalar(Scalar value)"});
+    torch::ParsedArgs<1> parsed;
+    auto args = pybind11::make_tuple(value);
+    const auto scalar_value = parser.parse(args.ptr(), nullptr, parsed).scalar(0);
+    return at::native::wrapped_scalar_tensor(scalar_value).to(dtype).to(device);
+  });
+  m.def("arithmetic_alpha", [](pybind11::object value, at::ScalarType dtype, at::ScalarType output_dtype, bool subtract) {
+    static torch::PythonArgParser parser({"arithmetic_alpha(Scalar value)"});
+    torch::ParsedArgs<1> parsed;
+    auto args = pybind11::make_tuple(value);
+    const auto alpha = parser.parse(args.ptr(), nullptr, parsed).scalar(0);
+    at::native::alpha_check(output_dtype, alpha);
+    std::vector<int64_t> bits;
+    foreach_binary_scalar_bits(bits, subtract ? -alpha : alpha, dtype);
+    return bits[0];
+  });
+  m.def("compressed_from_dense", [](const at::Tensor& self, std::optional<at::Layout> layout,
+      std::optional<std::vector<int64_t>> blocksize, std::optional<int64_t> dense_dim) {
+    at::OptionalIntArrayRef blocks = std::nullopt;
+    if (blocksize) blocks = at::IntArrayRef(*blocksize);
+    return at::native::dense_to_sparse(self, layout, blocks, dense_dim);
+  });
+  m.def("compressed_flip_block", [](const at::Tensor& self, std::vector<int64_t> blocksize,
+      std::optional<int64_t> dense_dim, bool column) {
+    TORCH_CHECK(self.layout() == at::kSparseBsr || self.layout() == at::kSparseBsc,
+        "compressed_flip_block requires blocked sparse storage");
+    return column ? at::native::sparse_compressed_to_sparse_bsc(self, blocksize, dense_dim)
+                  : at::native::sparse_compressed_to_sparse_bsr(self, blocksize, dense_dim);
+  });
+  m.def("compressed_mm_output", [](const at::Tensor& out, const at::Tensor& result) {
+    TORCH_CHECK((result.layout() == at::kSparseCsr || result.layout() == at::kSparseCsc) &&
+        out.layout() == result.layout() && out.scalar_type() == result.scalar_type() && out.device() == result.device(),
+        "compressed matrix output must match result layout, dtype and device");
+    TORCH_CHECK(out.dim() == 2 && result.dim() == 2 && out.dense_dim() == 0 && result.dense_dim() == 0,
+        "compressed matrix output requires non-batched scalar sparse matrices");
+    const bool row = result.layout() == at::kSparseCsr;
+    static_cast<at::SparseCsrTensorImpl*>(out.unsafeGetTensorImpl())->set_member_tensors(
+        row ? result.crow_indices() : result.ccol_indices(),
+        row ? result.col_indices() : result.row_indices(), result.values(), result.sizes());
+  });
+  m.def("compressed_arithmetic_output", [](const at::Tensor& out, const at::Tensor& result) {
+    const auto layout = result.layout();
+    TORCH_CHECK((layout == at::kSparseCsr || layout == at::kSparseCsc || layout == at::kSparseBsr || layout == at::kSparseBsc) &&
+        out.layout() == layout && out.scalar_type() == result.scalar_type() && out.device() == result.device(),
+        "compressed arithmetic output must match result layout, dtype and device");
+    const bool row = layout == at::kSparseCsr || layout == at::kSparseBsr;
+    static_cast<at::SparseCsrTensorImpl*>(out.unsafeGetTensorImpl())->set_member_tensors(
+        row ? result.crow_indices() : result.ccol_indices(),
+        row ? result.col_indices() : result.row_indices(), result.values(), result.sizes());
+  });
+  m.def("sparse_alpha_is_one", [](pybind11::object value, at::ScalarType dtype) {
+    static torch::PythonArgParser parser({"sparse_alpha_is_one(Scalar value)"});
+    torch::ParsedArgs<1> parsed;
+    auto args = pybind11::make_tuple(value);
+    const auto alpha = parser.parse(args.ptr(), nullptr, parsed).scalar(0);
+    bool one = false;
+    AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND2(at::kHalf, at::kBFloat16, dtype, "sparse_alpha_is_one", [&] {
+      one = alpha.to<scalar_t>() == scalar_t(1);
+    });
+    return one;
+  });
+  m.def("blas_accumulate_scalars", [](pybind11::object alpha_object, pybind11::object beta_object, at::ScalarType dtype, bool gemv) {
+    static torch::PythonArgParser parser({"blas_accumulate_scalars(Scalar alpha, Scalar beta)"});
+    torch::ParsedArgs<2> parsed;
+    auto args = pybind11::make_tuple(alpha_object, beta_object);
+    auto values = parser.parse(args.ptr(), nullptr, parsed);
+    const auto alpha = values.scalar(0), beta = values.scalar(1);
+    std::vector<double> coefficients(4, 0.0);
+    AT_DISPATCH_FLOATING_AND_COMPLEX_TYPES_AND2(at::kHalf, at::kBFloat16, dtype, "blas_accumulate_scalars", [&] {
+      using math_t = at::opmath_type<scalar_t>;
+      const math_t a = gemv ? math_t(alpha.to<scalar_t>()) : alpha.to<math_t>();
+      const math_t b = gemv ? math_t(beta.to<scalar_t>()) : beta.to<math_t>();
+      auto pack = [&](auto av, auto bv) {
+        if constexpr (c10::is_complex<decltype(av)>::value) {
+          coefficients = {double(av.real()), double(av.imag()), double(bv.real()), double(bv.imag())};
+        } else {
+          coefficients[0] = double(av); coefficients[2] = double(bv);
+        }
+      };
+      pack(a, b);
+    });
+    return pybind11::make_tuple(coefficients, beta.toComplexDouble() == c10::complex<double>(0.0, 0.0));
+  });
+  m.def("division_scalar", [](pybind11::object value, at::ScalarType dtype, int64_t op) {
+    TORCH_CHECK(op >= 0 && op <= 2, "invalid scalar division operation");
+    TORCH_CHECK(dtype == at::kFloat || dtype == at::kHalf || dtype == at::kBFloat16 || dtype == at::kDouble,
+                "scalar division requires a real floating computation dtype");
+    at::Tensor scalar;
+    if (THPVariable_Check(value.ptr())) {
+      scalar = THPVariable_Unpack(value.ptr());
+      TORCH_CHECK(scalar.device().is_cpu() && scalar.dim() == 0 && !scalar.is_complex(), "expected a real CPU scalar tensor");
+      scalar = scalar.resolve_conj().resolve_neg();
+    } else {
+      static torch::PythonArgParser parser({"division_scalar(Scalar value)"});
+      torch::ParsedArgs<1> parsed;
+      auto args = pybind11::make_tuple(value);
+      scalar = at::native::wrapped_scalar_tensor(parser.parse(args.ptr(), nullptr, parsed).scalar(0));
+    }
+    const double source = scalar.to(at::kDouble).const_data_ptr<double>()[0];
+    auto pack = [](auto number) {
+      uint64_t word = 0; std::memcpy(&word, &number, sizeof(number));
+      int64_t bits; std::memcpy(&bits, &word, sizeof(bits)); return bits;
+    };
+    if (dtype == at::kDouble) return std::vector<int64_t>{pack(source), pack(1.0 / source)};
+    const float divisor = scalar.to(at::kFloat).const_data_ptr<float>()[0];
+    const float reciprocal = op == 0 || (op == 2 && divisor == 0)
+        ? static_cast<float>(1.0 / source) : 1.0f / divisor;
+    return std::vector<int64_t>{pack(divisor), pack(reciprocal)};
+  });
+  m.def("logit_epsilon", [](double value, at::ScalarType dtype) {
+    TORCH_CHECK(dtype == at::kFloat || dtype == at::kHalf || dtype == at::kBFloat16 || dtype == at::kDouble,
+                "logit requires a real floating computation dtype");
+    return dtype == at::kDouble ? value : static_cast<double>(at::Scalar(value).to<float>());
+  });
+  m.def("power_scalar", power_scalar_parameters);
+  m.def("power_base_log", power_scalar_base_log);
+  m.def("masked_fill_native", [](const at::Tensor& input, const at::Tensor& mask, const at::Tensor& output,
+                                 pybind11::object value, bool inplace) {
+    validate(input.device());
+    TORCH_CHECK(mask.device() == input.device() && output.device() == input.device(), "masked_fill device mismatch");
+    TORCH_CHECK(mask.scalar_type() == at::kBool && input.scalar_type() == output.scalar_type(), "masked_fill dtype mismatch");
+    TORCH_CHECK(input.sizes() == output.sizes(), "masked_fill output shape mismatch");
+    if (inplace) {
+      TORCH_CHECK(input.is_same(output), "in-place masked_fill must target the input tensor");
+      if (at::has_internal_overlap(input) == at::MemOverlap::Yes) {
+        TORCH_WARN("Use of masked_fill_ on expanded tensors is deprecated. Please clone() the tensor before performing this operation. This also applies to advanced indexing e.g. tensor[mask] = scalar");
+      }
+      at::assert_no_partial_overlap(input, mask);
+    } else {
+      at::assert_no_internal_overlap(output);
+      TORCH_CHECK(!input.is_conj() && !input.is_neg() && !output.is_conj() && !output.is_neg(), "resolve functional masked_fill logical views before dispatch");
+    }
+    auto expanded_mask = mask.expand(input.sizes());
+    static torch::PythonArgParser parser({"masked_fill_native(Scalar value)"});
+    torch::ParsedArgs<1> parsed;
+    auto args = pybind11::make_tuple(value);
+    const auto scalar_value = parser.parse(args.ptr(), nullptr, parsed).scalar(0);
+    uint64_t words[2] = {0, 0};
+    const auto code = dtype_code(input.scalar_type());
+    if (code == 12) {
+      words[0] = c10::Float8_e4m3fn(scalar_value.toFloat()).x;
+    } else if (code == 13) {
+      words[0] = c10::Float8_e5m2(scalar_value.toFloat()).x;
+    } else {
+      AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND4(at::kBool, at::kHalf, at::kBFloat16, at::kComplexHalf,
+          input.scalar_type(), "ruda_masked_fill", [&] {
+        const auto converted = scalar_value.to<scalar_t>();
+        static_assert(sizeof(scalar_t) <= sizeof(words));
+        std::memcpy(words, &converted, sizeof(scalar_t));
+      });
+    }
+    if (output.is_neg()) {
+      switch (code) {
+        case 0: words[0] ^= 0x80000000ULL; break;
+        case 1: case 2: words[0] ^= 0x8000ULL; break;
+        case 4: case 5: case 6: case 7: case 8: words[0] = uint64_t(0) - words[0]; break;
+        case 9: words[0] ^= 0x8000000000000000ULL; break;
+        case 10: words[0] ^= 0x8000000080000000ULL; break;
+        case 11: words[0] ^= 0x8000000000000000ULL; words[1] ^= 0x8000000000000000ULL; break;
+        case 12: case 13: words[0] ^= 0x80ULL; break;
+        case 14: words[0] ^= 0x80008000ULL; break;
+        default: TORCH_CHECK(false, "masked_fill negative view dtype is unsupported");
+      }
+    }
+    if (output.is_conj()) {
+      if (code == 10) words[0] ^= 0x8000000000000000ULL;
+      else if (code == 11) words[1] ^= 0x8000000000000000ULL;
+      else if (code == 14) words[0] ^= 0x80000000ULL;
+    }
+    auto source = input;
+    auto target = output;
+    if (inplace && (input.is_conj() || input.is_neg())) {
+      source = at::native::as_strided_tensorimpl(input, input.sizes(), input.strides(), input.storage_offset());
+      source._set_conj(false); source._set_neg(false); target = source;
+    }
+    std::vector<int64_t> bits(2);
+    std::memcpy(bits.data(), words, sizeof(words));
+    scientific_call(483, {source, expanded_mask, target}, bits, {});
+  });
   m.def("check_inplace", [](const at::Tensor& out, const at::Tensor& input) {
     at::assert_no_internal_overlap(out);
     at::assert_no_partial_overlap(out, input);

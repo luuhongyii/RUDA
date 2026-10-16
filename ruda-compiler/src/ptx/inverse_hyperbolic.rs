@@ -18,6 +18,12 @@ impl Emitter {
             return Err(invalid("inverse hyperbolic operand types differ"));
         }
         let ty = Scalar::of(out.ty)?;
+        if ty == Scalar::F64 {
+            let source = self.value(input)?;
+            let destination = self.destination(out)?;
+            self.inverse_hyperbolic_f64(&destination, &source, cosine);
+            return Ok(());
+        }
         if ty != Scalar::F32 && !ty.half() {
             return Err(unsupported("asinh/acosh requires F32, F16 or BF16 storage"));
         }

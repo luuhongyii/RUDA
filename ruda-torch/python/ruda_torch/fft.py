@@ -33,14 +33,14 @@ def _input(input, kind):
         raise ValueError('RUDA FFT input must be on a ruda device')
     if input.layout != torch.strided:
         raise ValueError('FFT requires strided tensors')
-    if input.dtype in (torch.float16, torch.bfloat16, torch.complex32):
-        raise NotImplementedError('RUDA FFT supports float32/float64 and complex64/complex128; half/BF16 are not silently promoted')
-    if input.dtype not in (torch.float32, torch.float64, torch.complex64, torch.complex128):
+    if input.dtype == torch.bfloat16:
+        raise NotImplementedError('RUDA FFT does not support BF16 transforms or silently promote them')
+    if input.dtype not in (torch.float16, torch.float32, torch.float64, torch.complex32, torch.complex64, torch.complex128):
         if input.is_floating_point() or input.is_complex():
             raise NotImplementedError(f'unsupported FFT dtype: {input.dtype}')
         dtype = torch.get_default_dtype()
-        if dtype not in (torch.float32, torch.float64):
-            raise NotImplementedError('integer FFT requires a float32/float64 default dtype')
+        if dtype not in (torch.float16, torch.float32, torch.float64):
+            raise NotImplementedError('integer FFT requires a float16/float32/float64 default dtype')
         input = input.to(dtype)
     if kind in (2, 5) and input.is_complex():
         raise RuntimeError('real FFT and inverse Hermitian FFT require real input')
@@ -95,6 +95,8 @@ def _canonical(input, s, dim, kind, two_dim=False):
         raise ValueError('real/Hermitian FFT requires at least one transform dimension')
     if any(n <= 0 for n in lengths):
         raise ValueError('FFT lengths must be positive')
+    if input.dtype in (torch.float16, torch.complex32) and any(n & (n-1) for n in lengths):
+        raise ValueError('FP16/ComplexHalf FFT requires power-of-two lengths on every transformed axis')
     return axes, tuple(lengths)
 
 
@@ -108,6 +110,8 @@ def _shape(input_shape, kind, axes, lengths):
 
 
 def _dtype(input_dtype, kind):
+    if input_dtype in (torch.float16, torch.complex32):
+        return torch.float16 if kind in (3, 4) else torch.complex32
     double = input_dtype in (torch.float64, torch.complex128)
     if kind in (3, 4):
         return torch.float64 if double else torch.float32
@@ -124,7 +128,7 @@ def _run(input, kind, axes, lengths, norm, out=None, plan=None):
     if destination is not None:
         if out.device != input.device or out.layout != torch.strided:
             raise ValueError('FFT out must be a strided tensor on the input device')
-        allowed = (torch.float32, torch.float64) if kind in (3, 4) else (torch.complex64, torch.complex128)
+        allowed = (torch.float16, torch.float32, torch.float64) if kind in (3, 4) else (torch.complex32, torch.complex64, torch.complex128)
         if out.dtype not in allowed:
             raise TypeError('FFT out dtype must match the real/complex result category')
     # Compute before resizing out: input and out may share storage. Native
@@ -322,8 +326,8 @@ def _frequencies(n, d, onesided, *, dtype=None, layout=torch.strided, device=Non
         dtype = torch.get_default_dtype() if dtype is None else dtype
     if torch.device(device).type != 'ruda' or layout not in (None, torch.strided) or pin_memory:
         raise ValueError('RUDA frequencies require unpinned strided ruda storage')
-    if dtype not in (torch.float32, torch.float64):
-        raise TypeError('RUDA frequency helpers support float32/float64')
+    if dtype not in (torch.float16, torch.float32, torch.float64):
+        raise TypeError('RUDA frequency helpers support float16/float32/float64')
     if out is None:
         out = torch.empty(shape, dtype=dtype, device=device)
     elif tuple(out.shape) != shape:

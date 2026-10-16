@@ -35,7 +35,8 @@ def _forward_fake(q,k,v,mask,score_shape,mask_kind,causal,scale,p):
             torch.empty(4,device='cpu',dtype=torch.int64))
 
 
-@torch.library.custom_op('ruda::indexed_dense_attention_forward',mutates_args=(),tags=(torch.Tag.nondeterministic_seeded,))
+@torch.library.custom_op('ruda::indexed_dense_attention_forward',mutates_args=(),tags=(torch.Tag.nondeterministic_seeded,),
+    schema='(Tensor q, Tensor k, Tensor v, Tensor mask, SymInt[] score_shape, SymInt mask_kind, bool causal, float scale, float p, SymInt global_heads, SymInt head_start, str[] rng_groups, Tensor requested_rng) -> (Tensor, Tensor, Tensor)')
 def indexed_forward(q:torch.Tensor,k:torch.Tensor,v:torch.Tensor,mask:torch.Tensor,score_shape:list[int],
             mask_kind:int,causal:bool,scale:float,p:float,global_heads:int,head_start:int,
             rng_groups:list[str],requested_rng:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:

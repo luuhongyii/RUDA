@@ -17,7 +17,7 @@ def _parameters(values, rank, name, *, default=None, minimum=0):
 
 def _matching(a, *others):
     if a.dtype not in _dtypes:
-        raise RuntimeError("RUDA spatial operators require float32, float16 or bfloat16")
+        raise RuntimeError("RUDA spatial operators require float32, float16, bfloat16 or float64")
     for other in others:
         if other is not None and (other.device != a.device or other.dtype != a.dtype):
             raise RuntimeError("RUDA spatial tensors must have matching devices and dtypes")
@@ -70,9 +70,10 @@ def _run_conv(op, a, b, shape, params):
 
 def convolution(a, weight, bias, stride, padding, dilation, transposed, output_padding, groups):
     shape, params = _conv_shape(a, weight, bias, stride, padding, dilation, transposed, output_padding, groups)
-    result = _run_conv(3 if transposed else 0, a.float(), weight.float(), shape, params)
+    math_dtype = torch.float64 if a.dtype == torch.float64 else torch.float32
+    result = _run_conv(3 if transposed else 0, a.to(math_dtype), weight.to(math_dtype), shape, params)
     if bias is not None:
-        result = result + bias.float().view(1, -1, *((1,) * (a.ndim - 2)))
+        result = result + bias.to(math_dtype).view(1, -1, *((1,) * (a.ndim - 2)))
     return result.to(a.dtype).contiguous(memory_format=suggest_memory_format(a))
 
 
@@ -89,7 +90,8 @@ def convolution_backward(grad, a, weight, bias_sizes, stride, padding, dilation,
         raise RuntimeError("invalid convolution gradient shape or output mask")
     if output_mask[2] and bias_sizes is not None and tuple(bias_sizes) != (shape[1],):
         raise RuntimeError("invalid convolution bias gradient shape")
-    x, w, dy = a.float(), weight.float(), grad.float()
+    math_dtype = torch.float64 if a.dtype == torch.float64 else torch.float32
+    x, w, dy = a.to(math_dtype), weight.to(math_dtype), grad.to(math_dtype)
     dx = dw = db = None
     if a.shape[0] == 0:
         if output_mask[0]:
@@ -175,7 +177,5 @@ for name, function in {
     "_convolution": _convolution,
     "_convolution.deprecated": _convolution,
     "convolution_backward": convolution_backward,
-    "avg_pool2d": avg_pool2d,
-    "avg_pool2d_backward": avg_pool2d_backward,
 }.items():
     _registry.impl(name, function)

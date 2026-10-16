@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
-from .expert_parallel import ExpertParallelMLP
+from .expert_parallel import ExpertParallelMLP, _SeparateExpertParallelMLP
 
 
 def load_expert_parallel_safetensors(model, directory, *, device, tile_rows=128):
@@ -60,9 +60,36 @@ def load_expert_parallel_safetensors(model, directory, *, device, tile_rows=128)
             raise
 
     with torch.no_grad():
+        separate_loaded = {}
         for path, bank in banks:
             prefix = path if bank.source_prefix is None else bank.source_prefix
             prefix = prefix + '.' if prefix else ''
+            if isinstance(bank, _SeparateExpertParallelMLP):
+                width = bank.local_intermediate_size
+                begin = 0 if bank.tensor_group is None else width * bank.tensor_group.rank
+                finish = begin + width
+                for expert_id, part, field, layer in bank.projection_items():
+                    original = layer.weight
+                    key = f'{prefix}{expert_id}.{field}.weight'
+                    shape = ((bank.intermediate_size, bank.hidden_size) if part < 2
+                             else (bank.hidden_size, bank.intermediate_size))
+                    handle, sliced = source(key, shape)
+                    try:
+                        target = separate_loaded.get(id(original))
+                        if target is None:
+                            target = (original if original.device == device else
+                                      nn.Parameter(torch.empty(original.shape, dtype=original.dtype, device=device),
+                                                   requires_grad=original.requires_grad))
+                            for row in range(0, target.shape[0], tile_rows):
+                                end = min(row + tile_rows, target.shape[0])
+                                piece = sliced[begin+row:begin+end, :] if part < 2 else sliced[row:end, begin:finish]
+                                target[row:end].copy_(piece.to(device=device, dtype=target.dtype))
+                            separate_loaded[id(original)] = target
+                        layer.weight = target
+                    finally:
+                        handle.__exit__(None, None, None)
+                bank._mark_parameters()
+                continue
             gate = torch.empty(bank.gate_up_proj.shape, dtype=bank.gate_up_proj.dtype, device=device)
             down = torch.empty(bank.down_proj.shape, dtype=bank.down_proj.dtype, device=device)
             width = bank.local_intermediate_size

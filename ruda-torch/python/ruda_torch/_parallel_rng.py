@@ -96,7 +96,8 @@ def attention_state(shape, dropout, group_keys, requested):
     return torch.tensor(words, dtype=torch.int64, device='cpu')
 
 
-@torch.library.custom_op('ruda::attention_rng_state', mutates_args=(), tags=(torch.Tag.nondeterministic_seeded,))
+@torch.library.custom_op('ruda::attention_rng_state', mutates_args=(), tags=(torch.Tag.nondeterministic_seeded,),
+    schema='(Tensor anchor, SymInt[] shape, str[] groups, float dropout, Tensor requested) -> Tensor')
 def reserve_attention(anchor: torch.Tensor, shape: list[int], groups: list[str], dropout: float,
                       requested: torch.Tensor) -> torch.Tensor:
     return attention_state(tuple(shape), dropout, groups, requested)

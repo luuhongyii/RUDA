@@ -5,6 +5,12 @@ impl Emitter {
     pub fn error_function(&mut self, out: Variable, input: Variable) -> Result<()> {
         let ty = Scalar::of(out.ty)?;
         if out.ty != input.ty { return Err(invalid("erf operand types differ")); }
+        if ty == Scalar::F64 {
+            let source = self.value(input)?;
+            let destination = self.destination(out)?;
+            self.erf_f64(&destination, &source);
+            return Ok(());
+        }
         if ty != Scalar::F32 && !ty.half() {
             return Err(unsupported("erf requires F32, F16 or BF16 storage"));
         }

@@ -53,6 +53,16 @@ class ExpertParallelMLP(nn.Module):
     """
     def __init__(self, num_experts, hidden_size, intermediate_size, group, *,
                  group_key, device=None, dtype=None, combine='float32', activation='storage'):
+        self._initialize(num_experts, hidden_size, intermediate_size, group,
+                         group_key=group_key, combine=combine, activation=activation)
+        self.gate_up_proj = nn.Parameter(torch.empty(self.partition.local_experts,
+            2 * intermediate_size, hidden_size, device=device, dtype=dtype))
+        self.down_proj = nn.Parameter(torch.empty(self.partition.local_experts,
+            hidden_size, intermediate_size, device=device, dtype=dtype))
+        self._mark_parameters()
+
+    def _initialize(self, num_experts, hidden_size, intermediate_size, group, *,
+                    group_key, combine, activation):
         super().__init__()
         if (type(hidden_size) is not int or hidden_size < 1 or
                 type(intermediate_size) is not int or intermediate_size < 1):
@@ -70,11 +80,6 @@ class ExpertParallelMLP(nn.Module):
         self.source_kind = 'stacked'
         self.source_names = ('gate_up_proj', 'down_proj')
         self.source_prefix = None
-        self.gate_up_proj = nn.Parameter(torch.empty(self.partition.local_experts,
-            2 * intermediate_size, hidden_size, device=device, dtype=dtype))
-        self.down_proj = nn.Parameter(torch.empty(self.partition.local_experts,
-            hidden_size, intermediate_size, device=device, dtype=dtype))
-        self._mark_parameters()
         # Derived buffers are built on CPU and moved at use, including after to_empty(meta).
         self._owners, self._local_ids = self.partition.tables()
         self._owners.append(0)
@@ -130,36 +135,8 @@ class ExpertParallelMLP(nn.Module):
     @classmethod
     def from_linears(cls, experts, group, *, group_key, names=('gate_proj', 'up_proj', 'down_proj'),
                      combine='float32', activation='storage'):
-        if not experts:
-            raise ValueError('cannot partition an empty expert bank')
-        first = [getattr(experts[0], name) for name in names]
-        if any(not isinstance(layer, nn.Linear) or layer.bias is not None for layer in first):
-            raise ValueError('expert packing requires bias-free dense SwiGLU projections')
-        gate, up, down = [layer.weight for layer in first]
-        if gate.shape != up.shape or down.shape != gate.shape[::-1]:
-            raise ValueError('expert SwiGLU projection dimensions differ')
-        result = cls(len(experts), gate.shape[1], gate.shape[0], group, group_key=group_key,
-            device=gate.device, dtype=gate.dtype, combine=combine, activation=activation)
-        flags = gate.requires_grad, up.requires_grad, down.requires_grad
-        if flags[0] != flags[1]:
-            raise ValueError('packed gate and up projections must share requires_grad')
-        with torch.no_grad():
-            for local, expert_id in enumerate(range(result.partition.start, result.partition.end)):
-                layers = [getattr(experts[expert_id], name) for name in names]
-                if any(not isinstance(layer, nn.Linear) or layer.bias is not None for layer in layers):
-                    raise ValueError('expert packing requires bias-free dense SwiGLU projections')
-                weights = [layer.weight for layer in layers]
-                for weight, expected, trainable in zip(weights, (gate, up, down), flags):
-                    if (weight.shape != expected.shape or weight.dtype != expected.dtype or
-                            weight.device != expected.device or weight.requires_grad != trainable):
-                        raise ValueError('local experts must have matching geometry, dtype and trainability')
-                result.gate_up_proj[local, :result.intermediate_size].copy_(weights[0])
-                result.gate_up_proj[local, result.intermediate_size:].copy_(weights[1])
-                result.down_proj[local].copy_(weights[2])
-        result.gate_up_proj.requires_grad_(flags[0])
-        result.down_proj.requires_grad_(flags[2])
-        result.source_kind, result.source_names = 'separate', tuple(names)
-        return result
+        return _SeparateExpertParallelMLP(experts, group, group_key=group_key,
+            names=names, combine=combine, activation=activation)
 
     def _local_forward(self, rows, local_ids):
         from .moe import _expert_linear
@@ -189,8 +166,8 @@ class ExpertParallelMLP(nn.Module):
                 top_k_weights.shape != top_k_index.shape or top_k_index.shape[-1] < 1):
             raise ValueError('expert inputs and selected routing slots differ')
         if (top_k_index.dtype not in (torch.int32, torch.int64) or
-                any(t.device != hidden_states.device for t in (top_k_index, top_k_weights,
-                    self.gate_up_proj, self.down_proj)) or hidden_states.device.type != self.group.device_type):
+                any(t.device != hidden_states.device for t in (top_k_index, top_k_weights, *self.parameters()))
+                or hidden_states.device.type != self.group.device_type):
             raise ValueError('expert payloads, routing and parameters must share the communicator device')
         flat = hidden_states.reshape(-1, self.hidden_size)
         ids = top_k_index.reshape(-1).to(torch.int64)
@@ -199,6 +176,10 @@ class ExpertParallelMLP(nn.Module):
         local = torch.tensor(self._local_ids, dtype=torch.int64, device=ids.device).index_select(0, ids)
         order = owners.argsort(stable=True)
         rows = flat.index_select(0, torch.div(order, slots, rounding_mode='floor'))
+        from ._expert_exchange import backward_participation
+        participate = backward_participation(rows, any(p.requires_grad for p in self.parameters()), self.group_key)
+        if participate and not rows.requires_grad:
+            rows = rows.detach().requires_grad_(True)
         sends = torch.stack([(owners == rank).sum(dtype=torch.int64) for rank in range(self.group.world_size)])
         received, local_ids, receives = exchange(rows, local.index_select(0, order), sends, self.group_key)
         computed = self._local_forward(received, local_ids)
@@ -216,6 +197,104 @@ class ExpertParallelMLP(nn.Module):
                 for slot in range(slots):
                     result = result + output[..., slot, :]
         return result
+
+
+class _SeparateExpertParallelMLP(ExpertParallelMLP):
+    def __init__(self, experts, group, *, group_key, names, combine, activation):
+        if not experts or len(names) != 3 or len(set(names)) != 3:
+            raise ValueError('separate experts require three distinct projection names')
+        projections = [tuple(getattr(expert, name) for name in names) for expert in experts]
+        if any(type(layer) is not nn.Linear or layer.bias is not None
+               for trio in projections for layer in trio):
+            raise ValueError('separate experts require bias-free dense SwiGLU projections')
+        gate, up, down = (layer.weight for layer in projections[0])
+        if gate.shape != up.shape or down.shape != gate.shape[::-1]:
+            raise ValueError('expert SwiGLU projection dimensions differ')
+        if any(weight.shape != expected.shape or weight.dtype != expected.dtype or weight.device != expected.device
+               for trio in projections for weight, expected in zip((layer.weight for layer in trio), (gate, up, down))):
+            raise ValueError('separate experts must share projection geometry, dtype and device')
+        self._initialize(len(experts), gate.shape[1], gate.shape[0], group,
+            group_key=group_key, combine=combine, activation=activation)
+        self.source_kind, self.source_names = 'separate', tuple(names)
+        for expert_id in range(self.partition.start, self.partition.end):
+            self.add_module(str(expert_id), experts[expert_id])
+        self._mark_parameters()
+
+    def projection_items(self):
+        for expert_id in range(self.partition.start, self.partition.end):
+            expert = self._modules[str(expert_id)]
+            for column, name in enumerate(self.source_names):
+                yield expert_id, column, name, getattr(expert, name)
+
+    def _mark_parameters(self):
+        for expert_id, column, _, layer in self.projection_items():
+            parameter = layer.weight
+            parameter._ruda_ep_sharded = True
+            parameter._ruda_ep_global_shape = ((self.intermediate_size, self.hidden_size)
+                if column < 2 else (self.hidden_size, self.intermediate_size))
+            parameter._ruda_tp_sharded = self.tensor_group is not None
+
+    def shard_tensor_parallel(self, group):
+        if self.tensor_group is not None:
+            raise ValueError('expert intermediates are already tensor-parallel')
+        if self.intermediate_size % group.world_size or group.device_type != self.group.device_type:
+            raise ValueError('expert intermediate width must divide the tensor group on the same device type')
+        width = self.intermediate_size // group.world_size
+        begin, end = width * group.rank, width * (group.rank + 1)
+        replacements = {}
+        entries = [(column, layer, layer.weight) for _, column, _, layer in self.projection_items()]
+        axes = {}
+        for column, _, parameter in entries:
+            axis = 0 if column < 2 else 1
+            if id(parameter) in axes and axes[id(parameter)] != axis:
+                raise ValueError('a tied expert parameter cannot use two different tensor partitions')
+            axes[id(parameter)] = axis
+        with torch.no_grad():
+            for column, layer, parameter in entries:
+                axis = 0 if column < 2 else 1
+                key = (id(parameter), axis)
+                if key not in replacements:
+                    value = parameter[begin:end] if axis == 0 else parameter[:, begin:end]
+                    replacements[key] = nn.Parameter(value.contiguous().clone(), requires_grad=parameter.requires_grad)
+                layer.weight = replacements[key]
+                layer.out_features, layer.in_features = layer.weight.shape
+        self.tensor_group, self.local_intermediate_size = group, width
+        self._mark_parameters()
+        return self
+
+    def _local_forward(self, rows, local_ids):
+        from .parallel_training import copy_to_tensor_parallel, reduce_from_tensor_parallel
+        if self.tensor_group is not None:
+            rows = copy_to_tensor_parallel(rows, self.tensor_group)
+        dtype = (torch.get_autocast_dtype(rows.device.type)
+                 if torch.is_autocast_enabled(rows.device.type) else rows.dtype)
+        with precision_context(rows):
+            rows = rows.to(dtype)
+            if rows.device.type == 'ruda':
+                from ._indexed_experts import linear
+                banks = [[layer.weight for _, column, _, layer in self.projection_items() if column == part]
+                         for part in range(3)]
+                gate = linear(rows, banks[0], local_ids)
+                up = linear(rows, banks[1], local_ids)
+                value = ((self.act_fn(gate.float()) * up.float()).to(dtype)
+                         if self.activation == 'float32' else self.act_fn(gate) * up)
+                output = linear(value, banks[2], local_ids)
+            else:
+                output = rows * 0
+                for local, expert_id in enumerate(range(self.partition.start, self.partition.end)):
+                    selected = (local_ids == local).nonzero().flatten()
+                    if selected.numel() == 0:
+                        continue
+                    expert = self._modules[str(expert_id)]
+                    gate, up, down = [getattr(expert, name).weight.to(dtype) for name in self.source_names]
+                    value = rows.index_select(0, selected)
+                    gate, up = F.linear(value, gate), F.linear(value, up)
+                    value = ((self.act_fn(gate.float()) * up.float()).to(dtype)
+                             if self.activation == 'float32' else self.act_fn(gate) * up)
+                    output = output.index_add(0, selected, F.linear(value, down))
+            if self.tensor_group is not None:
+                output = reduce_from_tensor_parallel(output, self.tensor_group)
+            return torch.where((local_ids >= 0)[:, None], output, torch.zeros_like(output))
 
 
 def tensor_parallelize_experts(model, group):
