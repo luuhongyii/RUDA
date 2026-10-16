@@ -5,7 +5,7 @@
 #include <ATen/SparseCsrTensorImpl.h>
 #include <ATen/quantized/QTensorImpl.h>
 #include <ATen/native/quantized/AffineQuantizer.h>
-#include <ATen/native/layer_norm.h>
+#include <c10/util/accumulate.h>
 #include <ATen/native/MaxPooling.h>
 #include <ATen/native/quantized/PackedParams.h>
 #include <ATen/native/quantized/cpu/EmbeddingPackedParams.h>
@@ -197,6 +197,7 @@
 #include <limits>
 #include <unordered_map>
 #include <stdexcept>
+#include <sstream>
 #include <c10/core/InferenceMode.h>
 #include <c10/core/GradMode.h>
 

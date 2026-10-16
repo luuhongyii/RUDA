@@ -80,7 +80,30 @@ at::Tensor quantized_layer_norm(at::Tensor input, std::vector<int64_t> shape,
     std::optional<at::Tensor> weight, std::optional<at::Tensor> bias, double eps, double scale, int64_t zero) {
   validate(input.device()); quantized_storage_type(input.scalar_type());
   auto w = weight.value_or(at::Tensor()); auto b = bias.value_or(at::Tensor());
-  const auto [rows, width] = at::native::_check_layer_norm_inputs(input, shape, w, b);
+  const at::IntArrayRef normalized_shape(shape);
+  const int normalized_ndim = normalized_shape.size();
+  TORCH_CHECK(normalized_ndim >= 1,
+      "Expected normalized_shape to be at least 1-dimensional, i.e., ",
+      "containing at least one element, but got normalized_shape = ", normalized_shape);
+  TORCH_CHECK(!w.defined() || w.sizes().equals(normalized_shape),
+      "Expected weight to be of same shape as normalized_shape, but got ",
+      "weight of shape ", w.sizes(), " and normalized_shape = ", normalized_shape);
+  TORCH_CHECK(!b.defined() || b.sizes().equals(normalized_shape),
+      "Expected bias to be of same shape as normalized_shape, but got ",
+      "bias of shape ", b.sizes(), " and normalized_shape = ", normalized_shape);
+  const auto input_shape = input.sizes();
+  const auto input_ndim = input.dim();
+  if (input_ndim < normalized_ndim ||
+      !input_shape.slice(input_ndim - normalized_ndim).equals(normalized_shape)) {
+    std::stringstream message;
+    message << "Given normalized_shape=" << normalized_shape << ", expected input with shape [*";
+    for (auto size : normalized_shape) message << ", " << size;
+    message << "], but got input of size" << input_shape;
+    TORCH_CHECK(false, message.str());
+  }
+  const int axis = input_ndim - normalized_ndim;
+  const int64_t rows = c10::multiply_integers(input_shape.cbegin(), input_shape.cbegin() + axis);
+  const int64_t width = c10::multiply_integers(input_shape.cbegin() + axis, input_shape.cend());
   auto out = quantized_empty_affine(input.sizes(), input.scalar_type(), input.layout(), input.device(), false,
                                    scale, zero, at::MemoryFormat::Contiguous);
   if (rows > 0) quantized_normalize_call(input, w, b, out, rows, width, 1, 1, false, false, eps);
