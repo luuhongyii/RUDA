@@ -300,7 +300,7 @@ fn fp8<A: Float, S: Numeric>(a: &Tensor<u8>, b: &Tensor<u8>, sa: &Tensor<S>, sb:
         #[unroll] for j in 0..vc {
             let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
             let row = row_base + r as usize; let col = col_base + c as usize;
-            if row < m && col < n { store::<S, A>(sa, sb, alpha, metadata, out, group_index, row, col, reg[j], kind, mode); }
+            if row < m && col < n { store::<S, bf16>(sa, sb, alpha, metadata, out, group_index, row, col, reg[j], kind, mode); }
         }
     }
 }

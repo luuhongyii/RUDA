@@ -115,7 +115,7 @@ fn forward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S>
             let xbase=ix.floor();let ybase=iy.floor();let tx=ix-xbase;let ty=iy-ybase;
             let c0=cubic_coefficient::<F>(tx,0);let c1=cubic_coefficient::<F>(tx,1);let c2=cubic_coefficient::<F>(tx,2);let c3=cubic_coefficient::<F>(tx,3);
             for channel in 0..a.shape(1) {
-                let plane=n*a.shape(1)+channel;let mut rows=Array::<F>::new(4);
+                let plane=n*a.shape(1)+channel;let mut rows=Array::<F>::new(4usize);
                 for k in 0..4usize {
                     let y=S::cast_from(ybase-F::new(1.0)+F::cast_from(k));
                     let v0=F::cast_from(bounded::<S,F>(a,plane,y,S::cast_from(xbase-F::new(1.0)),padding,align));
@@ -176,8 +176,8 @@ fn backward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S
         let mut gx=S::new(0.0);let mut gy=S::new(0.0);let mut gz=S::new(0.0);
         if comptime!(mode==2) {
             let xbase=ix.floor();let ybase=iy.floor();let tx=ix-xbase;let ty=iy-ybase;
-            let mut cx=Array::<S>::new(4);let mut cy=Array::<S>::new(4);
-            let mut dcx=Array::<S>::new(4);let mut dcy=Array::<S>::new(4);
+            let mut cx=Array::<S>::new(4usize);let mut cy=Array::<S>::new(4usize);
+            let mut dcx=Array::<S>::new(4usize);let mut dcy=Array::<S>::new(4usize);
             for k in 0..4usize {cx[k]=cubic_coefficient::<S>(tx,k);cy[k]=cubic_coefficient::<S>(ty,k);dcx[k]=cubic_derivative::<S>(tx,k);dcy[k]=cubic_derivative::<S>(ty,k);}
             for channel in 0..a.shape(1) {
                 let plane=n*a.shape(1)+channel;let go=grad[address(grad,plane*spatial+location)];

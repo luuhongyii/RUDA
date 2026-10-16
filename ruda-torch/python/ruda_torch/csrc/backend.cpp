@@ -189,6 +189,7 @@
 #include <c10/core/DeviceGuard.h>
 #include <cstdio>
 #include <algorithm>
+#include <type_traits>
 #include <cstring>
 #include <memory>
 #include <mutex>

@@ -92,7 +92,7 @@ fn weighted_forward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,out:&m
         if comptime!(cubic) {
             let rx=coordinate::<F>(w,sw,align,true);let ry=coordinate::<F>(h,sh,align,true);
             let x=i64::cast_from(f32::cast_from(rx).floor());let y=i64::cast_from(f32::cast_from(ry).floor());
-            let tx=rx-F::cast_from(x);let ty=ry-F::cast_from(y);let mut rows=Array::<F>::new(4);
+            let tx=rx-F::cast_from(x);let ty=ry-F::cast_from(y);let mut rows=Array::<F>::new(4usize);
             let c0=cubic_coefficient::<F>(tx,0);let c1=cubic_coefficient::<F>(tx,1);let c2=cubic_coefficient::<F>(tx,2);let c3=cubic_coefficient::<F>(tx,3);
             let x0=usize::cast_from(i64::min(i64::max(x-1,0),i64::cast_from(iw)-1));
             let x1=usize::cast_from(i64::min(i64::max(x,0),i64::cast_from(iw)-1));

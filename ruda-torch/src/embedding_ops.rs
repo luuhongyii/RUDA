@@ -49,7 +49,7 @@ fn small_backward<S: Float + RudaElement, F: Float + RudaElement, I: Int + RudaE
     let mut first = 0usize;
     while first < indices.len() {
         let sample = first + warp;
-        let mut row = (-1i64).runtime(); let mut value = F::new(0.0);
+        let mut row = i64::cast_from(-1i64); let mut value = F::new(0.0);
         if sample < indices.len() {
             row = i64::cast_from(indices[address(indices, sample)]);
             if feature < width && row != padding { value = F::cast_from(grad[address(grad, sample * width + feature)]); }

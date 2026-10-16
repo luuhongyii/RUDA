@@ -36,7 +36,7 @@ fn real<S: Float + RudaElement, F: Float>(
         if comptime!(mode == 0) { b = F::cast_from(exponent[address(exponent,p)]); }
         let mut result = S::cast_from(0u32);
         if comptime!(special == 3) { result = S::cast_from(a.sqrt()); }
-        else if comptime!(special == 4) { result = S::cast_from(rsqrt(a)); }
+        else if comptime!(special == 4) { result = S::cast_from(rsqrt::<F>(a)); }
         else if comptime!(special == 5) { result = S::cast_from(F::new(1.0)/a); }
         else if comptime!(special == 6) { result = S::cast_from(a*a); }
         else if comptime!(special == 7) { result = S::cast_from(F::cast_from(S::cast_from(a*a))*a); }

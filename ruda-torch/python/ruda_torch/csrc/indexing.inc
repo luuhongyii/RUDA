@@ -12,7 +12,7 @@ struct IndexMetadata {
 template <typename Expand>
 std::vector<at::Tensor> expand_indices_on_device(Expand expand, const at::Tensor& source,
     const c10::List<std::optional<at::Tensor>>& original) {
-  if constexpr (requires { expand(source, original, true); }) {
+  if constexpr (std::is_invocable_v<Expand, decltype(source), decltype(original), bool>) {
     return expand(source, original, true);
   } else {
     auto indices = expand(source, original);

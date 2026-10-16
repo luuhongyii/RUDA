@@ -104,7 +104,7 @@ fn evaluate<F: Float>(x: F, #[comptime] op: u32) -> F {
         if x > F::new(0.0) { result = F::new(1.0); }
         else if x < F::new(0.0) { result = -F::new(1.0); }
     }
-    else if comptime!(op == 27) { result = rsqrt(x); }
+    else if comptime!(op == 27) { result = rsqrt::<F>(x); }
     else if comptime!(op == 28) { result = -x; }
     else if comptime!(op == 29) { result = x.abs(); }
     result
