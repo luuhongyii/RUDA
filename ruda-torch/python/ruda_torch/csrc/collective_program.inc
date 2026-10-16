@@ -131,7 +131,7 @@ class CollectiveProgram {
   }
   std::vector<int64_t> counts(const at::Tensor& value)const {
     TORCH_CHECK(value.scalar_type()==at::kLong && value.dim()==1 && value.numel()==world_,"exchange counts require int64[world]");
-    auto host=value.to(at::kCPU).contiguous();auto data=host.const_data_ptr<int64_t>();
+    auto host=value.to(at::kCPU).contiguous();auto data=static_cast<const int64_t*>(host.const_data_ptr());
     std::vector<int64_t> result(data,data+world_);total(result);return result;
   }
   at::Tensor ring_metadata(const at::Tensor& position,const at::Tensor& document,const at::Tensor& valid,

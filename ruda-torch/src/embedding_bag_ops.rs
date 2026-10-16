@@ -42,7 +42,7 @@ fn forward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>(weight
     if index<out.len() {
         let width=out.shape(1);let bag=index/width;let feature=index%width;
         let (begin,end)=bag_range::<I>(offsets,bag,out.shape(0),indices.len());
-        let mut count=0usize;let mut value=F::new(0.0);let mut max_row=i64::cast_from(-1i64);
+        let mut count:usize=0usize;let mut value=F::new(0.0);let mut max_row=i64::cast_from(-1i64);
         for sample in begin..end {
             let row=row_index::<I>(indices,sample,weight.shape(0));
             let mut item=F::cast_from(weight[address(weight,usize::cast_from(row)*width+feature)]);

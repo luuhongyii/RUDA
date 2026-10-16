@@ -1216,13 +1216,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       auto args = pybind11::make_tuple(value);
       scalar = at::native::wrapped_scalar_tensor(parser.parse(args.ptr(), nullptr, parsed).scalar(0));
     }
-    const double source = scalar.to(at::kDouble).const_data_ptr<double>()[0];
+    const double source = static_cast<const double*>(scalar.to(at::kDouble).const_data_ptr())[0];
     auto pack = [](auto number) {
       uint64_t word = 0; std::memcpy(&word, &number, sizeof(number));
       int64_t bits; std::memcpy(&bits, &word, sizeof(bits)); return bits;
     };
     if (dtype == at::kDouble) return std::vector<int64_t>{pack(source), pack(1.0 / source)};
-    const float divisor = scalar.to(at::kFloat).const_data_ptr<float>()[0];
+    const float divisor = static_cast<const float*>(scalar.to(at::kFloat).const_data_ptr())[0];
     const float reciprocal = op == 0 || (op == 2 && divisor == 0)
         ? static_cast<float>(1.0 / source) : 1.0f / divisor;
     return std::vector<int64_t>{pack(divisor), pack(reciprocal)};
