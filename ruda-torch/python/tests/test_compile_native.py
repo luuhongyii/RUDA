@@ -24,7 +24,7 @@ spec = importlib.import_module(NAME + '._graph_spec')
 
 
 class Simulator:
-    def __init__(self, inputs, nodes, outputs):
+    def __init__(self, inputs, nodes, outputs, device=None):
         self.inputs = inputs
         self.nodes = nodes
         self.outputs = outputs

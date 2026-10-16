@@ -430,7 +430,9 @@ if hasattr(_native, 'ruda_torch_paged_quantized_api_version') and hasattr(_C, 'i
         raise RuntimeError('RUDA quantized paged API mismatch; rebuild both native libraries')
     _C.initialize_paged_quantized(ctypes.cast(_native.ruda_torch_paged_quantized, ctypes.c_void_p).value)
     _paged_quantized_available = True
-from .packed_quantization import (PackedQuantizedTensor, PackedLinear, PackedEmbedding, quantize_packed, scaled_float8_mm)
+from .packed_quantization import (PackedQuantizedTensor, PackedLinear, PackedEmbedding, quantize_packed, scaled_float8_mm,
+                                  _register_aten_quantization)
+_aten_quantization = _register_aten_quantization()
 from .float8_training import Float8Recipe, Float8Linear, float8_linear, convert_to_float8_training
 from .float8_scaling import Float8ScaleState, advance_float8_scales
 from .quantization_calibration import (calibrate_quantization, QuantizationObserver, affine_fake_quantize)

@@ -5806,6 +5806,7 @@ dependencies = [
 name = "ruda-fft"
 version = "0.1.97"
 dependencies = [
+ "half",
  "num-complex",
  "realfft",
  "ruPRIM",

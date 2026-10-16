@@ -374,9 +374,11 @@ def _aten_scaled_mm_v2(a,b,scale_a,recipe_a,swizzle_a,scale_b,recipe_b,swizzle_b
                         bias,out_dtype,contraction_dim,use_fast_accum,out=out)
 
 
-_aten_quantization = torch.library.Library('aten','IMPL','PrivateUse1')
-_aten_quantization.impl('_scaled_mm',_aten_scaled_mm)
-_aten_quantization.impl('_scaled_mm.out',_aten_scaled_mm_out)
-if hasattr(torch.ops.aten, '_scaled_mm_v2'):
-    _aten_quantization.impl('_scaled_mm_v2',_aten_scaled_mm_v2)
-    _aten_quantization.impl('_scaled_mm_v2.out',_aten_scaled_mm_v2)
+def _register_aten_quantization():
+    library = torch.library.Library('aten','IMPL','PrivateUse1')
+    library.impl('_scaled_mm',_aten_scaled_mm)
+    library.impl('_scaled_mm.out',_aten_scaled_mm_out)
+    if hasattr(torch.ops.aten, '_scaled_mm_v2'):
+        library.impl('_scaled_mm_v2',_aten_scaled_mm_v2)
+        library.impl('_scaled_mm_v2.out',_aten_scaled_mm_v2)
+    return library

@@ -453,7 +453,6 @@ class OperationRegion(torch.nn.Module):
         self._cache=OrderedDict();self._lock=RLock();self._closed=False
 
     def forward(self,*values):
-        from . import _C
         from ._compile_native import NativeCoverageError,_stream_id
         with self._lock:
             self.state.check_open()
@@ -479,6 +478,7 @@ class OperationRegion(torch.nn.Module):
                     owned=sort_output_layout((result,) if args[1]==2 else result,args[-1],copy=False)
                     return owned[0] if args[1]==2 else owned
                 return result
+            from . import _C
             key=(_stream_id(),torch.is_inference_mode_enabled(),
                  tuple((_shape(t),t.dtype,t.device) for t in inputs),tuple(specs),integers,scalars,score_shape)
             if self.kind==26:key=(*key,extra['output_strides'])

@@ -23,6 +23,7 @@ Op = spec.GraphOp
 class ForwardSimulator:
     def __init__(self, inputs, nodes, outputs=None, *, optimize=False, reuse=False):
         self.inputs = tuple(inputs.values())
+        self._device = self.inputs[0].device
         metadata = {n: spec.TensorSpec(tuple(x.shape), str(x.dtype).removeprefix('torch.'))
                     for n, x in inputs.items()}
         plan = opt.prepare_plan(metadata, nodes, outputs, optimize=optimize, reuse_workspace=reuse)

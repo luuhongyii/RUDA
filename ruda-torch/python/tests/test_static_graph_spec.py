@@ -28,9 +28,15 @@ def test_supported_ops(kind):
 def test_invalid_input_shapes(shape):
     with pytest.raises(ValueError):layout({'x':T(shape,'float32')},[Op.copy('y','x')])
 
-@pytest.mark.parametrize('dtype',['int64','bool','float64','complex64'])
+@pytest.mark.parametrize('dtype',['float64','complex64'])
 def test_invalid_dtype(dtype):
     with pytest.raises(ValueError):layout({'x':T((2,),dtype)},[Op.copy('y','x')])
+
+
+@pytest.mark.parametrize('dtype',['bool','int64','int32','int16','int8','uint8'])
+def test_integer_bool_copy_layout(dtype):
+    p=layout({'x':T((2,),dtype)},[Op.copy('y','x')])
+    assert p.specs[-1]==T((2,),dtype) and p.workspace_bytes==2*m.DTYPE_BYTES[dtype]
 
 @pytest.mark.parametrize('eps',[0.,-1.,float('nan'),float('inf'),1e-100,1e100])
 def test_rms_invalid_scalar(eps):
