@@ -65,6 +65,15 @@ required-features = ["direct-ptx"]
 name = "compiler-backend"
 path = "tests/compiler_backend.rs"
 
+[[test]]
+name = "scalar-metadata"
+path = "tests/scalar_metadata.rs"
+
+[[example]]
+name = "ptx-packed"
+path = "examples/ptx_packed.rs"
+required-features = ["direct-ptx"]
+
 [dependencies.bytemuck]
 version = "1.16.1"
 

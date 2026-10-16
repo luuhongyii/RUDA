@@ -63,8 +63,11 @@ impl Emitter {
         let mut constants = Vec::with_capacity(count);
         for value in &values {
             let VariableKind::Constant(value) = value.kind else { return Err(invalid("constant array requires literal elements")); };
-            let value = value.cast_to(Type::scalar(array.elem_type()));
-            let literal = ty.constant(value)?;
+            let literal = if Scalar::is_packed_fp4(array.ty) {
+                super::packed::constant(value)
+            } else {
+                ty.constant(value.cast_to(Type::scalar(array.elem_type())))?
+            };
             constants.extend(std::iter::repeat_n(literal, width));
         }
         self.constant_arrays.insert(id, (array, values));

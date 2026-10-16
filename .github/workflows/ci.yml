@@ -53,6 +53,8 @@ jobs:
               cargo test --locked --release -p ruDNN --lib --features tensor-paged-attention,ruda-test-runtime/cuda --no-run
               cargo build --locked --release -p ruda-torch-native
               cargo check --locked -p ruCCL -p ruda-driver-cuda --features ruCCL/cuda,ruda-driver-cuda/direct-ptx --example tensor_collectives
+              cargo check --locked -p ruda-driver-cuda --features direct-ptx --test scalar-metadata --example ptx-packed
+              cargo test --locked -p ruda-driver-cuda --features direct-ptx --test compiler-backend
           - name: CPU libraries
             key: host
             command: |
@@ -106,6 +108,8 @@ jobs:
             command: |
               /usr/bin/time -v cargo test --locked -p ruda-optim --lib --features gradient-guard,collective
               cargo test --locked -p ruCCL --lib rank::host::exchange::tests
+              cargo test --locked -p ruCCL --lib tensor_device::all_gather_matmul::tests
+              cargo test --locked -p ruTENSOR --lib
               cargo test --locked -p ruda-nn --lib lora
               cargo test --locked -p ruda-nn --lib causal_lm
               cargo check --locked -p ruda-nn --no-default-features --lib

@@ -40,6 +40,7 @@ pub(super) struct Emitter {
     pub unit_barriers: Vec<(Variable, String)>,
     pub shared_declaration: String,
     pub target: PtxTarget,
+    pub architecture_specific: bool,
     pub plane_width: u32,
 }
 
@@ -140,6 +141,7 @@ impl Emitter {
             unit_barriers: Vec::new(),
             shared_declaration: String::new(),
             target,
+            architecture_specific: false,
             plane_width: (dim.x * dim.y * dim.z).min(32),
         };
         let mut params = Vec::new();
@@ -176,10 +178,11 @@ impl Emitter {
         emitter.scope(kernel.body.clone())?;
         let shared_memory_bytes = emitter.allocate_shared(kernel.body, dim)?;
         let source = format!(
-            ".version {}.{}\n.target sm_{}\n.address_size 64\n{}{}\n.visible .entry {}(\n    {}\n)\n.reqntid {}, {}, {}\n{cluster_directive}{{\n{}{}{}    ret;\n}}\n",
+            ".version {}.{}\n.target sm_{}{}\n.address_size 64\n{}{}\n.visible .entry {}(\n    {}\n)\n.reqntid {}, {}, {}\n{cluster_directive}{{\n{}{}{}    ret;\n}}\n",
             target.version.0,
             target.version.1,
             target.sm,
+            if emitter.architecture_specific { "a" } else { "" },
             emitter.shared_declaration,
             emitter.module_declarations,
             name,
@@ -248,6 +251,9 @@ impl Emitter {
         let ty = Scalar::of(var.ty)?;
         self.half_target(ty)?;
         if let VariableKind::Constant(value) = var.kind {
+            if Scalar::is_packed_fp4(var.ty) {
+                return Ok(super::packed::constant(value));
+            }
             if ty.half() {
                 if let Some(reg) = self.registers.get(&var) { return Ok(reg.clone()); }
                 let constant = ty.constant(value)?;

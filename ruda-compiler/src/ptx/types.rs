@@ -21,6 +21,10 @@ pub(super) enum Scalar {
 }
 
 impl Scalar {
+    pub fn is_packed_fp4(ty: Type) -> bool {
+        matches!(ty.with_vector_size(1), Type::Scalar(StorageType::Packed(ElemType::Float(FloatKind::E2M1), 2)))
+    }
+
     pub fn is_tf32(ty: Type) -> bool {
         matches!(ty, Type::Scalar(StorageType::Scalar(ElemType::Float(FloatKind::TF32))) | Type::Vector(StorageType::Scalar(ElemType::Float(FloatKind::TF32)), _))
     }
@@ -36,6 +40,7 @@ impl Scalar {
 
     pub fn of(ty: Type) -> Result<Self> {
         match ty {
+            Type::Scalar(StorageType::Packed(ElemType::Float(FloatKind::E2M1), 2)) => Ok(Self::U8),
             Type::Scalar(StorageType::Scalar(elem)) => match elem {
                 ElemType::UInt(UIntKind::U8) => Ok(Self::U8),
                 ElemType::UInt(UIntKind::U16) => Ok(Self::U16),

@@ -305,6 +305,12 @@ impl<'a> Command<'a> {
             elem_size,
         } = descriptor;
 
+        let (shape, strides) = if shape.is_empty() && strides.is_empty() {
+            (Shape::from([1]), Strides::from([1]))
+        } else {
+            (shape, strides)
+        };
+
         if shape.contains(&0) {
             self.resource(binding)?;
             return Ok(());
@@ -360,6 +366,11 @@ impl<'a> Command<'a> {
             strides,
             elem_size,
         } = descriptor;
+        let (shape, strides) = if shape.is_empty() && strides.is_empty() {
+            (Shape::from([1]), Strides::from([1]))
+        } else {
+            (shape, strides)
+        };
         if shape.contains(&0) {
             self.resource(handle)?;
             return Ok(());

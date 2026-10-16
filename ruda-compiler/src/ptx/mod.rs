@@ -40,6 +40,7 @@ mod erf_f64;
 mod vector;
 mod half;
 mod fp8;
+mod packed;
 mod metadata;
 mod operations;
 mod shared;
@@ -105,7 +106,7 @@ impl fmt::Display for PtxKernel {
 pub struct PtxCompiler;
 
 impl PtxCompiler {
-    pub const CACHE_VERSION: u32 = 43;
+    pub const CACHE_VERSION: u32 = 44;
 }
 
 impl Compiler for PtxCompiler {

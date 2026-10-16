@@ -8,6 +8,7 @@ mod registers;
 mod manual;
 mod indexing;
 mod volta;
+mod scaled;
 
 fn descriptor(variable: Variable) -> Result<Matrix> {
     let VariableKind::Matrix { mat, .. } = variable.kind else {
@@ -44,9 +45,9 @@ impl Emitter {
             CoopMma::LoadMatrix { buffer, offset, vector_size, factor, transpose } => self.matrix_transfer(out, buffer, offset, vector_size, factor, transpose, false),
             CoopMma::StoreMatrix { offset, vector_size, registers, factor, transpose } => self.matrix_transfer(registers, out, offset, vector_size, factor, transpose, true),
             CoopMma::ExecuteManual { matrix, registers_a, registers_b, registers_c } => self.matrix_manual(out, matrix, registers_a, registers_b, registers_c),
+            CoopMma::ExecuteScaled { matrix, registers_a, registers_b, registers_c, scales_a, scales_b, scales_factor } => self.matrix_scaled(out, matrix, registers_a, registers_b, registers_c, scales_a, scales_b, scales_factor),
             CoopMma::RowIndex { lane_id, i, matrix } => self.matrix_index(out, lane_id, i, matrix, true),
             CoopMma::ColIndex { lane_id, i, matrix } => self.matrix_index(out, lane_id, i, matrix, false),
-            other => Err(unsupported(format!("matrix operation {other:?}"))),
         }
     }
 }

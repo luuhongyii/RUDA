@@ -29,9 +29,7 @@ impl<M: DialectWmmaCompiler<Self>> Dialect for CudaDialect<M> {
     type Architecture = CudaArchitecture;
     fn supports_native_addresses() -> bool { true }
     fn format_non_finite_float(value: f64) -> String {
-        if value.is_nan() { "CUDART_NAN".into() }
-        else if value.is_sign_negative() { "-CUDART_INF".into() }
-        else { "CUDART_INF".into() }
+        format!("__longlong_as_double({}LL)", value.to_bits() as i64)
     }
 }
 

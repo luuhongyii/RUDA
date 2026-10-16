@@ -5475,6 +5475,8 @@ dependencies = [
 name = "ruTENSOR"
 version = "0.1.98"
 dependencies = [
+ "half",
+ "rublas",
  "ruda-core",
  "ruda-driver-cann",
  "ruda-kernel",

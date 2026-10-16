@@ -99,7 +99,9 @@ impl Runtime for CudaRuntime {
     }
 
     fn can_read_tensor(shape: &Shape, strides: &Strides) -> bool {
-        shape.contains(&0) || has_pitched_row_major_strides(shape, strides)
+        (shape.is_empty() && strides.is_empty())
+            || shape.contains(&0)
+            || has_pitched_row_major_strides(shape, strides)
     }
 
     fn target_properties() -> TargetProperties {

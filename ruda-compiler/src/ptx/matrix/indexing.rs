@@ -13,19 +13,22 @@ impl Emitter {
             return self.matrix_volta_index(out, lane, index, matrix.ident, ty, row);
         }
         let tf32 = Scalar::is_tf32(Type::new(matrix.storage));
-        let integer = matches!((matrix.ident, ty), (MatrixIdent::A | MatrixIdent::B, Scalar::I8 | Scalar::U8) | (MatrixIdent::Accumulator, Scalar::I32));
+        let packed_fp4 = Scalar::is_packed_fp4(Type::new(matrix.storage));
+        let integer = !packed_fp4 && matches!((matrix.ident, ty), (MatrixIdent::A | MatrixIdent::B, Scalar::I8 | Scalar::U8) | (MatrixIdent::Accumulator, Scalar::I32));
         let fp8 = ty.fp8() && matrix.ident != MatrixIdent::Accumulator;
         let double = ty == Scalar::F64;
         let fp8_accumulator = matrix.ident == MatrixIdent::Accumulator
             && matches!(ty, Scalar::F16 | Scalar::F32)
-            && (matrix.m, matrix.n, matrix.k) == (16, 8, 32);
-        let supported_shape = if integer { matches!((matrix.m, matrix.n, matrix.k), (8, 8, 16) | (16, 8, 16) | (16, 8, 32)) }
+            && ((matrix.m, matrix.n, matrix.k) == (16, 8, 32)
+                || ty == Scalar::F32 && !tf32 && (matrix.m, matrix.n, matrix.k) == (16, 8, 64));
+        let supported_shape = if packed_fp4 { (matrix.m, matrix.n, matrix.k) == (16, 8, 64) && matrix.ident != MatrixIdent::Accumulator }
+            else if integer { matches!((matrix.m, matrix.n, matrix.k), (8, 8, 16) | (16, 8, 16) | (16, 8, 32)) }
             else if double { matches!((matrix.m, matrix.n, matrix.k), (8, 8, 4) | (16, 8, 4) | (16, 8, 8) | (16, 8, 16)) }
             else if fp8 { matches!((matrix.m, matrix.n, matrix.k), (16, 8, 16) | (16, 8, 32)) }
             else if fp8_accumulator { true }
             else if tf32 { matches!((matrix.m, matrix.n, matrix.k), (16, 8, 4) | (16, 8, 8)) }
             else { matches!((matrix.m, matrix.n, matrix.k), (16, 8, 8) | (16, 8, 16)) || matrix.ident == MatrixIdent::Accumulator && (matrix.m, matrix.n, matrix.k) == (16, 8, 4) };
-        let supported_element = integer || fp8 || double || matches!((matrix.ident, ty), (MatrixIdent::A | MatrixIdent::B, Scalar::F16 | Scalar::BF16) | (MatrixIdent::Accumulator, Scalar::F16 | Scalar::F32)) || tf32 && matrix.ident != MatrixIdent::Accumulator;
+        let supported_element = packed_fp4 || integer || fp8 || double || matches!((matrix.ident, ty), (MatrixIdent::A | MatrixIdent::B, Scalar::F16 | Scalar::BF16) | (MatrixIdent::Accumulator, Scalar::F16 | Scalar::F32)) || tf32 && matrix.ident != MatrixIdent::Accumulator;
         if !supported_shape || !supported_element {
             return Err(unsupported("manual matrix coordinate shape or element type"));
         }

@@ -24,6 +24,7 @@ impl Emitter {
     }
 
     fn instruction_inner(&mut self, instruction: Instruction) -> Result<()> {
+        self.packed_instruction_supported(&instruction)?;
         self.fp8_instruction_supported(&instruction)?;
         if self.atomic_instruction(&instruction)? {
             return Ok(());

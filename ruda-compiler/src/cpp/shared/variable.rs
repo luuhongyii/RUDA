@@ -730,9 +730,8 @@ mod tests {
 
     #[test]
     fn cuda_non_finite_constants_scalar_vector_and_indexed() {
-        for (value, literal) in [(f64::INFINITY, "CUDART_INF"),
-                                 (f64::NEG_INFINITY, "-CUDART_INF"),
-                                 (f64::NAN, "CUDART_NAN")] {
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let literal = format!("__longlong_as_double({}LL)", value.to_bits() as i64);
             for elem in [Elem::<D>::F16, Elem::BF16, Elem::F32, Elem::F64] {
                 let scalar = Variable::Constant(ConstantValue::Float(value), Item::scalar(elem, false));
                 assert_eq!(scalar.to_string(), format!("{elem}({literal})"));
