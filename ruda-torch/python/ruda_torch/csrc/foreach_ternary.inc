@@ -138,9 +138,9 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   RUDA_FOREACH_POINTWISE_REGISTER(1, addcdiv)
   #undef RUDA_FOREACH_POINTWISE_REGISTER
   m.impl("_foreach_lerp.List", foreach_lerp_list<false>);
-  m.impl("_foreach_lerp_.List", foreach_lerp_list<true>);
+  m.impl("_foreach_lerp_.List", [](at::TensorList self, at::TensorList end, at::TensorList weights) { foreach_lerp_list<true>(self, end, weights); });
   m.impl("_foreach_lerp.Scalar", foreach_lerp_scalar<false>);
-  m.impl("_foreach_lerp_.Scalar", foreach_lerp_scalar<true>);
+  m.impl("_foreach_lerp_.Scalar", [](at::TensorList self, at::TensorList end, const at::Scalar& weight) { foreach_lerp_scalar<true>(self, end, weight); });
   m.impl("_foreach_lerp.ScalarList", foreach_lerp_scalarlist<false>);
-  m.impl("_foreach_lerp_.ScalarList", foreach_lerp_scalarlist<true>);
+  m.impl("_foreach_lerp_.ScalarList", [](at::TensorList self, at::TensorList end, at::ArrayRef<at::Scalar> weights) { foreach_lerp_scalarlist<true>(self, end, weights); });
 }
