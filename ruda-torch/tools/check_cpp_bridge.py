@@ -44,7 +44,7 @@ def main():
             raise RuntimeError('C++ compilation/link failed; see build.log')
         report['cpp_compiled']=True;report['torch']=torch.__version__
         junit=out/'cpp-tests.xml'
-        cmd=[sys.executable,'-m','pytest','-q',str(root/'ruda-torch/python/tests/test_v15_cpp.py'),f'--junitxml={junit}']
+        cmd=[sys.executable,'-m','pytest','-q','-s',str(root/'ruda-torch/python/tests/test_v15_cpp.py'),f'--junitxml={junit}']
         with (out/'tests.log').open('w') as log:
             result=subprocess.run(cmd,cwd=root,env=dict(os.environ,RUDA_CPP_TEST_LIBRARY=str(library)),stdout=log,stderr=subprocess.STDOUT)
         report['commands'].append({'command':cmd,'returncode':result.returncode})
@@ -57,7 +57,7 @@ def main():
         report['cpp_loaded_and_protocol_tested']=True;report['host_protocol_tests_passed']=len(cases)
         if args.static_graph:
             xml=out/'static-graph-cpp-tests.xml'
-            cmd=[sys.executable,'-m','pytest','-q',str(root/'ruda-torch/python/tests/test_static_graph_cpp.py'),f'--junitxml={xml}']
+            cmd=[sys.executable,'-m','pytest','-q','-s',str(root/'ruda-torch/python/tests/test_static_graph_cpp.py'),f'--junitxml={xml}']
             with (out/'static-graph-tests.log').open('w') as log:
                 result=subprocess.run(cmd,cwd=root,env=dict(os.environ,RUDA_CPP_TEST_LIBRARY=str(library)),stdout=log,stderr=subprocess.STDOUT)
             report['commands'].append({'command':cmd,'returncode':result.returncode})
