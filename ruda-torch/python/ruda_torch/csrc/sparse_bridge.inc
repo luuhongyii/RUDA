@@ -1,3 +1,26 @@
+at::Tensor sparse_view_as_real(const at::Tensor& self) {
+  TORCH_CHECK(self.is_sparse() && self.is_complex(), "view_as_real requires a complex sparse tensor");
+  TORCH_CHECK(!self.is_conj(), "view_as_real requires resolving the conjugate tensor first");
+  auto sizes = self.sym_sizes().vec();
+  sizes.emplace_back(2);
+  return at::_sparse_coo_tensor_with_dims_and_tensors_symint(
+      self.sparse_dim(), self.dense_dim() + 1, sizes, self._indices(), at::view_as_real(self._values()),
+      self.options().dtype(c10::toRealValueType(self.scalar_type())), self.is_coalesced());
+}
+
+at::Tensor sparse_view_as_complex(const at::Tensor& self) {
+  TORCH_CHECK(self.is_sparse() && (self.scalar_type() == at::kHalf ||
+      self.scalar_type() == at::kFloat || self.scalar_type() == at::kDouble),
+      "view_as_complex requires a half, float or double sparse tensor");
+  TORCH_CHECK(self.dense_dim() > 0 && self.size(-1) == 2,
+      "view_as_complex requires a final dense dimension of size 2");
+  auto sizes = self.sym_sizes().vec();
+  sizes.pop_back();
+  return at::_sparse_coo_tensor_with_dims_and_tensors_symint(
+      self.sparse_dim(), self.dense_dim() - 1, sizes, self._indices(), at::view_as_complex(self._values()),
+      self.options().dtype(c10::toComplexType(self.scalar_type())), self.is_coalesced());
+}
+
 TORCH_LIBRARY_IMPL(aten, SparsePrivateUse1, m) {
   m.impl("_sparse_coo_tensor_with_dims", TORCH_FN(at::native::new_with_dims_sparse));
   m.impl("_sparse_coo_tensor_with_dims_and_tensors", TORCH_FN(at::native::new_with_dims_and_tensor_sparse_symint));
@@ -78,8 +101,8 @@ TORCH_LIBRARY_IMPL(aten, SparsePrivateUse1, m) {
   m.impl("isinf", TORCH_FN(at::native::isinf_sparse));
   m.impl("threshold_backward", TORCH_FN(at::native::threshold_backward_sparse));
   m.impl("threshold_backward.grad_input", TORCH_FN(at::native::threshold_backward_sparse_out));
-  m.impl("view_as_real", TORCH_FN(at::native::view_as_real_sparse));
-  m.impl("view_as_complex", TORCH_FN(at::native::view_as_complex_sparse));
+  m.impl("view_as_real", TORCH_FN(sparse_view_as_real));
+  m.impl("view_as_complex", TORCH_FN(sparse_view_as_complex));
   m.impl("permute", TORCH_FN(at::native::permute_sparse_coo));
   m.impl("unsqueeze", TORCH_FN(at::native::unsqueeze_sparse));
   m.impl("_sparse_broadcast_to", TORCH_FN(at::native::sparse_broadcast_to));
@@ -145,7 +168,9 @@ TORCH_LIBRARY_IMPL(aten, SparseCsrPrivateUse1, m) {
   m.impl("select.int", TORCH_FN(at::native::select_sparse_csr));
   m.impl("select_copy.int", TORCH_FN(at::native::select_copy_sparse_csr));
   m.impl("sum", TORCH_FN(at::native::sum_csr));
-  m.impl("sum.out", TORCH_FN(at::native::sum_out));
+  m.impl("sum.out", [](const at::Tensor& self, std::optional<at::ScalarType> dtype, at::Tensor& out) -> at::Tensor& {
+    return at::native::sum_out(self, dtype, out);
+  });
   m.impl("sum.dim_IntList", TORCH_FN(at::native::sum_sparse_compressed));
 #define RUDA_COMPRESSED_UNARY(name) \
   m.impl(#name, TORCH_FN(at::native::name##_sparse_csr)); \

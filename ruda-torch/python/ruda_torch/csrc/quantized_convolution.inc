@@ -247,19 +247,19 @@ TORCH_LIBRARY_IMPL(quantized, QuantizedPrivateUse1, m) {
   m.impl("conv_transpose3d_prepack", TORCH_FN(quantized_conv_transpose_prepack<3>));
   m.impl("conv1d", TORCH_FN(quantized_conv1d_entry<false>));
   m.impl("conv1d_relu", TORCH_FN(quantized_conv1d_entry<true>));
-  m.impl("conv2d.new", TORCH_FN(quantized_conv_entry<2, false>));
-  m.impl("conv2d_relu.new", TORCH_FN(quantized_conv_entry<2, true>));
-  m.impl("conv3d.new", TORCH_FN(quantized_conv_entry<3, false>));
-  m.impl("conv3d_relu.new", TORCH_FN(quantized_conv_entry<3, true>));
-  m.impl("conv2d", TORCH_FN(quantized_conv_legacy<2, false>));
-  m.impl("conv2d_relu", TORCH_FN(quantized_conv_legacy<2, true>));
-  m.impl("conv3d", TORCH_FN(quantized_conv_legacy<3, false>));
-  m.impl("conv3d_relu", TORCH_FN(quantized_conv_legacy<3, true>));
+  m.impl("conv2d.new", TORCH_FN((quantized_conv_entry<2, false>)));
+  m.impl("conv2d_relu.new", TORCH_FN((quantized_conv_entry<2, true>)));
+  m.impl("conv3d.new", TORCH_FN((quantized_conv_entry<3, false>)));
+  m.impl("conv3d_relu.new", TORCH_FN((quantized_conv_entry<3, true>)));
+  m.impl("conv2d", TORCH_FN((quantized_conv_legacy<2, false>)));
+  m.impl("conv2d_relu", TORCH_FN((quantized_conv_legacy<2, true>)));
+  m.impl("conv3d", TORCH_FN((quantized_conv_legacy<3, false>)));
+  m.impl("conv3d_relu", TORCH_FN((quantized_conv_legacy<3, true>)));
   m.impl("conv2d_add", TORCH_FN(quantized_conv_add<false>));
   m.impl("conv2d_add_relu", TORCH_FN(quantized_conv_add<true>));
   m.impl("conv_transpose1d", TORCH_FN(quantized_conv1d_entry<false>));
-  m.impl("conv_transpose2d", TORCH_FN(quantized_conv_entry<2, false>));
-  m.impl("conv_transpose3d", TORCH_FN(quantized_conv_entry<3, false>));
+  m.impl("conv_transpose2d", TORCH_FN((quantized_conv_entry<2, false>)));
+  m.impl("conv_transpose3d", TORCH_FN((quantized_conv_entry<3, false>)));
 }
 TORCH_LIBRARY_IMPL(quantized, PrivateUse1, m) {
   m.impl("conv1d_dynamic", TORCH_FN(quantized_conv1d_dynamic));
@@ -275,10 +275,10 @@ TORCH_LIBRARY_IMPL(_quantized, QuantizedPrivateUse1, m) {
   m.impl("conv_transpose1d_prepack", TORCH_FN(quantized_conv_transpose1d_prepack));
   m.impl("conv_transpose2d_prepack", TORCH_FN(quantized_conv_transpose_prepack<2>));
   m.impl("conv_transpose3d_prepack", TORCH_FN(quantized_conv_transpose_prepack<3>));
-  m.impl("conv2d", TORCH_FN(quantized_conv_entry<2, false>));
-  m.impl("conv2d_relu", TORCH_FN(quantized_conv_entry<2, true>));
-  m.impl("conv3d", TORCH_FN(quantized_conv_entry<3, false>));
-  m.impl("conv3d_relu", TORCH_FN(quantized_conv_entry<3, true>));
+  m.impl("conv2d", TORCH_FN((quantized_conv_entry<2, false>)));
+  m.impl("conv2d_relu", TORCH_FN((quantized_conv_entry<2, true>)));
+  m.impl("conv3d", TORCH_FN((quantized_conv_entry<3, false>)));
+  m.impl("conv3d_relu", TORCH_FN((quantized_conv_entry<3, true>)));
   m.impl("conv_transpose1d", TORCH_FN(quantized_conv1d_entry<false>));
-  m.impl("conv_transpose2d", TORCH_FN(quantized_conv_entry<2, false>));
+  m.impl("conv_transpose2d", TORCH_FN((quantized_conv_entry<2, false>)));
 }
