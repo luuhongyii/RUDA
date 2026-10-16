@@ -5533,7 +5533,7 @@ version = "0.1.0"
 
 [[package]]
 name = "ruda-autodiff"
-version = "0.21.55"
+version = "0.21.56"
 dependencies = [
  "derive-new",
  "hashbrown 0.16.1",
