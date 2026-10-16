@@ -35,14 +35,18 @@ def main():
         cmd+=['-ltorch_python','-ltorch_cpu','-ltorch','-lc10','-o',str(library)]
         with (out/'build.log').open('w') as log:result=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT)
         report['commands'].append({'command':cmd,'returncode':result.returncode})
-        if result.returncode:raise RuntimeError('C++ compilation/link failed; see build.log')
+        if result.returncode:
+            print((out/'build.log').read_text(),file=sys.stderr)
+            raise RuntimeError('C++ compilation/link failed; see build.log')
         report['cpp_compiled']=True;report['torch']=torch.__version__
         junit=out/'cpp-tests.xml'
         cmd=[sys.executable,'-m','pytest','-q',str(root/'ruda-torch/python/tests/test_v15_cpp.py'),f'--junitxml={junit}']
         with (out/'tests.log').open('w') as log:
             result=subprocess.run(cmd,cwd=root,env=dict(os.environ,RUDA_CPP_TEST_LIBRARY=str(library)),stdout=log,stderr=subprocess.STDOUT)
         report['commands'].append({'command':cmd,'returncode':result.returncode})
-        if result.returncode:raise RuntimeError('C++ load/protocol test failed; see tests.log')
+        if result.returncode:
+            print((out/'tests.log').read_text(),file=sys.stderr)
+            raise RuntimeError('C++ load/protocol test failed; see tests.log')
         cases=list(ET.parse(junit).getroot().iter('testcase'))
         if len(cases)<8 or any(c.find(tag) is not None for c in cases for tag in ['failure','error','skipped']):
             raise RuntimeError('missing or skipped C++ test cases')
@@ -53,7 +57,9 @@ def main():
             with (out/'static-graph-tests.log').open('w') as log:
                 result=subprocess.run(cmd,cwd=root,env=dict(os.environ,RUDA_CPP_TEST_LIBRARY=str(library)),stdout=log,stderr=subprocess.STDOUT)
             report['commands'].append({'command':cmd,'returncode':result.returncode})
-            if result.returncode:raise RuntimeError('static graph C++ protocol test failed')
+            if result.returncode:
+                print((out/'static-graph-tests.log').read_text(),file=sys.stderr)
+                raise RuntimeError('static graph C++ protocol test failed')
             graph_cases=list(ET.parse(xml).getroot().iter('testcase'))
             if len(graph_cases)!=49 or any(c.find(tag) is not None for c in graph_cases for tag in ['failure','error','skipped']):
                 raise RuntimeError('missing or skipped static graph protocol tests')
