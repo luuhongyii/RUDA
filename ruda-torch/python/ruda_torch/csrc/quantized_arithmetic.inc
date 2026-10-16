@@ -134,12 +134,12 @@ TORCH_LIBRARY_IMPL(quantized, QuantizedPrivateUse1, m) {
   m.impl("add", TORCH_FN(quantized_binary_result<0>));
   m.impl("add.out", TORCH_FN(quantized_binary_out<0>));
   m.impl("add.Scalar", TORCH_FN(quantized_scalar_result<0>));
-  m.impl("add.Scalar2", TORCH_FN(quantized_scalar_reverse<0>));
+  m.impl("add.Scalar2", [](at::Scalar scalar, at::Tensor a) { return quantized_scalar_reverse<0>(scalar, a); });
   m.impl("add.Scalar_out", TORCH_FN(quantized_scalar_out<0>));
   m.impl("add_relu", TORCH_FN(quantized_binary_result<1>));
   m.impl("add_relu.out", TORCH_FN(quantized_binary_out<1>));
   m.impl("add_relu.Scalar", TORCH_FN(quantized_scalar_result<1>));
-  m.impl("add_relu.Scalar2", TORCH_FN(quantized_scalar_reverse<1>));
+  m.impl("add_relu.Scalar2", [](at::Scalar scalar, at::Tensor a) { return quantized_scalar_reverse<1>(scalar, a); });
   m.impl("add_relu.Scalar_out", TORCH_FN(quantized_scalar_out<1>));
   m.impl("add_out", TORCH_FN(quantized_binary_out<0>));
   m.impl("add_relu_out", TORCH_FN(quantized_binary_out<1>));
