@@ -12,7 +12,7 @@ fn sinc<F:Float+RudaElement>(x:F)->F {
 #[ruda]
 fn filter<F:Float+RudaElement>(distance:F)->F {
     let x=distance.abs();let mut value=F::new(0.0);
-    if x<F::new(3.0) {value=F::cast_from(f64::cast_from(sinc(x))*sinc(f64::cast_from(x)/3.0));}
+    if x<F::new(3.0) {value=F::cast_from(f64::cast_from(sinc::<F>(x))*sinc::<f64>(f64::cast_from(x)/3.0));}
     value
 }
 
@@ -31,7 +31,7 @@ fn weights<F:Float+RudaElement>(out:&mut Tensor<F>,bounds:&mut Tensor<i64>,maxim
         for j in 0..count {
             let delta=F::cast_from(i64::cast_from(j)+first)-center;
             let distance=F::cast_from((f64::cast_from(delta)+0.5)*f64::cast_from(inverse));
-            let value=filter(distance);out[base+j]=value;total+=value;
+            let value=filter::<F>(distance);out[base+j]=value;total+=value;
         }
         if total!=F::new(0.0) {for j in 0..count {out[base+j]=out[base+j]/total;maximum=F::max(maximum,out[base+j]);}}
         for j in count..capacity {out[base+j]=F::new(0.0);}
@@ -44,7 +44,7 @@ fn weight_precision(maxima:&Tensor<f64>,precision:&mut Tensor<i32>) {
     if ABSOLUTE_POS==0 {
         let mut maximum=0.0f64;
         for j in 0..maxima.len() {maximum=f64::max(maximum,maxima[j]);}
-        let mut bits=0u32;let mut searching=true;
+        let mut bits:u32=0u32;let mut searching=true;
         while bits<22 && searching {
             let next=i32::cast_from(0.5+maximum*f64::cast_from(1u32<<(bits+1)));
             if next>=32768 {searching=false;}else{bits+=1;}
@@ -78,7 +78,7 @@ fn forward_float<F:Float+RudaElement>(a:&Tensor<F>,weights:&Tensor<F>,bounds:&Te
         let mut value=F::new(0.0);
         for j in 0..count {
             let mut pixel=F::new(0.0);
-            if comptime!(horizontal) {pixel=load(a,plane,y,first+j);}else{pixel=load(a,plane,first+j,x);}
+            if comptime!(horizontal) {pixel=load::<F>(a,plane,y,first+j);}else{pixel=load::<F>(a,plane,first+j,x);}
             let term=pixel*weights[base+j];if j==0 {value=term;}else{value+=term;}
         }
         out[address(out,p)]=value;
@@ -95,10 +95,10 @@ fn forward_byte(a:&Tensor<u8>,weights:&Tensor<i16>,bounds:&Tensor<i64>,precision
         let bits=u32::cast_from(precision[0]);let mut value=i32::cast_from(1u32<<(bits-1));
         for j in 0..count {
             let mut pixel=0u8;
-            if comptime!(horizontal) {pixel=load(a,plane,y,first+j);}else{pixel=load(a,plane,first+j,x);}
+            if comptime!(horizontal) {pixel=load::<u8>(a,plane,y,first+j);}else{pixel=load::<u8>(a,plane,first+j,x);}
             value+=i32::cast_from(pixel)*i32::cast_from(weights[base+j]);
         }
-        out[address(out,p)]=u8::cast_from(i32::min(i32::max(value>>bits,0),255));
+        out[address(out,p)]=u8::cast_from(i32::min(i32::max(value>>i32::cast_from(bits),0),255));
     }
 }
 
@@ -127,7 +127,7 @@ fn backward<F:Float+RudaElement>(grad:&Tensor<F>,wx:&Tensor<F>,bx:&Tensor<i64>,w
         for oy in y0..y1 {for ox in x0..x1 {
             let first_x=usize::cast_from(bx[ox*2]);let first_y=usize::cast_from(by[oy*2]);
             let weight=wx[ox*wx.shape(1)+x-first_x]*wy[oy*wy.shape(1)+y-first_y];
-            value+=weight*load(grad,plane,oy,ox);
+            value+=weight*load::<F>(grad,plane,oy,ox);
         }}
         out[address(out,p)]=value;
     }

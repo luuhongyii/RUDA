@@ -3,7 +3,7 @@ use super::scientific::address;
 use ruda_kernel::dsl::prelude::Tensor;
 
 #[ruda(launch)]
-fn window<S: Float + RudaElement, F: Float>(
+fn window<S: Float + RudaElement, F: Float + RudaElement>(
     input: &Tensor<S>, output: &mut Tensor<S>, inv_alpha: F, beta: F, inv_i0_beta: F,
     #[comptime] wide: bool,
 ) {
@@ -12,7 +12,7 @@ fn window<S: Float + RudaElement, F: Float>(
         let a=F::cast_from(input[address(input,p)]); let one=F::new(1.0); let zero=F::new(0.0);
         let x=a*inv_alpha-one; let mut y=one-x*x;
         if !(y>zero) {y=zero;}
-        let value=crate::bessel::evaluate(beta*y.sqrt(),233,wide)*inv_i0_beta;
+        let value=crate::bessel::evaluate::<F>(beta*y.sqrt(),233u32,wide)*inv_i0_beta;
         output[address(output,p)]=S::cast_from(value);
     }
 }

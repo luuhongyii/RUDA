@@ -35,7 +35,7 @@ fn integral<S: Numeric + RudaElement>(
         } else if comptime!(op == 1 || op == 2) {
             value = zero;
             if x > zero { value = S::cast_from(1u32); }
-            else if x < zero { value = S::cast_from(0u64-1u64); }
+            else if x < zero { value = S::cast_from(u64::MAX); }
         }
         output[address(output,p)] = value;
     }

@@ -21,18 +21,18 @@ fn combine<F:Float+RudaElement>(a:F,b:F,#[comptime] maximum:bool)->F {
 #[ruda]
 fn warp_reduce<F:Float+RudaElement>(value:F,#[comptime] maximum:bool)->F {
     let mut sum=value;let mut offset=16u32;
-    while offset>0 {sum=combine(sum,plane_shuffle_down(sum,offset),maximum);offset/=2;}
+    while offset>0 {sum=combine::<F>(sum,plane_shuffle_down(sum,offset),maximum);offset/=2;}
     sum
 }
 
 #[ruda]
 fn block_reduce<F:Float+RudaElement>(value:F,#[comptime] maximum:bool)->F {
     let lane=UNIT_POS as usize;let mut shared=SharedMemory::<F>::new(8usize);
-    let mut sum=warp_reduce(value,maximum);sync_ruda();
+    let mut sum=warp_reduce::<F>(value,maximum);sync_ruda();
     if lane%32==0 {shared[lane/32]=sum;}
     sync_ruda();sum=F::new(0.0);
     if lane<8 {sum=shared[lane];}
-    if lane<32 {sum=warp_reduce(sum,maximum);}
+    if lane<32 {sum=warp_reduce::<F>(sum,maximum);}
     sum
 }
 
@@ -55,7 +55,7 @@ fn forward<F:Float+RudaElement>(a:&Tensor<F>,b:&Tensor<F>,out:&mut Tensor<F>,p:F
         else {value+=diff.powf(p);}
         feature+=256;
     }
-    value=block_reduce(value,kind==3);
+    value=block_reduce::<F>(value,kind==3);
     if lane==0 {
         if comptime!(kind==2) {value=value.sqrt();}
         else if comptime!(kind>=4) {value=value.powf(F::new(1.0)/p);}
@@ -96,7 +96,7 @@ fn backward_terms<F:Float+RudaElement>(a:&Tensor<F>,b:&Tensor<F>,grad:&Tensor<F>
             pair=(batch*rows+i)*columns+j;
         }
         let diff=a[address(a,(batch*rows+i)*features+feature)]-b[address(b,(batch*columns+j)*features+feature)];
-        let mut value=contribution(diff,grad[address(grad,pair)],distance[address(distance,pair)],p,kind);
+        let mut value=contribution::<F>(diff,grad[address(grad,pair)],distance[address(distance,pair)],p,kind);
         if negative {value=-value;}
         out[address(out,index)]=value;
     }

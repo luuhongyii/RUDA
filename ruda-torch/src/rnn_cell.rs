@@ -32,10 +32,10 @@ fn lstm_forward<S: Float + RudaElement, F: Float + RudaElement>(
         let width = cx.shape(1);
         let column = p % width;
         let base = (p / width) * 4usize * width + column;
-        let i = sigmoid(gate::<S, F>(input, hidden, bias_i, bias_h, base, column, has_bias));
-        let f = sigmoid(gate::<S, F>(input, hidden, bias_i, bias_h, base + width, column + width, has_bias));
+        let i = sigmoid::<F>(gate::<S, F>(input, hidden, bias_i, bias_h, base, column, has_bias));
+        let f = sigmoid::<F>(gate::<S, F>(input, hidden, bias_i, bias_h, base + width, column + width, has_bias));
         let c = gate::<S, F>(input, hidden, bias_i, bias_h, base + 2usize * width, column + 2usize * width, has_bias).tanh();
-        let o = sigmoid(gate::<S, F>(input, hidden, bias_i, bias_h, base + 3usize * width, column + 3usize * width, has_bias));
+        let o = sigmoid::<F>(gate::<S, F>(input, hidden, bias_i, bias_h, base + 3usize * width, column + 3usize * width, has_bias));
         let next_c = f * F::cast_from(cx[address(cx, p)]) + i * c;
         let next_h = o * next_c.tanh();
         hy[address(hy, p)] = S::cast_from(next_h);
@@ -91,8 +91,8 @@ fn gru_forward<S: Float + RudaElement, F: Float + RudaElement>(
         let width = hx.shape(1);
         let column = p % width;
         let base = (p / width) * 3usize * width + column;
-        let r = sigmoid(gate::<S, F>(input, hidden, bias_i, bias_h, base, column, has_bias));
-        let i = sigmoid(gate::<S, F>(input, hidden, bias_i, bias_h, base + width, column + width, has_bias));
+        let r = sigmoid::<F>(gate::<S, F>(input, hidden, bias_i, bias_h, base, column, has_bias));
+        let i = sigmoid::<F>(gate::<S, F>(input, hidden, bias_i, bias_h, base + width, column + width, has_bias));
         let mut bin = F::new(0.0);
         let mut bhn = F::new(0.0);
         if comptime!(has_bias) {

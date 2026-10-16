@@ -40,11 +40,11 @@ fn embedding_renorm<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElemen
             else {value+=x.powf(p);}
             feature+=128;
         }
-        value=warp_sum(value);sync_ruda();
+        value=warp_sum::<F>(value);sync_ruda();
         if lane%32==0 {shared[lane/32]=value;}
         sync_ruda();value=F::new(0.0);
         if lane<4 {value=shared[lane];}
-        if lane<32 {value=warp_sum(value);}
+        if lane<32 {value=warp_sum::<F>(value);}
         if lane==0 {shared[0]=value.powf(F::cast_from(1.0f64/f64::cast_from(p)));}
         sync_ruda();let norm=shared[0];
         if norm>maximum {

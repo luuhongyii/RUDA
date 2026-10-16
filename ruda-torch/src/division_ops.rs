@@ -6,7 +6,7 @@ use ruda_kernel::dsl::prelude::Tensor;
 fn signed_zero<F: Float>(value: F, #[comptime] code: u32) -> F {
     let mut mask = 0x80000000u64;
     if comptime!(code == 9) { mask = 0x8000000000000000u64; }
-    crate::floating::from_bits(crate::floating::bits(value, code) & mask, code)
+    crate::floating::from_bits::<F>(crate::floating::bits::<F>(value, code) & mask, code)
 }
 
 #[ruda(launch)]
@@ -36,7 +36,7 @@ fn floating<S: Float + RudaElement, F: Float>(
                 if div != zero {
                     result = F::cast_from(S::cast_from(div.floor()));
                     if div - result > F::new(0.5) { result = F::cast_from(S::cast_from(result + one)); }
-                } else { result = signed_zero(quotient, code); }
+                } else { result = signed_zero::<F>(quotient, code); }
             }
         } else if comptime!(op >= 3) {
             result = a % b;

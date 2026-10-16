@@ -40,7 +40,7 @@ fn forward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>(input:
     let index=ABSOLUTE_POS as usize;
     if index<out.len() {
         let inner=input.shape(2);let segments=out.shape(1);let row=index/inner;let outer=row/segments;let feature=index%inner;
-        let (start,end)=limits(offsets,outer*(segments+1)+row%segments,input.shape(1));
+        let (start,end)=limits::<I>(offsets,outer*(segments+1)+row%segments,input.shape(1));
         let mut value=S::cast_from(initial);
         for position in start..end {value=combine::<S,F>(value,input[address(input,(outer*input.shape(1)+position)*inner+feature)],kind);}
         if comptime!(kind==1) {
@@ -55,7 +55,7 @@ fn forward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>(input:
 fn forward_vector<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>(input:&Tensor<S>,offsets:&Tensor<I>,out:&mut Tensor<S>,initial:F,#[comptime] kind:u32,#[comptime] has_initial:bool) {
     let segment=(RUDA_POS_X+RUDA_POS_Y*RUDA_COUNT_X) as usize;let lane=UNIT_POS as usize;
     if segment<out.shape(1) {
-        let (start,end)=limits(offsets,segment,input.shape(1));let mut value=identity::<S>(kind);
+        let (start,end)=limits::<I>(offsets,segment,input.shape(1));let mut value=identity::<S>(kind);
         let mut position=i64::cast_from(start)+i64::cast_from(lane);
         while position<i64::cast_from(end) {value=combine::<S,F>(value,input[address(input,usize::cast_from(position))],kind);position+=256;}
         let mut shared=SharedMemory::<S>::new(256usize);shared[lane]=value;sync_ruda();let mut step=128usize;
@@ -80,7 +80,7 @@ fn backward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>(input
     let index=ABSOLUTE_POS as usize;
     if index<output.len() {
         let inner=input.shape(2);let segments=output.shape(1);let row=index/inner;let outer=row/segments;let feature=index%inner;
-        let (start,end)=limits(offsets,outer*(segments+1)+row%segments,input.shape(1));
+        let (start,end)=limits::<I>(offsets,outer*(segments+1)+row%segments,input.shape(1));
         let g=grad[address(grad,index)];let y=output[address(output,index)];
         if comptime!(kind==0 || kind==2) {
             let mut count=0usize;
@@ -106,7 +106,7 @@ fn backward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>(input
                 if x!=x || x==S::new(0.0) {
                     let mut product=S::cast_from(initial);
                     for other in start..end {
-                        if other!=position {product=combine::<S,F>(product,input[address(input,(outer*input.shape(1)+other)*inner+feature)],4);}
+                        if other!=position {product=combine::<S,F>(product,input[address(input,(outer*input.shape(1)+other)*inner+feature)],4u32);}
                     }
                     value=S::cast_from(F::cast_from(g)*F::cast_from(product));
                 } else {value=S::cast_from(F::cast_from(scaled)/F::cast_from(x));}

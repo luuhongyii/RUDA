@@ -107,7 +107,7 @@ fn mean<S: Numeric, F: Float>(real: S, imaginary: S, count: S, #[comptime] code:
         if numerator % denominator != 0i64 && ((numerator < 0i64) != (denominator < 0i64)) { quotient -= 1i64; }
         result = S::cast_from(quotient);
     } else if comptime!(code == 10 || code == 11) {
-        let (r, i) = crate::foreach_unary::complex_divide(F::cast_from(real), F::cast_from(imaginary), F::cast_from(divisor), F::new(0.0));
+        let (r, i) = crate::foreach_unary::complex_divide::<F>(F::cast_from(real), F::cast_from(imaginary), F::cast_from(divisor), F::new(0.0));
         result = S::cast_from(r); result_i = S::cast_from(i);
     } else { result = S::cast_from(F::cast_from(real) / F::cast_from(divisor)); }
     (result, result_i)

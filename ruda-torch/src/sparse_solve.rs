@@ -49,8 +49,8 @@ fn choose_pivot<F: Float + RudaElement>(
     let mut row = tid;
     while row < n {
         if rank[row] < 0i64 {
-            let score = coefficient(pointers, columns, values, row, column).abs();
-            if better(score, u32::cast_from(row), best, selected) {
+            let score = coefficient::<F>(pointers, columns, values, row, column).abs();
+            if better::<F>(score, u32::cast_from(row), best, selected) {
                 best = score;
                 selected = u32::cast_from(row);
             }
@@ -67,7 +67,7 @@ fn choose_pivot<F: Float + RudaElement>(
         if tid < stride {
             let score = scores[tid + stride];
             let row = rows[tid + stride];
-            if better(score, row, scores[tid], rows[tid]) {
+            if better::<F>(score, row, scores[tid], rows[tid]) {
                 scores[tid] = score;
                 rows[tid] = row;
             }
@@ -94,29 +94,30 @@ fn merged_pattern(
 ) -> usize {
     let begin = pointers[row] as usize;
     let end = pointers[row + 1usize] as usize;
+    let mut count = 0usize;
     if frozen {
         if comptime!(write) {
             for p in begin..end { output[start + (p - begin)] = columns[p]; }
         }
-        return end - begin;
-    }
-    let pivot_end = pointers[pivot + 1usize] as usize;
-    let mut right = pivot_end;
-    if active { right = lower(columns, pointers[pivot] as usize, pivot_end, column + 1i64); }
-    let mut left = begin;
-    let mut count = 0usize;
-    while left < end || right < pivot_end {
-        let mut a = 9223372036854775807i64;
-        let mut b = 9223372036854775807i64;
-        if left < end { a = columns[left]; }
-        if right < pivot_end { b = columns[right]; }
-        let mut next = a;
-        if b < a { next = b; }
-        if a <= b { left += 1usize; }
-        if b <= a { right += 1usize; }
-        if next != column {
-            if comptime!(write) { output[start + count] = next; }
-            count += 1usize;
+        count = end - begin;
+    } else {
+        let pivot_end = pointers[pivot + 1usize] as usize;
+        let mut right = pivot_end;
+        if active { right = lower(columns, pointers[pivot] as usize, pivot_end, column + 1i64); }
+        let mut left = begin;
+        while left < end || right < pivot_end {
+            let mut a = 9223372036854775807i64;
+            let mut b = 9223372036854775807i64;
+            if left < end { a = columns[left]; }
+            if right < pivot_end { b = columns[right]; }
+            let mut next = a;
+            if b < a { next = b; }
+            if a <= b { left += 1usize; }
+            if b <= a { right += 1usize; }
+            if next != column {
+                if comptime!(write) { output[start + count] = next; }
+                count += 1usize;
+            }
         }
     }
     count
@@ -133,7 +134,7 @@ fn count_rows<F: Float + RudaElement>(
         let mut count = 0usize;
         if info[0] == 0i32 {
             let frozen = rank[row] >= 0i64;
-            let active = !frozen && coefficient(pointers, columns, values, row, column) != F::new(0.0);
+            let active = !frozen && coefficient::<F>(pointers, columns, values, row, column) != F::new(0.0);
             count = merged_pattern(pointers, columns, row, pivots[column as usize] as usize, column,
                 active, frozen, counts, 0usize, false);
         }
@@ -149,7 +150,7 @@ fn emit_rows<F: Float + RudaElement>(
     let row = block_id() * 256usize + UNIT_POS as usize;
     if row < rank.len() {
         let frozen = rank[row] >= 0i64;
-        let active = !frozen && coefficient(pointers, columns, values, row, column) != F::new(0.0);
+        let active = !frozen && coefficient::<F>(pointers, columns, values, row, column) != F::new(0.0);
         merged_pattern(pointers, columns, row, pivots[column as usize] as usize, column,
             active, frozen, output, output_pointers[row] as usize, true);
     }
@@ -162,16 +163,16 @@ fn eliminate<F: Float + RudaElement>(
     output_values: &mut Tensor<F>, output_rhs: &mut Tensor<F>, column: i64,
 ) {
     let row = block_id();
-    if row >= rank.len() { return; }
+    if row >= rank.len() { terminate!(); }
     let tid = UNIT_POS as usize;
     let pivot = pivots[column as usize] as usize;
     let frozen = rank[row] >= 0i64;
     let mut multiplier = F::new(0.0);
     let mut active = false;
     if !frozen {
-        let a = coefficient(pointers, columns, values, row, column);
+        let a = coefficient::<F>(pointers, columns, values, row, column);
         if a != F::new(0.0) {
-            multiplier = a / coefficient(pointers, columns, values, pivot, column);
+            multiplier = a / coefficient::<F>(pointers, columns, values, pivot, column);
             active = true;
         }
     }
@@ -187,7 +188,7 @@ fn eliminate<F: Float + RudaElement>(
             value = values[pointers[row] as usize + offset];
         } else {
             let j = output_columns[p];
-            value = coefficient(pointers, columns, values, row, j);
+            value = coefficient::<F>(pointers, columns, values, row, j);
             if active {
                 let pivot_end = pointers[pivot + 1usize] as usize;
                 let q = lower(columns, pointers[pivot] as usize, pivot_end, j);
@@ -227,9 +228,9 @@ fn back_substitute<F: Float + RudaElement>(
             if j > i64::cast_from(column) { sum = fma(values[p], output[j as usize], sum); }
             if count - offset <= 256usize { active = false; } else { offset += 256usize; }
         }
-        sum = crate::blas_accumulate::block_sum(sum);
+        sum = crate::blas_accumulate::block_sum::<F>(sum);
         if tid == 0usize {
-            output[column] = (rhs[row] - sum) / coefficient(pointers, columns, values, row, i64::cast_from(column));
+            output[column] = (rhs[row] - sum) / coefficient::<F>(pointers, columns, values, row, i64::cast_from(column));
         }
         sync_ruda();
     }

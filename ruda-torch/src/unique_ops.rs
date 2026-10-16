@@ -29,15 +29,15 @@ fn float_key<T: Numeric>(value: T, #[comptime] code: u32) -> u64 {
 fn before<T: Numeric>(input: &Tensor<T>, a: u32, b: u32, width: usize, #[comptime] code: u32, #[comptime] flat: bool) -> bool {
     let mut result = a < b;
     if comptime!(flat && (code == 0 || code == 1 || code == 2 || code == 9)) {
-        let ka = float_key(load(input, a as usize, false), code);
-        let kb = float_key(load(input, b as usize, false), code);
+        let ka = float_key::<T>(load::<T>(input, a as usize, false), code);
+        let kb = float_key::<T>(load::<T>(input, b as usize, false), code);
         if ka != kb { result = ka < kb; }
     } else {
         let mut column = 0usize;
         let mut decided = false;
         while column < width && !decided {
-            let x = load(input, a as usize * width + column, code == 3);
-            let y = load(input, b as usize * width + column, code == 3);
+            let x = load::<T>(input, a as usize * width + column, code == 3);
+            let y = load::<T>(input, b as usize * width + column, code == 3);
             let xn = x != x; let yn = y != y;
             if xn != yn { result = yn; decided = true; }
             else if !xn {
@@ -75,7 +75,7 @@ fn merge<T: Numeric + RudaElement>(
         let mut hi = other_end;
         while lo < hi {
             let mid = lo + (hi - lo) / 2usize;
-            if before(input, order[mid], key, width, code, flat) { lo = mid + 1usize; }
+            if before::<T>(input, order[mid], key, width, code, flat) { lo = mid + 1usize; }
             else { hi = mid; }
         }
         output[base + (p - start) + (lo - other_start)] = key;
@@ -95,7 +95,7 @@ fn heads<T: Numeric + RudaElement>(
             if comptime!(!consecutive) { a = order[p - 1usize] as usize; b = order[p] as usize; }
             let mut column = 0usize;
             while column < width && !different {
-                different = load(input, a * width + column, boolean) != load(input, b * width + column, boolean);
+                different = load::<T>(input, a * width + column, boolean) != load::<T>(input, b * width + column, boolean);
                 column += 1usize;
             }
         }
@@ -171,7 +171,7 @@ fn emit<T: Numeric + RudaElement>(
         let column = p % width;
         let mut source = starts[row] as usize;
         if comptime!(!consecutive) { source = order[source] as usize; }
-        output[p] = load(input, source * width + column, boolean);
+        output[p] = load::<T>(input, source * width + column, boolean);
     }
     if comptime!(return_inverse) {
         if p < groups.len() {

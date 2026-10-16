@@ -61,7 +61,7 @@ fn coordinate<F:Float+RudaElement>(position:usize,scale:F,#[comptime] align:bool
 
 #[ruda]
 fn linear_coordinate<F:Float+RudaElement>(position:usize,size:usize,scale:F,#[comptime] align:bool)->(usize,usize,F,F) {
-    let x=coordinate(position,scale,align,false);let first=usize::cast_from(x);let mut last=first;
+    let x=coordinate::<F>(position,scale,align,false);let first=usize::cast_from(x);let mut last=first;
     if first<size-1 {last+=1;}
     let weight=x-F::cast_from(first);
     (first,last,F::new(1.0)-weight,weight)
@@ -90,10 +90,10 @@ fn weighted_forward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,out:&m
         let w=p%ow;let h=p/ow%oh;let d=p/(ow*oh)%od;
         let iw=a.shape(4);let ih=a.shape(3);let id=a.shape(2);let mut result=F::new(0.0);
         if comptime!(cubic) {
-            let rx=coordinate(w,sw,align,true);let ry=coordinate(h,sh,align,true);
+            let rx=coordinate::<F>(w,sw,align,true);let ry=coordinate::<F>(h,sh,align,true);
             let x=i64::cast_from(f32::cast_from(rx).floor());let y=i64::cast_from(f32::cast_from(ry).floor());
             let tx=rx-F::cast_from(x);let ty=ry-F::cast_from(y);let mut rows=Array::<F>::new(4);
-            let c0=cubic_coefficient(tx,0);let c1=cubic_coefficient(tx,1);let c2=cubic_coefficient(tx,2);let c3=cubic_coefficient(tx,3);
+            let c0=cubic_coefficient::<F>(tx,0);let c1=cubic_coefficient::<F>(tx,1);let c2=cubic_coefficient::<F>(tx,2);let c3=cubic_coefficient::<F>(tx,3);
             let x0=usize::cast_from(i64::min(i64::max(x-1,0),i64::cast_from(iw)-1));
             let x1=usize::cast_from(i64::min(i64::max(x,0),i64::cast_from(iw)-1));
             let x2=usize::cast_from(i64::min(i64::max(x+1,0),i64::cast_from(iw)-1));
@@ -103,14 +103,14 @@ fn weighted_forward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,out:&m
                 rows[k]=load::<S,F>(a,plane,0,yy,x0)*c0+load::<S,F>(a,plane,0,yy,x1)*c1
                     +load::<S,F>(a,plane,0,yy,x2)*c2+load::<S,F>(a,plane,0,yy,x3)*c3;
             }
-            result=rows[0]*cubic_coefficient(ty,0)+rows[1]*cubic_coefficient(ty,1)
-                +rows[2]*cubic_coefficient(ty,2)+rows[3]*cubic_coefficient(ty,3);
+            result=rows[0]*cubic_coefficient::<F>(ty,0)+rows[1]*cubic_coefficient::<F>(ty,1)
+                +rows[2]*cubic_coefficient::<F>(ty,2)+rows[3]*cubic_coefficient::<F>(ty,3);
         } else {
-            let (x0,x1,wx0,wx1)=linear_coordinate(w,iw,sw,align);
+            let (x0,x1,wx0,wx1)=linear_coordinate::<F>(w,iw,sw,align);
             if comptime!(rank==1) {result=wx0*load::<S,F>(a,plane,0,0,x0)+wx1*load::<S,F>(a,plane,0,0,x1);}
             else {
-                let (y0,y1,wy0,wy1)=linear_coordinate(h,ih,sh,align);
-                let (z0,z1,wz0,wz1)=linear_coordinate(d,id,sd,align);
+                let (y0,y1,wy0,wy1)=linear_coordinate::<F>(h,ih,sh,align);
+                let (z0,z1,wz0,wz1)=linear_coordinate::<F>(d,id,sd,align);
                 let top=wy0*(wx0*load::<S,F>(a,plane,z0,y0,x0)+wx1*load::<S,F>(a,plane,z0,y0,x1))
                     +wy1*(wx0*load::<S,F>(a,plane,z0,y1,x0)+wx1*load::<S,F>(a,plane,z0,y1,x1));
                 result=top;
@@ -140,20 +140,20 @@ fn weighted_backward<S:Float+RudaElement,F:Float+RudaElement>(grad:&Tensor<S>,ou
         let w=p%ow;let h=p/ow%oh;let d=p/(ow*oh)%od;
         let iw=out.shape(4);let ih=out.shape(3);let id=out.shape(2);let value=F::cast_from(grad[address(grad,p)]);
         if comptime!(cubic) {
-            let rx=coordinate(w,sw,align,true);let ry=coordinate(h,sh,align,true);
+            let rx=coordinate::<F>(w,sw,align,true);let ry=coordinate::<F>(h,sh,align,true);
             let x=i64::cast_from(f32::cast_from(rx).floor());let y=i64::cast_from(f32::cast_from(ry).floor());
             let tx=rx-F::cast_from(x);let ty=ry-F::cast_from(y);
             for ky in 0..4usize {for kx in 0..4usize {
                 let yy=usize::cast_from(i64::min(i64::max(y-1+i64::cast_from(ky),0),i64::cast_from(ih)-1));
                 let xx=usize::cast_from(i64::min(i64::max(x-1+i64::cast_from(kx),0),i64::cast_from(iw)-1));
-                add::<S,F>(out,plane,0,yy,xx,value*cubic_coefficient(ty,ky)*cubic_coefficient(tx,kx));
+                add::<S,F>(out,plane,0,yy,xx,value*cubic_coefficient::<F>(ty,ky)*cubic_coefficient::<F>(tx,kx));
             }}
         } else {
-            let (x0,x1,wx0,wx1)=linear_coordinate(w,iw,sw,align);
+            let (x0,x1,wx0,wx1)=linear_coordinate::<F>(w,iw,sw,align);
             if comptime!(rank==1) {add::<S,F>(out,plane,0,0,x0,wx0*value);add::<S,F>(out,plane,0,0,x1,wx1*value);}
             else {
-                let (y0,y1,wy0,wy1)=linear_coordinate(h,ih,sh,align);
-                let (z0,z1,wz0,wz1)=linear_coordinate(d,id,sd,align);
+                let (y0,y1,wy0,wy1)=linear_coordinate::<F>(h,ih,sh,align);
+                let (z0,z1,wz0,wz1)=linear_coordinate::<F>(d,id,sd,align);
                 if comptime!(rank==2) {
                     add::<S,F>(out,plane,0,y0,x0,wy0*wx0*value);add::<S,F>(out,plane,0,y0,x1,wy0*wx1*value);
                     add::<S,F>(out,plane,0,y1,x0,wy1*wx0*value);add::<S,F>(out,plane,0,y1,x1,wy1*wx1*value);
@@ -210,12 +210,12 @@ fn aa_span<F:Float+RudaElement>(position:usize,size:usize,scale:F,#[comptime] cu
 fn aa_weights<S:Float+RudaElement,F:Float+RudaElement>(weights:&mut Tensor<S>,input_size:usize,scale:F,#[comptime] cubic:bool) {
     let p=ABSOLUTE_POS as usize;
     if p<weights.shape(0) {
-        let (first,count,center)=aa_span(p,input_size,scale,cubic);let capacity=weights.shape(1);
+        let (first,count,center)=aa_span::<F>(p,input_size,scale,cubic);let capacity=weights.shape(1);
         aa_assert(count<=capacity);
         let mut inverse=F::new(1.0);if scale>=F::new(1.0) {inverse=F::new(1.0)/scale;}
         let offset=F::cast_from(first)-center;let mut total=F::new(0.0);
         for j in 0..count {
-            let value=aa_filter((F::cast_from(j)+offset+F::new(0.5))*inverse,cubic);
+            let value=aa_filter::<F>((F::cast_from(j)+offset+F::new(0.5))*inverse,cubic);
             weights[p*capacity+j]=S::cast_from(value);total+=value;
         }
         if total!=F::new(0.0) {
@@ -231,8 +231,8 @@ fn aa_forward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,wx:&Tensor<S
     let p=ABSOLUTE_POS as usize;
     if p<out.len() {
         let ow=out.shape(4);let oh=out.shape(3);let x=p%ow;let y=p/ow%oh;let plane=p/(ow*oh);
-        let (first_x,count_x,_center_x)=aa_span(x,a.shape(4),sw,cubic);
-        let (first_y,count_y,_center_y)=aa_span(y,a.shape(3),sh,cubic);
+        let (first_x,count_x,_center_x)=aa_span::<F>(x,a.shape(4),sw,cubic);
+        let (first_y,count_y,_center_y)=aa_span::<F>(y,a.shape(3),sh,cubic);
         let xbase=x*wx.shape(1);let ybase=y*wy.shape(1);let mut total=F::new(0.0);
         for row in 0..count_y {
             let mut value=load::<S,F>(a,plane,0,first_y+row,first_x)*F::cast_from(wx[xbase]);
@@ -251,8 +251,8 @@ fn aa_backward<S:Float+RudaElement,F:Float+RudaElement>(grad:&Tensor<S>,wx:&Tens
     let p=ABSOLUTE_POS as usize;
     if p<grad.len() {
         let ow=grad.shape(4);let oh=grad.shape(3);let x=p%ow;let y=p/ow%oh;let plane=p/(ow*oh);
-        let (first_x,count_x,_center_x)=aa_span(x,out.shape(4),sw,cubic);
-        let (first_y,count_y,_center_y)=aa_span(y,out.shape(3),sh,cubic);
+        let (first_x,count_x,_center_x)=aa_span::<F>(x,out.shape(4),sw,cubic);
+        let (first_y,count_y,_center_y)=aa_span::<F>(y,out.shape(3),sh,cubic);
         let xbase=x*wx.shape(1);let ybase=y*wy.shape(1);let value=grad[address(grad,p)];
         for row in 0..count_y {for column in 0..count_x {
             let weight=wx[xbase+column]*wy[ybase+row];let contribution=weight*value;

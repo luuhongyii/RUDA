@@ -70,23 +70,23 @@ fn complex<S: Float + RudaElement, F: Float + RudaElement>(
             let dr = c - a;
             let di = d - b;
             if e * e + f * f < F::new(0.25) {
-                let (r, i) = complex_multiply(e, f, dr, di, code);
+                let (r, i) = complex_multiply::<F>(e, f, dr, di, code);
                 result_r = a + r; result_i = b + i;
             } else {
-                let (r, i) = complex_multiply(dr, di, F::new(1.0) - e, F::new(0.0) - f, code);
+                let (r, i) = complex_multiply::<F>(dr, di, F::new(1.0) - e, F::new(0.0) - f, code);
                 result_r = c - r; result_i = d - i;
             }
         } else {
             let mut product_r = F::new(0.0);
             let mut product_i = F::new(0.0);
             if comptime!(op == 399) {
-                let (r, i) = complex_multiply(c, d, e, f, code);
+                let (r, i) = complex_multiply::<F>(c, d, e, f, code);
                 product_r = r; product_i = i;
             } else {
-                let (r, i) = complex_divide(c, d, e, f, code, fraction, exponent_bits);
+                let (r, i) = complex_divide::<F>(c, d, e, f, code, fraction, exponent_bits);
                 product_r = r; product_i = i;
             }
-            let (r, i) = complex_multiply(alpha, beta, product_r, product_i, code);
+            let (r, i) = complex_multiply::<F>(alpha, beta, product_r, product_i, code);
             result_r = a + r; result_i = b + i;
         }
         out_r[address(out_r, p)] = S::cast_from(result_r);

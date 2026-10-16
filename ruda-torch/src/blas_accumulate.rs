@@ -28,12 +28,12 @@ pub(super) fn block_sum<F: Float>(value: F) -> F {
 }
 
 #[ruda(launch)]
-fn gemv<S: Float + RudaElement, F: Float>(
+fn gemv<S: Float + RudaElement, F: Float + RudaElement>(
     bias: &Tensor<S>, matrix: &Tensor<S>, vector: &Tensor<S>, out: &mut Tensor<S>,
     alpha: F, beta: F, #[comptime] zero_beta: bool,
 ) {
     let row = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if row >= out.shape(0) { return; }
+    if row >= out.shape(0) { terminate!(); }
     let tid = UNIT_POS as usize;
     let inner = matrix.shape(1);
     let mut sum = F::new(0.0);
@@ -47,7 +47,7 @@ fn gemv<S: Float + RudaElement, F: Float>(
             }
         }
     }
-    let sum = block_sum(sum);
+    let sum = block_sum::<F>(sum);
     if tid == 0usize {
         let mut value = F::new(0.0);
         if inner == 0usize {
@@ -67,7 +67,7 @@ fn complex_gemv<F: Float + RudaElement>(
     #[comptime] zero_beta: bool,
 ) {
     let row = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if row >= yr.shape(0) { return; }
+    if row >= yr.shape(0) { terminate!(); }
     let tid = UNIT_POS as usize;
     let inner = ar.shape(1);
     let mut sr = F::new(0.0); let mut si = F::new(0.0);
@@ -83,7 +83,7 @@ fn complex_gemv<F: Float + RudaElement>(
             }
         }
     }
-    let sr = block_sum(sr); let si = block_sum(si);
+    let sr = block_sum::<F>(sr); let si = block_sum::<F>(si);
     if tid == 0usize {
         let mut r = F::new(0.0); let mut i = F::new(0.0);
         if inner != 0usize { r = alpha_r * sr - alpha_i * si; i = alpha_r * si + alpha_i * sr; }
@@ -98,7 +98,7 @@ fn complex_gemv<F: Float + RudaElement>(
 }
 
 #[ruda(launch)]
-fn batched<S: Float + RudaElement, O: Float + RudaElement, F: Float>(
+fn batched<S: Float + RudaElement, O: Float + RudaElement, F: Float + RudaElement>(
     bias: &Tensor<O>, left: &Tensor<S>, right: &Tensor<S>, out: &mut Tensor<O>, alpha: F, beta: F,
     row_tiles: usize, column_tiles: usize, inner_tiles: usize,
     #[comptime] reduce_batch: bool, #[comptime] zero_beta: bool, #[comptime] activation: u32,
@@ -107,8 +107,8 @@ fn batched<S: Float + RudaElement, O: Float + RudaElement, F: Float>(
     let tid = UNIT_POS as usize; let tx = tid % 16usize; let ty = tid / 16usize;
     let tiles = row_tiles * column_tiles;
     let batch = block / tiles; let tile = block % tiles;
-    if comptime!(reduce_batch) { if batch != 0usize { return; } }
-    else { if batch >= left.shape(0) { return; } }
+    if comptime!(reduce_batch) { if batch != 0usize { terminate!(); } }
+    else { if batch >= left.shape(0) { terminate!(); } }
     let row = tile / column_tiles * 16usize + ty; let col = tile % column_tiles * 16usize + tx;
     let rows = left.shape(1); let inner = left.shape(2); let columns = right.shape(2);
     let valid = row < rows && col < columns;
@@ -175,8 +175,8 @@ fn complex_batched<F: Float + RudaElement>(
     let tid = UNIT_POS as usize; let tx = tid % 16usize; let ty = tid / 16usize;
     let tiles = row_tiles * column_tiles;
     let batch = block / tiles; let tile = block % tiles;
-    if comptime!(reduce_batch) { if batch != 0usize { return; } }
-    else { if batch >= ar.shape(0) { return; } }
+    if comptime!(reduce_batch) { if batch != 0usize { terminate!(); } }
+    else { if batch >= ar.shape(0) { terminate!(); } }
     let row = tile / column_tiles * 16usize + ty; let col = tile % column_tiles * 16usize + tx;
     let rows = ar.shape(1); let inner = ar.shape(2); let columns = br.shape(2);
     let valid = row < rows && col < columns;

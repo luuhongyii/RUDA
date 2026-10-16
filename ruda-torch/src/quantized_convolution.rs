@@ -54,7 +54,7 @@ fn convolution<Q: Numeric + RudaElement>(
     #[comptime] transpose: bool, #[comptime] relu: bool, #[comptime] add: bool,
 ) {
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if block >= blocks { return; }
+    if block >= blocks { terminate!(); }
     let tid = UNIT_POS as usize; let tx = tid % 16usize; let ty = tid / 16usize;
     let group = block / (row_tiles * output_tiles);
     let output_tile = block % output_tiles;

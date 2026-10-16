@@ -45,7 +45,7 @@ fn offsets(
             if coordinate < 0i64 { valid = false; }
             else { offset += usize::cast_from(coordinate) * usize::cast_from(*strides64.index(dim)); }
         }
-        let mut result = -1i64;
+        let mut result = (-1i64).runtime();
         if valid { result = i64::cast_from(offset); }
         output[address(output, p)] = result;
     }

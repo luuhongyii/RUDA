@@ -72,8 +72,8 @@ fn floating<S: Float + RudaElement, F: Float>(
                 if comptime!(mode == 0) { b = scale * F::cast_from(other[p]); }
                 else if comptime!(mode == 2) { b = scale * F::cast_from(other[0usize]); }
                 let mut value = F::new(0.0);
-                if comptime!(reverse) { value = real_op(b, a, op); }
-                else { value = real_op(a, b, op); }
+                if comptime!(reverse) { value = real_op::<F>(b, a, op); }
+                else { value = real_op::<F>(a, b, op); }
                 output[p] = S::cast_from(value);
                 offset += 512usize;
             }
@@ -122,7 +122,7 @@ fn integral<S: Numeric + RudaElement>(
                     if comptime!(op == 0) { value = a + b; }
                     else if comptime!(op == 1) { value = a - b; }
                     else if comptime!(op == 2) { value = a * b; }
-                    else if comptime!(op == 6) { value = integer_power(b, a, code != 8); }
+                    else if comptime!(op == 6) { value = integer_power::<S>(b, a, code != 8); }
                 }
                 output[p] = value;
                 offset += 512usize;
@@ -140,11 +140,11 @@ fn complex_op<F: Float>(a: F, ai: F, b: F, bi: F, #[comptime] op: u32, #[comptim
     else if comptime!(op == 1) { real = a - b; imag = ai - bi; }
     else if comptime!(op == 2) { real = a * b - ai * bi; imag = a * bi + ai * b; }
     else if comptime!(op == 3) {
-        let (r, i) = crate::foreach_unary::complex_divide(a, ai, b, bi);
+        let (r, i) = crate::foreach_unary::complex_divide::<F>(a, ai, b, bi);
         real = r; imag = i;
     } else if comptime!(op == 6) {
-        let (r, i) = crate::scientific::complex_log(a, ai);
-        let (pr, pi) = crate::foreach_unary::complex_exp(r * b - i * bi, r * bi + i * b, code);
+        let (r, i) = crate::scientific::complex_log::<F>(a, ai);
+        let (pr, pi) = crate::foreach_unary::complex_exp::<F>(r * b - i * bi, r * bi + i * b, code);
         real = pr; imag = pi;
     }
     (real, imag)
@@ -190,10 +190,10 @@ fn complex<F: Float + RudaElement>(
                 let mut real = F::new(0.0);
                 let mut imag = F::new(0.0);
                 if comptime!(reverse) {
-                    let (r, i) = complex_op(b, bi, a, ai, op, code);
+                    let (r, i) = complex_op::<F>(b, bi, a, ai, op, code);
                     real = r; imag = i;
                 } else {
-                    let (r, i) = complex_op(a, ai, b, bi, op, code);
+                    let (r, i) = complex_op::<F>(a, ai, b, bi, op, code);
                     real = r; imag = i;
                 }
                 output[p] = real;

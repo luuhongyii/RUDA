@@ -81,26 +81,27 @@ fn binomial_lower<S: Float, F: Float>(count: F, prob: F, seed_low: u32, seed_hig
             let v = binomial_uniform::<F>(seed_low, seed_high, stream, draw);
             let us = F::new(0.5) - u.abs();
             let k = stored::<S, F>(((F::new(2.0) * a / us + b) * u + c).floor());
-            if k < F::new(0.0) || k > count { continue; }
-            if f64::cast_from(us) >= 0.07f64 && v <= vr {
-                result = k;
-                break;
+            if !(k < F::new(0.0) || k > count) {
+                if f64::cast_from(us) >= 0.07f64 && v <= vr {
+                    result = k;
+                    break;
+                }
+                let transformed = (v * alpha / (a / (us * us) + b)).ln();
+                let count_k = stored::<S, F>(count - k);
+                let count_k1 = stored::<S, F>(count_k + one);
+                let k1 = stored::<S, F>(k + one);
+                let count_m1 = count - m + one;
+                let first = ((m + one) / (r * count_m1)).ln();
+                let second = count1 * (count_m1 / count_k1).ln();
+                let third = (r * count_k1 / k1).ln();
+                let bound = F::cast_from(
+                    (f64::cast_from(m) + 0.5f64) * f64::cast_from(first)
+                    + f64::cast_from(second)
+                    + (f64::cast_from(k) + 0.5f64) * f64::cast_from(third)
+                    + f64::cast_from(stirling_tail::<F>(m)) + f64::cast_from(stirling_tail::<F>(count - m))
+                    - f64::cast_from(stirling_tail::<F>(k)) - f64::cast_from(stirling_tail::<F>(count_k)));
+                if transformed <= bound { result = k; break; }
             }
-            let transformed = (v * alpha / (a / (us * us) + b)).ln();
-            let count_k = stored::<S, F>(count - k);
-            let count_k1 = stored::<S, F>(count_k + one);
-            let k1 = stored::<S, F>(k + one);
-            let count_m1 = count - m + one;
-            let first = ((m + one) / (r * count_m1)).ln();
-            let second = count1 * (count_m1 / count_k1).ln();
-            let third = (r * count_k1 / k1).ln();
-            let bound = F::cast_from(
-                (f64::cast_from(m) + 0.5f64) * f64::cast_from(first)
-                + f64::cast_from(second)
-                + (f64::cast_from(k) + 0.5f64) * f64::cast_from(third)
-                + f64::cast_from(stirling_tail(m)) + f64::cast_from(stirling_tail(count - m))
-                - f64::cast_from(stirling_tail(k)) - f64::cast_from(stirling_tail(count_k)));
-            if transformed <= bound { result = k; break; }
         }
     } else {
         let logarithm = (-prob).log1p();

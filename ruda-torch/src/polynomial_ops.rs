@@ -33,12 +33,12 @@ fn chebyshev<F:Float>(x:F,n:i64,#[comptime] family:u32,#[comptime] shifted:bool)
                 else {result=order*(order*angle).cos()/z;}
             } else if comptime!(family==2) {
                 if (angle/two).sin()!=one {result=((degree+F::new(0.5))*angle).cos()/(angle/two).cos();}
-                else {result=endpoint::<F>(n,false,2);}
+                else {result=endpoint::<F>(n,false,2u32);}
             } else {
                 if (angle/two).cos()!=one {result=((degree+F::new(0.5))*angle).sin()/(angle/two).sin();}
                 else {
                     let mut edge_positive=x>zero;if comptime!(shifted) {edge_positive=false;}
-                    result=endpoint::<F>(n,edge_positive,3);
+                    result=endpoint::<F>(n,edge_positive,3u32);
                 }
             }
         } else if n==0i64 {result=one;}
@@ -82,7 +82,7 @@ fn classical<F:Float>(x:F,n:i64,#[comptime] legendre:bool)->F {
     let one=F::new(1.0);let mut result=F::new(0.0);
     if n>=0i64 {
         let mut at_endpoint=x.abs()==F::new(0.0);let mut endpoint_value=one;
-        if comptime!(legendre) {at_endpoint=x.abs()==one;endpoint_value=endpoint::<F>(n,x>F::new(0.0),0);}
+        if comptime!(legendre) {at_endpoint=x.abs()==one;endpoint_value=endpoint::<F>(n,x>F::new(0.0),0u32);}
         if at_endpoint || n==0i64 {result=endpoint_value;}
         else {
             let mut previous=one;let mut current=one-x;if comptime!(legendre) {current=x;}

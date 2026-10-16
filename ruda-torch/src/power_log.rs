@@ -29,7 +29,7 @@ use super::*;
 fn trim<F: Float>(value: F, #[comptime] code: u32) -> F {
     let mut mask = 0xffff0000u64;
     if comptime!(code == 9) { mask = 0xfffffff800000000u64; }
-    crate::floating::from_bits(crate::floating::bits(value, code) & mask, code)
+    crate::floating::from_bits::<F>(crate::floating::bits::<F>(value, code) & mask, code)
 }
 
 #[ruda]
@@ -53,8 +53,8 @@ pub(super) fn logarithm<F: Float>(x: F, y: F, #[comptime] code: u32) -> F {
     else if ax >= one { result = ((ax-one)*(ax+one) + ay*ay).log1p()*half; }
     else if ax*ax + ay*ay <= F::cast_from(0.7f64) { result = (ax*ax + ay*ay).ln()*half; }
     else {
-        let x0 = trim(ax, code); let y0 = trim(ay, code); ax -= x0; ay -= y0;
-        let x1 = trim(ax, code); let y1 = trim(ay, code); let x2 = ax-x1; let y2 = ay-y1;
+        let x0 = trim::<F>(ax, code); let y0 = trim::<F>(ay, code); ax -= x0; ay -= y0;
+        let x1 = trim::<F>(ax, code); let y1 = trim::<F>(ay, code); let x2 = ax-x1; let y2 = ay-y1;
         let mut parts = Array::<F>::new(12usize);
         parts[0usize]=x0*x0; parts[1usize]=y0*y0; parts[2usize]=two*x0*x1; parts[3usize]=two*y0*y1;
         parts[4usize]=x1*x1; parts[5usize]=y1*y1; parts[6usize]=two*x0*x2; parts[7usize]=two*y0*y2;

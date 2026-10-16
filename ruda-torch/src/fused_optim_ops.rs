@@ -10,14 +10,14 @@ fn control(controls: &Sequence<Tensor<f32>>, #[comptime] flags: u32, #[comptime]
 #[ruda]
 fn learning_rate(controls: &Sequence<Tensor<f32>>, host_lr: f64, #[comptime] flags: u32) -> f64 {
     let mut lr = host_lr;
-    if comptime!(flags & 1 != 0) { lr = f64::cast_from(control(controls, flags, 0)); }
+    if comptime!(flags & 1 != 0) { lr = f64::cast_from(control(controls, flags, 0u32)); }
     lr
 }
 
 #[ruda]
 fn skip(controls: &Sequence<Tensor<f32>>, #[comptime] flags: u32) -> bool {
     let mut result = false;
-    if comptime!(flags & 4 != 0) { result = control(controls, flags, 2) == 1.0f32; }
+    if comptime!(flags & 4 != 0) { result = control(controls, flags, 2u32) == 1.0f32; }
     result
 }
 
@@ -64,7 +64,7 @@ fn adam<P: Float + RudaElement, M: Float + RudaElement, F: Float + RudaElement>(
                 let p = base + offset;
                 let mut value = F::cast_from(param[p]);
                 let mut g = F::cast_from(grad[p]);
-                if comptime!(flags & 2 != 0) { g /= F::cast_from(control(controls, flags, 1)); }
+                if comptime!(flags & 2 != 0) { g /= F::cast_from(control(controls, flags, 1u32)); }
                 let unscaled = g;
                 if comptime!(maximize) { g = -g; }
                 if wd != F::new(0.0) {
@@ -128,7 +128,7 @@ fn sgd<S: Float + RudaElement, F: Float + RudaElement>(
                 let mut value = F::cast_from(param[p]);
                 let mut g = F::cast_from(grad[p]);
                 if comptime!(flags & 2 != 0) {
-                    g /= F::cast_from(control(controls, flags, 1));
+                    g /= F::cast_from(control(controls, flags, 1u32));
                 }
                 let unscaled = g;
                 let mut next_buffer = F::new(0.0);
@@ -184,7 +184,7 @@ fn adagrad<S: Float + RudaElement, F: Float + RudaElement>(
                 let value = F::cast_from(param[p]);
                 let mut g = F::cast_from(grad[p]);
                 if comptime!(flags & 2 != 0) {
-                    g = F::cast_from(f64::cast_from(g) / f64::cast_from(control(controls, flags, 1)));
+                    g = F::cast_from(f64::cast_from(g) / f64::cast_from(control(controls, flags, 1u32)));
                 }
                 let unscaled = g;
                 if comptime!(maximize) { g = -g; }

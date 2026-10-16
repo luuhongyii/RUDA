@@ -64,7 +64,7 @@ fn classify_integer<I:Numeric+RudaElement>(a:&Tensor<I>,out:&mut Tensor<u8>,#[co
     let p=ABSOLUTE_POS as usize;
     if p<out.len() {
         let mut value=false;
-        if comptime!(sign) {value=a[address(a,p)]<I::new(0);}
+        if comptime!(sign) {value=a[address(a,p)]<I::cast_from(0i32);}
         out[address(out,p)]=u8::cast_from(value);
     }
 }

@@ -58,7 +58,7 @@ fn gamma_grad<F: Float>(alpha: F, x: F) -> F {
         let power = x.powf(alpha);
         let pdf = x.powf(alpha - one) * (-x).exp();
         let cdf = power * series1;
-        let cdf_alpha = (x.ln() - digamma(alpha)) * cdf - power * series2;
+        let cdf_alpha = (x.ln() - digamma::<F>(alpha)) * cdf - power * series2;
         result = -cdf_alpha / pdf;
         if result != result { result = F::new(0.0); }
     } else if alpha > F::new(8.0) {
@@ -98,7 +98,7 @@ fn gamma_grad<F: Float>(alpha: F, x: F) -> F {
 #[ruda]
 fn beta_alpha_small<F: Float>(x: F, alpha: F, beta: F) -> F {
     let one = F::new(1.0);
-    let factor = digamma(alpha) - digamma(alpha + beta) - x.ln();
+    let factor = digamma::<F>(alpha) - digamma::<F>(alpha + beta) - x.ln();
     let mut numerator = one;
     let mut series = numerator / alpha * (factor + one / alpha);
     for i in 1u32..11u32 {
@@ -115,7 +115,7 @@ fn beta_alpha_small<F: Float>(x: F, alpha: F, beta: F) -> F {
 #[ruda]
 fn beta_beta_small<F: Float>(x: F, alpha: F, beta: F) -> F {
     let one = F::new(1.0);
-    let factor = digamma(alpha + beta) - digamma(beta);
+    let factor = digamma::<F>(alpha + beta) - digamma::<F>(beta);
     let mut numerator = one;
     let mut betas = one;
     let mut dbetas = F::new(0.0);
@@ -175,11 +175,11 @@ fn dirichlet_grad<F: Float>(x: F, alpha: F, total: F) -> F {
     let boundary = total * x * (one - x);
     let mut result = F::new(0.0);
     if x <= F::new(0.5) && boundary < F::new(2.5) {
-        result = beta_alpha_small(x, alpha, beta);
+        result = beta_alpha_small::<F>(x, alpha, beta);
     } else if x >= F::new(0.5) && boundary < F::new(0.75) {
-        result = -beta_beta_small(one - x, beta, alpha);
+        result = -beta_beta_small::<F>(one - x, beta, alpha);
     } else if alpha > F::new(6.0) && beta > F::new(6.0) {
-        result = beta_alpha_mid(x, alpha, beta);
+        result = beta_alpha_mid::<F>(x, alpha, beta);
     } else {
         let coefficients = Array::<F>::from_data(comptime!(DIRICHLET_COEFFICIENTS.to_vec()));
         let u = x.ln();
@@ -201,7 +201,7 @@ fn dirichlet_grad<F: Float>(x: F, alpha: F, total: F) -> F {
                     + b * (coefficients[index + 38] + b * coefficients[index + 39])));
             }
         }
-        let approximation = x * (digamma(total) - digamma(alpha)) / beta;
+        let approximation = x * (digamma::<F>(total) - digamma::<F>(alpha)) / beta;
         result = p / q * approximation;
     }
     result
@@ -215,7 +215,7 @@ fn gamma_gradient<S: Float + RudaElement, F: Float + RudaElement>(
     if p < output.len() {
         let a = F::cast_from(alpha[address(alpha, p)]);
         let x = F::cast_from(samples[address(samples, p)]);
-        output[address(output, p)] = S::cast_from(gamma_grad(a, x));
+        output[address(output, p)] = S::cast_from(gamma_grad::<F>(a, x));
     }
 }
 
@@ -228,7 +228,7 @@ fn dirichlet_gradient<F: Float + RudaElement>(
         let x = samples[address(samples, p)];
         let a = alpha[address(alpha, p)];
         let t = total[address(total, p)];
-        output[address(output, p)] = dirichlet_grad(x, a, t);
+        output[address(output, p)] = dirichlet_grad::<F>(x, a, t);
     }
 }
 

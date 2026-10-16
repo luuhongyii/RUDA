@@ -114,9 +114,9 @@ fn evaluate<F: Float>(x: F, #[comptime] op: u32) -> F {
 fn copy_sign<F: Float>(x: F, y: F, #[comptime] code: u32) -> F {
     let mut sign = 0x80000000u64;
     if comptime!(code == 9) { sign = 0x8000000000000000u64; }
-    let a = crate::floating::bits(x, code);
-    let b = crate::floating::bits(y, code);
-    crate::floating::from_bits((a & !sign) | (b & sign), code)
+    let a = crate::floating::bits::<F>(x, code);
+    let b = crate::floating::bits::<F>(y, code);
+    crate::floating::from_bits::<F>((a & !sign) | (b & sign), code)
 }
 
 #[ruda]
@@ -157,7 +157,7 @@ fn scaled_complex_exp<F: Float>(x: F, y: F, #[comptime] code: u32, #[comptime] a
         reduction = F::cast_from(1246.97177782734161156f64);
     }
     let value = (x - reduction).exp();
-    let raw = crate::floating::bits(value, code);
+    let raw = crate::floating::bits::<F>(value, code);
     let exponent = i32::cast_from(raw >> fraction) - bias * 2i32 + k + adjust;
     let mantissa = crate::floating::from_bits::<F>(
         (raw & ((1u64 << fraction) - 1u64)) | (u64::cast_from(bias * 2i32) << fraction), code,
@@ -182,12 +182,12 @@ pub(super) fn complex_exp<F: Float>(x: F, y: F, #[comptime] code: u32) -> (F, F)
         else if x == inf { real = x; imag = y - y; }
         else { real = y - y; imag = y - y; }
     } else {
-        let mut high = crate::floating::bits(x, code);
+        let mut high = crate::floating::bits::<F>(x, code);
         let mut lower = 0x42b17218u64;
         let mut upper = 0x43400074u64;
         if comptime!(code == 9) { high >>= 32u32; lower = 0x40862e42u64; upper = 0x4096b8e4u64; }
         if high >= lower && high <= upper {
-            let (a, b) = scaled_complex_exp(x, y, code, 0);
+            let (a, b) = scaled_complex_exp::<F>(x, y, code, 0);
             real = a; imag = b;
         } else {
             let magnitude = x.exp();
@@ -207,7 +207,7 @@ fn complex_hyperbolic<F: Float>(x: F, y: F, #[comptime] code: u32, #[comptime] c
     let mut real = F::new(f32::NAN);
     let mut imag = real;
     if ax < inf && ay < inf {
-        let mut high = crate::floating::bits(ax, code);
+        let mut high = crate::floating::bits::<F>(ax, code);
         let mut small = 0x41100000u64;
         let mut lower = 0x42b17218u64;
         let mut upper = 0x4340b1e7u64;
@@ -224,12 +224,12 @@ fn complex_hyperbolic<F: Float>(x: F, y: F, #[comptime] code: u32, #[comptime] c
             else { real = x.sinh() * y.cos(); imag = x.cosh() * y.sin(); }
         } else if high < lower {
             let magnitude = ax.exp() * F::new(0.5);
-            if comptime!(cosh) { real = magnitude * y.cos(); imag = copy_sign(magnitude, x, code) * y.sin(); }
-            else { real = copy_sign(magnitude, x, code) * y.cos(); imag = magnitude * y.sin(); }
+            if comptime!(cosh) { real = magnitude * y.cos(); imag = copy_sign::<F>(magnitude, x, code) * y.sin(); }
+            else { real = copy_sign::<F>(magnitude, x, code) * y.cos(); imag = magnitude * y.sin(); }
         } else if high < upper {
-            let (a, b) = scaled_complex_exp(ax, y, code, -1);
-            if comptime!(cosh) { real = a; imag = b * copy_sign(one, x, code); }
-            else { real = a * copy_sign(one, x, code); imag = b; }
+            let (a, b) = scaled_complex_exp::<F>(ax, y, code, -1);
+            if comptime!(cosh) { real = a; imag = b * copy_sign::<F>(one, x, code); }
+            else { real = a * copy_sign::<F>(one, x, code); imag = b; }
         } else {
             let magnitude = huge * x;
             if comptime!(cosh) { real = magnitude * magnitude * y.cos(); imag = magnitude * y.sin(); }
@@ -237,13 +237,13 @@ fn complex_hyperbolic<F: Float>(x: F, y: F, #[comptime] code: u32, #[comptime] c
         }
     } else if x == zero && !(ay < inf) {
         let nan = y - y;
-        if comptime!(cosh) { real = nan; imag = copy_sign(zero, x * nan, code); }
-        else { real = copy_sign(zero, x * nan, code); imag = nan; }
+        if comptime!(cosh) { real = nan; imag = copy_sign::<F>(zero, x * nan, code); }
+        else { real = copy_sign::<F>(zero, x * nan, code); imag = nan; }
     } else if y == zero && !(ax < inf) {
         if comptime!(cosh) {
             real = x * x;
-            if ax == inf { imag = copy_sign(zero, x, code) * y; }
-            else { imag = copy_sign(zero, (x + x) * y, code); }
+            if ax == inf { imag = copy_sign::<F>(zero, x, code) * y; }
+            else { imag = copy_sign::<F>(zero, (x + x) * y, code); }
         } else { real = x; imag = y; }
     } else if ax < inf && !(ay < inf) {
         real = y - y; imag = x * (y - y);
@@ -264,66 +264,66 @@ fn evaluate_complex<F: Float>(x: F, y: F, #[comptime] op: u32, #[comptime] code:
     let mut real = zero;
     let mut imag = zero;
     if comptime!(op == 5) {
-        let (a, b) = crate::scientific::inverse_hyperbolic(x, y, true);
-        real = b.abs(); imag = -copy_sign(a, y, code);
+        let (a, b) = crate::scientific::inverse_hyperbolic::<F>(x, y, true);
+        real = b.abs(); imag = -copy_sign::<F>(a, y, code);
         if x == zero && y != y { real = one.atan2(zero); }
     } else if comptime!(op == 6) {
-        let (a, b) = crate::scientific::inverse_hyperbolic(-y, x, false);
+        let (a, b) = crate::scientific::inverse_hyperbolic::<F>(-y, x, false);
         real = b; imag = -a;
         if y != y && x.abs() == F::new(f32::INFINITY) { imag = x; }
     } else if comptime!(op == 7) {
-        let (a, b) = crate::scientific::complex_atanh(-y, x);
+        let (a, b) = crate::scientific::complex_atanh::<F>(-y, x);
         real = b; imag = -a;
     } else if comptime!(op == 8) {
-        let (a, b) = complex_hyperbolic(x, y, code, true);
+        let (a, b) = complex_hyperbolic::<F>(x, y, code, true);
         real = a; imag = b;
     } else if comptime!(op == 9) {
-        let (a, b) = crate::scientific::complex_tanh(-y, x);
+        let (a, b) = crate::scientific::complex_tanh::<F>(-y, x);
         real = b; imag = -a;
     } else if comptime!(op == 10) {
-        let (a, b) = complex_hyperbolic(-y, x, code, false);
+        let (a, b) = complex_hyperbolic::<F>(-y, x, code, false);
         real = b; imag = -a;
     } else if comptime!(op == 11) {
-        let (a, b) = complex_hyperbolic(x, y, code, false);
+        let (a, b) = complex_hyperbolic::<F>(x, y, code, false);
         real = a; imag = b;
     } else if comptime!(op == 12) {
-        let (a, b) = complex_exp(x, y, code);
+        let (a, b) = complex_exp::<F>(x, y, code);
         real = a; imag = b;
     } else if comptime!(op == 13) {
-        let (a, b) = crate::elementary::evaluate(x, y, zero, zero, zero, 250, true);
+        let (a, b) = crate::elementary::evaluate::<F>(x, y, zero, zero, zero, 250u32, true);
         real = a; imag = b;
     } else if comptime!(op == 14) {
-        let (a, b) = crate::scientific::complex_tanh(x, y);
+        let (a, b) = crate::scientific::complex_tanh::<F>(x, y);
         real = a; imag = b;
     } else if comptime!(op == 15 || op == 16 || op == 17) {
-        let (a, b) = crate::scientific::complex_log(x, y);
+        let (a, b) = crate::scientific::complex_log::<F>(x, y);
         real = a; imag = b;
         if comptime!(op == 16) {
             let divisor = F::cast_from(2.30258509299404568402f64);
             real = a / divisor; imag = b / divisor;
         } else if comptime!(op == 17) {
-            let (r, i) = complex_divide(a, b, F::cast_from(0.693147180559945309417232121458176f64), zero);
+            let (r, i) = complex_divide::<F>(a, b, F::cast_from(0.693147180559945309417232121458176f64), zero);
             real = r; imag = i;
         }
     } else if comptime!(op == 18) {
-        let (a, b) = crate::elementary::complex_log1p(x, y);
+        let (a, b) = crate::elementary::complex_log1p::<F>(x, y);
         real = a; imag = b;
     } else if comptime!(op == 19) {
-        let (a, b) = complex_hyperbolic(-y, x, code, true);
+        let (a, b) = complex_hyperbolic::<F>(-y, x, code, true);
         real = a; imag = b;
     } else if comptime!(op == 20 || op == 27) {
-        let (a, b) = crate::scientific::complex_sqrt(x, y);
+        let (a, b) = crate::scientific::complex_sqrt::<F>(x, y);
         real = a; imag = b;
         if comptime!(op == 27) {
-            let (r, i) = complex_divide(one, zero, a, b);
+            let (r, i) = complex_divide::<F>(one, zero, a, b);
             real = r; imag = i;
         }
     } else if comptime!(op == 22) {
-        let (a, b) = complex_exp(-x, -y, code);
-        let (r, i) = complex_divide(one, zero, one + a, zero + b);
+        let (a, b) = complex_exp::<F>(-x, -y, code);
+        let (r, i) = complex_divide::<F>(one, zero, one + a, zero + b);
         real = r; imag = i;
     } else if comptime!(op == 25) {
-        let (r, i) = complex_divide(one, zero, x, y);
+        let (r, i) = complex_divide::<F>(one, zero, x, y);
         real = r; imag = i;
     } else if comptime!(op == 28) { real = -x; imag = -y; }
     (real, imag)
@@ -350,7 +350,7 @@ fn complex<F: Float + RudaElement>(
                 let mut x = F::new(0.0);
                 let mut y = F::new(0.0);
                 if comptime!(op != 30) { x = input[p]; y = input[p + 1usize]; }
-                let (real, imag) = evaluate_complex(x, y, op, code);
+                let (real, imag) = evaluate_complex::<F>(x, y, op, code);
                 output[p] = real;
                 output[p + 1usize] = imag;
                 offset += 512usize;
@@ -379,7 +379,7 @@ fn floating<S: Float + RudaElement, F: Float + RudaElement>(
                 let p = base + offset;
                 let mut x = F::new(0.0);
                 if comptime!(op != 30) { x = F::cast_from(input[p]); }
-                output[p] = S::cast_from(evaluate(x, op));
+                output[p] = S::cast_from(evaluate::<F>(x, op));
                 offset += 512usize;
             }
         }

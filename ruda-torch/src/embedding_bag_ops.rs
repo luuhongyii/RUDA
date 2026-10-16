@@ -26,9 +26,9 @@ fn row_index<I:Numeric+RudaElement>(indices:&Tensor<I>,sample:usize,rows:usize)-
 fn metadata<I:Numeric+RudaElement>(indices:&Tensor<I>,offsets:&Tensor<I>,mapping:&mut Tensor<I>,sizes:&mut Tensor<I>,bags:usize,rows:usize,padding:i64) {
     let bag=ABSOLUTE_POS as usize;
     if bag<bags {
-        let (begin,end)=bag_range(offsets,bag,bags,indices.len());let mut count=0usize;
+        let (begin,end)=bag_range::<I>(offsets,bag,bags,indices.len());let mut count:usize=0usize;
         for sample in begin..end {
-            let row=row_index(indices,sample,rows);
+            let row=row_index::<I>(indices,sample,rows);
             if row!=padding {count+=1;}
             mapping[address(mapping,sample)]=I::cast_from(bag);
         }
@@ -41,10 +41,10 @@ fn forward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>(weight
     let index=ABSOLUTE_POS as usize;
     if index<out.len() {
         let width=out.shape(1);let bag=index/width;let feature=index%width;
-        let (begin,end)=bag_range(offsets,bag,out.shape(0),indices.len());
-        let mut count=0usize;let mut value=F::new(0.0);let mut max_row=-1i64;
+        let (begin,end)=bag_range::<I>(offsets,bag,out.shape(0),indices.len());
+        let mut count=0usize;let mut value=F::new(0.0);let mut max_row=(-1i64).runtime();
         for sample in begin..end {
-            let row=row_index(indices,sample,weight.shape(0));
+            let row=row_index::<I>(indices,sample,weight.shape(0));
             let mut item=F::cast_from(weight[address(weight,usize::cast_from(row)*width+feature)]);
             if comptime!(mode==2) {
                 if row!=padding {
@@ -82,7 +82,7 @@ fn dense_backward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>
         let width=out.shape(1);let row=i64::cast_from(index/width);let feature=index%width;
         let mut total=F::new(0.0);
         if row!=padding {
-            let begin=bound(sorted,row,false);let end=bound(sorted,row,true);
+            let begin=bound::<I>(sorted,row,false);let end=bound::<I>(sorted,row,true);
             let mut chunk=begin;
             while chunk<end {
                 let mut stop=end;if end-chunk>10 {stop=chunk+10;}
@@ -127,7 +127,7 @@ fn max_backward<S:Float+RudaElement,I:Numeric+RudaElement>(grad:&Tensor<S>,maxim
 fn sample_backward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement>(grad:&Tensor<S>,weight:&Tensor<S>,indices:&Tensor<I>,mapping:&Tensor<I>,out:&mut Tensor<S>,padding:i64) {
     let lane=UNIT_POS as usize%32;let sample=RUDA_POS_X as usize*8+UNIT_POS as usize/32;
     if sample<indices.len() {
-        let row=row_index(indices,sample,weight.shape(0));let mut value=F::new(0.0);
+        let row=row_index::<I>(indices,sample,weight.shape(0));let mut value=F::new(0.0);
         if row!=padding {
             let bag=i64::cast_from(mapping[address(mapping,sample)]);
             if bag<0 || bag>=i64::cast_from(grad.shape(0)) {
@@ -150,7 +150,7 @@ fn sample_backward<S:Float+RudaElement,F:Float+RudaElement,I:Numeric+RudaElement
 fn restore_mapping<I:Numeric+RudaElement>(offsets:&Tensor<I>,out:&mut Tensor<I>) {
     let sample=ABSOLUTE_POS as usize;
     if sample<out.len() {
-        let position=bound(offsets,i64::cast_from(sample),true);
+        let position=bound::<I>(offsets,i64::cast_from(sample),true);
         out[address(out,sample)]=I::cast_from(i64::cast_from(position)-1);
     }
 }

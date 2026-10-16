@@ -83,18 +83,18 @@ fn reflection_backward_deterministic<S:Float+RudaElement>(grad:&Tensor<S>,out:&m
         let pr=i64::cast_from(grad.shape(4))-iw-pw;let pb=i64::cast_from(grad.shape(3))-ih-ph;
         let is_left=x>=1 && x<=pw;let is_right=x<iw-1 && x>=iw-pr-1;
         if y>=1 && y<=ph {
-            sum=add_at(grad,sum,plane,top,center_x,lane,1);
-            if is_left {sum=add_at(grad,sum,plane,top,left,lane,2);}
-            else if is_right {sum=add_at(grad,sum,plane,top,right,lane,2);}
+            sum=add_at::<S>(grad,sum,plane,top,center_x,lane,1u32);
+            if is_left {sum=add_at::<S>(grad,sum,plane,top,left,lane,2u32);}
+            else if is_right {sum=add_at::<S>(grad,sum,plane,top,right,lane,2u32);}
         }
         if y<ih-1 && y>=ih-pb-1 {
-            sum=add_at(grad,sum,plane,bottom,center_x,lane,2);
-            if is_left {sum=add_at(grad,sum,plane,bottom,left,lane,2);}
-            else if is_right {sum=add_at(grad,sum,plane,bottom,right,lane,2);}
+            sum=add_at::<S>(grad,sum,plane,bottom,center_x,lane,2u32);
+            if is_left {sum=add_at::<S>(grad,sum,plane,bottom,left,lane,2u32);}
+            else if is_right {sum=add_at::<S>(grad,sum,plane,bottom,right,lane,2u32);}
         }
-        if is_left {sum=add_at(grad,sum,plane,center_y,left,lane,2);}
-        if is_right {sum=add_at(grad,sum,plane,center_y,right,lane,2);}
-        sum=add_at(grad,sum,plane,center_y,center_x,lane,0);
+        if is_left {sum=add_at::<S>(grad,sum,plane,center_y,left,lane,2u32);}
+        if is_right {sum=add_at::<S>(grad,sum,plane,center_y,right,lane,2u32);}
+        sum=add_at::<S>(grad,sum,plane,center_y,center_x,lane,0u32);
         out[address(out,p)]=S::new(0.0)+sum;
     }
 }

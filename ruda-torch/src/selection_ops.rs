@@ -49,14 +49,14 @@ fn select<E:Numeric+RudaElement>(input:&Tensor<E>,values:&mut Tensor<E>,indices:
             if comptime!(kind==1) {if missing>0 {target=u32::cast_from(width);}}
             sync_ruda();
         }
-        let mut mask=0u64;let mut prefix=0u64;let mut shift=bits.runtime();
+        let mut mask=0u64;let mut prefix=0u64;let mut shift=u64::cast_from(bits.runtime());
         while shift>0 {
             shift-=2;
             let mut local=Array::<u32>::new(4usize);
             for bucket in 0..4usize {local[bucket]=0;}
             let mut position=i64::cast_from(lane);
             while position<length {
-                let key=radix_key(input[address(input,base+usize::cast_from(position))],code,bits);
+                let key=radix_key::<E>(input[address(input,base+usize::cast_from(position))],code,bits);
                 if key&mask==prefix {local[usize::cast_from((key>>shift)&3u64)]+=1;}
                 position+=256;
             }
@@ -76,7 +76,7 @@ fn select<E:Numeric+RudaElement>(input:&Tensor<E>,values:&mut Tensor<E>,indices:
         }
         let mut first=u32::MAX.runtime();let mut position=i64::cast_from(lane);
         while position<length {
-            let key=radix_key(input[address(input,base+usize::cast_from(position))],code,bits);
+            let key=radix_key::<E>(input[address(input,base+usize::cast_from(position))],code,bits);
             if key&mask==prefix {first=u32::min(first,u32::cast_from(position));}
             position+=256;
         }

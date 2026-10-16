@@ -48,7 +48,7 @@ fn block_starts(groups: &Tensor<u32>, starts: &mut Tensor<u32>, count: &mut Tens
     if p < groups.len() {
         let mut first = p == 0usize;
         if p > 0usize { first = groups[p] != groups[p - 1usize]; }
-        if first { starts[groups[p] as usize - 1usize] = u32::cast_from(p); }
+        if first { let group = groups[p] as usize; starts[group - 1usize] = u32::cast_from(p); }
         if p + 1usize == groups.len() { count[0] = i64::cast_from(groups[p]); }
     }
 }

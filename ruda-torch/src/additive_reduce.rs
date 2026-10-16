@@ -27,7 +27,7 @@ fn add<A: Numeric>(a: A, b: A, #[comptime] code: u32) -> A {
 fn block_sum<A: Numeric>(value: A, #[comptime] code: u32) -> A {
     let tid = UNIT_POS as usize; let mut result = value; let mut distance = 16u32;
     while distance > 0u32 {
-        result = add(result, plane_shuffle_down(result, distance), code); distance /= 2u32;
+        result = add::<A>(result, plane_shuffle_down(result, distance), code); distance /= 2u32;
     }
     let mut shared = SharedMemory::<A>::new(8usize);
     sync_ruda();
@@ -38,7 +38,7 @@ fn block_sum<A: Numeric>(value: A, #[comptime] code: u32) -> A {
     if tid < 32usize {
         distance = 16u32;
         while distance > 0u32 {
-            result = add(result, plane_shuffle_down(result, distance), code); distance /= 2u32;
+            result = add::<A>(result, plane_shuffle_down(result, distance), code); distance /= 2u32;
         }
     }
     result
@@ -64,12 +64,12 @@ fn small<S: Numeric + RudaElement, O: Numeric + RudaElement, A: Numeric + RudaEl
     if row < output.len() {
         let mut re = A::cast_from(0u32); let mut im = A::cast_from(0u32); let mut item = 0usize;
         while item < width {
-            let offset = source_address(input, row, item, reduced);
-            re = add(re, A::cast_from(input[offset]), code);
-            if comptime!(code == 10 || code == 11 || code == 14) { im = add(im, A::cast_from(imaginary[offset]), code); }
+            let offset = source_address::<S>(input, row, item, reduced.clone());
+            re = add::<A>(re, A::cast_from(input[offset]), code);
+            if comptime!(code == 10 || code == 11 || code == 14) { im = add::<A>(im, A::cast_from(imaginary[offset]), code); }
             item += 1usize;
         }
-        emit(output, output_imaginary, row, re, im, factor, mean, code);
+        emit::<O, A>(output, output_imaginary, row, re, im, factor, mean, code);
     }
 }
 
@@ -85,15 +85,15 @@ fn chunks<S: Numeric + RudaElement, O: Numeric + RudaElement, A: Numeric + RudaE
         let base = chunk * 65536usize; let remaining = width - base;
         let mut re = A::cast_from(0u32); let mut im = A::cast_from(0u32); let mut item = tid;
         while item < remaining && item < 65536usize {
-            let offset = source_address(input, row, base + item, reduced);
-            re = add(re, A::cast_from(input[offset]), code);
-            if comptime!(code == 10 || code == 11 || code == 14) { im = add(im, A::cast_from(imaginary[offset]), code); }
+            let offset = source_address::<S>(input, row, base + item, reduced.clone());
+            re = add::<A>(re, A::cast_from(input[offset]), code);
+            if comptime!(code == 10 || code == 11 || code == 14) { im = add::<A>(im, A::cast_from(imaginary[offset]), code); }
             item += 256usize;
         }
-        re = block_sum(re, code);
-        if comptime!(code == 10 || code == 11 || code == 14) { im = block_sum(im, code); }
+        re = block_sum::<A>(re, code);
+        if comptime!(code == 10 || code == 11 || code == 14) { im = block_sum::<A>(im, code); }
         if tid == 0usize {
-            if comptime!(direct) { emit(output, output_imaginary, row, re, im, factor, mean, code); }
+            if comptime!(direct) { emit::<O, A>(output, output_imaginary, row, re, im, factor, mean, code); }
             else {
                 partials[task] = re;
                 if comptime!(code == 10 || code == 11 || code == 14) { partials[output.len() * count + task] = im; }
@@ -111,13 +111,13 @@ fn finish<O: Numeric + RudaElement, A: Numeric + RudaElement>(
     if row < output.len() {
         let mut re = A::cast_from(0u32); let mut im = A::cast_from(0u32); let mut chunk = tid;
         while chunk < count {
-            let offset = row * count + chunk; re = add(re, partials[offset], code);
-            if comptime!(code == 10 || code == 11 || code == 14) { im = add(im, partials[output.len() * count + offset], code); }
+            let offset = row * count + chunk; re = add::<A>(re, partials[offset], code);
+            if comptime!(code == 10 || code == 11 || code == 14) { im = add::<A>(im, partials[output.len() * count + offset], code); }
             chunk += 256usize;
         }
-        re = block_sum(re, code);
-        if comptime!(code == 10 || code == 11 || code == 14) { im = block_sum(im, code); }
-        if tid == 0usize { emit(output, imaginary, row, re, im, factor, mean, code); }
+        re = block_sum::<A>(re, code);
+        if comptime!(code == 10 || code == 11 || code == 14) { im = block_sum::<A>(im, code); }
+        if tid == 0usize { emit::<O, A>(output, imaginary, row, re, im, factor, mean, code); }
     }
 }
 

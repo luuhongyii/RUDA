@@ -22,12 +22,12 @@ fn prepare(a: &Tensor<u8>, b: &Tensor<u8>, offsets: &Tensor<i32>, sa: &Tensor<u8
         let mut end = previous;
         if comptime!(mode != 0) {
             let signed = offsets[g];
-            if signed < 0i32 { status[0] = 1u32; return; }
+            if signed < 0i32 { status[0] = 1u32; terminate!(); }
             end = usize::cast_from(signed);
             let mut limit = usize::min(full_k, other_k);
             if comptime!(mode == 1) { limit = full_m; }
             if comptime!(mode == 2) { limit = full_n; }
-            if end < previous || end > limit { status[0] = 1u32; return; }
+            if end < previous || end > limit { status[0] = 1u32; terminate!(); }
         }
         if comptime!(mode == 0) {
             ao = g * a.stride(0); bo = g * b.stride(0); co = g * out.stride(0);
@@ -46,13 +46,13 @@ fn prepare(a: &Tensor<u8>, b: &Tensor<u8>, offsets: &Tensor<i32>, sa: &Tensor<u8
             else { spa = u64::cast_from(g) * u64::cast_from(m); spb = u64::cast_from(g) * u64::cast_from(n); }
         }
         if comptime!(kind >= 2) {
-            if comptime!(mode == 3) { if k % scale_block != 0usize { status[0] = 2u32; return; } }
+            if comptime!(mode == 3) { if k % scale_block != 0usize { status[0] = 2u32; terminate!(); } }
             let width = u64::cast_from(k / (scale_block * 4usize) + usize::cast_from(k % (scale_block * 4usize) != 0usize)) * 4u64;
             let height_a = (u64::cast_from(m) + 127u64) / 128u64 * 128u64;
             let height_b = (u64::cast_from(n) + 127u64) / 128u64 * 128u64;
             spa = sa_base; spb = sb_base;
             sa_base += height_a * width; sb_base += height_b * width;
-            if sa_base > u64::cast_from(sa.len()) || sb_base > u64::cast_from(sb.len()) { status[0] = 3u32; return; }
+            if sa_base > u64::cast_from(sa.len()) || sb_base > u64::cast_from(sb.len()) { status[0] = 3u32; terminate!(); }
         }
         let nt = n / tile_n + usize::cast_from(n % tile_n != 0usize);
         let mt = m / 16usize + usize::cast_from(m % 16usize != 0usize);
@@ -63,7 +63,7 @@ fn prepare(a: &Tensor<u8>, b: &Tensor<u8>, offsets: &Tensor<i32>, sa: &Tensor<u8
         metadata[p + 6usize] = u32::cast_from(co); metadata[p + 7usize] = u32::cast_from(spa);
         metadata[p + 8usize] = u32::cast_from(spb); metadata[p + 9usize] = u32::cast_from(nt);
         tiles += u64::cast_from(mt) * u64::cast_from(nt);
-        if tiles > 4294967295u64 { status[0] = 4u32; return; }
+        if tiles > 4294967295u64 { status[0] = 4u32; terminate!(); }
         previous = end;
     }
     metadata[groups * 10usize] = u32::cast_from(tiles);
@@ -131,7 +131,8 @@ fn store<S: Numeric, O: Float>(sa: &Tensor<S>, sb: &Tensor<S>, alpha: &Tensor<f3
     }
     if comptime!(kind == 4) { value *= alpha[group]; }
     let od = comptime!(if mode == 0 || mode == 3 {1usize} else {0usize});
-    out[usize::cast_from(metadata[p + 6usize]) + row * out.stride(od) + column * out.stride(od + 1usize)] = O::cast_from(value);
+    let base = usize::cast_from(metadata[p + 6usize]);
+    out[base + row * out.stride(od) + column * out.stride(od + 1usize)] = O::cast_from(value);
 }
 
 #[ruda(launch)]
@@ -142,7 +143,7 @@ fn simt<I: Numeric, S: Numeric, O: Float>(
     #[define(I)] _input_type: StorageType, #[define(S)] _scale_type: StorageType, #[define(O)] _output_type: StorageType,
 ) {
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if block >= usize::cast_from(metadata[groups * 10usize]) { return; }
+    if block >= usize::cast_from(metadata[groups * 10usize]) { terminate!(); }
     let group = group_for(metadata, block, groups); let p = group * 10usize;
     let tile = block - usize::cast_from(metadata[p]); let nt = usize::cast_from(metadata[p + 9usize]);
     let tid = UNIT_POS as usize; let ty = tid / 16usize; let tx = tid % 16usize;
@@ -156,22 +157,22 @@ fn simt<I: Numeric, S: Numeric, O: Float>(
     let mut sum = 0.0f32; let mut total = 0.0f32; let mut base = 0usize;
     while base < k {
         let mut av = 0.0f32; let mut bv = 0.0f32;
-        if row < m && base + tx < k { av = load(a, ao, row, base + tx, ad, code, false); }
-        if base + ty < k && col < n { bv = load(b, bo, base + ty, col, bd, code, true); }
+        if row < m && base + tx < k { av = load::<I>(a, ao, row, base + tx, ad, code, false); }
+        if base + ty < k && col < n { bv = load::<I>(b, bo, base + ty, col, bd, code, true); }
         left[tid] = av; right[tid] = bv; sync_ruda();
         for inner in 0usize..16usize { sum = fma(left[ty * 16usize + inner], right[inner * 16usize + tx], sum); }
         sync_ruda();
         if comptime!(kind >= 2) {
             let size = comptime!(if kind == 4 {16usize} else {32usize});
             if k - base <= 16usize || (base + 16usize) % size == 0usize {
-                if row < m && col < n { total += block_scale(sa, sb, metadata, p, sum, row, col, base, k, kind); }
+                if row < m && col < n { total += block_scale::<S>(sa, sb, metadata, p, sum, row, col, base, k, kind); }
                 sum = 0.0f32;
             }
         }
         if k - base <= 16usize { base = k; } else { base += 16usize; }
     }
     if comptime!(kind < 2) { total = sum; }
-    if row < m && col < n { store(sa, sb, alpha, metadata, out, group, row, col, total, kind, mode); }
+    if row < m && col < n { store::<S, O>(sa, sb, alpha, metadata, out, group, row, col, total, kind, mode); }
 }
 
 #[ruda(launch)]
@@ -183,7 +184,7 @@ fn carrier<I: Numeric, T: Float, S: Numeric, O: Float>(
     #[define(S)] _scale_type: StorageType, #[define(O)] _output_type: StorageType,
 ) {
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if block >= usize::cast_from(metadata[groups * 10usize]) { return; }
+    if block >= usize::cast_from(metadata[groups * 10usize]) { terminate!(); }
     let group = group_for(metadata, block, groups); let p = group * 10usize;
     let tile = block - usize::cast_from(metadata[p]); let nt = usize::cast_from(metadata[p + 9usize]);
     let row_base = tile / nt * 16usize; let col_base = tile % nt * 16usize; let lane = UNIT_POS as usize;
@@ -202,8 +203,8 @@ fn carrier<I: Numeric, T: Float, S: Numeric, O: Float>(
         #[unroll] for i in 0usize..8usize {
             let t = lane + i * 32usize; let r = t / 16usize; let c = t % 16usize;
             let mut av = 0.0f32; let mut bv = 0.0f32;
-            if row_base + r < m && base + c < k { av = load(a, ao, row_base + r, base + c, ad, code, false); }
-            if base + r < k && col_base + c < n { bv = load(b, bo, base + r, col_base + c, bd, code, true); }
+            if row_base + r < m && base + c < k { av = load::<I>(a, ao, row_base + r, base + c, ad, code, false); }
+            if base + r < k && col_base + c < n { bv = load::<I>(b, bo, base + r, col_base + c, bd, code, true); }
             left[t] = T::cast_from(av); right[t] = T::cast_from(bv);
         }
         sync_ruda();
@@ -220,7 +221,7 @@ fn carrier<I: Numeric, T: Float, S: Numeric, O: Float>(
             #[unroll] for i in 0usize..8usize {
                 let t = lane + i * 32usize; let row = row_base + t / 16usize; let col = col_base + t % 16usize;
                 if row < m && col < n {
-                    if comptime!(kind >= 2) { total[i] += block_scale(sa, sb, metadata, p, partial[t], row, col, base, k, kind); }
+                    if comptime!(kind >= 2) { total[i] += block_scale::<S>(sa, sb, metadata, p, partial[t], row, col, base, k, kind); }
                     else { total[i] = partial[t]; }
                 }
             }
@@ -230,7 +231,7 @@ fn carrier<I: Numeric, T: Float, S: Numeric, O: Float>(
     }
     #[unroll] for i in 0usize..8usize {
         let t = lane + i * 32usize; let row = row_base + t / 16usize; let col = col_base + t % 16usize;
-        if row < m && col < n { store(sa, sb, alpha, metadata, out, group, row, col, total[i], kind, mode); }
+        if row < m && col < n { store::<S, O>(sa, sb, alpha, metadata, out, group, row, col, total[i], kind, mode); }
     }
 }
 
@@ -241,7 +242,7 @@ fn fp8<A: Float, S: Numeric>(a: &Tensor<u8>, b: &Tensor<u8>, sa: &Tensor<S>, sb:
     #[define(A)] _input_type: StorageType, #[define(S)] _scale_type: StorageType,
 ) {
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if block >= usize::cast_from(metadata[groups * 10usize]) { return; }
+    if block >= usize::cast_from(metadata[groups * 10usize]) { terminate!(); }
     let group_index = group_for(metadata, block, groups); let p = group_index * 10usize;
     let tile = block - usize::cast_from(metadata[p]); let nt = usize::cast_from(metadata[p + 9usize]);
     let row_base = tile / nt * 16usize; let col_base = tile % nt * 8usize; let lane = UNIT_POS_PLANE;
@@ -285,7 +286,7 @@ fn fp8<A: Float, S: Numeric>(a: &Tensor<u8>, b: &Tensor<u8>, sa: &Tensor<S>, sb:
                 #[unroll] for j in 0..vc {
                     let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
                     let row = row_base + r as usize; let col = col_base + c as usize;
-                    if row < m && col < n { sum[j] += block_scale(sa, sb, metadata, p, value[j], row, col, base, k, kind); }
+                    if row < m && col < n { sum[j] += block_scale::<S>(sa, sb, metadata, p, value[j], row, col, base, k, kind); }
                 }
                 total[i] = sum; rc[i] = Vector::cast_from(0.0f32);
             }
@@ -299,7 +300,7 @@ fn fp8<A: Float, S: Numeric>(a: &Tensor<u8>, b: &Tensor<u8>, sa: &Tensor<S>, sb:
         #[unroll] for j in 0..vc {
             let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
             let row = row_base + r as usize; let col = col_base + c as usize;
-            if row < m && col < n { store(sa, sb, alpha, metadata, out, group_index, row, col, reg[j], kind, mode); }
+            if row < m && col < n { store::<S, A>(sa, sb, alpha, metadata, out, group_index, row, col, reg[j], kind, mode); }
         }
     }
 }

@@ -27,14 +27,14 @@ fn binary<S:Float+RudaElement,F:Float+RudaElement>(ar:&Tensor<S>,ai:&Tensor<S>,b
         if comptime!(op<=1) {
             real=a+(alpha_r*c-alpha_i*d);imag=b+(alpha_r*d+alpha_i*c);
         } else if comptime!(op==2 || op==4) {
-            if comptime!(half && op==2) {let(r,i)=complex_multiply(a,b,c,d,0);real=r;imag=i;}
+            if comptime!(half && op==2) {let(r,i)=complex_multiply::<F>(a,b,c,d,0u32);real=r;imag=i;}
             else {real=a*c-b*d;imag=a*d+b*c;}
         } else if comptime!(op==3) {
-            if comptime!(half) {let(r,i)=complex_divide(a,b,c,d,0,23,8);real=r;imag=i;}
+            if comptime!(half) {let(r,i)=complex_divide::<F>(a,b,c,d,0u32,23u32,8u32);real=r;imag=i;}
             else if comptime!(scalar_right) {
-                let(r,i)=c10_divide(1.0f64,0.0f64,scalar_br,scalar_bi);
+                let(r,i)=c10_divide::<f64>(1.0f64,0.0f64,scalar_br,scalar_bi);
                 let cr=F::cast_from(r);let ci=F::cast_from(i);real=a*cr-b*ci;imag=a*ci+b*cr;
-            } else {let(r,i)=c10_divide(a,b,c,d);real=r;imag=i;}
+            } else {let(r,i)=c10_divide::<F>(a,b,c,d);real=r;imag=i;}
         } else {
             if comptime!(scalar_left) {a=F::cast_from(S::cast_from(a));b=F::cast_from(S::cast_from(b));}
             if comptime!(scalar_right) {c=F::cast_from(S::cast_from(c));d=F::cast_from(S::cast_from(d));}

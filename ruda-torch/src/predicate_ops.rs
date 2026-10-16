@@ -27,7 +27,7 @@ fn predicate<S: Numeric + RudaElement>(
         if comptime!(code == 3) { a = S::cast_from(a != S::cast_from(0u32)); b = S::cast_from(b != S::cast_from(0u32)); }
         let mut result = false;
         if comptime!(op >= 85) {
-            let x = truth(a, ai, code); let y = truth(b, bi, code);
+            let x = truth::<S>(a, ai, code); let y = truth::<S>(b, bi, code);
             if comptime!(op == 85) { result = x && y; }
             else if comptime!(op == 86) { result = x || y; }
             else if comptime!(op == 87) { result = x != y; }

@@ -21,7 +21,7 @@ fn transpose_rows<I: Numeric + RudaElement>(pointers: &Tensor<I>, order: &Tensor
 fn reduce<F: Float>(value: F, #[comptime] vector: bool) -> F {
     let mut total = F::new(0.0);
     if comptime!(vector) {
-        total = crate::blas_accumulate::block_sum(value);
+        total = crate::blas_accumulate::block_sum::<F>(value);
         sync_ruda();
     } else {
         let tid = UNIT_POS as usize; let mut partial = SharedMemory::<F>::new(256usize);
@@ -68,14 +68,14 @@ fn solve<I: Numeric + RudaElement, F: Float + RudaElement>(
     if comptime!(vector) { column = 0usize; entry_lane = tid; entry_step = 256usize; write = tid == 0usize; }
     let zero = F::new(0.0);
     if comptime!(block_size > 1 && !unit) {
-        if missing_block_diagonal(pointers, indices) != 0u32 {
+        if missing_block_diagonal::<I>(pointers, indices) != 0u32 {
             if write {
                 for row in 0..xr.shape(0) {
                     xr[row * xr.stride(0) + column * xr.stride(1)] = F::cast_from(f32::NAN);
                     if comptime!(complex) { xi[row * xi.stride(0) + column * xi.stride(1)] = zero; }
                 }
             }
-            return;
+            terminate!();
         }
     }
     for step in 0..xr.shape(0) {
@@ -106,8 +106,8 @@ fn solve<I: Numeric + RudaElement, F: Float + RudaElement>(
                 if count - offset <= entry_step { active = false; } else { offset += entry_step; }
             }
         }
-        real = reduce(real, vector);
-        if comptime!(complex) { imag = reduce(imag, vector); }
+        real = reduce::<F>(real, vector);
+        if comptime!(complex) { imag = reduce::<F>(imag, vector); }
         if write {
             let mut x = br[row * br.stride(0) + column * br.stride(1)] - real; let mut y = zero;
             if comptime!(complex) { y = bi[row * bi.stride(0) + column * bi.stride(1)] - imag; }
@@ -124,7 +124,7 @@ fn solve<I: Numeric + RudaElement, F: Float + RudaElement>(
                     }
                 }
                 if comptime!(complex) {
-                    let (r, i) = crate::math_extra::complex_divide(x, y, diagonal_r, diagonal_i, code, fraction, exponent);
+                    let (r, i) = crate::math_extra::complex_divide::<F>(x, y, diagonal_r, diagonal_i, code, fraction, exponent);
                     x = r; y = i;
                 } else { x /= diagonal_r; }
             }

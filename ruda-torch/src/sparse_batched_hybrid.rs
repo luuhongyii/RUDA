@@ -37,7 +37,7 @@ fn batched_multiply<F: Float + RudaElement>(
     let block = block_id();
     let global_row = block / tiles;
     let batch = global_row / yr.shape(1);
-    if batch >= yr.shape(0) { return; }
+    if batch >= yr.shape(0) { terminate!(); }
     let row = global_row % yr.shape(1);
     let tid = UNIT_POS as usize;
     let lane = tid % 32usize;
@@ -75,8 +75,8 @@ fn batched_multiply<F: Float + RudaElement>(
     }
     let mut write = tid < 32usize && column < yr.shape(2);
     if comptime!(vector) {
-        r = crate::blas_accumulate::block_sum(r);
-        if comptime!(complex) { i = crate::blas_accumulate::block_sum(i); }
+        r = crate::blas_accumulate::block_sum::<F>(r);
+        if comptime!(complex) { i = crate::blas_accumulate::block_sum::<F>(i); }
         write = tid == 0usize;
     } else {
         let mut partial_r = SharedMemory::<F>::new(256usize);

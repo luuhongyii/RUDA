@@ -33,19 +33,19 @@ fn block_reduce<F: Float>(value: F, #[comptime] kind: u32) -> F {
     let mut result = value;
     let mut offset = 16u32;
     while offset > 0u32 {
-        result = combine(result, plane_shuffle_down(result, offset), kind);
+        result = combine::<F>(result, plane_shuffle_down(result, offset), kind);
         offset /= 2u32;
     }
     let mut shared = SharedMemory::<F>::new(8usize);
     sync_ruda();
     if tid % 32usize == 0 { shared[tid / 32usize] = result; }
     sync_ruda();
-    result = identity(kind);
+    result = identity::<F>(kind);
     if tid < 8usize { result = shared[tid]; }
     if tid < 32usize {
         offset = 16u32;
         while offset > 0u32 {
-            result = combine(result, plane_shuffle_down(result, offset), kind);
+            result = combine::<F>(result, plane_shuffle_down(result, offset), kind);
             offset /= 2u32;
         }
     }
@@ -121,12 +121,12 @@ fn chunks<S: Float + RudaElement, O: Float + RudaElement, F: Float + RudaElement
             let x = cast_input::<S, O, F>(real[address(real, p)], output_code);
             let mut y = F::new(0.0);
             if comptime!(complex) { y = cast_input::<S, O, F>(imag[address(imag, p)], output_code); }
-            value = combine(value, term(x, y, order, kind, complex), kind);
+            value = combine::<F>(value, term::<F>(x, y, order, kind, complex), kind);
             offset += 256usize;
         }
-        value = block_reduce(value, kind);
+        value = block_reduce::<F>(value, kind);
         if tid == 0 {
-            if comptime!(last) { out[row] = O::cast_from(project(value, order, kind, power_sum)); }
+            if comptime!(last) { out[row] = O::cast_from(project::<F>(value, order, kind, power_sum)); }
             else { partials[task] = value; }
         }
     }
@@ -143,11 +143,11 @@ fn finish<O: Float + RudaElement, F: Float + RudaElement>(
         let mut value = identity::<F>(kind);
         let mut chunk = tid;
         while chunk < count {
-            value = combine(value, partials[row * count + chunk], kind);
+            value = combine::<F>(value, partials[row * count + chunk], kind);
             chunk += 256usize;
         }
-        value = block_reduce(value, kind);
-        if tid == 0 { out[row] = O::cast_from(project(value, order, kind, power_sum)); }
+        value = block_reduce::<F>(value, kind);
+        if tid == 0 { out[row] = O::cast_from(project::<F>(value, order, kind, power_sum)); }
     }
 }
 

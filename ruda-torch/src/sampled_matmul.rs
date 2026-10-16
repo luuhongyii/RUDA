@@ -11,7 +11,7 @@ fn sampled<I: Numeric + RudaElement, F: Float + RudaElement>(
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
     let lane = UNIT_POS as usize % 32usize;
     let p = block * 8usize + UNIT_POS as usize / 32usize;
-    if p >= yr.len() { return; }
+    if p >= yr.len() { terminate!(); }
     let batch_rank = yr.rank() - 1usize; let nnz = yr.shape(batch_rank);
     let batch = p / nnz; let entry = p % nnz;
     let rows = ar.shape(batch_rank); let inner = ar.shape(batch_rank + 1usize);

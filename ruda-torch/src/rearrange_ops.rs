@@ -68,6 +68,7 @@ fn shuffle(a:&Tensor<u8>,out:&mut Tensor<u8>,factor:usize,#[comptime] mode:u32) 
 
 #[ruda(launch)]
 fn unfold_backward<S:Numeric+RudaElement>(grad:&Tensor<S>,out:&mut Tensor<S>,dim:u32,size:i64,step:i64,#[comptime] boolean:bool,#[comptime] copy_only:bool) {
+    let dim = dim as usize;
     let p=ABSOLUTE_POS as usize;
     if p<out.len() {
         let components=out.shape(out.rank()-1);let lane=p%components;let mut point=p/components;

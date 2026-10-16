@@ -82,26 +82,30 @@ fn complex_exp64(x: f64, y: f64) -> (f64, f64) {
     let xb = u64::reinterpret(x);
     let yb = u64::reinterpret(y);
     let magnitude = 0x7fff_ffff_ffff_ffffu64;
-    if (yb & magnitude) == 0u64 { return (x.exp(), y); }
-    if (xb & magnitude) == 0u64 { return (y.cos(), y.sin()); }
-    if (yb & magnitude) >= 0x7ff0_0000_0000_0000u64 {
-        if (xb & magnitude) != 0x7ff0_0000_0000_0000u64 { return (y - y, y - y); }
-        if (xb >> 63u32) != 0u64 { return (0.0f64, 0.0f64); }
-        return (x, y - y);
+    let mut real = 0.0f64;
+    let mut imag = 0.0f64;
+    if (yb & magnitude) == 0u64 { real = x.exp(); imag = y; }
+    else if (xb & magnitude) == 0u64 { real = y.cos(); imag = y.sin(); }
+    else if (yb & magnitude) >= 0x7ff0_0000_0000_0000u64 {
+        if (xb & magnitude) != 0x7ff0_0000_0000_0000u64 { real = y - y; imag = y - y; }
+        else if (xb >> 63u32) == 0u64 { real = x; imag = y - y; }
+    } else {
+        let high = xb >> 32u32;
+        if high >= 0x4086_2e42u64 && high <= 0x4096_b8e4u64 {
+            let reduced = (x - 1246.97177782734161156f64).exp();
+            let bits = u64::reinterpret(reduced);
+            let exponent = i32::cast_from(bits >> 52u32) - 2046i32 + 1799i32;
+            let exp_x = f64::reinterpret((bits & 0x000f_ffff_ffff_ffffu64) | (2046u64 << 52u32));
+            let half = exponent / 2i32;
+            let scale1 = f64::reinterpret(u64::cast_from(1023i32 + half) << 52u32);
+            let scale2 = f64::reinterpret(u64::cast_from(1023i32 + exponent - half) << 52u32);
+            real = y.cos() * exp_x * scale1 * scale2; imag = y.sin() * exp_x * scale1 * scale2;
+        } else {
+            let exp_x = x.exp();
+            real = exp_x * y.cos(); imag = exp_x * y.sin();
+        }
     }
-    let high = xb >> 32u32;
-    if high >= 0x4086_2e42u64 && high <= 0x4096_b8e4u64 {
-        let reduced = (x - 1246.97177782734161156f64).exp();
-        let bits = u64::reinterpret(reduced);
-        let exponent = i32::cast_from(bits >> 52u32) - 2046i32 + 1799i32;
-        let exp_x = f64::reinterpret((bits & 0x000f_ffff_ffff_ffffu64) | (2046u64 << 52u32));
-        let half = exponent / 2i32;
-        let scale1 = f64::reinterpret(u64::cast_from(1023i32 + half) << 52u32);
-        let scale2 = f64::reinterpret(u64::cast_from(1023i32 + exponent - half) << 52u32);
-        return (y.cos() * exp_x * scale1 * scale2, y.sin() * exp_x * scale1 * scale2);
-    }
-    let exp_x = x.exp();
-    (exp_x * y.cos(), exp_x * y.sin())
+    (real, imag)
 }
 
 #[ruda(launch)]

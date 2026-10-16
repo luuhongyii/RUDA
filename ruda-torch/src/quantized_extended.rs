@@ -29,7 +29,7 @@ fn concatenate_segment<Q: Numeric + RudaElement>(
 ) {
     let p = ABSOLUTE_POS as usize;
     if p < output.len() {
-        let value = affine_value(input[address(input, p)], input_scale, input_zero);
+        let value = affine_value::<Q>(input[address(input, p)], input_scale, input_zero);
         let mut q = affine_integer(value, output_scale, output_zero, minimum, maximum);
         if comptime!(relu) { if q < output_zero { q = output_zero; } }
         output[address(output, p)] = Q::cast_from(q);
@@ -82,10 +82,10 @@ fn softmax<Q: Numeric + RudaElement>(
     let lane = UNIT_POS as usize % 32usize;
     let width = input.shape(axis);
     if row < input.len() / width {
-        let ib = row_offset(input, row, axis); let ob = row_offset(output, row, axis);
-        let mut largest = f32::cast_from(f32::NEG_INFINITY); let mut nan_count = 0.0f32; let mut i = lane;
+        let ib = row_offset::<Q>(input, row, axis); let ob = row_offset::<Q>(output, row, axis);
+        let mut largest = f32::cast_from(f32::NEG_INFINITY); let mut nan_count: f32 = 0.0f32; let mut i = lane;
         while i < width {
-            let value = affine_value(input[ib + i * input.stride(axis)], input_scale, input_zero);
+            let value = affine_value::<Q>(input[ib + i * input.stride(axis)], input_scale, input_zero);
             if value != value { nan_count = 1.0f32; }
             if value > largest { largest = value; }
             i += 32usize;
@@ -95,12 +95,12 @@ fn softmax<Q: Numeric + RudaElement>(
         if nan_count > 0.0f32 { largest = f32::NAN; }
         let mut total = 0.0f32; i = lane;
         while i < width {
-            let value = affine_value(input[ib + i * input.stride(axis)], input_scale, input_zero);
+            let value = affine_value::<Q>(input[ib + i * input.stride(axis)], input_scale, input_zero);
             total += (value - largest).exp(); i += 32usize;
         }
         total = plane_sum(total); i = lane;
         while i < width {
-            let value = affine_value(input[ib + i * input.stride(axis)], input_scale, input_zero);
+            let value = affine_value::<Q>(input[ib + i * input.stride(axis)], input_scale, input_zero);
             let probability = (value - largest).exp() / total;
             let q = affine_integer(probability, output_scale, output_zero, minimum, maximum);
             output[ob + i * output.stride(axis)] = Q::cast_from(q);

@@ -11,7 +11,7 @@ fn maximum<N: Numeric>(a: N, b: N) -> N {
 #[ruda]
 fn combine<N: Numeric>(a: N, b: N, #[comptime] is_max: bool) -> N {
     let mut result = N::cast_from(0u32);
-    if comptime!(is_max) { result = maximum(a, b); }
+    if comptime!(is_max) { result = maximum::<N>(a, b); }
     else { result = a + b; }
     result
 }
@@ -24,7 +24,7 @@ fn block_reduce<N: Numeric>(value: N, #[comptime] is_max: bool) -> N {
     let mut result = value;
     let mut offset = 16u32;
     while offset > 0u32 {
-        result = combine(result, plane_shuffle_down(result, offset), is_max);
+        result = combine::<N>(result, plane_shuffle_down(result, offset), is_max);
         offset /= 2u32;
     }
     let mut shared = SharedMemory::<N>::new(16usize);
@@ -37,7 +37,7 @@ fn block_reduce<N: Numeric>(value: N, #[comptime] is_max: bool) -> N {
     if warp == 0 {
         offset = 16u32;
         while offset > 0u32 {
-            result = combine(result, plane_shuffle_down(result, offset), is_max);
+            result = combine::<N>(result, plane_shuffle_down(result, offset), is_max);
             offset /= 2u32;
         }
     }
@@ -47,11 +47,11 @@ fn block_reduce<N: Numeric>(value: N, #[comptime] is_max: bool) -> N {
 #[ruda]
 fn accumulate<N: Numeric>(sum: N, value: N, #[comptime] kind: u32) -> N {
     let mut result = N::cast_from(0u32);
-    if comptime!(kind == 0) { result = maximum(sum, value); }
+    if comptime!(kind == 0) { result = maximum::<N>(sum, value); }
     else if comptime!(kind == 1) { result = sum + N::cast_from(value != N::cast_from(0u32)); }
     else if comptime!(kind == 2) { result = sum + value.abs(); }
     else if comptime!(kind == 3) { result = sum + value * value; }
-    else { result = maximum(sum, value.abs()); }
+    else { result = maximum::<N>(sum, value.abs()); }
     result
 }
 
@@ -86,15 +86,15 @@ fn chunks<S: Numeric + RudaElement, A: Numeric + RudaElement>(
                     if p < remaining && p < 65536usize {
                         let mut value = A::cast_from(input[base + p]);
                         if comptime!(boolean) { value = A::cast_from(value != A::cast_from(0u32)); }
-                        values[ilp] = accumulate(values[ilp], value, kind);
+                        values[ilp] = accumulate::<A>(values[ilp], value, kind);
                     }
                 }
                 start += 2048usize;
             }
             let mut value = identity;
             #[unroll]
-            for ilp in 0..4usize { value = combine(value, values[ilp], kind == 0 || kind == 4); }
-            let result = block_reduce(value, kind == 0 || kind == 4);
+            for ilp in 0..4usize { value = combine::<A>(value, values[ilp], kind == 0 || kind == 4); }
+            let result = block_reduce::<A>(value, kind == 0 || kind == 4);
             if tid == 0 { partials[usize::cast_from(*offsets.index(tensor)) + chunk] = result; }
         }
         first += blocks;
@@ -121,10 +121,10 @@ fn cleanup<A: Numeric + RudaElement, O: Numeric + RudaElement>(
             while chunk < max_chunks {
                 let mut part = identity;
                 if chunk < count { part = partials[first + chunk]; }
-                value = combine(value, part, kind == 0 || kind == 4);
+                value = combine::<A>(value, part, kind == 0 || kind == 4);
                 chunk += 512usize;
             }
-            let mut result = block_reduce(value, kind == 0 || kind == 4);
+            let mut result = block_reduce::<A>(value, kind == 0 || kind == 4);
             if tid == 0 {
                 if comptime!(root) {
                     if comptime!(code == 9) { result = A::cast_from(f64::cast_from(result).sqrt()); }

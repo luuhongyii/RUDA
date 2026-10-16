@@ -24,12 +24,12 @@ fn add<S:Float,F:Float>(ar:S,ai:S,br:S,bi:S,#[comptime] complex:bool)->(S,S) {
             if low.abs()==inf && low==high {
                 if low<F::new(0.0) {real=low;imag=low_i;}
                 else {
-                    let (a,b)=infinite_exp(low_i);let (c,d)=infinite_exp(high_i);
-                    let (r,i)=crate::elementary::complex_log1p(a+c-F::new(1.0),b+d);real=r;imag=i;
+                    let (a,b)=infinite_exp::<F>(low_i);let (c,d)=infinite_exp::<F>(high_i);
+                    let (r,i)=crate::elementary::complex_log1p::<F>(a+c-F::new(1.0),b+d);real=r;imag=i;
                 }
             } else {
                 let magnitude=(low-high).exp();let angle=low_i-high_i;
-                let (r,i)=crate::elementary::complex_log1p(magnitude*angle.cos(),magnitude*angle.sin());
+                let (r,i)=crate::elementary::complex_log1p::<F>(magnitude*angle.cos(),magnitude*angle.sin());
                 real=r+high;imag=i+high_i;
             }
         }

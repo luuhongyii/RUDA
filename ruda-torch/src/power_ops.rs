@@ -66,7 +66,7 @@ fn integral<S: Numeric + RudaElement>(
             if b < zero {
                 value = 0u64;
                 if a == one { value = 1u64; }
-                else if a == zero-one { value = 1u64; if (i64::cast_from(b)&1i64) != 0i64 { value = 0u64-1u64; } }
+                else if a == zero-one { value = 1u64; if (i64::cast_from(b)&1i64) != 0i64 { value = u64::MAX; } }
             } else {
                 let mut n = u64::cast_from(b); let mut factor = u64::cast_from(a);
                 while n != 0u64 {
@@ -83,14 +83,14 @@ fn integral<S: Numeric + RudaElement>(
 #[ruda]
 pub(super) fn copy_sign<F: Float>(value: F, sign: F, #[comptime] code: u32) -> F {
     let mut mask = 0x80000000u64; if comptime!(code == 9) { mask = 0x8000000000000000u64; }
-    crate::floating::from_bits((crate::floating::bits(value,code)&!mask) | (crate::floating::bits(sign,code)&mask),code)
+    crate::floating::from_bits::<F>((crate::floating::bits::<F>(value,code)&!mask) | (crate::floating::bits::<F>(sign,code)&mask),code)
 }
 
 #[ruda]
 pub(super) fn jit_exp<F: Float>(x: F, y: F, #[comptime] code: u32) -> (F,F) {
     let zero=F::new(0.0); let inf=F::new(f32::INFINITY); let mut angle=y;
     let mut real=zero; let mut imag=zero;
-    if y==zero { real=x.exp(); imag=copy_sign(zero,y,code); }
+    if y==zero { real=x.exp(); imag=copy_sign::<F>(zero,y,code); }
     else if x==inf && !(y.abs()<inf) { real=x; imag=y; if y.abs()==inf { imag=F::new(f32::NAN); } }
     else {
         if x== -inf && !(y.abs()<inf) { angle=F::new(1.0); }
@@ -104,8 +104,8 @@ fn jit_sqrt<F: Float>(x: F,y: F,#[comptime] code:u32)->(F,F) {
     let zero=F::new(0.0); let inf=F::new(f32::INFINITY);
     let mut real=F::new(f32::NAN); let mut imag=F::new(f32::NAN);
     if y.abs()==inf {real=inf;imag=y;}
-    else if x==inf {real=x;imag=copy_sign(zero,y,code);if y!=y {imag=y;}}
-    else if x== -inf {real=zero;imag=copy_sign(x,y,code);if y!=y {real=y;}}
+    else if x==inf {real=x;imag=copy_sign::<F>(zero,y,code);if y!=y {imag=y;}}
+    else if x== -inf {real=zero;imag=copy_sign::<F>(x,y,code);if y!=y {real=y;}}
     else {
         let magnitude=x.hypot(y).sqrt(); let angle=y.atan2(x)/F::new(2.0);
         if magnitude==magnitude {
@@ -133,25 +133,25 @@ fn complex<S:Float+RudaElement,F:Float>(
         let zero=F::new(0.0);let one=F::new(1.0);let inf=F::new(f32::INFINITY);
         let mut real=zero;let mut imag=zero;
         if comptime!(special==3 || special==4) {
-            let(r,i)=jit_sqrt(a,b,code);real=r;imag=i;
-            if comptime!(special==4) {let(x,y)=crate::math_extra::complex_divide(one,zero,r,i,code,comptime!(if code==9{52u32}else{23u32}),comptime!(if code==9{11u32}else{8u32}));real=x;imag=y;}
+            let(r,i)=jit_sqrt::<F>(a,b,code);real=r;imag=i;
+            if comptime!(special==4) {let(x,y)=crate::math_extra::complex_divide::<F>(one,zero,r,i,code,comptime!(if code==9{52u32}else{23u32}),comptime!(if code==9{11u32}else{8u32}));real=x;imag=y;}
         } else if comptime!(special==5) {
             if a!=a || b!=b || (a.abs()==inf && b.abs()==inf) {real=F::new(f32::NAN);imag=F::new(f32::NAN);}
-            else if a.abs()!=inf && b.abs()!=inf {let(r,i)=crate::foreach_unary::complex_divide(one,zero,a,b);real=r;imag=i;}
+            else if a.abs()!=inf && b.abs()!=inf {let(r,i)=crate::foreach_unary::complex_divide::<F>(one,zero,a,b);real=r;imag=i;}
         } else if comptime!(special==6) {real=a*a-b*b;imag=a*b+b*a;}
         else {
             let mut lr=zero;let mut li=zero;
             if comptime!(mode==2) {lr=crate::floating::from_bits::<F>(scalar_real,code);li=crate::floating::from_bits::<F>(scalar_imag,code);}
             else {
                 li=b.atan2(a);
-                if comptime!(half) {lr=a.hypot(b).ln();}else{lr=crate::power_log::logarithm(a,b,code);}
+                if comptime!(half) {lr=a.hypot(b).ln();}else{lr=crate::power_log::logarithm::<F>(a,b,code);}
             }
             let mut pr=lr*c-li*d;let mut pi=lr*d+li*c;
             if comptime!(half) {
-                if comptime!(mode==2) {let(r,i)=crate::math_extra::complex_multiply(lr,li,c,d,code);pr=r;pi=i;}
-                else {let(r,i)=crate::math_extra::complex_multiply(c,d,lr,li,code);pr=r;pi=i;}
-                let(r,i)=jit_exp(pr,pi,code);real=r;imag=i;
-            } else {let(r,i)=crate::foreach_unary::complex_exp(pr,pi,code);real=r;imag=i;}
+                if comptime!(mode==2) {let(r,i)=crate::math_extra::complex_multiply::<F>(lr,li,c,d,code);pr=r;pi=i;}
+                else {let(r,i)=crate::math_extra::complex_multiply::<F>(c,d,lr,li,code);pr=r;pi=i;}
+                let(r,i)=jit_exp::<F>(pr,pi,code);real=r;imag=i;
+            } else {let(r,i)=crate::foreach_unary::complex_exp::<F>(pr,pi,code);real=r;imag=i;}
         }
         out_r[address(out_r,p)]=S::cast_from(real);out_i[address(out_i,p)]=S::cast_from(imag);
     }

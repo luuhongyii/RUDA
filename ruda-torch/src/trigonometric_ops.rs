@@ -47,17 +47,17 @@ fn jit_atanh<F: Float>(x: F, y: F, #[comptime] code: u32) -> (F,F) {
     let zero=F::new(0.0); let one=F::new(1.0); let two=F::new(2.0); let inf=F::new(f32::INFINITY);
     let pi=F::cast_from(3.14159265358979323846264338327950288f64);
     let mut real=zero; let mut imag=zero;
-    if y.abs()==inf {real=copy_sign(zero,x,code); imag=copy_sign(pi/two,y,code);}
+    if y.abs()==inf {real=copy_sign::<F>(zero,x,code); imag=copy_sign::<F>(pi/two,y,code);}
     else if y!=y {
-        if x.abs()==inf || x==zero {real=copy_sign(zero,x,code);} else {real=y;}
+        if x.abs()==inf || x==zero {real=copy_sign::<F>(zero,x,code);} else {real=y;}
         imag=y;
     } else if x!=x {real=x; imag=x;}
-    else if x.abs()==inf {real=copy_sign(zero,x,code); imag=copy_sign(pi/two,y,code);}
-    else if x.abs()==one && y==zero {real=copy_sign(inf,x,code); imag=copy_sign(zero,y,code);}
+    else if x.abs()==inf {real=copy_sign::<F>(zero,x,code); imag=copy_sign::<F>(pi/two,y,code);}
+    else if x.abs()==one && y==zero {real=copy_sign::<F>(inf,x,code); imag=copy_sign::<F>(zero,y,code);}
     else {
-        let (r,i)=crate::math_extra::complex_divide(one+x,y,one-x,-y,code,
+        let (r,i)=crate::math_extra::complex_divide::<F>(one+x,y,one-x,-y,code,
             comptime!(if code==9 {52u32}else{23u32}),comptime!(if code==9 {11u32}else{8u32}));
-        real=copy_sign(r.hypot(i).ln()/two,x,code); imag=copy_sign(i.atan2(r)/two,y,code);
+        real=copy_sign::<F>(r.hypot(i).ln()/two,x,code); imag=copy_sign::<F>(i.atan2(r)/two,y,code);
     }
     (real,imag)
 }
@@ -94,23 +94,23 @@ fn complex<S: Float + RudaElement, F: Float>(
     if p<output_real.len() {
         let x=F::cast_from(input_real[address(input_real,p)]); let y=F::cast_from(input_imag[address(input_imag,p)]);
         let mut real=F::new(0.0); let mut imag=F::new(0.0);
-        if comptime!(op==0) {let (r,i)=jit_hyperbolic(-y,x,false); real=i; imag=-r;}
-        else if comptime!(op==1) {let (r,i)=jit_hyperbolic(-y,x,true); real=r; imag=i;}
-        else if comptime!(op==2) {let (r,i)=crate::inverse_trig::tanh(-y,x,code); real=i; imag=-r;}
-        else if comptime!(op==3) {let (r,i)=crate::inverse_trig::asinh(y,x,code); real=i; imag=r;}
-        else if comptime!(op==4) {let (r,i)=crate::inverse_trig::acos(x,y,code); real=r; imag=i;}
-        else if comptime!(op==5) {let (r,i)=jit_atanh(-y,x,code); real=i; imag=-r;}
-        else if comptime!(op==6) {let (r,i)=jit_hyperbolic(x,y,false); real=r; imag=i;}
-        else if comptime!(op==7) {let (r,i)=jit_hyperbolic(x,y,true); real=r; imag=i;}
-        else if comptime!(op==8) {let (r,i)=crate::inverse_trig::tanh(x,y,code); real=r; imag=i;}
-        else if comptime!(op==9) {let (r,i)=crate::inverse_trig::asinh(x,y,code); real=r; imag=i;}
+        if comptime!(op==0) {let (r,i)=jit_hyperbolic::<F>(-y,x,false); real=i; imag=-r;}
+        else if comptime!(op==1) {let (r,i)=jit_hyperbolic::<F>(-y,x,true); real=r; imag=i;}
+        else if comptime!(op==2) {let (r,i)=crate::inverse_trig::tanh::<F>(-y,x,code); real=i; imag=-r;}
+        else if comptime!(op==3) {let (r,i)=crate::inverse_trig::asinh::<F>(y,x,code); real=i; imag=r;}
+        else if comptime!(op==4) {let (r,i)=crate::inverse_trig::acos::<F>(x,y,code); real=r; imag=i;}
+        else if comptime!(op==5) {let (r,i)=jit_atanh::<F>(-y,x,code); real=i; imag=-r;}
+        else if comptime!(op==6) {let (r,i)=jit_hyperbolic::<F>(x,y,false); real=r; imag=i;}
+        else if comptime!(op==7) {let (r,i)=jit_hyperbolic::<F>(x,y,true); real=r; imag=i;}
+        else if comptime!(op==8) {let (r,i)=crate::inverse_trig::tanh::<F>(x,y,code); real=r; imag=i;}
+        else if comptime!(op==9) {let (r,i)=crate::inverse_trig::asinh::<F>(x,y,code); real=r; imag=i;}
         else if comptime!(op==10) {
-            let (r,i)=crate::inverse_trig::acos(x,y,code);
+            let (r,i)=crate::inverse_trig::acos::<F>(x,y,code);
             if r!=r && i!=i {real=i; imag=r;}
             else if r!=r {real=i.abs(); imag=r;}
             else if i!=i {real=i; imag=i;}
-            else {real=i.abs(); imag=copy_sign(r,y,code);}
-        } else if comptime!(op==11) {let (r,i)=jit_atanh(x,y,code); real=r; imag=i;}
+            else {real=i.abs(); imag=copy_sign::<F>(r,y,code);}
+        } else if comptime!(op==11) {let (r,i)=jit_atanh::<F>(x,y,code); real=r; imag=i;}
         output_real[address(output_real,p)]=S::cast_from(real);
         output_imag[address(output_imag,p)]=S::cast_from(imag);
     }

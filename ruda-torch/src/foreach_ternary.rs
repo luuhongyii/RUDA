@@ -45,7 +45,7 @@ fn complex_value<F: Float>(
             product = y * z - yi * zi;
             producti = y * zi + yi * z;
         } else {
-            let (r, i) = crate::foreach_unary::complex_divide(y, yi, z, zi);
+            let (r, i) = crate::foreach_unary::complex_divide::<F>(y, yi, z, zi);
             product = r; producti = i;
         }
         if alpha == one && alphai == zero {
@@ -88,7 +88,7 @@ fn floating<S: Float + RudaElement, F: Float>(
                 if comptime!(mode != 1) { y = F::cast_from(input1[p]); }
                 let mut z = scalar;
                 if comptime!(mode != 2) { z = F::cast_from(input2[p]); }
-                output[p] = S::cast_from(real_value(x, y, z, scalar, op));
+                output[p] = S::cast_from(real_value::<F>(x, y, z, scalar, op));
                 offset += 512usize;
             }
         }
@@ -131,7 +131,7 @@ fn complex<F: Float + RudaElement>(
                 let mut z = scalar;
                 let mut zi = scalar_imag;
                 if comptime!(mode != 2) { z = input2[p]; zi = input2[p + 1usize]; }
-                let (real, imag) = complex_value(x, xi, y, yi, z, zi, scalar, scalar_imag, op);
+                let (real, imag) = complex_value::<F>(x, xi, y, yi, z, zi, scalar, scalar_imag, op);
                 output[p] = real;
                 output[p + 1usize] = imag;
                 offset += 512usize;

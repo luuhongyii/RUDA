@@ -49,7 +49,7 @@ fn small_backward<S: Float + RudaElement, F: Float + RudaElement, I: Int + RudaE
     let mut first = 0usize;
     while first < indices.len() {
         let sample = first + warp;
-        let mut row = -1i64; let mut value = F::new(0.0);
+        let mut row = (-1i64).runtime(); let mut value = F::new(0.0);
         if sample < indices.len() {
             row = i64::cast_from(indices[address(indices, sample)]);
             if feature < width && row != padding { value = F::cast_from(grad[address(grad, sample * width + feature)]); }
@@ -97,7 +97,7 @@ fn chunk_flags<I: Int + RudaElement>(indices: &Tensor<I>, order: &Tensor<u32>, p
     let p = (RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize) * 256usize + UNIT_POS as usize;
     if p < order.len() {
         let row = i64::cast_from(indices[address(indices, order[p] as usize)]);
-        let first = bound(indices, order, row, false);
+        let first = bound::<I>(indices, order, row, false);
         prefix[p] = u32::cast_from((p - first) % 10usize == 0usize);
     }
 }
@@ -121,7 +121,7 @@ fn chunk_metadata<I: Int + RudaElement>(
             starts[chunk] = u32::cast_from(p);
             if comptime!(frequency) {
                 let row = i64::cast_from(indices[address(indices, order[p] as usize)]);
-                counts[chunk] = u32::cast_from(bound(indices, order, row, true) - bound(indices, order, row, false));
+                counts[chunk] = u32::cast_from(bound::<I>(indices, order, row, true) - bound::<I>(indices, order, row, false));
             }
         }
     }
@@ -159,7 +159,7 @@ fn finish<S: Float + RudaElement, F: Float + RudaElement, I: Int + RudaElement>(
         let width = output.shape(1usize); let row = i64::cast_from(p / width); let feature = p % width;
         let mut value = F::new(0.0);
         if row != padding {
-            let first = bound(indices, order, row, false); let end = bound(indices, order, row, true);
+            let first = bound::<I>(indices, order, row, false); let end = bound::<I>(indices, order, row, true);
             if first < end {
                 let mut chunk = (prefix[first] - 1u32) as usize; let last = prefix[end - 1usize] as usize;
                 while chunk < last { value += partial[chunk * width + feature]; chunk += 1usize; }

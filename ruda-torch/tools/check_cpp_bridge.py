@@ -27,7 +27,8 @@ def main():
         import torch
         from torch.utils.cpp_extension import include_paths,library_paths
         library=out/('_C'+sysconfig.get_config_var('EXT_SUFFIX'))
-        cmd=[args.compiler,'-std=c++20','-shared','-fPIC','-O0','-DTORCH_EXTENSION_NAME=_C',
+        standard='c++17' if 'C++ Version: 201703' in torch.__config__.show() else 'c++20'
+        cmd=[args.compiler,'-std='+standard,'-shared','-fPIC','-O0','-DTORCH_EXTENSION_NAME=_C',
              '-D_GLIBCXX_USE_CXX11_ABI='+str(int(torch._C._GLIBCXX_USE_CXX11_ABI))]
         cmd+=['-I'+d for d in include_paths()+[sysconfig.get_paths()['include']]]
         cmd+=[str(root/'ruda-torch/python/ruda_torch/csrc/backend.cpp')]

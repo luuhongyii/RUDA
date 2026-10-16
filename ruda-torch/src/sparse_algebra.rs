@@ -94,7 +94,7 @@ fn spmm<S: Float + RudaElement, F: Float + RudaElement>(
     alpha_r: F, alpha_i: F, beta_r: F, beta_i: F, tiles: usize, #[comptime] complex: bool,
 ) {
     let block = block_id(); let row = block / tiles; let tile = block % tiles;
-    if row >= yr.shape(0) { return; }
+    if row >= yr.shape(0) { terminate!(); }
     let tid = UNIT_POS as usize; let lane = tid % 32usize; let warp = tid / 32usize;
     let column = tile * 32usize + lane;
     let mut r = F::new(0.0); let mut i = F::new(0.0);

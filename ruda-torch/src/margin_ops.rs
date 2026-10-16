@@ -16,11 +16,11 @@ fn warp_sum<F:Float+RudaElement>(input:F)->F {
 #[ruda]
 fn block_sum<F:Float+RudaElement>(input:F)->F {
     let lane=UNIT_POS as usize;let mut shared=SharedMemory::<F>::new(4usize);
-    let mut value=warp_sum(input);sync_ruda();
+    let mut value=warp_sum::<F>(input);sync_ruda();
     if lane%32==0 {shared[lane/32]=value;}
     sync_ruda();value=F::new(0.0);
     if lane<4 {value=shared[lane];}
-    if lane<32 {value=warp_sum(value);}
+    if lane<32 {value=warp_sum::<F>(value);}
     value
 }
 
@@ -131,7 +131,7 @@ fn multilabel<S:Float+RudaElement,F:Float+RudaElement>(input:&Tensor<S>,target:&
                 position+=128;
             }
             if comptime!(backward) {
-                sync_ruda();let total=block_sum(subtotal);
+                sync_ruda();let total=block_sum::<F>(subtotal);
                 if lane==0 {
                     let at=address(out,base+usize::cast_from(label));out[at]=S::cast_from(F::cast_from(out[at])+stored::<S,F>(total));
                 }
@@ -147,7 +147,7 @@ fn multilabel<S:Float+RudaElement,F:Float+RudaElement>(input:&Tensor<S>,target:&
                 let at=address(out,base+usize::cast_from(position));out[at]=S::cast_from(F::cast_from(out[at])*gradient);position+=128;
             }
         } else {
-            let total=block_sum(subtotal);
+            let total=block_sum::<F>(subtotal);
             if lane==0 {
                 let mut value=total/F::cast_from(width);
                 if comptime!(reduction==1) {value/=F::cast_from(input.shape(0));}

@@ -28,8 +28,8 @@ use ruda_kernel::dsl::prelude::Tensor;
 fn heaviside<N:Numeric+RudaElement>(a:&Tensor<N>,b:&Tensor<N>,out:&mut Tensor<N>) {
     let p=ABSOLUTE_POS as usize;
     if p<out.len() {
-        let x=a[address(a,p)];let mut value=N::cast_from(x>N::new(0));
-        if x==N::new(0) {value=b[address(b,p)];}
+        let x=a[address(a,p)];let mut value=N::cast_from(x>N::cast_from(0i32));
+        if x==N::cast_from(0i32) {value=b[address(b,p)];}
         out[address(out,p)]=value;
     }
 }
@@ -60,12 +60,12 @@ fn gcd_lcm<I:Numeric+RudaElement>(a:&Tensor<I>,b:&Tensor<I>,out:&mut Tensor<I>,#
 #[ruda]
 fn copy_sign<F:Float>(x:F,y:F,#[comptime] code:u32)->F {
     let mut sign=1u64<<31u32;if comptime!(code==9) {sign=1u64<<63u32;}
-    from_bits::<F>((bits(x,code)&(sign-1u64))|(bits(y,code)&sign),code)
+    from_bits::<F>((bits::<F>(x,code)&(sign-1u64))|(bits::<F>(y,code)&sign),code)
 }
 
 #[ruda]
 fn scale<F:Float>(x:F,power:i32,#[comptime] code:u32,#[comptime] fraction:u32,#[comptime] exponent_bits:u32)->F {
-    let raw=bits(x,code);let sign=1u64<<(fraction+exponent_bits);let limit=(1u64<<exponent_bits)-1u64;
+    let raw=bits::<F>(x,code);let sign=1u64<<(fraction+exponent_bits);let limit=(1u64<<exponent_bits)-1u64;
     let infinity=limit<<fraction;let magnitude=raw&(sign-1u64);let mut result=raw;
     if magnitude!=0u64 && magnitude<infinity {
         let (significand,e)=normalize(raw,fraction,exponent_bits);let exponent=i64::cast_from(e)+i64::cast_from(power);result=raw&sign;
@@ -90,21 +90,21 @@ pub(super) fn complex_divide<F:Float>(a:F,b:F,c0:F,d0:F,#[comptime] code:u32,#[c
     let mut maximum=c.abs();if maximum!=maximum || d.abs()>maximum {maximum=d.abs();}
     let mut exponent=0i32;
     if maximum>zero && maximum<inf {
-        let (_mantissa,e)=normalize(bits(maximum,code),fraction,exponent_bits);
+        let (_mantissa,e)=normalize(bits::<F>(maximum,code),fraction,exponent_bits);
         exponent=e-comptime!((1i32<<(exponent_bits-1u32))-1i32);
-        c=scale(c,-exponent,code,fraction,exponent_bits);d=scale(d,-exponent,code,fraction,exponent_bits);
+        c=scale::<F>(c,-exponent,code,fraction,exponent_bits);d=scale::<F>(d,-exponent,code,fraction,exponent_bits);
     }
     let denominator=c*c+d*d;
-    let mut real=scale((a*c+b*d)/denominator,-exponent,code,fraction,exponent_bits);
-    let mut imag=scale((b*c-a*d)/denominator,-exponent,code,fraction,exponent_bits);
+    let mut real=scale::<F>((a*c+b*d)/denominator,-exponent,code,fraction,exponent_bits);
+    let mut imag=scale::<F>((b*c-a*d)/denominator,-exponent,code,fraction,exponent_bits);
     if real!=real && imag!=imag {
-        if denominator==zero && (a==a || b==b) {let infinity=copy_sign(inf,c,code);real=infinity*a;imag=infinity*b;}
+        if denominator==zero && (a==a || b==b) {let infinity=copy_sign::<F>(inf,c,code);real=infinity*a;imag=infinity*b;}
         else if (a.abs()==inf || b.abs()==inf) && c.abs()<inf && d.abs()<inf {
             let mut aa=zero;let mut bb=zero;if a.abs()==inf {aa=one;}if b.abs()==inf {bb=one;}
-            aa=copy_sign(aa,a,code);bb=copy_sign(bb,b,code);real=inf*(aa*c+bb*d);imag=inf*(bb*c-aa*d);
+            aa=copy_sign::<F>(aa,a,code);bb=copy_sign::<F>(bb,b,code);real=inf*(aa*c+bb*d);imag=inf*(bb*c-aa*d);
         } else if maximum==inf && a.abs()<inf && b.abs()<inf {
             let mut cc=zero;let mut dd=zero;if c.abs()==inf {cc=one;}if d.abs()==inf {dd=one;}
-            cc=copy_sign(cc,c,code);dd=copy_sign(dd,d,code);real=zero*(a*cc+b*dd);imag=zero*(b*cc-a*dd);
+            cc=copy_sign::<F>(cc,c,code);dd=copy_sign::<F>(dd,d,code);real=zero*(a*cc+b*dd);imag=zero*(b*cc-a*dd);
         }
     }
     (real,imag)
@@ -118,16 +118,16 @@ pub(super) fn complex_multiply<F:Float>(a0:F,b0:F,c0:F,d0:F,#[comptime] code:u32
     if real!=real && imag!=imag {
         let mut recalc=false;
         if a.abs()==inf || b.abs()==inf {
-            a=copy_sign(F::cast_from(a.abs()==inf),a,code);b=copy_sign(F::cast_from(b.abs()==inf),b,code);
-            if c!=c {c=copy_sign(zero,c,code);}if d!=d {d=copy_sign(zero,d,code);}recalc=true;
+            a=copy_sign::<F>(F::cast_from(a.abs()==inf),a,code);b=copy_sign::<F>(F::cast_from(b.abs()==inf),b,code);
+            if c!=c {c=copy_sign::<F>(zero,c,code);}if d!=d {d=copy_sign::<F>(zero,d,code);}recalc=true;
         }
         if c.abs()==inf || d.abs()==inf {
-            c=copy_sign(F::cast_from(c.abs()==inf),c,code);d=copy_sign(F::cast_from(d.abs()==inf),d,code);
-            if a!=a {a=copy_sign(zero,a,code);}if b!=b {b=copy_sign(zero,b,code);}recalc=true;
+            c=copy_sign::<F>(F::cast_from(c.abs()==inf),c,code);d=copy_sign::<F>(F::cast_from(d.abs()==inf),d,code);
+            if a!=a {a=copy_sign::<F>(zero,a,code);}if b!=b {b=copy_sign::<F>(zero,b,code);}recalc=true;
         }
         if !recalc && (ac.abs()==inf || bd.abs()==inf || ad.abs()==inf || bc.abs()==inf) {
-            if a!=a {a=copy_sign(zero,a,code);}if b!=b {b=copy_sign(zero,b,code);}
-            if c!=c {c=copy_sign(zero,c,code);}if d!=d {d=copy_sign(zero,d,code);}recalc=true;
+            if a!=a {a=copy_sign::<F>(zero,a,code);}if b!=b {b=copy_sign::<F>(zero,b,code);}
+            if c!=c {c=copy_sign::<F>(zero,c,code);}if d!=d {d=copy_sign::<F>(zero,d,code);}recalc=true;
         }
         if recalc {real=inf*(a*c-b*d);imag=inf*(a*d+b*c);}
     }
@@ -142,7 +142,7 @@ fn complex_sinc<F:Float>(x:F,y:F,#[comptime] code:u32,#[comptime] fraction:u32,#
         let mut pr=pi*x-zero*y;let mut im=pi*y+zero*x;
         if pr!=pr && im!=im && (x.abs()==inf || y.abs()==inf) {
             let mut a=zero;let mut b=zero;if x.abs()==inf {a=one;}if y.abs()==inf {b=one;}
-            a=copy_sign(a,x,code);b=copy_sign(b,y,code);pr=inf*(pi*a-zero*b);im=inf*(pi*b+zero*a);
+            a=copy_sign::<F>(a,x,code);b=copy_sign::<F>(b,y,code);pr=inf*(pi*a-zero*b);im=inf*(pi*b+zero*a);
         }
         let hreal= -im;let himag=pr;let mut sr=F::new(f32::NAN);let mut si=F::new(f32::NAN);
         if (hreal.abs()==inf || hreal==zero) && !(himag.abs()<inf) {sr=hreal;}
@@ -176,9 +176,9 @@ fn vector_base<N:Numeric>(a:&Tensor<N>,vector:usize,axis:usize)->usize {
 fn cross_float<S:Float+RudaElement,F:Float+RudaElement>(ar:&Tensor<S>,ai:&Tensor<S>,br:&Tensor<S>,bi:&Tensor<S>,out:&mut Tensor<S>,out_i:&mut Tensor<S>,axis:usize,#[comptime] complex:bool) {
     let p=ABSOLUTE_POS as usize;
     if p<out.len()/3usize {
-        let abase=vector_base(ar,p,axis);let bbase=vector_base(br,p,axis);let obase=vector_base(out,p,axis);
+        let abase=vector_base::<S>(ar,p,axis);let bbase=vector_base::<S>(br,p,axis);let obase=vector_base::<S>(out,p,axis);
         let mut aibase=0usize;let mut bibase=0usize;let mut oibase=0usize;
-        if comptime!(complex) {aibase=vector_base(ai,p,axis);bibase=vector_base(bi,p,axis);oibase=vector_base(out_i,p,axis);}
+        if comptime!(complex) {aibase=vector_base::<S>(ai,p,axis);bibase=vector_base::<S>(bi,p,axis);oibase=vector_base::<S>(out_i,p,axis);}
         for c in 0usize..3usize {
             let j=(c+1usize)%3usize;let k=(c+2usize)%3usize;
             let a=F::cast_from(ar[abase+j*ar.stride(axis)]);let b=F::cast_from(br[bbase+k*br.stride(axis)]);
@@ -199,7 +199,7 @@ fn cross_float<S:Float+RudaElement,F:Float+RudaElement>(ar:&Tensor<S>,ai:&Tensor
 fn cross_integer<I:Numeric+RudaElement>(a:&Tensor<I>,b:&Tensor<I>,out:&mut Tensor<I>,axis:usize) {
     let p=ABSOLUTE_POS as usize;
     if p<out.len()/3usize {
-        let abase=vector_base(a,p,axis);let bbase=vector_base(b,p,axis);let obase=vector_base(out,p,axis);
+        let abase=vector_base::<I>(a,p,axis);let bbase=vector_base::<I>(b,p,axis);let obase=vector_base::<I>(out,p,axis);
         for c in 0usize..3usize {
             let j=(c+1usize)%3usize;let k=(c+2usize)%3usize;
             let left=u64::cast_from(i64::cast_from(a[abase+j*a.stride(axis)]))*u64::cast_from(i64::cast_from(b[bbase+k*b.stride(axis)]));

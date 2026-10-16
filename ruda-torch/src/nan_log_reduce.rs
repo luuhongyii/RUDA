@@ -48,7 +48,7 @@ fn block_max<F: Float>(value: F) -> F {
     let mut result = value;
     let mut offset = 16u32;
     while offset > 0u32 {
-        result = maximum(result, plane_shuffle_down(result, offset));
+        result = maximum::<F>(result, plane_shuffle_down(result, offset));
         offset /= 2u32;
     }
     let mut shared = SharedMemory::<F>::new(8usize);
@@ -60,7 +60,7 @@ fn block_max<F: Float>(value: F) -> F {
     if tid < 32usize {
         offset = 16u32;
         while offset > 0u32 {
-            result = maximum(result, plane_shuffle_down(result, offset));
+            result = maximum::<F>(result, plane_shuffle_down(result, offset));
             offset /= 2u32;
         }
     }
@@ -92,7 +92,7 @@ fn write_nan<S: Float, F: Float>(
     if comptime!(mean) {
         let divisor = F::cast_from(storage::<S, F>(F::cast_from(count), code));
         if comptime!(complex) {
-            let (a, b) = crate::foreach_unary::complex_divide(x, y, divisor, F::new(0.0));
+            let (a, b) = crate::foreach_unary::complex_divide::<F>(x, y, divisor, F::new(0.0));
             x = a; y = b;
         } else { x /= divisor; }
     }
@@ -135,11 +135,11 @@ fn nan_chunks<S: Float + RudaElement, R: Float + RudaElement, F: Float + RudaEle
             }
             offset += 256usize;
         }
-        sum_re = block_sum(sum_re);
-        if comptime!(complex) { sum_im = block_sum(sum_im); }
-        if comptime!(mean) { count = block_sum(count); }
+        sum_re = block_sum::<F>(sum_re);
+        if comptime!(complex) { sum_im = block_sum::<F>(sum_im); }
+        if comptime!(mean) { count = block_sum::<u32>(count); }
         if tid == 0 {
-            if comptime!(last) { write_nan(out_re, out_im, row, sum_re, sum_im, count, mean, complex, code); }
+            if comptime!(last) { write_nan::<S, F>(out_re, out_im, row, sum_re, sum_im, count, mean, complex, code); }
             else {
                 partial_re[task] = sum_re;
                 if comptime!(complex) { partial_im[task] = sum_im; }
@@ -169,10 +169,10 @@ fn nan_finish<S: Float + RudaElement, F: Float + RudaElement>(
             if comptime!(mean) { count += partial_count[p]; }
             chunk += 256usize;
         }
-        sum_re = block_sum(sum_re);
-        if comptime!(complex) { sum_im = block_sum(sum_im); }
-        if comptime!(mean) { count = block_sum(count); }
-        if tid == 0 { write_nan(out_re, out_im, row, sum_re, sum_im, count, mean, complex, code); }
+        sum_re = block_sum::<F>(sum_re);
+        if comptime!(complex) { sum_im = block_sum::<F>(sum_im); }
+        if comptime!(mean) { count = block_sum::<u32>(count); }
+        if tid == 0 { write_nan::<S, F>(out_re, out_im, row, sum_re, sum_im, count, mean, complex, code); }
     }
 }
 
@@ -190,10 +190,10 @@ fn max_chunks<S: Float + RudaElement, F: Float>(
         let mut offset = tid;
         let mut value = F::new(f32::NEG_INFINITY);
         while offset < remaining && offset < 65536usize {
-            value = maximum(value, F::cast_from(real[address(real, row * width + start + offset)]));
+            value = maximum::<F>(value, F::cast_from(real[address(real, row * width + start + offset)]));
             offset += 256usize;
         }
-        value = block_max(value);
+        value = block_max::<F>(value);
         if tid == 0 {
             if comptime!(last) {
                 if value.abs() == F::new(f32::INFINITY) { value = F::new(0.0); }
@@ -211,10 +211,10 @@ fn max_finish<S: Float + RudaElement, F: Float>(partials: &Tensor<S>, maxima: &m
         let mut chunk = tid;
         let mut value = F::new(f32::NEG_INFINITY);
         while chunk < chunks {
-            value = maximum(value, F::cast_from(partials[row * chunks + chunk]));
+            value = maximum::<F>(value, F::cast_from(partials[row * chunks + chunk]));
             chunk += 256usize;
         }
-        value = block_max(value);
+        value = block_max::<F>(value);
         if tid == 0 {
             if value.abs() == F::new(f32::INFINITY) { value = F::new(0.0); }
             maxima[row] = S::cast_from(value);
@@ -232,7 +232,7 @@ fn write_log<S: Float, O: Float, F: Float, A: Float>(
     let mut log_re = x.ln();
     let mut log_im = F::new(0.0);
     if comptime!(complex) {
-        let (a, b) = crate::scientific::complex_log(x, y);
+        let (a, b) = crate::scientific::complex_log::<F>(x, y);
         log_re = a; log_im = b;
     }
     let result = A::cast_from(storage::<O, F>(log_re, output_code)) + A::cast_from(maxima[row]);
@@ -267,7 +267,7 @@ fn exp_chunks<S: Float + RudaElement, O: Float + RudaElement, I: Float, F: Float
             let mut exp_im = I::new(0.0);
             if comptime!(input_complex) {
                 let y = I::cast_from(imag[address(imag, p)]);
-                let (a, b) = crate::foreach_unary::complex_exp(x, y, math_code);
+                let (a, b) = crate::foreach_unary::complex_exp::<I>(x, y, math_code);
                 exp_re = a; exp_im = b;
             }
             let stored_re = storage::<S, I>(exp_re, input_code);
@@ -278,8 +278,8 @@ fn exp_chunks<S: Float + RudaElement, O: Float + RudaElement, I: Float, F: Float
             }
             offset += 256usize;
         }
-        sum_re = block_sum(sum_re);
-        if comptime!(output_complex) { sum_im = block_sum(sum_im); }
+        sum_re = block_sum::<F>(sum_re);
+        if comptime!(output_complex) { sum_im = block_sum::<F>(sum_im); }
         if tid == 0 {
             if comptime!(last) {
                 write_log::<S, O, F, A>(maxima, out_re, out_im, row, sum_re, sum_im, output_complex, output_code);
@@ -308,8 +308,8 @@ fn log_finish<S: Float + RudaElement, O: Float + RudaElement, F: Float + RudaEle
             if comptime!(complex) { sum_im += partial_im[p]; }
             chunk += 256usize;
         }
-        sum_re = block_sum(sum_re);
-        if comptime!(complex) { sum_im = block_sum(sum_im); }
+        sum_re = block_sum::<F>(sum_re);
+        if comptime!(complex) { sum_im = block_sum::<F>(sum_im); }
         if tid == 0 { write_log::<S, O, F, A>(maxima, out_re, out_im, row, sum_re, sum_im, complex, output_code); }
     }
 }

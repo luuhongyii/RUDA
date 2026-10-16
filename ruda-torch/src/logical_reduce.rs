@@ -69,8 +69,8 @@ fn small<S: Numeric + RudaElement, O: Numeric + RudaElement>(
     if row < output.len() {
         let mut result = u32::cast_from(comptime!(mode == 0)); let mut item = 0usize;
         while item < width {
-            let offset = source_address(input, row, item, reduced);
-            result = combine(result, truth(input, imaginary, offset, code), mode); item += 1usize;
+            let offset = source_address::<S>(input, row, item, reduced.clone());
+            result = combine(result, truth::<S>(input, imaginary, offset, code), mode); item += 1usize;
         }
         output[address(output, row)] = O::cast_from(result);
     }
@@ -88,8 +88,8 @@ fn chunks<S: Numeric + RudaElement, O: Numeric + RudaElement>(
         let base = chunk * 65536usize; let remaining = width - base;
         let mut item = tid; let mut result = u32::cast_from(comptime!(mode == 0));
         while item < remaining && item < 65536usize {
-            let offset = source_address(input, row, base + item, reduced);
-            result = combine(result, truth(input, imaginary, offset, code), mode); item += 256usize;
+            let offset = source_address::<S>(input, row, base + item, reduced.clone());
+            result = combine(result, truth::<S>(input, imaginary, offset, code), mode); item += 256usize;
         }
         result = block_reduce(result, mode);
         if tid == 0usize {

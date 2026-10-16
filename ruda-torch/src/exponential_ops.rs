@@ -15,7 +15,7 @@ fn real<S: Float + RudaElement, F: Float>(
         else if comptime!(op==2) {value=x.log1p();}
         else if comptime!(op==3) {value=one/(one+(-x).exp());}
         else {
-            let (r,_i)=crate::elementary::evaluate(x,zero,zero,zero,zero,comptime!(op+245u32),false);
+            let (r,_i)=crate::elementary::evaluate::<F>(x,zero,zero,zero,zero,comptime!(op+245u32),false);
             value=r;
         }
         output[address(output,p)]=S::cast_from(value);
@@ -32,23 +32,23 @@ fn complex<S: Float + RudaElement, F: Float>(
         let x=F::cast_from(input_real[address(input_real,p)]); let y=F::cast_from(input_imag[address(input_imag,p)]);
         let zero=F::new(0.0); let one=F::new(1.0); let mut real=zero; let mut imag=zero;
         if comptime!(op==0) {
-            let (r,i)=crate::power_ops::jit_exp(x,y,code); real=r; imag=i;
+            let (r,i)=crate::power_ops::jit_exp::<F>(x,y,code); real=r; imag=i;
         } else if comptime!(op==1 || op==6 || op==7) {
             real=x.hypot(y).ln(); imag=y.atan2(x);
             if comptime!(op==6) {let denominator=F::new(2.0).ln(); real/=denominator; imag/=denominator;}
             else if comptime!(op==7) {let denominator=F::new(10.0).ln(); real/=denominator; imag/=denominator;}
         } else if comptime!(op==2) {
-            let (r,i)=crate::elementary::complex_log1p(x,y); real=r; imag=i;
+            let (r,i)=crate::elementary::complex_log1p::<F>(x,y); real=r; imag=i;
         } else if comptime!(op==3) {
-            let (r,i)=crate::power_ops::jit_exp(-x,-y,code);
-            let (a,b)=crate::math_extra::complex_divide(one,zero,one+r,zero+i,code,
+            let (r,i)=crate::power_ops::jit_exp::<F>(-x,-y,code);
+            let (a,b)=crate::math_extra::complex_divide::<F>(one,zero,one+r,zero+i,code,
                 comptime!(if code==9 {52u32}else{23u32}),comptime!(if code==9 {11u32}else{8u32}));
             real=a; imag=b;
         } else if comptime!(op==4) {
             let ln2=F::cast_from(0.693147180559945309417232121458176f64);
-            let (r,i)=crate::power_ops::jit_exp(ln2*x,ln2*y,code); real=r; imag=i;
+            let (r,i)=crate::power_ops::jit_exp::<F>(ln2*x,ln2*y,code); real=r; imag=i;
         } else if comptime!(op==5) {
-            let (r,i)=crate::elementary::evaluate(x,y,zero,zero,zero,250,true); real=r; imag=i;
+            let (r,i)=crate::elementary::evaluate::<F>(x,y,zero,zero,zero,250u32,true); real=r; imag=i;
         }
         output_real[address(output_real,p)]=S::cast_from(real);
         output_imag[address(output_imag,p)]=S::cast_from(imag);
@@ -109,11 +109,11 @@ fn backward_complex<S: Float + RudaElement, F: Float>(
         let b=F::cast_from(saved_real[address(saved_real,p)]); let bi=F::cast_from(saved_imag[address(saved_imag,p)]);
         let zero=F::new(0.0); let one=F::new(1.0); let mut dr=zero; let mut di=zero;
         if comptime!(tanh) {
-            let (r,i)=crate::math_extra::complex_multiply(b,bi,b,bi,code); dr=one-r; di=zero-i;
+            let (r,i)=crate::math_extra::complex_multiply::<F>(b,bi,b,bi,code); dr=one-r; di=zero-i;
         } else {
-            let (r,i)=crate::math_extra::complex_multiply(one-b,zero-bi,b,bi,code); dr=r; di=i;
+            let (r,i)=crate::math_extra::complex_multiply::<F>(one-b,zero-bi,b,bi,code); dr=r; di=i;
         }
-        let (r,i)=crate::math_extra::complex_multiply(a,ai,dr,-di,code);
+        let (r,i)=crate::math_extra::complex_multiply::<F>(a,ai,dr,-di,code);
         output_real[address(output_real,p)]=S::cast_from(r); output_imag[address(output_imag,p)]=S::cast_from(i);
     }
 }

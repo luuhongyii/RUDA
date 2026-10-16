@@ -29,7 +29,7 @@ fn multiply<A: Numeric>(ar: A, ai: A, br: A, bi: A, #[comptime] code: u32) -> (A
 fn block_product<A: Numeric>(real: A, imaginary: A, #[comptime] code: u32) -> (A, A) {
     let tid = UNIT_POS as usize; let mut re = real; let mut im = imaginary; let mut distance = 16u32;
     while distance > 0u32 {
-        let (next_re, next_im) = multiply(re, im, plane_shuffle_down(re, distance), plane_shuffle_down(im, distance), code);
+        let (next_re, next_im) = multiply::<A>(re, im, plane_shuffle_down(re, distance), plane_shuffle_down(im, distance), code);
         re = next_re; im = next_im; distance /= 2u32;
     }
     let mut shared_re = SharedMemory::<A>::new(8usize); let mut shared_im = SharedMemory::<A>::new(8usize);
@@ -47,7 +47,7 @@ fn block_product<A: Numeric>(real: A, imaginary: A, #[comptime] code: u32) -> (A
     if tid < 32usize {
         distance = 16u32;
         while distance > 0u32 {
-            let (next_re, next_im) = multiply(re, im, plane_shuffle_down(re, distance), plane_shuffle_down(im, distance), code);
+            let (next_re, next_im) = multiply::<A>(re, im, plane_shuffle_down(re, distance), plane_shuffle_down(im, distance), code);
             re = next_re; im = next_im; distance /= 2u32;
         }
     }
@@ -75,10 +75,10 @@ fn small<S: Numeric + RudaElement, A: Numeric>(
     if row < output.len() {
         let mut re = A::cast_from(1u32); let mut im = A::cast_from(0u32); let mut item = 0usize;
         while item < width {
-            let offset = source_address(input, row, item, reduced);
+            let offset = source_address::<S>(input, row, item, reduced.clone());
             let value = A::cast_from(input[offset]); let mut value_i = A::cast_from(0u32);
             if comptime!(code == 10 || code == 11 || code == 14) { value_i = A::cast_from(imaginary[offset]); }
-            let (next_re, next_im) = multiply(re, im, value, value_i, code);
+            let (next_re, next_im) = multiply::<A>(re, im, value, value_i, code);
             re = next_re; im = next_im; item += 1usize;
         }
         output[address(output, row)] = S::cast_from(re);
@@ -98,13 +98,13 @@ fn chunks<S: Numeric + RudaElement, A: Numeric + RudaElement>(
         let base = chunk * 65536usize; let remaining = width - base;
         let mut re = A::cast_from(1u32); let mut im = A::cast_from(0u32); let mut item = tid;
         while item < remaining && item < 65536usize {
-            let offset = source_address(input, row, base + item, reduced);
+            let offset = source_address::<S>(input, row, base + item, reduced.clone());
             let value = A::cast_from(input[offset]); let mut value_i = A::cast_from(0u32);
             if comptime!(code == 10 || code == 11 || code == 14) { value_i = A::cast_from(imaginary[offset]); }
-            let (next_re, next_im) = multiply(re, im, value, value_i, code);
+            let (next_re, next_im) = multiply::<A>(re, im, value, value_i, code);
             re = next_re; im = next_im; item += 256usize;
         }
-        let (value, value_i) = block_product(re, im, code);
+        let (value, value_i) = block_product::<A>(re, im, code);
         if tid == 0usize {
             if comptime!(direct) {
                 output[address(output, row)] = S::cast_from(value);
@@ -127,10 +127,10 @@ fn finish<S: Numeric + RudaElement, A: Numeric + RudaElement>(
         while chunk < count {
             let offset = row * count + chunk; let value = partials[offset]; let mut value_i = A::cast_from(0u32);
             if comptime!(code == 10 || code == 11 || code == 14) { value_i = partials[output.len() * count + offset]; }
-            let (next_re, next_im) = multiply(re, im, value, value_i, code);
+            let (next_re, next_im) = multiply::<A>(re, im, value, value_i, code);
             re = next_re; im = next_im; chunk += 256usize;
         }
-        let (value, value_i) = block_product(re, im, code);
+        let (value, value_i) = block_product::<A>(re, im, code);
         if tid == 0usize {
             output[address(output, row)] = S::cast_from(value);
             if comptime!(code == 10 || code == 11 || code == 14) { imaginary[address(imaginary, row)] = S::cast_from(value_i); }

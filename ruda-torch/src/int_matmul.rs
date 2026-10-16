@@ -6,7 +6,7 @@ fn multiply(left: &Tensor<i8>, right: &Tensor<i8>, out: &mut Tensor<i32>,
     column_tiles: usize, inner_tiles: usize, blocks: usize,
 ) {
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if block >= blocks { return; }
+    if block >= blocks { terminate!(); }
     let tid = UNIT_POS as usize; let tx = tid % 16usize; let ty = tid / 16usize;
     let row = block / column_tiles * 16usize + ty; let column = block % column_tiles * 16usize + tx;
     let rows = left.shape(0); let inner = left.shape(1); let columns = right.shape(1);

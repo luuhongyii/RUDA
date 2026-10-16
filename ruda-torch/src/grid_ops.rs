@@ -76,7 +76,7 @@ fn bounded<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,plane:usize,y:S
     let (px,_mx)=padded::<S,F>(x,a.shape(4),padding,align,false);
     let (py,_my)=padded::<S,F>(y,a.shape(3),padding,align,false);
     let ix=i64::cast_from(px);let iy=i64::cast_from(py);let mut value=S::new(0.0);
-    if inside(a,0,iy,ix) {value=load(a,plane,0,iy,ix);}
+    if inside::<S>(a,0,iy,ix) {value=load::<S>(a,plane,0,iy,ix);}
     value
 }
 
@@ -113,7 +113,7 @@ fn forward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S>
         }
         if comptime!(mode==2) {
             let xbase=ix.floor();let ybase=iy.floor();let tx=ix-xbase;let ty=iy-ybase;
-            let c0=cubic_coefficient(tx,0);let c1=cubic_coefficient(tx,1);let c2=cubic_coefficient(tx,2);let c3=cubic_coefficient(tx,3);
+            let c0=cubic_coefficient::<F>(tx,0);let c1=cubic_coefficient::<F>(tx,1);let c2=cubic_coefficient::<F>(tx,2);let c3=cubic_coefficient::<F>(tx,3);
             for channel in 0..a.shape(1) {
                 let plane=n*a.shape(1)+channel;let mut rows=Array::<F>::new(4);
                 for k in 0..4usize {
@@ -124,14 +124,14 @@ fn forward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S>
                     let v3=F::cast_from(bounded::<S,F>(a,plane,y,S::cast_from(xbase+F::new(2.0)),padding,align));
                     rows[k]=v0*c0+v1*c1+v2*c2+v3*c3;
                 }
-                let value=rows[0]*cubic_coefficient(ty,0)+rows[1]*cubic_coefficient(ty,1)+rows[2]*cubic_coefficient(ty,2)+rows[3]*cubic_coefficient(ty,3);
+                let value=rows[0]*cubic_coefficient::<F>(ty,0)+rows[1]*cubic_coefficient::<F>(ty,1)+rows[2]*cubic_coefficient::<F>(ty,2)+rows[3]*cubic_coefficient::<F>(ty,3);
                 out[address(out,plane*spatial+location)]=S::cast_from(value);
             }
         } else if comptime!(mode==1) {
             let x=i64::cast_from(ix.round());let y=i64::cast_from(iy.round());let z=i64::cast_from(iz.round());
             for channel in 0..a.shape(1) {
                 let plane=n*a.shape(1)+channel;let mut value=S::new(0.0);
-                if inside(a,z,y,x) {value=load(a,plane,z,y,x);}
+                if inside::<S>(a,z,y,x) {value=load::<S>(a,plane,z,y,x);}
                 out[address(out,plane*spatial+location)]=value;
             }
         } else {
@@ -144,11 +144,11 @@ fn forward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S>
                 let plane=n*a.shape(1)+channel;let mut value=F::new(0.0);
                 for kz in 0..depths {for ky in 0..2usize {for kx in 0..2usize {
                     let z=zbase+i64::cast_from(kz);let y=ybase+i64::cast_from(ky);let x=xbase+i64::cast_from(kx);
-                    if inside(a,z,y,x) {
+                    if inside::<S>(a,z,y,x) {
                         let mut wx=wx0;let mut wy=wy0;let mut wz=wz0;
                         if kx==1 {wx=wx1;}if ky==1 {wy=wy1;}if kz==1 {wz=wz1;}
                         let mut weight=wx*wy;if comptime!(rank==3) {weight*=wz;}
-                        value+=F::cast_from(load(a,plane,z,y,x))*weight;
+                        value+=F::cast_from(load::<S>(a,plane,z,y,x))*weight;
                     }
                 }}}
                 out[address(out,plane*spatial+location)]=S::cast_from(value);
@@ -178,7 +178,7 @@ fn backward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S
             let xbase=ix.floor();let ybase=iy.floor();let tx=ix-xbase;let ty=iy-ybase;
             let mut cx=Array::<S>::new(4);let mut cy=Array::<S>::new(4);
             let mut dcx=Array::<S>::new(4);let mut dcy=Array::<S>::new(4);
-            for k in 0..4usize {cx[k]=cubic_coefficient(tx,k);cy[k]=cubic_coefficient(ty,k);dcx[k]=cubic_derivative(tx,k);dcy[k]=cubic_derivative(ty,k);}
+            for k in 0..4usize {cx[k]=cubic_coefficient::<S>(tx,k);cy[k]=cubic_coefficient::<S>(ty,k);dcx[k]=cubic_derivative::<S>(tx,k);dcy[k]=cubic_derivative::<S>(ty,k);}
             for channel in 0..a.shape(1) {
                 let plane=n*a.shape(1)+channel;let go=grad[address(grad,plane*spatial+location)];
                 for kx in 0..4usize {for ky in 0..4usize {
@@ -186,9 +186,9 @@ fn backward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S
                     let (px,_pmx)=padded::<S,F>(x,a.shape(4),padding,align,false);
                     let (py,_pmy)=padded::<S,F>(y,a.shape(3),padding,align,false);
                     let xx=i64::cast_from(px);let yy=i64::cast_from(py);let mut value=S::new(0.0);
-                    if inside(a,0,yy,xx) {
-                        value=load(a,plane,0,yy,xx);
-                        if comptime!(want_dx) {add(dx,plane,0,yy,xx,go*cx[kx]*cy[ky]);}
+                    if inside::<S>(a,0,yy,xx) {
+                        value=load::<S>(a,plane,0,yy,xx);
+                        if comptime!(want_dx) {add::<S>(dx,plane,0,yy,xx,go*cx[kx]*cy[ky]);}
                     }
                     gx-=value*dcx[kx]*cy[ky]*go;gy-=value*dcy[ky]*cx[kx]*go;
                 }}
@@ -196,8 +196,8 @@ fn backward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S
         } else if comptime!(mode==1) {
             if comptime!(want_dx) {
                 let x=i64::cast_from(ix.round());let y=i64::cast_from(iy.round());let z=i64::cast_from(iz.round());
-                if inside(a,z,y,x) {for channel in 0..a.shape(1) {
-                    let plane=n*a.shape(1)+channel;add(dx,plane,z,y,x,grad[address(grad,plane*spatial+location)]);
+                if inside::<S>(a,z,y,x) {for channel in 0..a.shape(1) {
+                    let plane=n*a.shape(1)+channel;add::<S>(dx,plane,z,y,x,grad[address(grad,plane*spatial+location)]);
                 }}
             }
         } else {
@@ -210,14 +210,14 @@ fn backward<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grid:&Tensor<S
                 let plane=n*a.shape(1)+channel;let go=grad[address(grad,plane*spatial+location)];
                 for kz in 0..depths {for ky in 0..2usize {for kx in 0..2usize {
                     let z=zbase+i64::cast_from(kz);let y=ybase+i64::cast_from(ky);let x=xbase+i64::cast_from(kx);
-                    if inside(a,z,y,x) {
+                    if inside::<S>(a,z,y,x) {
                         let mut wx=wx0;let mut wy=wy0;let mut wz=wz0;
                         if kx==1 {wx=wx1;}if ky==1 {wy=wy1;}if kz==1 {wz=wz1;}
                         if comptime!(want_dx) {
                             let mut weight=wx*wy;if comptime!(rank==3) {weight*=wz;}
-                            add(dx,plane,z,y,x,weight*go);
+                            add::<S>(dx,plane,z,y,x,weight*go);
                         }
-                        let value=load(a,plane,z,y,x);let mut vx=value*wy;let mut vy=value*wx;
+                        let value=load::<S>(a,plane,z,y,x);let mut vx=value*wy;let mut vy=value*wx;
                         if comptime!(rank==3) {
                             vx*=wz;vy*=wz;let vz=value*wx*wy*go;
                             if kz==0 {gz-=vz;}else{gz+=vz;}

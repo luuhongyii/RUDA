@@ -8,7 +8,7 @@ fn chunks<S: Float + RudaElement, F: Float + RudaElement>(
     count: usize, #[comptime] last: bool,
 ) {
     let chunk = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if chunk >= count { return; }
+    if chunk >= count { terminate!(); }
     let tid = UNIT_POS as usize; let start = chunk * 4096usize;
     let remaining = left.len() - start;
     let mut sum = F::new(0.0);
@@ -19,7 +19,7 @@ fn chunks<S: Float + RudaElement, F: Float + RudaElement>(
             sum = fma(F::cast_from(left[p * left.stride(0)]), F::cast_from(right[p * right.stride(0)]), sum);
         }
     }
-    let sum = block_sum(sum);
+    let sum = block_sum::<F>(sum);
     if tid == 0usize {
         if comptime!(last) { out[0usize] = S::cast_from(sum); }
         else { partials[chunk] = sum; }
@@ -31,7 +31,7 @@ fn finish<S: Float + RudaElement, F: Float + RudaElement>(partials: &Tensor<F>, 
     let tid = UNIT_POS as usize;
     let mut sum = F::new(0.0); let mut i = tid;
     while i < partials.len() { sum += partials[i]; i += 256usize; }
-    let sum = block_sum(sum);
+    let sum = block_sum::<F>(sum);
     if tid == 0usize { out[0usize] = S::cast_from(sum); }
 }
 
@@ -42,7 +42,7 @@ fn complex_chunks<F: Float + RudaElement>(
     #[comptime] conjugate: bool, #[comptime] last: bool,
 ) {
     let chunk = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if chunk >= count { return; }
+    if chunk >= count { terminate!(); }
     let tid = UNIT_POS as usize; let start = chunk * 4096usize;
     let remaining = ar.len() - start;
     let mut real = F::new(0.0); let mut imag = F::new(0.0);
@@ -56,7 +56,7 @@ fn complex_chunks<F: Float + RudaElement>(
             real += x * y - u * v; imag += x * v + u * y;
         }
     }
-    let real = block_sum(real); let imag = block_sum(imag);
+    let real = block_sum::<F>(real); let imag = block_sum::<F>(imag);
     if tid == 0usize {
         if comptime!(last) { yr[0usize] = real; yi[0usize] = imag; }
         else { partials[2usize * chunk] = real; partials[2usize * chunk + 1usize] = imag; }
@@ -70,7 +70,7 @@ fn complex_finish<F: Float + RudaElement>(partials: &Tensor<F>, yr: &mut Tensor<
     while i < partials.len() / 2usize {
         real += partials[2usize * i]; imag += partials[2usize * i + 1usize]; i += 256usize;
     }
-    let real = block_sum(real); let imag = block_sum(imag);
+    let real = block_sum::<F>(real); let imag = block_sum::<F>(imag);
     if tid == 0usize { yr[0usize] = real; yi[0usize] = imag; }
 }
 

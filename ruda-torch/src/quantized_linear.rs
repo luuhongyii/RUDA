@@ -45,7 +45,7 @@ fn integer_linear<I: Numeric + RudaElement, O: Numeric + RudaElement>(
     #[comptime] float_output: bool, #[comptime] activation: u32,
 ) {
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if block >= blocks { return; }
+    if block >= blocks { terminate!(); }
     let tid = UNIT_POS as usize; let tx = tid % 16usize; let ty = tid / 16usize;
     let column_tile = block % column_tiles;
     let row = block / column_tiles * 16usize + ty; let column = column_tile * 16usize + tx;
@@ -110,7 +110,7 @@ fn half_linear(
     #[comptime] relu: bool,
 ) {
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
-    if block >= blocks { return; }
+    if block >= blocks { terminate!(); }
     let tid = UNIT_POS as usize; let tx = tid % 16usize; let ty = tid / 16usize;
     let column_tile = block % column_tiles;
     let row = block / column_tiles * 16usize + ty; let column = column_tile * 16usize + tx;

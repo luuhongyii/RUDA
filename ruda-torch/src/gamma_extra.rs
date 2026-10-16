@@ -230,7 +230,7 @@ fn zeta<F:Float>(x:F,q:F)->F {
     else if q<=zero && q==q.floor() {result=F::new(f32::INFINITY);}
     else if q<=zero && x!=x.floor() {}
     else {
-        let mut sum=q.powf(-x);let mut a=q;let mut b=zero;let mut i=0i64;let mut converged=false;
+        let mut sum=q.powf(-x);let mut a=q;let mut b=zero;let mut i:i64=0i64;let mut converged=false;
         while i<9i64 || a<=F::new(9.0) {
             i+=1i64;a+=one;b=a.powf(-x);sum+=b;
             if -eps*sum<b && b<eps*sum {converged=true;break;}
@@ -264,14 +264,14 @@ fn airy<F:Float>(x:F)->F {
         let phase=F::new(-2.0)*x*(-x).sqrt()/F::new(3.0);let z=one/phase;let zz=z*z;
         let afn=Array::<F>::from_data(comptime!(AIRY_AFN.to_vec()));let afd=Array::<F>::from_data(comptime!(AIRY_AFD.to_vec()));
         let agn=Array::<F>::from_data(comptime!(AIRY_AGN.to_vec()));let agd=Array::<F>::from_data(comptime!(AIRY_AGD.to_vec()));
-        let even=one+zz*polynomial::<F>(zz,&afn,9)/polynomial::<F>(zz,&afd,9);
-        let odd=z*polynomial::<F>(zz,&agn,11)/polynomial::<F>(zz,&agd,10);
+        let even=one+zz*polynomial::<F>(zz,&afn,9usize)/polynomial::<F>(zz,&afd,9usize);
+        let odd=z*polynomial::<F>(zz,&agn,11usize)/polynomial::<F>(zz,&agd,10usize);
         let t=phase+F::new(0.25)*F::cast_from(3.14159265358979323846f64);
         result=F::cast_from(5.64189583547756286948e-1f64)/(-x).sqrt().sqrt()*(t.sin()*even-t.cos()*odd);
     } else if x>=F::cast_from(2.09f64) {
         let phase=F::new(2.0)*x*x.sqrt()/F::new(3.0);
         let an=Array::<F>::from_data(comptime!(AIRY_AN.to_vec()));let ad=Array::<F>::from_data(comptime!(AIRY_AD.to_vec()));
-        result=F::cast_from(5.64189583547756286948e-1f64)*(polynomial::<F>(one/phase,&an,8)/polynomial::<F>(one/phase,&ad,8))/(F::new(2.0)*x.sqrt().sqrt()*phase.exp());
+        result=F::cast_from(5.64189583547756286948e-1f64)*(polynomial::<F>(one/phase,&an,8usize)/polynomial::<F>(one/phase,&ad,8usize))/(F::new(2.0)*x.sqrt().sqrt()*phase.exp());
     } else {
         let mut f=one;let mut g=x;let mut k=one;let mut m=one;let mut n=x;let mut t=one;let z=x*x*x;
         while t>F::new(1.11022302462515654042e-16) {

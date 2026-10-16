@@ -42,7 +42,7 @@ fn block_moments<F: Float>(mean: F, moment: F, count: F) -> (F, F, F) {
     let mut n = count;
     let mut offset = 16u32;
     while offset > 0u32 {
-        let (next_m, next_v, next_n) = combine(m, v, n,
+        let (next_m, next_v, next_n) = combine::<F>(m, v, n,
             plane_shuffle_down(m, offset), plane_shuffle_down(v, offset), plane_shuffle_down(n, offset));
         m = next_m; v = next_v; n = next_n;
         offset /= 2u32;
@@ -62,7 +62,7 @@ fn block_moments<F: Float>(mean: F, moment: F, count: F) -> (F, F, F) {
     if tid < 32usize {
         offset = 16u32;
         while offset > 0u32 {
-            let (next_m, next_v, next_n) = combine(m, v, n,
+            let (next_m, next_v, next_n) = combine::<F>(m, v, n,
                 plane_shuffle_down(m, offset), plane_shuffle_down(v, offset), plane_shuffle_down(n, offset));
             m = next_m; v = next_v; n = next_n;
             offset /= 2u32;
@@ -89,7 +89,7 @@ fn write_result<S: Float, O: Float, F: Float>(
     }
     if comptime!(std) {
         if comptime!(variance_complex) {
-            let (real, imag) = crate::scientific::complex_sqrt(variance, F::new(0.0));
+            let (real, imag) = crate::scientific::complex_sqrt::<F>(variance, F::new(0.0));
             variance = real; imaginary = imag;
         } else { variance = variance.sqrt(); }
     }
@@ -150,20 +150,20 @@ fn chunks<S: Float + RudaElement, O: Float + RudaElement, F: Float + RudaElement
             let p = row * width + start + offset;
             let x = F::cast_from(storage::<O, S>(real[address(real, p)], output_code));
             n += 1u32;
-            let (next_mean, next_moment) = update(mr, vr, n, x);
+            let (next_mean, next_moment) = update::<F>(mr, vr, n, x);
             mr = next_mean; vr = next_moment;
             if comptime!(complex) {
                 let y = F::cast_from(storage::<O, S>(imag[address(imag, p)], output_code));
-                let (next_mean, next_moment) = update(mi, vi, n, y);
+                let (next_mean, next_moment) = update::<F>(mi, vi, n, y);
                 mi = next_mean; vi = next_moment;
             }
             offset += 256usize;
         }
         let nf = F::cast_from(n);
-        let (real_mean, real_moment, total) = block_moments(mr, vr, nf);
+        let (real_mean, real_moment, total) = block_moments::<F>(mr, vr, nf);
         mr = real_mean; vr = real_moment;
         if comptime!(complex) {
-            let (imag_mean, imag_moment, _) = block_moments(mi, vi, nf);
+            let (imag_mean, imag_moment, _) = block_moments::<F>(mi, vi, nf);
             mi = imag_mean; vi = imag_moment;
         }
         if tid == 0 {
@@ -196,19 +196,19 @@ fn finish<S: Float + RudaElement, O: Float + RudaElement, F: Float + RudaElement
         while chunk < count {
             let p = row * count + chunk;
             let next_count = partials[2usize * tasks + p];
-            let (real_mean, real_moment, total) = combine(mr, vr, n, partials[p], partials[tasks + p], next_count);
+            let (real_mean, real_moment, total) = combine::<F>(mr, vr, n, partials[p], partials[tasks + p], next_count);
             mr = real_mean; vr = real_moment;
             if comptime!(complex) {
-                let (imag_mean, imag_moment, _) = combine(mi, vi, n, partials[3usize * tasks + p], partials[4usize * tasks + p], next_count);
+                let (imag_mean, imag_moment, _) = combine::<F>(mi, vi, n, partials[3usize * tasks + p], partials[4usize * tasks + p], next_count);
                 mi = imag_mean; vi = imag_moment;
             }
             n = total;
             chunk += 256usize;
         }
-        let (real_mean, real_moment, total) = block_moments(mr, vr, n);
+        let (real_mean, real_moment, total) = block_moments::<F>(mr, vr, n);
         mr = real_mean; vr = real_moment;
         if comptime!(complex) {
-            let (imag_mean, imag_moment, _) = block_moments(mi, vi, n);
+            let (imag_mean, imag_moment, _) = block_moments::<F>(mi, vi, n);
             mi = imag_mean; vi = imag_moment;
         }
         if tid == 0 { write_result::<S, O, F>(variance_re, variance_im, mean_re, mean_im, row, mr, vr, mi, vi, total, correction,

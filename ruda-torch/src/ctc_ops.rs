@@ -41,7 +41,7 @@ fn forward<F:Float+RudaElement,I:Numeric+RudaElement>(probs:&Tensor<F>,targets:&
             while state<i64::cast_from(width) {
                 let mut value=neginf;
                 if i64::cast_from(time)<input_length && state<end {
-                    let current=label(targets,target_offset,state,blank,i64::cast_from(classes));
+                    let current=label::<I>(targets,target_offset,state,blank,i64::cast_from(classes));
                     let probability=probs[time*probs.stride(0)+batch*probs.stride(1)+current*probs.stride(2)];
                     if time==0 {if state<2 {value=probability;}}
                     else {
@@ -49,9 +49,9 @@ fn forward<F:Float+RudaElement,I:Numeric+RudaElement>(probs:&Tensor<F>,targets:&
                         let one=alpha[address(alpha,previous)];let mut two=neginf;let mut three=neginf;
                         if state>0 {two=alpha[address(alpha,previous-1)];}
                         if state>1 {
-                            if label(targets,target_offset,state-2,blank,i64::cast_from(classes))!=current {three=alpha[address(alpha,previous-2)];}
+                            if label::<I>(targets,target_offset,state-2,blank,i64::cast_from(classes))!=current {three=alpha[address(alpha,previous-2)];}
                         }
-                        value=log_three(one,two,three)+probability;
+                        value=log_three::<F>(one,two,three)+probability;
                     }
                 }
                 alpha[address(alpha,alpha_base+time*width+usize::cast_from(state))]=value;
@@ -66,7 +66,7 @@ fn forward<F:Float+RudaElement,I:Numeric+RudaElement>(probs:&Tensor<F>,targets:&
                 let last=alpha_base+usize::cast_from(input_length-1)*width+usize::cast_from(end-1);
                 let one=alpha[address(alpha,last)];let mut two=neginf;
                 if target_length>0 {two=alpha[address(alpha,last-1)];}
-                likelihood=log_two(one,two);
+                likelihood=log_two::<F>(one,two);
             }
             nll[address(nll,batch)]=-likelihood;
         }
@@ -86,7 +86,7 @@ fn backward_beta<F:Float+RudaElement,I:Numeric+RudaElement>(probs:&Tensor<F>,tar
             while state<i64::cast_from(width) {
                 let mut value=neginf;
                 if time<input_length && state<end {
-                    let current=label(targets,target_offset,state,blank,i64::cast_from(classes));
+                    let current=label::<I>(targets,target_offset,state,blank,i64::cast_from(classes));
                     let probability=probs[usize::cast_from(time)*probs.stride(0)+batch*probs.stride(1)+current*probs.stride(2)];
                     if time==input_length-1 {if state>=end-2 {value=probability;}}
                     else {
@@ -94,9 +94,9 @@ fn backward_beta<F:Float+RudaElement,I:Numeric+RudaElement>(probs:&Tensor<F>,tar
                         let one=beta[address(beta,next)];let mut two=neginf;let mut three=neginf;
                         if state+1<end {two=beta[address(beta,next+1)];}
                         if state+2<end {
-                            if label(targets,target_offset,state+2,blank,i64::cast_from(classes))!=current {three=beta[address(beta,next+2)];}
+                            if label::<I>(targets,target_offset,state+2,blank,i64::cast_from(classes))!=current {three=beta[address(beta,next+2)];}
                         }
-                        value=log_three(one,two,three)+probability;
+                        value=log_three::<F>(one,two,three)+probability;
                     }
                 }
                 beta[address(beta,beta_base+usize::cast_from(time)*width+usize::cast_from(state))]=value;
@@ -120,10 +120,10 @@ fn collect<F:Float+RudaElement,I:Numeric+RudaElement>(probs:&Tensor<F>,targets:&
             let target_length=metadata[address(metadata,batch*3+1)];let target_offset=metadata[address(metadata,batch*3+2)];
             let base=(batch*times+time)*alpha.shape(2);let mut state=0i64;
             while state<target_length*2+1 {
-                let character=label(targets,target_offset,state,blank,i64::cast_from(classes));
+                let character=label::<I>(targets,target_offset,state,blank,i64::cast_from(classes));
                 let at=output_base+character*out.stride(2);let old=out[at];
                 let value=alpha[address(alpha,base+usize::cast_from(state))]+beta[address(beta,base+usize::cast_from(state))];
-                if old==neginf {out[at]=value;}else{out[at]=log_two(old,value);}
+                if old==neginf {out[at]=value;}else{out[at]=log_two::<F>(old,value);}
                 state+=1;
             }
             let g=grad[address(grad,batch)];let probability_base=time*probs.stride(0)+batch*probs.stride(1);
@@ -145,7 +145,7 @@ fn collect_nonblank<F:Float+RudaElement,I:Numeric+RudaElement>(probs:&Tensor<F>,
         let likelihood=nll[address(nll,batch)];let mut active=i64::cast_from(state)<length;
         if comptime!(zero_infinity) {if likelihood==F::new(f32::INFINITY) {active=false;}}
         if active {
-            let offset=metadata[address(metadata,batch*3+2)];let character=label(targets,offset,i64::cast_from(state)*2+1,blank,i64::cast_from(probs.shape(2)));
+            let offset=metadata[address(metadata,batch*3+2)];let character=label::<I>(targets,offset,i64::cast_from(state)*2+1,blank,i64::cast_from(probs.shape(2)));
             let input_length=metadata[address(metadata,batch*3)];let g=grad[address(grad,batch)];let mut time=0i64;
             while time<input_length {
                 let position=(batch*probs.shape(0)+usize::cast_from(time))*alpha.shape(2)+state*2+1;

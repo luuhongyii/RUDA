@@ -33,11 +33,11 @@ fn match_rows(input: &Tensor<i64>, grad: &Tensor<i64>, matched: &mut Tensor<u32>
         let mut lo = 0usize; let mut hi = grad.shape(1);
         while lo < hi {
             let mid = lo + (hi - lo) / 2usize;
-            if compare(input, row, grad, mid, kept) > 0i32 { lo = mid + 1usize; } else { hi = mid; }
+            if compare(input, row, grad, mid, kept.clone()) > 0i32 { lo = mid + 1usize; } else { hi = mid; }
         }
         let mut found = 4294967295u32;
         if lo < grad.shape(1) {
-            if compare(input, row, grad, lo, kept) == 0i32 { found = u32::cast_from(lo); }
+            if compare(input, row, grad, lo, kept.clone()) == 0i32 { found = u32::cast_from(lo); }
         }
         matched[row] = found;
     }

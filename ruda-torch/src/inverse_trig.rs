@@ -85,7 +85,7 @@ fn hard_work<F: Float>(x: F, y: F, sign: F, #[comptime] cosine: bool, #[comptime
     if a<F::new(10.0) {
         if y==one && x<epsilon*epsilon/F::new(128.0) {real=x.sqrt();}
         else if x>=epsilon*(y-one).abs() {
-            let am1=difference(x,one+y,plus)+difference(x,one-y,minus);
+            let am1=difference::<F>(x,one+y,plus)+difference::<F>(x,one-y,minus);
             real=(am1+(am1*(a+one)).sqrt()).log1p();
         } else if y<one {real=x/((one-y)*(one+y)).sqrt();}
         else {real=((y-one)+((y-one)*(y+one)).sqrt()).log1p();}
@@ -98,7 +98,7 @@ fn hard_work<F: Float>(x: F, y: F, sign: F, #[comptime] cosine: bool, #[comptime
             usable=false;
             if y==one && x<epsilon/F::new(128.0) {root=x.sqrt()*((a+y)/two).sqrt();}
             else if x>=epsilon*(y-one).abs() {
-                let amy=difference(x,y+one,plus)+difference(x,y-one,minus); root=(amy*(a+y)).sqrt();
+                let amy=difference::<F>(x,y+one,plus)+difference::<F>(x,y-one,minus); root=(amy*(a+y)).sqrt();
             } else if y>one {
                 root=x*(four/epsilon/epsilon)*y/((y+one)*(y-one)).sqrt(); new_y=y*(four/epsilon/epsilon);
             } else {root=((one-y)*(one+y)).sqrt();}
@@ -106,8 +106,8 @@ fn hard_work<F: Float>(x: F, y: F, sign: F, #[comptime] cosine: bool, #[comptime
     }
     let mut angle=zero;
     if comptime!(cosine) {
-        if usable {angle=copy_sign(b,sign,code).acos();}
-        else {angle=root.atan2(copy_sign(new_y,sign,code));}
+        if usable {angle=copy_sign::<F>(b,sign,code).acos();}
+        else {angle=root.atan2(copy_sign::<F>(new_y,sign,code));}
     } else {
         if usable {angle=b.asin();} else {angle=new_y.atan2(root);}
     }
@@ -142,13 +142,13 @@ pub(super) fn asinh<F: Float>(x: F, y: F, #[comptime] code: u32) -> (F,F) {
         else {real=(x+zero)+(y+zero); imag=real;}
     } else if ax>reciprocal_epsilon || ay>reciprocal_epsilon {
         let mut xx=x; let mut yy=y;
-        if copy_sign(one,x,code)<zero {xx=-x; yy=-y;}
-        let (r,i)=large_log(xx,yy,code);
-        real=copy_sign(r+F::cast_from(6.9314718055994531e-1f64),x,code); imag=copy_sign(i,y,code);
+        if copy_sign::<F>(one,x,code)<zero {xx=-x; yy=-y;}
+        let (r,i)=large_log::<F>(xx,yy,code);
+        real=copy_sign::<F>(r+F::cast_from(6.9314718055994531e-1f64),x,code); imag=copy_sign::<F>(i,y,code);
     } else if x==zero && y==zero {real=x; imag=y;}
     else if ax<sqrt_6_epsilon/F::new(4.0) && ay<sqrt_6_epsilon/F::new(4.0) {real=x; imag=y;}
     else {
-        let (r,i)=hard_work(ax,ay,zero,false,code); real=copy_sign(r,x,code); imag=copy_sign(i,y,code);
+        let (r,i)=hard_work::<F>(ax,ay,zero,false,code); real=copy_sign::<F>(r,x,code); imag=copy_sign::<F>(i,y,code);
     }
     (real,imag)
 }
@@ -166,13 +166,13 @@ pub(super) fn acos<F: Float>(x: F, y: F, #[comptime] code: u32) -> (F,F) {
         else if x==zero {real=pio2_hi+pio2_lo; imag=y+y;}
         else {real=(x+zero)+(y+zero); imag=real;}
     } else if ax>reciprocal_epsilon || ay>reciprocal_epsilon {
-        let (r,i)=large_log(x,y,code); real=i.abs(); imag=r+F::cast_from(6.9314718055994531e-1f64);
-        if copy_sign(one,y,code)>zero {imag=-imag;}
+        let (r,i)=large_log::<F>(x,y,code); real=i.abs(); imag=r+F::cast_from(6.9314718055994531e-1f64);
+        if copy_sign::<F>(one,y,code)>zero {imag=-imag;}
     } else if x==one && y==zero {real=zero; imag=-y;}
     else if ax<sqrt_6_epsilon/F::new(4.0) && ay<sqrt_6_epsilon/F::new(4.0) {real=pio2_hi-(x-pio2_lo); imag=-y;}
     else {
-        let (r,i)=hard_work(ay,ax,x,true,code); real=i; imag=r;
-        if copy_sign(one,y,code)>zero {imag=-imag;}
+        let (r,i)=hard_work::<F>(ay,ax,x,true,code); real=i; imag=r;
+        if copy_sign::<F>(one,y,code)>zero {imag=-imag;}
     }
     (real,imag)
 }
@@ -184,11 +184,11 @@ pub(super) fn tanh<F: Float>(x: F, y: F, #[comptime] code: u32) -> (F,F) {
     let mut real=zero; let mut imag=zero;
     if x!=x {real=x; imag=x*y; if y==zero {imag=y;}}
     else if x.abs()==inf {
-        real=copy_sign(one,x,code); let mut sign=y;
-        if y.abs()!=inf {sign=y.sin()*y.cos();} imag=copy_sign(zero,sign,code);
+        real=copy_sign::<F>(one,x,code); let mut sign=y;
+        if y.abs()!=inf {sign=y.sin()*y.cos();} imag=copy_sign::<F>(zero,sign,code);
     } else if !(y.abs()<inf) {real=y-y; imag=real;}
     else if x.abs()>=threshold {
-        let exp_mx=(-x.abs()).exp(); real=copy_sign(one,x,code); imag=F::new(4.0)*y.sin()*y.cos()*exp_mx*exp_mx;
+        let exp_mx=(-x.abs()).exp(); real=copy_sign::<F>(one,x,code); imag=F::new(4.0)*y.sin()*y.cos()*exp_mx*exp_mx;
     } else {
         let t=y.tan(); let beta=one+t*t; let s=x.sinh(); let rho=(one+s*s).sqrt(); let denominator=one+beta*s*s;
         real=(beta*rho*s)/denominator; imag=t/denominator;

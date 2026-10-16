@@ -10,38 +10,39 @@ pub(super) fn encode_fp8(value: f32, #[comptime] code: u32) -> u8 {
         if exponent != 255u32 && (raw & 0x400000u32) != 0u32 && ((raw & 0x3fffffu32) != 0u32 || exponent != 0u32) {
             exponent += 1u32;
         }
-        return u8::cast_from(exponent);
-    }
-    let sign = raw & 0x80000000u32;
-    let magnitude = raw ^ sign;
-    let mut result = 0u32;
-    if comptime!(code == 12) {
-        if magnitude >= (1087u32 << 20u32) {
-            result = 0x7eu32;
-            if magnitude > 0x7f800000u32 { result = 0x7fu32; }
-        } else if magnitude < (121u32 << 23u32) {
-            let mask = 141u32 << 23u32;
-            result = u32::reinterpret(f32::reinterpret(magnitude) + f32::reinterpret(mask)) - mask;
-        } else {
-            let odd = (magnitude >> 20u32) & 1u32;
-            let rounded = magnitude + (u32::cast_from(-120i32) << 23u32) + 0x7ffffu32 + odd;
-            result = (rounded >> 20u32) & 0xffu32;
-            if result == 0x7fu32 { result = 0x7eu32; }
-        }
+        u8::cast_from(exponent)
     } else {
-        if magnitude >= (143u32 << 23u32) {
-            result = 0x7cu32;
-            if magnitude > 0x7f800000u32 { result = 0x7fu32; }
-        } else if magnitude < (113u32 << 23u32) {
-            let mask = 134u32 << 23u32;
-            result = u32::reinterpret(f32::reinterpret(magnitude) + f32::reinterpret(mask)) - mask;
+        let sign = raw & 0x80000000u32;
+        let magnitude = raw ^ sign;
+        let mut result = 0u32;
+        if comptime!(code == 12) {
+            if magnitude >= (1087u32 << 20u32) {
+                result = 0x7eu32;
+                if magnitude > 0x7f800000u32 { result = 0x7fu32; }
+            } else if magnitude < (121u32 << 23u32) {
+                let mask = 141u32 << 23u32;
+                result = u32::reinterpret(f32::reinterpret(magnitude) + f32::reinterpret(mask)) - mask;
+            } else {
+                let odd = (magnitude >> 20u32) & 1u32;
+                let rounded = magnitude + (u32::cast_from(-120i32) << 23u32) + 0x7ffffu32 + odd;
+                result = (rounded >> 20u32) & 0xffu32;
+                if result == 0x7fu32 { result = 0x7eu32; }
+            }
         } else {
-            let odd = (magnitude >> 21u32) & 1u32;
-            let rounded = magnitude + (u32::cast_from(-112i32) << 23u32) + 0xfffffu32 + odd;
-            result = (rounded >> 21u32) & 0xffu32;
+            if magnitude >= (143u32 << 23u32) {
+                result = 0x7cu32;
+                if magnitude > 0x7f800000u32 { result = 0x7fu32; }
+            } else if magnitude < (113u32 << 23u32) {
+                let mask = 134u32 << 23u32;
+                result = u32::reinterpret(f32::reinterpret(magnitude) + f32::reinterpret(mask)) - mask;
+            } else {
+                let odd = (magnitude >> 21u32) & 1u32;
+                let rounded = magnitude + (u32::cast_from(-112i32) << 23u32) + 0xfffffu32 + odd;
+                result = (rounded >> 21u32) & 0xffu32;
+            }
         }
+        u8::cast_from(result | (sign >> 24u32))
     }
-    u8::cast_from(result | (sign >> 24u32))
 }
 
 #[ruda]

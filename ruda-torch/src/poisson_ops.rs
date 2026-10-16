@@ -83,17 +83,19 @@ fn sample(lambda: f64, seed_low: u32, seed_high: u32, stream: u64) -> u32 {
             let u = uniform::<f64>(seed_low, seed_high, stream, &mut draw, true) - 0.5f64;
             let v = uniform::<f64>(seed_low, seed_high, stream, &mut draw, true);
             let us = 0.5f64 - u.abs();
-            if us == 0.0f64 { continue; }
-            let k = ((2.0f64 * a / us + b) * u + rate + 0.43f64).floor();
-            if us >= 0.07f64 && v <= vr {
-                result = u32::cast_from(k);
-                break;
-            }
-            if k < 0.0f64 || (us < 0.013f64 && v > us) { continue; }
-            if v.ln() + inverse_alpha.ln() - (a / (us * us) + b).ln()
-                <= -rate + k * log_rate - super::gamma::lgamma(k + 1.0f64) {
-                result = u32::cast_from(k);
-                break;
+            if us != 0.0f64 {
+                let k = ((2.0f64 * a / us + b) * u + rate + 0.43f64).floor();
+                if us >= 0.07f64 && v <= vr {
+                    result = u32::cast_from(k);
+                    break;
+                }
+                if !(k < 0.0f64 || (us < 0.013f64 && v > us)) {
+                    if v.ln() + inverse_alpha.ln() - (a / (us * us) + b).ln()
+                        <= -rate + k * log_rate - super::gamma::lgamma(k + 1.0f64) {
+                        result = u32::cast_from(k);
+                        break;
+                    }
+                }
             }
         }
     }
