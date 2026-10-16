@@ -30,6 +30,9 @@ def main():
         standard='c++17' if 'C++ Version: 201703' in torch.__config__.show() else 'c++20'
         cmd=[args.compiler,'-std='+standard,'-shared','-fPIC','-O0','-DTORCH_EXTENSION_NAME=_C',
              '-D_GLIBCXX_USE_CXX11_ABI='+str(int(torch._C._GLIBCXX_USE_CXX11_ABI))]
+        compiler_version=subprocess.check_output([args.compiler,'--version'],text=True)
+        if 'clang' in compiler_version.lower() and 'GCC' in torch.__config__.show():
+            cmd.append('-fclang-abi-compat=17')
         cmd+=['-I'+d for d in include_paths()+[sysconfig.get_paths()['include']]]
         cmd+=[str(root/'ruda-torch/python/ruda_torch/csrc/backend.cpp')]
         for path in library_paths():cmd+=['-L'+path,'-Wl,-rpath,'+path]
