@@ -16,7 +16,7 @@ def _silu(x):
 def forward_values(layout, inputs, device=None):
     """Storage-rounded expressions for backward recomputation, in node order."""
     values = list(inputs)
-    if device is None and inputs:device=inputs[0].device
+    if device is None and values:device=values[0].device
     for i, scalar in enumerate(layout.scalars):
         op, a, b = layout.words[3*i:3*i+3]
         if op in (160,161,172):

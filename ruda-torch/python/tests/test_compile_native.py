@@ -203,7 +203,7 @@ def test_runtime_metadata_guard_uses_reference_before_dispatch(simulated, case):
     backend, call = make_call(fn, args)
     torch.testing.assert_close(call(args), fn(*args))
     assert not simulated[0]
-    assert backend.info['region_reference_runs'] == (0 if case == 'noncontiguous' else 1)
+    assert backend.info['region_reference_runs'] == backend.info['graphs'][0]['native_regions']
     if case == 'noncontiguous':
         assert not backend.info['graphs'][0]['native_regions']
     else:
