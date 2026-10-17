@@ -6343,7 +6343,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-tensor-wgpu"
-version = "0.21.70"
+version = "0.21.71"
 dependencies = [
  "ruda-core",
  "ruda-driver-wgpu",
