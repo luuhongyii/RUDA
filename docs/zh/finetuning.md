@@ -241,7 +241,7 @@ Rust `DpoTrainer::step`、`PpoTrainer::step`、`GrpoTrainer::step` 和 `RewardTr
 
 原生 PPO／GRPO 和 `SftTrainer` 为 `DeviceBackend` actor 提供 `sample_paged`：传入 prompt token 向量、正数的逐请求 token 预算、EOS ID、`ContinuousBatchConfig` 和 `PagedKvCacheConfig`；SFT 入口还需 `&mut PostTrainingState`。每次调用捕获当前全参数权重，或将当前 LoRA adapter 合并为推理快照，分配真实分页 KV 引擎并连续合批。返回结果按 prompt 顺序排列，包含采样 EOS 并区分终止／截断。采样为完整词表、温度一，不做过滤或惩罚。批次结束后释放推理快照及 KV 池，下次调用捕获更新后的 actor。
 
-`Response` 新增可选 `rotary_context`／`behavior_log_probs` 字段；普通外部 response 使用 `None`。分页生成记录实际 append 结束位置，包含分块预填充和重放前缀，并从引擎 logits 直接记录选中 token 的 log probability。Packed actor／参考／critic／奖励前向重放这些旋转上下文；PPO／GRPO 使用实际行为概率，不用舍入或更新后的权重重评分。没有 append 历史的 runtime RoPE response 仍按真实完整前缀评分。请求种子游标仅在整批成功后提交：rollout 前保存 checkpoint 可重试同一组请求 RNG 流，成功后的 response／固定更新缓冲区应放入 `state.data` 再存档；不保存执行中的 KV。
+`sample_paged` 返回 `PagedResponse { response, rotary_context, behavior_log_probs }`，原有三字段 `Response` 契约不变。分页生成记录实际 append 结束位置，包含分块预填充和重放前缀，并从引擎 logits 直接记录选中 token 的 log probability。使用 PPO `prepare_rollouts` 或 GRPO `prepare_paged_group` 后调用 `step_paged`；奖励批量接口接受两种 response 类型。`PreferencePair`／`PpoRollout`／`GrpoRollout` 的类型参数默认仍是 `Response`，保留旧调用方式，分页更新则保留 `PagedResponse` 元数据。Packed actor／参考／critic／奖励前向重放旋转上下文；PPO／GRPO 使用实际行为概率，不用舍入或更新后的权重重评分。普通 runtime RoPE response 仍按真实完整前缀评分。请求种子游标仅在整批成功后提交：rollout 前保存 checkpoint 可重试同一组请求 RNG 流，成功后的 response／固定更新缓冲区应放入 `state.data` 再存档；不保存执行中的 KV。
 
 ## 配对奖励模型
 
