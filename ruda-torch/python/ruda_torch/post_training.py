@@ -1,4 +1,4 @@
-"""DPO, PPO and GRPO on the existing causal trainer/checkpoint/distributed path."""
+"""Reward learning, DPO, PPO and GRPO on the causal checkpoint/distributed path."""
 from __future__ import annotations
 
 import copy
@@ -243,6 +243,54 @@ class CausalValueModel(CausalLMFinetuner):
         return values.squeeze(-1).float()
 
 
+class RewardModel(CausalLMFinetuner):
+    """Pairwise Bradley-Terry loss on a last-response-token scalar reward.
+
+    `policy` is an explicit CausalValueModel backbone/scalar-head split. Labels
+    use the same prompt/completion contract as PreferenceCollator. There is no
+    frozen reference, language-model loss or implicit reward normalization.
+    """
+    def __init__(self, policy, *, prefix_scoring=False):
+        nn.Module.__init__(self)
+        if (not isinstance(policy, CausalValueModel) or getattr(policy, 'packed_input', False)
+                or getattr(policy, 'context_input', False)):
+            raise TypeError('reward learning requires a padded CausalValueModel')
+        if type(prefix_scoring) is not bool:
+            raise ValueError('prefix_scoring must be boolean')
+        self.policy = policy
+        self.prefix_scoring = prefix_scoring
+        self.label_smoothing = 0.
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.policy.eval()
+        return self
+
+    def contract(self):
+        return dict(algorithm='reward', loss='bradley_terry', pooling='last_response_token',
+                    prefix_scoring=self.prefix_scoring)
+
+    def forward(self, input_ids, attention_mask, labels, *, reduction='mean',
+                label_smoothing=0., mode='loss'):
+        batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        if mode == 'loss':
+            n = _preference_batch(batch)
+        elif mode == 'score':
+            _response_batch(batch)
+        else:
+            raise ValueError('unknown reward forward mode')
+        lengths = attention_mask.sum(-1).long()
+        if self.prefix_scoring:
+            scores = torch.stack([self.policy(input_ids[row:row+1, :int(end)],
+                attention_mask[row:row+1, :int(end)])[0, -1] for row, end in enumerate(lengths)])
+        else:
+            values = self.policy(input_ids, attention_mask)
+            scores = values.gather(-1, (lengths-1).unsqueeze(-1)).squeeze(-1)
+        if mode == 'score':
+            return scores
+        return _PostTrainingModel._reduce(-F.logsigmoid(scores[:n]-scores[n:]), reduction)
+
+
 def generalized_advantage_estimation(rewards, values, mask, terminal, *, gamma=1., gae_lambda=0.95):
     """Values [B,L+1], rewards/mask [B,L]; final value bootstraps truncation."""
     if not 0 <= gamma <= 1 or not 0 <= gae_lambda <= 1:
@@ -351,10 +399,10 @@ class GRPOModel(_PostTrainingModel):
         return self._reduce(losses, reduction)
 
 
-class _PostTrainingTrainer(CausalLMTrainer):
-    expected_type = _PostTrainingModel
+class _ObjectiveTrainer(CausalLMTrainer):
+    expected_type = CausalLMFinetuner
 
-    def __init__(self, model, optimizer, *, rollout_group=None, **options):
+    def __init__(self, model, optimizer, **options):
         if options.get('sampler') is not None:
             raise ValueError('post-training data/rollout cursors are supplied through data_state, not the SFT sampler')
         super().__init__(model, optimizer, **options)
@@ -362,8 +410,6 @@ class _PostTrainingTrainer(CausalLMTrainer):
         if not isinstance(template, self.expected_type):
             raise TypeError(f'trainer requires {self.expected_type.__name__}')
         self._contract = copy.deepcopy(template.contract())
-        head = template.policy.head
-        self.sampling_group = rollout_group if rollout_group is not None else head.group if _parallel_head(head) else None
         self.data_state = None
         self.executable.train()
 
@@ -429,7 +475,7 @@ class _PostTrainingTrainer(CausalLMTrainer):
                 expected = (mask.shape[0],) if algorithm == 'grpo' and name == 'advantages' else mask.shape
                 if tensor.shape != expected or not tensor.is_floating_point() or not torch.isfinite(tensor).all():
                     raise ValueError(f'invalid finite floating rollout field: {name}')
-            counts.append(_preference_batch(batch, cpu=True) if algorithm == 'dpo' else
+            counts.append(_preference_batch(batch, cpu=True) if algorithm in ('dpo', 'reward') else
                           int(mask.sum()) if algorithm == 'ppo' else mask.shape[0])
         return counts
 
@@ -448,6 +494,40 @@ class _PostTrainingTrainer(CausalLMTrainer):
         return {'algorithm': self._contract['algorithm'], 'normalization_units': result['supervised_tokens'],
                 'objective_sum': result['nll_sum'], 'objective_mean': result['nll_mean'],
                 'microbatches': result['microbatches'], 'evaluation_seconds': result['evaluation_seconds']}
+
+
+class RewardTrainer(_ObjectiveTrainer):
+    """Actual scalar-head/backbone updates, scoring and local/all-rank recovery."""
+    expected_type = RewardModel
+
+    @torch.no_grad()
+    def score(self, batch):
+        if set(batch) != {'input_ids', 'attention_mask', 'labels'}:
+            raise ValueError('supply a labeled CPU response batch for reward scoring')
+        _response_batch(batch, cpu=True)
+        self.executable.eval()
+        device = next(self.model.parameters()).device
+        return self.executable(**{k: v.to(device) for k, v in batch.items()}, mode='score').cpu()
+
+    def token_rewards(self, batch):
+        """Explicit PPO outcome placement, zero except each final action.
+
+        `score(batch)` is the corresponding GRPO outcome-reward vector. The
+        caller explicitly passes either result to prepare_rollout/prepare_groups.
+        """
+        scores = self.score(batch)
+        rewards = torch.zeros_like(batch['labels'][:, 1:], dtype=scores.dtype)
+        final = batch['attention_mask'].sum(-1).long()-2
+        return rewards.scatter(1, final.unsqueeze(-1), scores.unsqueeze(-1))
+
+
+class _PostTrainingTrainer(_ObjectiveTrainer):
+    expected_type = _PostTrainingModel
+
+    def __init__(self, model, optimizer, *, rollout_group=None, **options):
+        super().__init__(model, optimizer, **options)
+        head = getattr(self.model, '_template', self.model).policy.head
+        self.sampling_group = rollout_group if rollout_group is not None else head.group if _parallel_head(head) else None
 
     @torch.no_grad()
     def sample(self, prompt, *, max_new_tokens, eos_token_ids, generator=None):

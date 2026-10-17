@@ -540,7 +540,7 @@ from . import _varlen_ops
 from .causal_finetuning import PackedCausalLMFinetuner,CausalLMTrainer
 from .causal_finetuning import ContextParallelFinetuner
 from .post_training import (chunked_lm_log_probs, PreferenceCollator, CausalValueModel,
-    DPOModel, PPOModel, GRPOModel, DPOTrainer, PPOTrainer, GRPOTrainer,
+    RewardModel, RewardTrainer, DPOModel, PPOModel, GRPOModel, DPOTrainer, PPOTrainer, GRPOTrainer,
     generalized_advantage_estimation)
 from .training_checkpoint import training_state_dict,validate_training_state_dict,load_training_state_dict
 from .training_autotune import TrainingAutotuner,TrainingPlan,PipelineAutotuner

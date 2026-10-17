@@ -77,7 +77,11 @@ def make(algorithm, prefix_scoring=False):
     reference = copy.deepcopy(actor)
     with torch.no_grad():
         reference.head.weight.add_(torch.randn_like(reference.head.weight)*0.1)
-    if algorithm == 'dpo':
+    if algorithm == 'reward':
+        model = pt.RewardModel(pt.CausalValueModel(Backbone(), nn.Linear(5, 1, bias=False),
+            activation_checkpointing=True), prefix_scoring=prefix_scoring)
+        kind = pt.RewardTrainer
+    elif algorithm == 'dpo':
         model = pt.DPOModel(actor, reference, reference_id='immutable-ref', beta=0.4, prefix_scoring=prefix_scoring)
         kind = pt.DPOTrainer
     elif algorithm == 'ppo':
@@ -93,7 +97,7 @@ def make(algorithm, prefix_scoring=False):
 
 def rollout(algorithm, trainer):
     data = batch()
-    if algorithm == 'dpo':
+    if algorithm in ('dpo', 'reward'):
         # chosen rows then rejected rows, with matching pair prompts
         order = torch.tensor([0, 2, 1, 3])
         return {k: v[order] for k, v in data.items()}
@@ -149,7 +153,7 @@ def test_objective_matches_independent_full_projection(algorithm):
             torch.testing.assert_close(a, b, atol=2e-6, rtol=2e-5)
 
 
-@pytest.mark.parametrize('algorithm', ['dpo', 'ppo', 'grpo'])
+@pytest.mark.parametrize('algorithm', ['reward', 'dpo', 'ppo', 'grpo'])
 def test_updates_unequal_microbatches_and_exact_checkpoint_continuation(algorithm, tmp_path):
     model, trainer = make(algorithm)
     data = rollout(algorithm, trainer)
@@ -157,7 +161,7 @@ def test_updates_unequal_microbatches_and_exact_checkpoint_continuation(algorith
     oracle_optimizer = torch.optim.AdamW([p for p in oracle.parameters() if p.requires_grad], lr=.01)
     oracle.train(); oracle(**data).backward(); oracle_optimizer.step(); oracle_optimizer.zero_grad(set_to_none=True)
     before = {n: p.detach().clone() for n, p in model.named_parameters()}
-    indices = ([0, 2], [1, 3]) if algorithm == 'dpo' else ([0], [1, 2, 3])
+    indices = ([0, 2], [1, 3]) if algorithm in ('dpo', 'reward') else ([0], [1, 2, 3])
     micros = [{k: v[list(rows)].clone() for k, v in data.items()} for rows in indices]
     metrics = trainer.train_step(micros)
     assert math.isfinite(metrics['loss']) and metrics['normalization_units'] > 0
@@ -240,17 +244,22 @@ def _distributed_worker(rank, uri, directory):
     dist.init_process_group('gloo', init_method=uri, rank=rank, world_size=2, timeout=timedelta(seconds=40))
     try:
         replicas = importlib.import_module(NAME+'.distributed_training')
-        for algorithm in ('dpo', 'ppo', 'grpo'):
+        for algorithm in ('reward', 'dpo', 'ppo', 'grpo'):
             model, original = make(algorithm)
             group = replicas.ReplicaGroup(device_type='cpu')
             group.initialize(model)
             trainer = type(original)(model, original.optimizer, base_id=original.base_id,
                 run_config=original.run_config, replica_group=group)
             full = rollout(algorithm, trainer)
+            if algorithm == 'reward':
+                full = {k: v[[0, 1, 0, 2, 3, 2]] for k, v in full.items()}
             oracle = copy.deepcopy(model)
             optimizer = torch.optim.AdamW([p for p in oracle.parameters() if p.requires_grad], lr=.01)
             oracle.train(); oracle(**full).backward(); optimizer.step(); optimizer.zero_grad(set_to_none=True)
-            rows = ([0, 2] if rank == 0 else [1, 3]) if algorithm == 'dpo' else ([0] if rank == 0 else [1, 2, 3])
+            if algorithm == 'reward':
+                rows = [0, 3] if rank == 0 else [1, 2, 4, 5]
+            else:
+                rows = ([0, 2] if rank == 0 else [1, 3]) if algorithm == 'dpo' else ([0] if rank == 0 else [1, 2, 3])
             local = {k: v[rows] for k, v in full.items()}
             trainer.train_step([local])
             for p, q in zip(model.parameters(), oracle.parameters()):
@@ -288,3 +297,75 @@ def test_dropout_free_actor_and_critic_still_recompute_backbone_activations():
     actor_hook.remove(); critic_hook.remove()
     assert calls == {'actor': 2, 'critic': 2}
     assert not model.policy.backbone.training and not model.critic.backbone.training
+
+
+@pytest.mark.parametrize('kind', ['dense', 'lora', 'nf4', 'qlora'])
+def test_reward_pairwise_loss_and_gradients_use_last_response_token(kind):
+    torch.manual_seed(230)
+    backbone = Backbone()
+    if kind in ('nf4', 'qlora'):
+        backbone.block[0] = ft.NF4Linear.from_linear(backbone.block[0], block_size=8)
+    if kind in ('lora', 'qlora'):
+        ft.inject_lora(backbone, target_modules=['block.0'], rank=2, alpha=3.)
+    model = pt.RewardModel(pt.CausalValueModel(backbone, nn.Linear(5, 1)))
+    model.train()
+    data = rollout('reward', None)
+    values = model.policy.head(model.policy.hidden(data['input_ids'], data['attention_mask'])).squeeze(-1)
+    selected = values[torch.arange(4), data['attention_mask'].sum(-1)-1]
+    expected = torch.logaddexp(torch.zeros(2), selected[2:]-selected[:2]).mean()
+    actual = model(**data)
+    torch.testing.assert_close(actual, expected)
+    params = [p for p in model.parameters() if p.requires_grad]
+    expected_grads = torch.autograd.grad(expected, params, retain_graph=True)
+    actual_grads = torch.autograd.grad(actual, params)
+    for a, b in zip(actual_grads, expected_grads):
+        torch.testing.assert_close(a, b)
+
+
+def test_reward_scores_sparse_outcomes_feed_ppo_and_grpo_without_mutation():
+    _, reward = make('reward')
+    data = batch()
+    scores = reward.score(data)
+    sparse = reward.token_rewards(data)
+    torch.testing.assert_close(sparse.sum(-1), scores)
+    assert not sparse.requires_grad
+    final = data['attention_mask'].sum(-1)-2
+    expected = torch.zeros_like(sparse)
+    expected[torch.arange(4), final] = scores
+    torch.testing.assert_close(sparse, expected)
+    _, ppo = make('ppo')
+    fixed = ppo.prepare_rollout(data, sparse, torch.ones(4, dtype=torch.bool))
+    assert math.isfinite(ppo.train_step([fixed])['loss'])
+    _, grpo = make('grpo')
+    fixed = grpo.prepare_groups(data, scores, torch.tensor([0, 0, 1, 1]))
+    assert math.isfinite(grpo.train_step([fixed])['loss'])
+
+
+def test_reward_runtime_length_scoring_trims_each_padded_response_and_recomputes():
+    model, trainer = make('reward', prefix_scoring=True)
+    model.policy.backbone.length_scale = .1
+    data = rollout('reward', trainer)
+    scores = trainer.score(data)
+    for row, end in enumerate(data['attention_mask'].sum(-1).tolist()):
+        expected = model.policy(data['input_ids'][row:row+1, :end],
+            data['attention_mask'][row:row+1, :end])[0, -1]
+        torch.testing.assert_close(scores[row], expected.detach())
+    calls = []
+    hook = model.policy.backbone.register_forward_pre_hook(lambda *_: calls.append(1))
+    trainer.train_step([data])
+    hook.remove()
+    assert len(calls) == 2*data['input_ids'].shape[0]
+    assert not model.policy.backbone.training
+
+
+def test_reward_rejects_prompt_mismatch_and_checkpoint_objective_change(tmp_path):
+    model, trainer = make('reward')
+    data = rollout('reward', trainer)
+    invalid = {k: v.clone() for k, v in data.items()}
+    invalid['input_ids'][2, 0] += 1
+    with pytest.raises(ValueError, match='identical pair prompts'):
+        trainer.train_step([invalid])
+    saved = trainer.save(tmp_path)
+    _, incompatible = make('reward', prefix_scoring=True)
+    with pytest.raises(ValueError, match='loss options'):
+        incompatible.resume(saved)
