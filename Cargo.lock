@@ -5963,7 +5963,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-model"
-version = "0.21.61"
+version = "0.21.62"
 dependencies = [
  "ahash",
  "bincode",
