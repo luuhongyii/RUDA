@@ -199,7 +199,7 @@ NF4Linear、LoRALinear 的 `get_extra_state()`／`set_extra_state(state)` 在普
 
 ## DPO、PPO 与 GRPO
 
-Python 导出 `DPOModel`／`DPOTrainer`、`PPOModel`／`PPOTrainer`、`GRPOModel`／`GRPOTrainer`、`CausalValueModel`、`PreferenceCollator` 和 `chunked_lm_log_probs`。策略和独立冻结参考模型遵循带右侧 padding 的 `CausalLMFinetuner` backbone／head 契约，支持 dense／NF4／LoRA；显式提供 `reference_id`。prompt／padding 标签为 `-100`，completion 标签等于输入 token。完整词表 log probability 采用分块投影与反向重算，支持词表并行 head；rollout 和更新都禁用 dropout，但保留可训练参数的梯度。
+Python 导出 `DPOModel`／`DPOTrainer`、`PPOModel`／`PPOTrainer`、`GRPOModel`／`GRPOTrainer`、`CausalValueModel`、`PackedCausalValueModel`、`PreferenceCollator`、`select_response_batch` 和 `chunked_lm_log_probs`。策略和独立冻结参考模型遵循带右侧 padding 的 `CausalLMFinetuner` 或 flat-token `PackedCausalLMFinetuner` backbone／head 契约，支持 dense／NF4／LoRA；参考模型必须使用相同布局，并显式提供 `reference_id`。prompt／padding 标签为 `-100`，completion 标签等于输入 token。完整词表 log probability 采用分块投影与反向重算，支持词表并行 head；rollout 和更新都禁用 dropout，但保留可训练参数的梯度。
 
 ```python
 objective = DPOModel(policy, reference, reference_id=reference_id, beta=0.1)
@@ -221,6 +221,12 @@ PPO／GRPO 提供 `sample(prompt, max_new_tokens=..., eos_token_ids=...)`，按�
 
 三个训练器复用 `CausalLMTrainer` 的梯度累积、scheduler／scaler、分布式 coordinator 和原子本地／分布式存档。全局归一化单位依次为偏好对、completion token、response，不平均不等长 microbatch 的均值。指标使用 `normalization_units`，`evaluate` 报告目标函数而非 perplexity。`save`／`resume` 包含 actor、参考模型、PPO critic、优化器状态、算法／参考契约、RNG 和 `trainer.data_state`；存档前将数据游标、固定待处理 rollout、epoch／minibatch 位置及显式 generator 状态放入 `data_state`。不保存半个梯度累积窗口；跨 FSDP／ZeRO／DP／TP 的全 rank 提交使用实际 coordinator 与 `save_distributed`／`resume_distributed`。
 
+Python packed 后训练中，DPO／奖励偏好对使用 `PreferenceCollator(packed=True)`，PPO／GRPO response 使用 `collate_varlen_causal_lm(samples)`；样本显式标注非空 prompt 和连续非空 completion。批次包含扁平 `input_ids`／`attention_mask`／`labels`／`position_ids` `[N]`、CPU 整数 `cu_seqlens` `[D+1]` 和整数 `max_seqlen`，没有 padding 或隐式截断。backbone 必须消费这些元数据并真正执行文档隔离的 varlen attention。PPO critic 使用独立且布局相同的 `PackedCausalValueModel(backbone, scalar_head)`。这不是 `ContextParallelFinetuner` 接口。
+
+Packed PPO 奖励、log probability、旧 action value、优势和 return 都按目标 token 对齐为 `[N]`：token `j` 的 action 由同文档前一状态预测该 token；文档首 token 和 prompt target 不参与损失。独立工具 `chunked_lm_log_probs` 对 shifted flat 输入返回 `[N-1]`，objective 包装器在首位补零后对齐 `[N]`。GAE 每篇文档独立重启，真正终止用零 bootstrap，截断用该文档末状态 critic value。GRPO 结果奖励／group ID／优势及奖励模型评分仍为 `[D]`。DPO／奖励按偏好对、PPO 按 token、GRPO 按 response 归一化，权重与 padded 路径一致。Packed `prefix_scoring=True` 使用各文档真实前缀及对应 position ID；`sample` 返回单文档 packed 批次。
+
+用 `select_response_batch(fixed_rollout, indices)` 拆分已固定的 PPO／GRPO 更新 microbatch；它按完整文档选择，重建 packed 边界与最大长度，保留显式 position ID，复制固定统计而不重算旧策略，也支持 padded 批次。DPO／奖励选择必须先放所选 chosen，再放对应 rejected；例如两对 chosen-first 批次可拆为 `[0, 2]` 和 `[1, 3]`。Packed checkpoint 记录布局，不能通过 padded objective 恢复。
+
 Rust 在 `rullm::training` 导出 `DpoTrainer`、`PpoTrainer`、`GrpoTrainer`，actor 接收全参数或 LoRA 的 `SftTrainer`。先构造 `ReferencePolicy::new(model, adapters, identity)`，再调用 `DpoTrainer::new(actor, reference, beta, seed)`、`PpoTrainer::new(actor, ValueCritic::new(critic_backbone, device), critic_train_config, reference, ppo_config, seed)` 或 `GrpoTrainer::new(actor, reference, grpo_config, seed)`。`Response` 分开记录 prompt／completion 与终止状态；`PreferencePair` 保存 chosen／rejected。PPO 的 `prepare_rollout(response, token_rewards)`、GRPO 的 `prepare_group(responses, outcome_rewards)` 返回可序列化的固定统计；`step` 对传入的有效批次真正更新参数，PPO 同时更新独立 critic 优化器。PPO／GRPO 的 `sample` 使用随 checkpoint 保存的采样 RNG。包装之前可对 actor 调用 `with_data_parallel` 接入 ruCCL；每个 rank 的本地批次非空、更新调用顺序一致，归一化权重及 actor／critic 梯度通过同一 peer 归约。`save_checkpoint`／`load_checkpoint` 依照 actor 的保留策略原子保存 actor／优化器、critic／优化器、算法／参考元数据与 `state`；将待处理 rollout、更新位置和数据游标存入 `state.data`，恢复前重载相同的不可变参考及 LoRA 冻结 base。这些 API 不会自动启动 GPU 任务。
 
 ## 配对奖励模型
@@ -236,6 +242,6 @@ ppo_rollout = ppo_trainer.prepare_rollout(response_batch, reward_trainer.token_r
 grpo_rollout = grpo_trainer.prepare_groups(response_batch, reward_trainer.score(response_batch), group_ids)
 ```
 
-`score` 返回已脱离梯度的 CPU 结果奖励 `[B]`；`token_rewards` 仅在每条 response 最后的 completion action 写入该奖励，返回 `[B,T-1]`，prompt／padding／其他 action 为零。评分由调用者显式请求，不修改奖励模型，也不自动更新策略。`RewardTrainer` 复用按偏好对加权的梯度累积、分布式归约、目标函数评估、`data_state` 游标及原子本地／全 rank 存档，包含 backbone、标量 head、优化器、scheduler／scaler 与 RNG。
+`score` 返回已脱离梯度的 CPU 结果奖励 `[B]`；`token_rewards` 仅在每条 response 最后的 completion action 写入该奖励，返回 `[B,T-1]`，prompt／padding／其他 action 为零。Packed response 改用 `PackedCausalValueModel`：评分为 `[D]`，稀疏 token 奖励按目标对齐为 `[N]`，每个评分写在对应文档末 token。评分由调用者显式请求，不修改奖励模型，也不自动更新策略。`RewardTrainer` 复用按偏好对加权的梯度累积、分布式归约、目标函数评估、`data_state` 游标及原子本地／全 rank 存档，包含 backbone、标量 head、优化器、scheduler／scaler 与 RNG。
 
 Rust 导出 `RewardTrainer::new(actor, head_train_config)`，actor 为全参数或 LoRA 的 `SftTrainer`。构造时创建无偏置标量 head，从同一次反向传播取得两条路径的梯度；backbone／adapter 与标量 head 分别配置 AdamW 学习率计划和 norm clipping。`step(&[PreferencePair])`、`score(&Response)`、`token_rewards(&Response)` 使用相同损失、末 token 池化与显式结果奖励位置；将 token 奖励传给 PPO `prepare_rollout`，或将标量评分传给 GRPO `prepare_group`。ruCCL 归一化及 head 梯度沿用 actor 的 peer。`save_checkpoint`／`load_checkpoint` 按 actor 的保留策略共同提交 backbone／adapter、head、两个优化器、契约与 `state.data`；LoRA 冻结 base 须从相同来源重载。

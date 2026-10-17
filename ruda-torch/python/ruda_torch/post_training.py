@@ -10,6 +10,9 @@ from torch.utils.checkpoint import checkpoint
 
 from ._architecture_ops import positive_int, precision_context, work_dtype
 from .causal_finetuning import CausalLMFinetuner, CausalLMTrainer, SFTCollator
+from ._post_training_batch import (response_batch as _response_batch, prompt as _prompt,
+    batch_metadata, response_fields, response_spans, response_count, document_sum,
+    action_values, prefix_metadata, move_batch, clone_batch, select_response_batch)
 
 
 def _parallel_head(head):
@@ -21,21 +24,21 @@ def _parallel_head(head):
 
 
 def chunked_lm_log_probs(hidden, head, labels, *, token_chunk_size=32, recompute=True, shift=True):
-    """Shifted selected-token log probabilities [B,T-1], zero on -100 labels.
+    """Shifted selected-token log probabilities [B,T-1] or flat [N-1].
 
     Full-vocabulary softmax is exact. Backward recomputes one vocabulary chunk
     at a time, including head/LoRA gradients and vocabulary-parallel reduction.
     """
     positive_int(token_chunk_size, 'token_chunk_size')
-    if hidden.ndim != 3 or labels.shape != hidden.shape[:2] or labels.device != hidden.device:
-        raise ValueError('hidden [B,T,D] and labels [B,T] must share token axes/device')
+    if hidden.ndim not in (2, 3) or labels.shape != hidden.shape[:-1] or labels.device != hidden.device:
+        raise ValueError('hidden [B,T,D]/[N,D] and labels must share token axes/device')
     if labels.dtype not in (torch.int32, torch.int64):
         raise ValueError('labels must be integer token IDs or -100')
     parallel = _parallel_head(head)
     if parallel and head.gather_output:
         raise ValueError('vocabulary-parallel log probabilities require gather_output=False')
     if shift:
-        hidden, labels = hidden[:, :-1], labels[:, 1:]
+        hidden, labels = hidden[..., :-1, :], labels[..., 1:]
     shape = tuple(labels.shape)
     flat, targets = hidden.reshape(-1, hidden.shape[-1]), labels.reshape(-1)
     def project(x, target):
@@ -57,50 +60,40 @@ def chunked_lm_log_probs(hidden, head, labels, *, token_chunk_size=32, recompute
     return torch.cat(pieces).reshape(shape) if pieces else hidden.sum(-1) * 0
 
 
-def _response_batch(batch, *, cpu=False):
-    ids, mask, labels = (batch[k] for k in ('input_ids', 'attention_mask', 'labels'))
-    if ids.ndim != 2 or ids.shape != mask.shape or ids.shape != labels.shape or ids.shape[1] < 2:
-        raise ValueError('responses need matching [B,T>=2] IDs, attention mask and labels')
-    if ids.dtype not in (torch.int32, torch.int64) or labels.dtype not in (torch.int32, torch.int64) or mask.dtype != torch.bool:
-        raise ValueError('IDs/labels must be integers and attention_mask boolean')
-    if any(t.device != ids.device for t in (mask, labels)) or cpu and ids.device.type != 'cpu':
-        raise ValueError('response fields must share a device; trainer batches must be on CPU')
-    supervised = labels != -100
-    if (ids < 0).any() or ((labels != ids) & supervised).any() or (supervised & ~mask).any():
-        raise ValueError('completion labels must equal input IDs; prompt/padding labels must be -100')
-    if (~mask[:, 0]).any() or supervised[:, 0].any() or ((~mask[:, :-1]) & mask[:, 1:]).any():
-        raise ValueError('responses require a nonempty prompt and right padding')
-    if ((supervised[:, :-1] & mask[:, 1:]) & ~supervised[:, 1:]).any() or (supervised[:, 1:].sum(-1) == 0).any():
-        raise ValueError('each response must have a nonempty contiguous completion suffix')
-    return supervised[:, 1:]
-
-
 class PreferenceCollator:
     """Pairs of explicitly labeled `chosen`/`rejected` SFT samples, same prompt.
 
-    Output rows are all chosen responses followed by all rejected responses.
+    Output responses are all chosen followed by all rejected, padded or packed.
     """
-    def __init__(self, **options):
-        self.collator = SFTCollator(**options)
+    def __init__(self, *, packed=False, **options):
+        if type(packed) is not bool:
+            raise ValueError('packed must be boolean')
+        self.packed = packed
+        if packed:
+            if options:
+                raise ValueError('packed preference samples require explicit labels, without padding/truncation options')
+            from .training_data import collate_varlen_causal_lm
+            self.collator = collate_varlen_causal_lm
+        else:
+            self.collator = SFTCollator(**options)
 
     def __call__(self, pairs):
         pairs = list(pairs)
         if not pairs:
             raise ValueError('preference batch must not be empty')
-        batch = self.collator([p['chosen'] for p in pairs] + [p['rejected'] for p in pairs])
+        samples = [p['chosen'] for p in pairs] + [p['rejected'] for p in pairs]
+        if self.packed and any(not len(s['labels']) or s['labels'][0] != -100 for s in samples):
+            raise ValueError('packed preference samples require an explicitly labeled nonempty prompt')
+        batch = self.collator(samples)
         _preference_batch(batch)
         return batch
 
 
-def _prompt(batch, row):
-    first = int((batch['labels'][row] != -100).nonzero()[0, 0])
-    return batch['input_ids'][row, :first].tolist()
-
-
 def _preference_batch(batch, *, cpu=False):
-    mask = _response_batch(batch, cpu=cpu)
-    n = mask.shape[0] // 2
-    if n == 0 or mask.shape[0] != 2*n or any(_prompt(batch, i) != _prompt(batch, i+n) for i in range(n)):
+    _response_batch(batch, cpu=cpu)
+    count = response_count(batch)
+    n = count // 2
+    if n == 0 or count != 2*n or any(_prompt(batch, i) != _prompt(batch, i+n) for i in range(n)):
         raise ValueError('DPO requires chosen/rejected halves with identical pair prompts')
     return n
 
@@ -129,20 +122,27 @@ def _freeze_reference(reference, *trainable):
     reference.eval()
 
 
-def _training_hidden(policy, input_ids, attention_mask):
+def _training_hidden(policy, input_ids, attention_mask, **metadata):
     # Dropout-free eval mode also disables HF's training-mode checkpoint hooks.
     # Retain the finetuner's requested activation recomputation explicitly.
     if policy.activation_checkpointing and torch.is_grad_enabled():
         return checkpoint(policy.hidden, input_ids, attention_mask, use_reentrant=False,
-                          preserve_rng_state=policy.preserve_rng_state)
-    return policy.hidden(input_ids, attention_mask)
+                          preserve_rng_state=policy.preserve_rng_state, **metadata)
+    return policy.hidden(input_ids, attention_mask, **metadata)
+
+
+def _layout_contract(model, contract):
+    return dict(contract, layout='packed') if model.packed_input else contract
 
 
 class _PostTrainingModel(CausalLMFinetuner):
     def __init__(self, policy, reference, *, reference_id, prefix_scoring=False):
         nn.Module.__init__(self)
-        if not isinstance(policy, CausalLMFinetuner) or getattr(policy, 'packed_input', False) or getattr(policy, 'context_input', False):
-            raise TypeError('post-training requires an explicit padded causal hidden/head policy')
+        if not isinstance(policy, CausalLMFinetuner) or getattr(policy, 'context_input', False):
+            raise TypeError('post-training requires an explicit padded or packed causal hidden/head policy')
+        self.packed_input = bool(getattr(policy, 'packed_input', False))
+        if getattr(reference, 'context_input', False) or bool(getattr(reference, 'packed_input', False)) != self.packed_input:
+            raise ValueError('policy and reference must use the same response layout')
         if not isinstance(reference_id, str) or not reference_id:
             raise ValueError('supply exact immutable reference_id')
         _freeze_reference(reference, policy)
@@ -163,7 +163,24 @@ class _PostTrainingModel(CausalLMFinetuner):
             self.critic.eval()
         return self
 
-    def _logp(self, policy, input_ids, attention_mask, labels):
+    def _logp(self, policy, input_ids, attention_mask, labels, **metadata):
+        if self.packed_input:
+            batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **metadata)
+            if self.prefix_scoring:
+                selected = []
+                for begin, end in response_spans(batch):
+                    for t in range(begin, end):
+                        if int(labels[t]) == -100:
+                            selected.append(input_ids.new_zeros((), dtype=torch.float32))
+                            continue
+                        hidden = _training_hidden(policy, input_ids[begin:t], attention_mask[begin:t],
+                                                  **prefix_metadata(batch, begin, t))[-1:]
+                        selected.append(chunked_lm_log_probs(hidden, policy.head, labels[t:t+1],
+                            token_chunk_size=1, shift=False).reshape(()))
+                return torch.stack(selected)
+            logp = chunked_lm_log_probs(_training_hidden(policy, input_ids, attention_mask, **metadata),
+                                       policy.head, labels, token_chunk_size=policy.token_chunk_size)
+            return torch.cat((logp.new_zeros(1), logp))
         if self.prefix_scoring:
             rows = []
             for row in range(input_ids.shape[0]):
@@ -180,9 +197,20 @@ class _PostTrainingModel(CausalLMFinetuner):
         return chunked_lm_log_probs(_training_hidden(policy, input_ids, attention_mask), policy.head, labels,
                                    token_chunk_size=policy.token_chunk_size)
 
-    def _values(self, input_ids, attention_mask, labels):
+    def _values(self, input_ids, attention_mask, labels, **metadata):
         if not self.prefix_scoring:
-            return self.critic(input_ids, attention_mask)
+            return self.critic(input_ids, attention_mask, **metadata)
+        if self.packed_input:
+            batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **metadata)
+            selected = []
+            for begin, end in response_spans(batch):
+                first = begin+int((labels[begin:end] != -100).nonzero()[0, 0])-1
+                selected.extend(input_ids.new_zeros((), dtype=torch.float32) for _ in range(begin, first))
+                for t in range(first, end):
+                    value = self.critic(input_ids[begin:t+1], attention_mask[begin:t+1],
+                                        **prefix_metadata(batch, begin, t+1))
+                    selected.append(value[-1])
+            return torch.stack(selected)
         rows = []
         for row in range(input_ids.shape[0]):
             first = int((labels[row] != -100).nonzero()[0, 0])-1
@@ -195,9 +223,11 @@ class _PostTrainingModel(CausalLMFinetuner):
             rows.append(torch.stack(selected))
         return torch.stack(rows)
 
-    def _next_logits(self, input_ids, attention_mask):
-        hidden = self.policy.hidden(input_ids, attention_mask)
-        logits = self.policy.head(hidden[:, -1])
+    def _next_logits(self, input_ids, attention_mask, **metadata):
+        batch_metadata(input_ids, metadata, self.packed_input)
+        hidden = self.policy.hidden(input_ids, attention_mask, **metadata)
+        last = hidden[metadata['cu_seqlens'][1:].to(hidden.device).long()-1] if self.packed_input else hidden[:, -1]
+        logits = self.policy.head(last)
         if _parallel_head(self.policy.head) and not self.policy.head.gather_output:
             from .parallel_training import gather_from_tensor_parallel
             logits = gather_from_tensor_parallel(logits, self.policy.head.group)
@@ -218,29 +248,37 @@ class DPOModel(_PostTrainingModel):
         self.beta = _positive(beta, 'beta')
 
     def contract(self):
-        return {'algorithm': 'dpo', 'reference_id': self.reference_id, 'beta': self.beta, 'prefix_scoring': self.prefix_scoring}
+        return _layout_contract(self, {'algorithm': 'dpo', 'reference_id': self.reference_id,
+                                      'beta': self.beta, 'prefix_scoring': self.prefix_scoring})
 
-    def forward(self, input_ids, attention_mask, labels=None, *, reduction='mean', label_smoothing=0., mode='loss'):
+    def forward(self, input_ids, attention_mask, labels=None, *, reduction='mean', label_smoothing=0., mode='loss', **metadata):
+        batch_metadata(input_ids, metadata, self.packed_input)
         if mode == 'next_logits':
-            return self._next_logits(input_ids, attention_mask)
+            return self._next_logits(input_ids, attention_mask, **metadata)
         if mode != 'loss':
             raise ValueError('unknown DPO forward mode')
-        batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **metadata)
         n = _preference_batch(batch)
-        logp = self._logp(self.policy, **batch).sum(-1)
+        logp = document_sum(self._logp(self.policy, **batch), batch)
         with torch.no_grad():
-            ref = self._logp(self.reference, **batch).sum(-1)
+            ref = document_sum(self._logp(self.reference, **batch), batch)
         loss = -F.logsigmoid(self.beta*((logp[:n]-logp[n:])-(ref[:n]-ref[n:])))
         return self._reduce(loss, reduction)
 
 
 class CausalValueModel(CausalLMFinetuner):
     """Independent value backbone and scalar head; actual trainable parameters."""
-    def forward(self, input_ids, attention_mask):
-        values = self.head(_training_hidden(self, input_ids, attention_mask))
+    def forward(self, input_ids, attention_mask, **metadata):
+        batch_metadata(input_ids, metadata, bool(getattr(self, 'packed_input', False)))
+        values = self.head(_training_hidden(self, input_ids, attention_mask, **metadata))
         if values.shape != (*input_ids.shape, 1):
             raise ValueError('critic head must produce one scalar per token')
         return values.squeeze(-1).float()
+
+
+class PackedCausalValueModel(CausalValueModel):
+    """Flat-token critic/reward path over an explicitly document-isolated backbone."""
+    packed_input = True
 
 
 class RewardModel(CausalLMFinetuner):
@@ -252,9 +290,9 @@ class RewardModel(CausalLMFinetuner):
     """
     def __init__(self, policy, *, prefix_scoring=False):
         nn.Module.__init__(self)
-        if (not isinstance(policy, CausalValueModel) or getattr(policy, 'packed_input', False)
-                or getattr(policy, 'context_input', False)):
-            raise TypeError('reward learning requires a padded CausalValueModel')
+        if not isinstance(policy, CausalValueModel) or getattr(policy, 'context_input', False):
+            raise TypeError('reward learning requires a padded or packed CausalValueModel')
+        self.packed_input = bool(getattr(policy, 'packed_input', False))
         if type(prefix_scoring) is not bool:
             raise ValueError('prefix_scoring must be boolean')
         self.policy = policy
@@ -267,23 +305,32 @@ class RewardModel(CausalLMFinetuner):
         return self
 
     def contract(self):
-        return dict(algorithm='reward', loss='bradley_terry', pooling='last_response_token',
-                    prefix_scoring=self.prefix_scoring)
+        return _layout_contract(self, dict(algorithm='reward', loss='bradley_terry', pooling='last_response_token',
+                                          prefix_scoring=self.prefix_scoring))
 
     def forward(self, input_ids, attention_mask, labels, *, reduction='mean',
-                label_smoothing=0., mode='loss'):
-        batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                label_smoothing=0., mode='loss', **metadata):
+        batch_metadata(input_ids, metadata, self.packed_input)
+        batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **metadata)
         if mode == 'loss':
             n = _preference_batch(batch)
         elif mode == 'score':
             _response_batch(batch)
         else:
             raise ValueError('unknown reward forward mode')
-        lengths = attention_mask.sum(-1).long()
-        if self.prefix_scoring:
+        if self.packed_input:
+            if self.prefix_scoring:
+                scores = torch.stack([self.policy(input_ids[a:b], attention_mask[a:b],
+                    **prefix_metadata(batch, a, b))[-1] for a, b in response_spans(batch)])
+            else:
+                values = self.policy(input_ids, attention_mask, **metadata)
+                scores = values[metadata['cu_seqlens'][1:].to(values.device).long()-1]
+        elif self.prefix_scoring:
+            lengths = attention_mask.sum(-1).long()
             scores = torch.stack([self.policy(input_ids[row:row+1, :int(end)],
                 attention_mask[row:row+1, :int(end)])[0, -1] for row, end in enumerate(lengths)])
         else:
+            lengths = attention_mask.sum(-1).long()
             values = self.policy(input_ids, attention_mask)
             scores = values.gather(-1, (lengths-1).unsqueeze(-1)).squeeze(-1)
         if mode == 'score':
@@ -320,6 +367,8 @@ class PPOModel(_PostTrainingModel):
         super().__init__(policy, reference, reference_id=reference_id, prefix_scoring=prefix_scoring)
         if not isinstance(critic, CausalValueModel):
             raise TypeError('critic must be a CausalValueModel with an independent trainable value path')
+        if getattr(critic, 'context_input', False) or bool(getattr(critic, 'packed_input', False)) != self.packed_input:
+            raise ValueError('actor and critic must use the same response layout')
         if {id(p) for p in policy.parameters()} & {id(p) for p in critic.parameters()}:
             raise ValueError('actor and critic must have independent parameter ownership')
         _freeze_reference(reference, policy, critic)
@@ -333,27 +382,29 @@ class PPOModel(_PostTrainingModel):
             raise ValueError('gamma and gae_lambda must be in [0,1]')
 
     def contract(self):
-        return dict(algorithm='ppo', reference_id=self.reference_id, clip_ratio=self.clip_ratio,
+        return _layout_contract(self, dict(algorithm='ppo', reference_id=self.reference_id, clip_ratio=self.clip_ratio,
                     value_clip=self.value_clip, value_coefficient=self.value_coefficient,
-                    gamma=self.gamma, gae_lambda=self.gae_lambda, kl_coefficient=self.kl_coefficient, prefix_scoring=self.prefix_scoring)
+                    gamma=self.gamma, gae_lambda=self.gae_lambda, kl_coefficient=self.kl_coefficient, prefix_scoring=self.prefix_scoring))
 
     def forward(self, input_ids, attention_mask, labels=None, *, old_log_probs=None, old_values=None,
-                advantages=None, returns=None, reduction='mean', mode='loss', label_smoothing=0.):
+                advantages=None, returns=None, reduction='mean', mode='loss', label_smoothing=0., **metadata):
+        batch_metadata(input_ids, metadata, self.packed_input)
         if mode == 'next_logits':
-            return self._next_logits(input_ids, attention_mask)
-        mask = _response_batch(dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels))
-        logp = self._logp(self.policy, input_ids, attention_mask, labels)
-        values = self._values(input_ids, attention_mask, labels)
+            return self._next_logits(input_ids, attention_mask, **metadata)
+        batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **metadata)
+        mask = _response_batch(batch)
+        logp = self._logp(self.policy, **batch)
+        values = self._values(**batch)
         if mode == 'snapshot':
             with torch.no_grad():
-                ref = self._logp(self.reference, input_ids, attention_mask, labels)
+                ref = self._logp(self.reference, **batch)
             return logp.detach(), values.detach(), ref.detach()
         if mode != 'loss':
             raise ValueError('unknown PPO forward mode')
         ratio = (logp - old_log_probs.detach()).exp()
         policy = torch.minimum(ratio*advantages.detach(),
             ratio.clamp(1-self.clip_ratio, 1+self.clip_ratio)*advantages.detach())
-        predicted = values[:, :-1]
+        predicted = action_values(values, batch)
         value_loss = (predicted-returns.detach()).square()
         if self.value_clip is not None:
             clipped = old_values.detach()+(predicted-old_values.detach()).clamp(-self.value_clip, self.value_clip)
@@ -374,28 +425,34 @@ class GRPOModel(_PostTrainingModel):
         self.reward_epsilon = _positive(reward_epsilon, 'reward_epsilon')
 
     def contract(self):
-        return dict(algorithm='grpo', reference_id=self.reference_id, clip_ratio=self.clip_ratio,
+        return _layout_contract(self, dict(algorithm='grpo', reference_id=self.reference_id, clip_ratio=self.clip_ratio,
                     kl_coefficient=self.kl_coefficient, reward_epsilon=self.reward_epsilon,
-                    reward_std='population', reduction='mean_response_token_means', prefix_scoring=self.prefix_scoring)
+                    reward_std='population', reduction='mean_response_token_means', prefix_scoring=self.prefix_scoring))
 
     def forward(self, input_ids, attention_mask, labels=None, *, old_log_probs=None, reference_log_probs=None,
-                advantages=None, reduction='mean', mode='loss', label_smoothing=0.):
+                advantages=None, reduction='mean', mode='loss', label_smoothing=0., **metadata):
+        batch_metadata(input_ids, metadata, self.packed_input)
         if mode == 'next_logits':
-            return self._next_logits(input_ids, attention_mask)
-        mask = _response_batch(dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels))
-        logp = self._logp(self.policy, input_ids, attention_mask, labels)
+            return self._next_logits(input_ids, attention_mask, **metadata)
+        batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **metadata)
+        mask = _response_batch(batch)
+        logp = self._logp(self.policy, **batch)
         if mode == 'snapshot':
             with torch.no_grad():
-                ref = self._logp(self.reference, input_ids, attention_mask, labels)
+                ref = self._logp(self.reference, **batch)
             return logp.detach(), ref.detach()
         if mode != 'loss':
             raise ValueError('unknown GRPO forward mode')
         ratio = (logp-old_log_probs.detach()).exp()
-        advantage = advantages.detach().unsqueeze(-1)
+        if self.packed_input:
+            advantage = torch.cat([advantages[row].detach().expand(b-a)
+                                   for row, (a, b) in enumerate(response_spans(batch))])
+        else:
+            advantage = advantages.detach().unsqueeze(-1)
         policy = torch.minimum(ratio*advantage, ratio.clamp(1-self.clip_ratio, 1+self.clip_ratio)*advantage)
         delta = reference_log_probs.detach()-logp
         kl = delta.exp()-delta-1
-        losses = torch.where(mask, self.kl_coefficient*kl-policy, torch.zeros_like(policy)).sum(-1)/mask.sum(-1)
+        losses = document_sum(torch.where(mask, self.kl_coefficient*kl-policy, torch.zeros_like(policy)), batch)/document_sum(mask, batch)
         return self._reduce(losses, reduction)
 
 
@@ -462,21 +519,23 @@ class _ObjectiveTrainer(CausalLMTrainer):
         counts = []
         algorithm = self._contract['algorithm']
         for batch in microbatches:
-            fields = {'input_ids', 'attention_mask', 'labels'}
+            base_fields = response_fields(self.packed_input)
+            fields = base_fields.copy()
             if algorithm == 'ppo':
                 fields |= {'old_log_probs', 'old_values', 'advantages', 'returns'}
             elif algorithm == 'grpo':
                 fields |= {'old_log_probs', 'reference_log_probs', 'advantages'}
-            if set(batch) != fields or any(not isinstance(t, torch.Tensor) or t.device.type != 'cpu' or t.requires_grad for t in batch.values()):
+            if set(batch) != fields or any(not isinstance(t, torch.Tensor) or t.device.type != 'cpu' or t.requires_grad
+                                          for k, t in batch.items() if k != 'max_seqlen'):
                 raise ValueError('supply detached CPU post-training fields with the exact algorithm schema')
             mask = _response_batch(batch, cpu=True)
-            for name in fields-{'input_ids', 'attention_mask', 'labels'}:
+            for name in fields-base_fields:
                 tensor = batch[name]
-                expected = (mask.shape[0],) if algorithm == 'grpo' and name == 'advantages' else mask.shape
+                expected = (response_count(batch),) if algorithm == 'grpo' and name == 'advantages' else mask.shape
                 if tensor.shape != expected or not tensor.is_floating_point() or not torch.isfinite(tensor).all():
                     raise ValueError(f'invalid finite floating rollout field: {name}')
             counts.append(_preference_batch(batch, cpu=True) if algorithm in ('dpo', 'reward') else
-                          int(mask.sum()) if algorithm == 'ppo' else mask.shape[0])
+                          int(mask.sum()) if algorithm == 'ppo' else response_count(batch))
         return counts
 
     def train_step(self, microbatches):
@@ -502,12 +561,12 @@ class RewardTrainer(_ObjectiveTrainer):
 
     @torch.no_grad()
     def score(self, batch):
-        if set(batch) != {'input_ids', 'attention_mask', 'labels'}:
+        if set(batch) != response_fields(self.packed_input):
             raise ValueError('supply a labeled CPU response batch for reward scoring')
         _response_batch(batch, cpu=True)
         self.executable.eval()
         device = next(self.model.parameters()).device
-        return self.executable(**{k: v.to(device) for k, v in batch.items()}, mode='score').cpu()
+        return self.executable(**move_batch(batch, device), mode='score').cpu()
 
     def token_rewards(self, batch):
         """Explicit PPO outcome placement, zero except each final action.
@@ -516,6 +575,10 @@ class RewardTrainer(_ObjectiveTrainer):
         caller explicitly passes either result to prepare_rollout/prepare_groups.
         """
         scores = self.score(batch)
+        if self.packed_input:
+            rewards = torch.zeros_like(batch['labels'], dtype=scores.dtype)
+            rewards[batch['cu_seqlens'][1:].long()-1] = scores
+            return rewards
         rewards = torch.zeros_like(batch['labels'][:, 1:], dtype=scores.dtype)
         final = batch['attention_mask'].sum(-1).long()-2
         return rewards.scatter(1, final.unsqueeze(-1), scores.unsqueeze(-1))
@@ -545,8 +608,11 @@ class _PostTrainingTrainer(_ObjectiveTrainer):
         terminal = False
         self.executable.eval()
         for _ in range(max_new_tokens):
-            tokens = torch.tensor([ids], dtype=torch.long, device=device)
-            logits = self.executable(input_ids=tokens, attention_mask=torch.ones_like(tokens, dtype=torch.bool), mode='next_logits')
+            tokens = torch.tensor(ids if self.packed_input else [ids], dtype=torch.long, device=device)
+            metadata = dict(position_ids=torch.arange(len(ids), device=device),
+                            cu_seqlens=torch.tensor([0, len(ids)], device='cpu'), max_seqlen=len(ids)) if self.packed_input else {}
+            logits = self.executable(input_ids=tokens, attention_mask=torch.ones_like(tokens, dtype=torch.bool),
+                                     mode='next_logits', **metadata)
             probability = torch.softmax(logits.float(), -1).cpu()
             token = torch.multinomial(probability, 1, generator=generator).to(device)
             if self.sampling_group is not None:
@@ -556,9 +622,11 @@ class _PostTrainingTrainer(_ObjectiveTrainer):
             if token in eos_token_ids:
                 terminal = True
                 break
-        tokens = torch.tensor([ids], dtype=torch.long)
-        labels = tokens.clone(); labels[:, :len(prompt)] = -100
-        return dict(input_ids=tokens, attention_mask=torch.ones_like(tokens, dtype=torch.bool), labels=labels), terminal
+        tokens = torch.tensor(ids if self.packed_input else [ids], dtype=torch.long, device='cpu')
+        labels = tokens.clone(); labels[..., :len(prompt)] = -100
+        metadata = dict(position_ids=torch.arange(len(ids), device='cpu'), cu_seqlens=torch.tensor([0, len(ids)], device='cpu'),
+                        max_seqlen=len(ids)) if self.packed_input else {}
+        return dict(input_ids=tokens, attention_mask=torch.ones_like(tokens, dtype=torch.bool), labels=labels, **metadata), terminal
 
 
 class DPOTrainer(_PostTrainingTrainer):
@@ -572,19 +640,26 @@ class PPOTrainer(_PostTrainingTrainer):
     def prepare_rollout(self, batch, rewards, terminal):
         """Snapshot old policy/value/reference before epochs; no invented reward."""
         mask = _response_batch(batch, cpu=True)
-        if set(batch) != {'input_ids', 'attention_mask', 'labels'} or rewards.shape != mask.shape or terminal.shape != (mask.shape[0],):
+        if set(batch) != response_fields(self.packed_input) or rewards.shape != mask.shape or terminal.shape != (response_count(batch),):
             raise ValueError('provide response batch, per-token rewards and per-row terminal flags')
         if rewards.device.type != 'cpu' or terminal.device.type != 'cpu' or not rewards.is_floating_point() or not torch.isfinite(rewards).all() or terminal.dtype != torch.bool:
             raise ValueError('rollout rewards must be finite CPU floats and terminal CPU booleans')
         self.executable.eval()
         device = next(self.model.parameters()).device
-        old, values, ref = self.executable(**{k: v.to(device) for k, v in batch.items()}, mode='snapshot')
+        old, values, ref = self.executable(**move_batch(batch, device), mode='snapshot')
         old, values, ref = old.cpu(), values.cpu(), ref.cpu()
         shaped = rewards.float()-self._contract['kl_coefficient']*(old-ref)
-        advantages, returns = generalized_advantage_estimation(shaped, values, mask, terminal,
-            gamma=self._contract['gamma'], gae_lambda=self._contract['gae_lambda'])
-        return {**{k: v.detach().clone() for k, v in batch.items()}, 'old_log_probs': old,
-                'old_values': values[:, :-1], 'advantages': advantages, 'returns': returns}
+        options = dict(gamma=self._contract['gamma'], gae_lambda=self._contract['gae_lambda'])
+        if self.packed_input:
+            advantages, returns = torch.zeros_like(shaped), torch.zeros_like(shaped)
+            for row, (a, b) in enumerate(response_spans(batch)):
+                adv, ret = generalized_advantage_estimation(shaped[a+1:b].unsqueeze(0), values[a:b].unsqueeze(0),
+                    mask[a+1:b].unsqueeze(0), terminal[row:row+1], **options)
+                advantages[a+1:b], returns[a+1:b] = adv[0], ret[0]
+        else:
+            advantages, returns = generalized_advantage_estimation(shaped, values, mask, terminal, **options)
+        return {**clone_batch(batch), 'old_log_probs': old,
+                'old_values': action_values(values, batch), 'advantages': advantages, 'returns': returns}
 
 
 class GRPOTrainer(_PostTrainingTrainer):
@@ -594,8 +669,8 @@ class GRPOTrainer(_PostTrainingTrainer):
     def prepare_groups(self, batch, rewards, group_ids):
         """Complete same-prompt groups with population reward standard deviation."""
         mask = _response_batch(batch, cpu=True)
-        n = mask.shape[0]
-        if set(batch) != {'input_ids', 'attention_mask', 'labels'} or rewards.shape != (n,) or group_ids.shape != (n,):
+        n = response_count(batch)
+        if set(batch) != response_fields(self.packed_input) or rewards.shape != (n,) or group_ids.shape != (n,):
             raise ValueError('GRPO needs one outcome reward and group ID per response')
         if (rewards.device.type != 'cpu' or group_ids.device.type != 'cpu' or not rewards.is_floating_point()
                 or not torch.isfinite(rewards).all() or group_ids.dtype not in (torch.int32, torch.int64)):
@@ -609,6 +684,6 @@ class GRPOTrainer(_PostTrainingTrainer):
             advantages[rows] = (reward-reward.mean())/(reward.std(unbiased=False)+self._contract['reward_epsilon'])
         self.executable.eval()
         device = next(self.model.parameters()).device
-        old, ref = self.executable(**{k: v.to(device) for k, v in batch.items()}, mode='snapshot')
-        return {**{k: v.detach().clone() for k, v in batch.items()}, 'old_log_probs': old.cpu(),
+        old, ref = self.executable(**move_batch(batch, device), mode='snapshot')
+        return {**clone_batch(batch), 'old_log_probs': old.cpu(),
                 'reference_log_probs': ref.cpu(), 'advantages': advantages}

@@ -129,4 +129,4 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
           OMP_NUM_THREADS: '1'
-        run: python -m pytest -q ruda-torch/python/tests/test_post_training.py
+        run: python -m pytest -q ruda-torch/python/tests/test_post_training.py ruda-torch/python/tests/test_packed_post_training.py

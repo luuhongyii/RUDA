@@ -539,9 +539,9 @@ from .varlen_attention import varlen_scaled_dot_product_attention
 from . import _varlen_ops
 from .causal_finetuning import PackedCausalLMFinetuner,CausalLMTrainer
 from .causal_finetuning import ContextParallelFinetuner
-from .post_training import (chunked_lm_log_probs, PreferenceCollator, CausalValueModel,
+from .post_training import (chunked_lm_log_probs, PreferenceCollator, CausalValueModel, PackedCausalValueModel,
     RewardModel, RewardTrainer, DPOModel, PPOModel, GRPOModel, DPOTrainer, PPOTrainer, GRPOTrainer,
-    generalized_advantage_estimation)
+    generalized_advantage_estimation, select_response_batch)
 from .training_checkpoint import training_state_dict,validate_training_state_dict,load_training_state_dict
 from .training_autotune import TrainingAutotuner,TrainingPlan,PipelineAutotuner
 from .architecture_cache import KVCache, KDAState, MambaState, ArchitectureCache
