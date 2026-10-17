@@ -221,13 +221,27 @@ PPO／GRPO 提供 `sample(prompt, max_new_tokens=..., eos_token_ids=...)`，按�
 
 三个训练器复用 `CausalLMTrainer` 的梯度累积、scheduler／scaler、分布式 coordinator 和原子本地／分布式存档。全局归一化单位依次为偏好对、completion token、response，不平均不等长 microbatch 的均值。指标使用 `normalization_units`，`evaluate` 报告目标函数而非 perplexity。`save`／`resume` 包含 actor、参考模型、PPO critic、优化器状态、算法／参考契约、RNG 和 `trainer.data_state`；存档前将数据游标、固定待处理 rollout、epoch／minibatch 位置及显式 generator 状态放入 `data_state`。不保存半个梯度累积窗口；跨 FSDP／ZeRO／DP／TP 的全 rank 提交使用实际 coordinator 与 `save_distributed`／`resume_distributed`。
 
-Python packed 后训练中，DPO／奖励偏好对使用 `PreferenceCollator(packed=True)`，PPO／GRPO response 使用 `collate_varlen_causal_lm(samples)`；样本显式标注非空 prompt 和连续非空 completion。批次包含扁平 `input_ids`／`attention_mask`／`labels`／`position_ids` `[N]`、CPU 整数 `cu_seqlens` `[D+1]` 和整数 `max_seqlen`，没有 padding 或隐式截断。backbone 必须消费这些元数据并真正执行文档隔离的 varlen attention。PPO critic 使用独立且布局相同的 `PackedCausalValueModel(backbone, scalar_head)`。这不是 `ContextParallelFinetuner` 接口。
+Python packed 后训练中，DPO／奖励偏好对使用 `PreferenceCollator(packed=True)`，PPO／GRPO response 使用 `collate_varlen_causal_lm(samples)`；样本显式标注非空 prompt 和连续非空 completion。批次包含扁平 `input_ids`／`attention_mask`／`labels`／`position_ids` `[N]`、CPU 整数 `cu_seqlens` `[D+1]` 和整数 `max_seqlen`，没有 padding 或隐式截断。backbone 必须消费这些元数据并真正执行文档隔离的 varlen attention。PPO critic 使用独立且布局相同的 `PackedCausalValueModel(backbone, scalar_head)`。Context 分片使用下述独立的 `ContextParallelFinetuner` 接口。
 
 Packed PPO 奖励、log probability、旧 action value、优势和 return 都按目标 token 对齐为 `[N]`：token `j` 的 action 由同文档前一状态预测该 token；文档首 token 和 prompt target 不参与损失。独立工具 `chunked_lm_log_probs` 对 shifted flat 输入返回 `[N-1]`，objective 包装器在首位补零后对齐 `[N]`。GAE 每篇文档独立重启，真正终止用零 bootstrap，截断用该文档末状态 critic value。GRPO 结果奖励／group ID／优势及奖励模型评分仍为 `[D]`。DPO／奖励按偏好对、PPO 按 token、GRPO 按 response 归一化，权重与 padded 路径一致。Packed `prefix_scoring=True` 使用各文档真实前缀及对应 position ID；`sample` 返回单文档 packed 批次。
 
 用 `select_response_batch(fixed_rollout, indices)` 拆分已固定的 PPO／GRPO 更新 microbatch；它按完整文档选择，重建 packed 边界与最大长度，保留显式 position ID，复制固定统计而不重算旧策略，也支持 padded 批次。DPO／奖励选择必须先放所选 chosen，再放对应 rejected；例如两对 chosen-first 批次可拆为 `[0, 2]` 和 `[1, 3]`。Packed checkpoint 记录布局，不能通过 padded objective 恢复。
 
+Context-parallel DPO／PPO／GRPO 的策略和独立参考模型使用 `ContextParallelFinetuner(backbone, head, context_group, group_key=...)`；PPO critic 使用 `ContextParallelValueModel(critic_backbone, scalar_head, context_group, group_key=...)`，奖励学习则将独立标量模型包在 `RewardModel` 中。各路径必须使用同一个实际 CP 进程组，沿用现有 HF／原生 ring attention 适配器，并向训练器提供包含该 CP 组的 model-mesh coordinator；只有 CP 的任务也可使用对应 `ReplicaGroup`。后训练损失不聚集 hidden state、attention KV 或可训练权重。
+
+每个 CP peer 提供相同、完整、已脱离梯度的 CPU 源批次，支持 padded 和 packed。`train_step`／`evaluate` 自动分片完整批次；`shard_post_training_batch(batch, context_group)` 显式返回本地 token／position／document 张量、预先 shift 的 `context_targets` 和 CPU `response_metadata`。DPO／奖励偏好损失与 GRPO response 的和／计数先跨 CP 归约再计算非线性目标，每个偏好对／response 只计权一次，不按 rank 重复。PPO 使用不重叠 completion action 的本地损失之和，再由 coordinator 恰好归约一次对应 CP 参数梯度。
+
+`prepare_rollout`／`prepare_groups` 仍接收完整 CPU response 和调用者奖励，只聚集已脱离梯度的逐 token 标量 log probability／value 快照，按文档计算 GAE 或按完整组计算优势，返回固定的 context 分片更新；EOS／截断 bootstrap 跨分片边界仍遵循同一规则。`select_response_batch` 也能在不重评分的情况下重排这些更新。`score` 在各 CP peer 返回完整评分向量；`token_rewards` 按完整源布局返回稀疏奖励。`prefix_scoring=True` 对每条真实 response 前缀重新分片，在前缀／response 所属 rank 间转移选中标量及其伴随梯度，不以最终长度 RoPE 代替前缀。CP `sample` 通过训练器包装调用分片 backbone，并在 CP 和指定 TP rollout 组广播 token。所有 peer 必须按相同顺序调用这些带 collective 的 API。存档前将待处理 context 更新、源游标和 epoch 位置放入 `data_state`，再调用现有本地／全 rank 存档接口；context checkpoint 使用独立布局契约。
+
 Rust 在 `rullm::training` 导出 `DpoTrainer`、`PpoTrainer`、`GrpoTrainer`，actor 接收全参数或 LoRA 的 `SftTrainer`。先构造 `ReferencePolicy::new(model, adapters, identity)`，再调用 `DpoTrainer::new(actor, reference, beta, seed)`、`PpoTrainer::new(actor, ValueCritic::new(critic_backbone, device), critic_train_config, reference, ppo_config, seed)` 或 `GrpoTrainer::new(actor, reference, grpo_config, seed)`。`Response` 分开记录 prompt／completion 与终止状态；`PreferencePair` 保存 chosen／rejected。PPO 的 `prepare_rollout(response, token_rewards)`、GRPO 的 `prepare_group(responses, outcome_rewards)` 返回可序列化的固定统计；`step` 对传入的有效批次真正更新参数，PPO 同时更新独立 critic 优化器。PPO／GRPO 的 `sample` 使用随 checkpoint 保存的采样 RNG。包装之前可对 actor 调用 `with_data_parallel` 接入 ruCCL；每个 rank 的本地批次非空、更新调用顺序一致，归一化权重及 actor／critic 梯度通过同一 peer 归约。`save_checkpoint`／`load_checkpoint` 依照 actor 的保留策略原子保存 actor／优化器、critic／优化器、算法／参考元数据与 `state`；将待处理 rollout、更新位置和数据游标存入 `state.data`，恢复前重载相同的不可变参考及 LoRA 冻结 base。这些 API 不会自动启动 GPU 任务。
+
+### 原生 packed 批次与分页 rollout
+
+Rust `DpoTrainer::step`、`PpoTrainer::step`、`GrpoTrainer::step` 和 `RewardTrainer::step` 将传入 response 打包为扁平、文档隔离的训练前向，包含全参数／LoRA 投影与内存高效的注意力反向。偏好对、completion token、response 的归一化语义保持不变。`PpoTrainer::prepare_rollouts(responses, &token_rewards)` 对不等长批次取快照，逐文档重启 GAE；`RewardTrainer::score_batch`／`token_rewards_batch` 提供对应批量奖励。需限制激活内存时，由调用者显式拆分更新工作量。
+
+原生 PPO／GRPO 和 `SftTrainer` 为 `DeviceBackend` actor 提供 `sample_paged`：传入 prompt token 向量、正数的逐请求 token 预算、EOS ID、`ContinuousBatchConfig` 和 `PagedKvCacheConfig`；SFT 入口还需 `&mut PostTrainingState`。每次调用捕获当前全参数权重，或将当前 LoRA adapter 合并为推理快照，分配真实分页 KV 引擎并连续合批。返回结果按 prompt 顺序排列，包含采样 EOS 并区分终止／截断。采样为完整词表、温度一，不做过滤或惩罚。批次结束后释放推理快照及 KV 池，下次调用捕获更新后的 actor。
+
+`Response` 新增可选 `rotary_context`／`behavior_log_probs` 字段；普通外部 response 使用 `None`。分页生成记录实际 append 结束位置，包含分块预填充和重放前缀，并从引擎 logits 直接记录选中 token 的 log probability。Packed actor／参考／critic／奖励前向重放这些旋转上下文；PPO／GRPO 使用实际行为概率，不用舍入或更新后的权重重评分。没有 append 历史的 runtime RoPE response 仍按真实完整前缀评分。请求种子游标仅在整批成功后提交：rollout 前保存 checkpoint 可重试同一组请求 RNG 流，成功后的 response／固定更新缓冲区应放入 `state.data` 再存档；不保存执行中的 KV。
 
 ## 配对奖励模型
 

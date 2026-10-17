@@ -100,7 +100,8 @@ jobs:
       - name: Compile native generation continuation
         run: |
           cargo check --locked -p ruda-llm --lib
-          cargo check --locked -p ruda-llm --features nvidia-ptx,gpu-kv,expert-parallel,distributed --lib --tests --bin ruda-serve
+          cargo check --locked -p ruda-llm --features nvidia-ptx,gpu-kv,expert-parallel,distributed,structured-output --lib --tests --bin ruda-serve
+          cargo test --locked -p ruda-llm --features structured-output --lib serving::
       - name: Compile native FFT sparse and solver tuning
         run: |
           cargo check --locked -p ruda-fft --features tensor --lib
@@ -129,4 +130,4 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
           OMP_NUM_THREADS: '1'
-        run: python -m pytest -q ruda-torch/python/tests/test_post_training.py ruda-torch/python/tests/test_packed_post_training.py
+        run: python -m pytest -q ruda-torch/python/tests/test_post_training.py ruda-torch/python/tests/test_packed_post_training.py ruda-torch/python/tests/test_context_post_training.py

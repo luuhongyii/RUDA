@@ -301,6 +301,12 @@ curl -N http://127.0.0.1:8000/v1/chat/completions \
 
 This is a text-only HTTP/1.1 subset, not the full OpenAI API: one completion (`n = 1`), text `system`/`user`/`assistant` messages, no tool execution or image inference. Networking uses the standard library, has no TLS, and is unauthenticated unless an API key is configured. `OpenAiServerConfig` exposes the default-token limit and request-body limit (1 MiB by default) for library callers. `model_name` controls the single model advertised by the server.
 
+## Constrained tool calls in `ruda-serve`
+
+The separate `serving` adapter (`ruda-serve`, not the standard-library HTTP subset above) supports strict function arguments when built with `structured-output`. Chat Completions function definitions and Responses function tools accept `strict: true` with a JSON Schema in `parameters`. Decoding masks every token using the selected function's original schema, including its local `$ref`/`$defs`; it does not merely validate generated arguments afterward. Strict output uses the supported Qwen `<tool_call>{"name":...,"arguments":...}</tool_call>` wire format. Existing non-strict XML calls retain their parser path.
+
+`tool_choice: "auto"` permits ordinary text or declared tool calls; `"required"` requires at least one call, and a named choice restricts calls to that function. `"none"` disables tool constraints. `parallel_tool_calls: false` permits at most one call. Required/named/single-call constrained choices also require `structured-output`. EOS is masked while a required call or its arguments are incomplete; a token limit or explicit stop can still truncate generation. Single-request and continuous-batch serving use the same decoder. Generic `response_format`/`grammar` constraints remain separate and cannot be combined with enabled tool calls.
+
 ## Qwen3.5 fused paged attention
 
 `Qwen35BatchCache` selects its attention path when `new_batch_cache` creates it. Set `RUDA_PAGED_ATTENTION=fused` before cache creation to use ruDNN's fused paged attention in Qwen3.5 continuous batching. Unset or `legacy` retains the existing path; other values are rejected. Changing the variable does not switch an existing cache, and it is not a global switch for every generation entry point.

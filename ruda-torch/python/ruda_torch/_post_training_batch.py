@@ -117,6 +117,9 @@ def select_response_batch(batch, indices):
     must be snapshotted in full before selection. Packed token statistics are
     target-aligned [N]; response-level GRPO advantages are [documents].
     """
+    if 'response_metadata' in batch:
+        from ._context_post_training import select_context_batch
+        return select_context_batch(batch, indices)
     response_batch(batch)
     if isinstance(indices, torch.Tensor):
         if indices.device.type != 'cpu' or indices.ndim != 1 or indices.dtype not in (torch.int32, torch.int64):

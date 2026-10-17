@@ -13,6 +13,9 @@ from .causal_finetuning import CausalLMFinetuner, CausalLMTrainer, SFTCollator
 from ._post_training_batch import (response_batch as _response_batch, prompt as _prompt,
     batch_metadata, response_fields, response_spans, response_count, document_sum,
     action_values, prefix_metadata, move_batch, clone_batch, select_response_batch)
+from ._context_post_training import (ContextParallelValueModel, shard_post_training_batch,
+    context_forward, context_sample, context_next_logits, CONTEXT_FIELDS, validate_context_batch,
+    gather_context_statistics)
 
 
 def _parallel_head(head):
@@ -132,16 +135,43 @@ def _training_hidden(policy, input_ids, attention_mask, **metadata):
 
 
 def _layout_contract(model, contract):
+    if model.context_input:
+        return dict(contract, layout='context')
     return dict(contract, layout='packed') if model.packed_input else contract
+
+
+def _context_layout(model, policy):
+    model.context_input = bool(getattr(policy, 'context_input', False))
+    if model.context_input:
+        model.context_group, model.context_key = policy.context_group, policy.context_key
+
+
+def _same_layout(a, b):
+    if (bool(getattr(a, 'packed_input', False)), bool(getattr(a, 'context_input', False))) != (
+            bool(getattr(b, 'packed_input', False)), bool(getattr(b, 'context_input', False))):
+        return False
+    if getattr(a, 'context_input', False):
+        return (a.context_group.group is b.context_group.group
+                and a.context_group.rank == b.context_group.rank
+                and a.context_group.world_size == b.context_group.world_size)
+    return True
+
+
+def _context_call(model, input_ids, attention_mask, metadata, mode, reduction, **statistics):
+    if mode == 'next_logits':
+        return context_next_logits(model, input_ids, attention_mask, **metadata)
+    return context_forward(model, dict(input_ids=input_ids, attention_mask=attention_mask, **metadata),
+                           mode=mode, reduction=reduction, **statistics)
 
 
 class _PostTrainingModel(CausalLMFinetuner):
     def __init__(self, policy, reference, *, reference_id, prefix_scoring=False):
         nn.Module.__init__(self)
-        if not isinstance(policy, CausalLMFinetuner) or getattr(policy, 'context_input', False):
-            raise TypeError('post-training requires an explicit padded or packed causal hidden/head policy')
+        if not isinstance(policy, CausalLMFinetuner):
+            raise TypeError('post-training requires an explicit causal hidden/head policy')
+        _context_layout(self, policy)
         self.packed_input = bool(getattr(policy, 'packed_input', False))
-        if getattr(reference, 'context_input', False) or bool(getattr(reference, 'packed_input', False)) != self.packed_input:
+        if not _same_layout(policy, reference):
             raise ValueError('policy and reference must use the same response layout')
         if not isinstance(reference_id, str) or not reference_id:
             raise ValueError('supply exact immutable reference_id')
@@ -252,6 +282,8 @@ class DPOModel(_PostTrainingModel):
                                       'beta': self.beta, 'prefix_scoring': self.prefix_scoring})
 
     def forward(self, input_ids, attention_mask, labels=None, *, reduction='mean', label_smoothing=0., mode='loss', **metadata):
+        if self.context_input:
+            return _context_call(self, input_ids, attention_mask, metadata, mode, reduction)
         batch_metadata(input_ids, metadata, self.packed_input)
         if mode == 'next_logits':
             return self._next_logits(input_ids, attention_mask, **metadata)
@@ -290,8 +322,9 @@ class RewardModel(CausalLMFinetuner):
     """
     def __init__(self, policy, *, prefix_scoring=False):
         nn.Module.__init__(self)
-        if not isinstance(policy, CausalValueModel) or getattr(policy, 'context_input', False):
-            raise TypeError('reward learning requires a padded or packed CausalValueModel')
+        if not isinstance(policy, (CausalValueModel, ContextParallelValueModel)):
+            raise TypeError('reward learning requires an explicit causal value model')
+        _context_layout(self, policy)
         self.packed_input = bool(getattr(policy, 'packed_input', False))
         if type(prefix_scoring) is not bool:
             raise ValueError('prefix_scoring must be boolean')
@@ -308,8 +341,10 @@ class RewardModel(CausalLMFinetuner):
         return _layout_contract(self, dict(algorithm='reward', loss='bradley_terry', pooling='last_response_token',
                                           prefix_scoring=self.prefix_scoring))
 
-    def forward(self, input_ids, attention_mask, labels, *, reduction='mean',
+    def forward(self, input_ids, attention_mask, labels=None, *, reduction='mean',
                 label_smoothing=0., mode='loss', **metadata):
+        if self.context_input:
+            return _context_call(self, input_ids, attention_mask, metadata, mode, reduction)
         batch_metadata(input_ids, metadata, self.packed_input)
         batch = dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **metadata)
         if mode == 'loss':
@@ -365,9 +400,9 @@ class PPOModel(_PostTrainingModel):
     def __init__(self, policy, reference, critic, *, reference_id, clip_ratio=0.2,
                  value_clip=0.2, value_coefficient=0.5, gamma=1., gae_lambda=0.95, kl_coefficient=0., prefix_scoring=False):
         super().__init__(policy, reference, reference_id=reference_id, prefix_scoring=prefix_scoring)
-        if not isinstance(critic, CausalValueModel):
+        if not isinstance(critic, (CausalValueModel, ContextParallelValueModel)):
             raise TypeError('critic must be a CausalValueModel with an independent trainable value path')
-        if getattr(critic, 'context_input', False) or bool(getattr(critic, 'packed_input', False)) != self.packed_input:
+        if not _same_layout(policy, critic):
             raise ValueError('actor and critic must use the same response layout')
         if {id(p) for p in policy.parameters()} & {id(p) for p in critic.parameters()}:
             raise ValueError('actor and critic must have independent parameter ownership')
@@ -388,6 +423,9 @@ class PPOModel(_PostTrainingModel):
 
     def forward(self, input_ids, attention_mask, labels=None, *, old_log_probs=None, old_values=None,
                 advantages=None, returns=None, reduction='mean', mode='loss', label_smoothing=0., **metadata):
+        if self.context_input:
+            return _context_call(self, input_ids, attention_mask, metadata, mode, reduction,
+                old_log_probs=old_log_probs, old_values=old_values, advantages=advantages, returns=returns)
         batch_metadata(input_ids, metadata, self.packed_input)
         if mode == 'next_logits':
             return self._next_logits(input_ids, attention_mask, **metadata)
@@ -431,6 +469,9 @@ class GRPOModel(_PostTrainingModel):
 
     def forward(self, input_ids, attention_mask, labels=None, *, old_log_probs=None, reference_log_probs=None,
                 advantages=None, reduction='mean', mode='loss', label_smoothing=0., **metadata):
+        if self.context_input:
+            return _context_call(self, input_ids, attention_mask, metadata, mode, reduction,
+                old_log_probs=old_log_probs, reference_log_probs=reference_log_probs, advantages=advantages)
         batch_metadata(input_ids, metadata, self.packed_input)
         if mode == 'next_logits':
             return self._next_logits(input_ids, attention_mask, **metadata)
@@ -466,6 +507,13 @@ class _ObjectiveTrainer(CausalLMTrainer):
         template = getattr(self.model, '_template', self.model)
         if not isinstance(template, self.expected_type):
             raise TypeError(f'trainer requires {self.expected_type.__name__}')
+        if self.context_input:
+            self.context_group = template.context_group
+            if self.context_group.world_size > 1:
+                context_peer = getattr(self.replica_group, 'context', self.replica_group)
+                if (context_peer.group is not self.context_group.group
+                        or context_peer.world_size != self.context_group.world_size):
+                    raise ValueError('context post-training requires its actual CP gradient coordinator')
         self._contract = copy.deepcopy(template.contract())
         self.data_state = None
         self.executable.train()
@@ -519,6 +567,22 @@ class _ObjectiveTrainer(CausalLMTrainer):
         counts = []
         algorithm = self._contract['algorithm']
         for batch in microbatches:
+            if self.context_input:
+                fields = CONTEXT_FIELDS.copy()
+                if algorithm == 'ppo':
+                    fields |= {'old_log_probs', 'old_values', 'advantages', 'returns'}
+                elif algorithm == 'grpo':
+                    fields |= {'old_log_probs', 'reference_log_probs', 'advantages'}
+                if set(batch) != fields:
+                    raise ValueError('supply the exact context post-training algorithm schema')
+                source = validate_context_batch(batch, self.context_group, cpu=True)
+                if algorithm == 'ppo':
+                    count = int((batch['context_targets'] != -100).sum())
+                else:
+                    count = _preference_batch(source, cpu=True) if algorithm in ('dpo', 'reward') else response_count(source)
+                    count = count if self.context_group.rank == 0 else 0
+                counts.append(count)
+                continue
             base_fields = response_fields(self.packed_input)
             fields = base_fields.copy()
             if algorithm == 'ppo':
@@ -539,6 +603,9 @@ class _ObjectiveTrainer(CausalLMTrainer):
         return counts
 
     def train_step(self, microbatches):
+        if self.context_input:
+            microbatches = [batch if 'response_metadata' in batch else shard_post_training_batch(batch, self.context_group)
+                            for batch in microbatches]
         stats = super().train_step(microbatches)
         stats['normalization_units'] = stats.pop('supervised_tokens')
         stats['total_normalization_units'] = stats.pop('total_supervised_tokens')
@@ -548,6 +615,9 @@ class _ObjectiveTrainer(CausalLMTrainer):
 
     def evaluate(self, microbatches):
         batches = list(microbatches)
+        if self.context_input:
+            batches = [batch if 'response_metadata' in batch else shard_post_training_batch(batch, self.context_group)
+                       for batch in batches]
         # Reuse distributed loss summation, but these are objectives, not NLL.
         result = super().evaluate(batches)
         return {'algorithm': self._contract['algorithm'], 'normalization_units': result['supervised_tokens'],
@@ -561,6 +631,13 @@ class RewardTrainer(_ObjectiveTrainer):
 
     @torch.no_grad()
     def score(self, batch):
+        if self.context_input:
+            batch = batch if 'response_metadata' in batch else shard_post_training_batch(batch, self.context_group)
+            validate_context_batch(batch, self.context_group, cpu=True)
+            if set(batch) != CONTEXT_FIELDS:
+                raise ValueError('supply a labeled response batch without rollout statistics for reward scoring')
+            self.executable.eval()
+            return self.executable(**move_batch(batch, next(self.model.parameters()).device), mode='score').cpu()
         if set(batch) != response_fields(self.packed_input):
             raise ValueError('supply a labeled CPU response batch for reward scoring')
         _response_batch(batch, cpu=True)
@@ -575,7 +652,9 @@ class RewardTrainer(_ObjectiveTrainer):
         caller explicitly passes either result to prepare_rollout/prepare_groups.
         """
         scores = self.score(batch)
-        if self.packed_input:
+        if self.context_input and 'response_metadata' in batch:
+            batch = batch['response_metadata']['source']
+        if self.packed_input or self.context_input and 'cu_seqlens' in batch:
             rewards = torch.zeros_like(batch['labels'], dtype=scores.dtype)
             rewards[batch['cu_seqlens'][1:].long()-1] = scores
             return rewards
@@ -600,6 +679,8 @@ class _PostTrainingTrainer(_ObjectiveTrainer):
         reward and groups. CPU RNG is checkpointed; an explicit generator's
         state must be kept in data_state by its owner.
         """
+        if self.context_input:
+            return context_sample(self, prompt, max_new_tokens=max_new_tokens, eos_token_ids=eos_token_ids, generator=generator)
         positive_int(max_new_tokens, 'max_new_tokens')
         if not prompt or any(type(t) is not int or t < 0 for t in [*prompt, *eos_token_ids]):
             raise ValueError('supply nonempty prompt and nonnegative prompt/EOS token IDs')
@@ -640,17 +721,22 @@ class PPOTrainer(_PostTrainingTrainer):
     def prepare_rollout(self, batch, rewards, terminal):
         """Snapshot old policy/value/reference before epochs; no invented reward."""
         mask = _response_batch(batch, cpu=True)
-        if set(batch) != response_fields(self.packed_input) or rewards.shape != mask.shape or terminal.shape != (response_count(batch),):
+        packed = self.packed_input or self.context_input and 'cu_seqlens' in batch
+        if set(batch) != response_fields(packed) or rewards.shape != mask.shape or terminal.shape != (response_count(batch),):
             raise ValueError('provide response batch, per-token rewards and per-row terminal flags')
         if rewards.device.type != 'cpu' or terminal.device.type != 'cpu' or not rewards.is_floating_point() or not torch.isfinite(rewards).all() or terminal.dtype != torch.bool:
             raise ValueError('rollout rewards must be finite CPU floats and terminal CPU booleans')
         self.executable.eval()
         device = next(self.model.parameters()).device
-        old, values, ref = self.executable(**move_batch(batch, device), mode='snapshot')
+        inputs = shard_post_training_batch(batch, self.context_group) if self.context_input else batch
+        old, values, ref = self.executable(**move_batch(inputs, device), mode='snapshot')
+        if self.context_input:
+            old, ref = [gather_context_statistics(t, inputs, self.context_group) for t in (old, ref)]
+            values = gather_context_statistics(values, inputs, self.context_group, action=False)
         old, values, ref = old.cpu(), values.cpu(), ref.cpu()
         shaped = rewards.float()-self._contract['kl_coefficient']*(old-ref)
         options = dict(gamma=self._contract['gamma'], gae_lambda=self._contract['gae_lambda'])
-        if self.packed_input:
+        if packed:
             advantages, returns = torch.zeros_like(shaped), torch.zeros_like(shaped)
             for row, (a, b) in enumerate(response_spans(batch)):
                 adv, ret = generalized_advantage_estimation(shaped[a+1:b].unsqueeze(0), values[a:b].unsqueeze(0),
@@ -658,8 +744,9 @@ class PPOTrainer(_PostTrainingTrainer):
                 advantages[a+1:b], returns[a+1:b] = adv[0], ret[0]
         else:
             advantages, returns = generalized_advantage_estimation(shaped, values, mask, terminal, **options)
-        return {**clone_batch(batch), 'old_log_probs': old,
-                'old_values': action_values(values, batch), 'advantages': advantages, 'returns': returns}
+        fixed = {**clone_batch(batch), 'old_log_probs': old,
+                 'old_values': action_values(values, batch), 'advantages': advantages, 'returns': returns}
+        return shard_post_training_batch(fixed, self.context_group) if self.context_input else fixed
 
 
 class GRPOTrainer(_PostTrainingTrainer):
@@ -670,7 +757,8 @@ class GRPOTrainer(_PostTrainingTrainer):
         """Complete same-prompt groups with population reward standard deviation."""
         mask = _response_batch(batch, cpu=True)
         n = response_count(batch)
-        if set(batch) != response_fields(self.packed_input) or rewards.shape != (n,) or group_ids.shape != (n,):
+        packed = self.packed_input or self.context_input and 'cu_seqlens' in batch
+        if set(batch) != response_fields(packed) or rewards.shape != (n,) or group_ids.shape != (n,):
             raise ValueError('GRPO needs one outcome reward and group ID per response')
         if (rewards.device.type != 'cpu' or group_ids.device.type != 'cpu' or not rewards.is_floating_point()
                 or not torch.isfinite(rewards).all() or group_ids.dtype not in (torch.int32, torch.int64)):
@@ -684,6 +772,10 @@ class GRPOTrainer(_PostTrainingTrainer):
             advantages[rows] = (reward-reward.mean())/(reward.std(unbiased=False)+self._contract['reward_epsilon'])
         self.executable.eval()
         device = next(self.model.parameters()).device
-        old, ref = self.executable(**move_batch(batch, device), mode='snapshot')
-        return {**clone_batch(batch), 'old_log_probs': old.cpu(),
-                'reference_log_probs': ref.cpu(), 'advantages': advantages}
+        inputs = shard_post_training_batch(batch, self.context_group) if self.context_input else batch
+        old, ref = self.executable(**move_batch(inputs, device), mode='snapshot')
+        if self.context_input:
+            old, ref = [gather_context_statistics(t, inputs, self.context_group) for t in (old, ref)]
+        fixed = {**clone_batch(batch), 'old_log_probs': old.cpu(),
+                 'reference_log_probs': ref.cpu(), 'advantages': advantages}
+        return shard_post_training_batch(fixed, self.context_group) if self.context_input else fixed

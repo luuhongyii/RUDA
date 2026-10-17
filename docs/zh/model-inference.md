@@ -301,6 +301,12 @@ curl -N http://127.0.0.1:8000/v1/chat/completions \
 
 这是纯文本 HTTP/1.1 子集，不是完整 OpenAI API：单个补全（`n = 1`），文本 `system`／`user`／`assistant` 消息，不执行工具或图片推理。网络层使用标准库，不提供 TLS；未配置 API key 时不认证。库调用方可通过 `OpenAiServerConfig` 设置默认 token 上限及请求体上限，后者默认 1 MiB；`model_name` 控制服务展示的单个模型名称。
 
+## `ruda-serve` 工具参数约束解码
+
+独立的 `serving` 适配器（`ruda-serve`，不是上一节的标准库 HTTP 子集）在启用 `structured-output` 时支持严格函数参数。Chat Completions 的函数定义和 Responses 的函数工具可传 `strict: true`，并在 `parameters` 提供 JSON Schema。解码按选中函数的原始 schema 逐 token 掩码，保留局部 `$ref`／`$defs` 的作用域，不是生成后才检查参数。严格输出采用已支持的 Qwen `<tool_call>{"name":...,"arguments":...}</tool_call>` 格式；既有非严格 XML 调用保留原解析路径。
+
+`tool_choice: "auto"` 允许普通文本或已声明工具调用；`"required"` 要求至少一次调用，指定名称则将调用限制为该函数；`"none"` 关闭工具约束。`parallel_tool_calls: false` 最多允许一次调用。required／指定名称／单调用的约束选择也需要 `structured-output`。要求的调用或参数未完成时屏蔽 EOS；token 上限或显式 stop 仍可能截断生成。单请求与连续批处理服务共用同一解码器。通用 `response_format`／`grammar` 约束保持独立，不能与已启用工具调用组合。
+
 ## Qwen3.5 融合分页注意力
 
 `Qwen35BatchCache` 在 `new_batch_cache` 创建时选择注意力路径。创建缓存前设置 `RUDA_PAGED_ATTENTION=fused`，即可在 Qwen3.5 连续批处理中使用 ruDNN 融合分页注意力。未设置或设为 `legacy` 时保留原路径；其他值会被拒绝。修改变量不会切换已有缓存，也不是所有生成入口的全局开关。

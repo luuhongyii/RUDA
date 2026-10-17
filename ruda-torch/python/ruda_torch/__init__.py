@@ -541,7 +541,7 @@ from .causal_finetuning import PackedCausalLMFinetuner,CausalLMTrainer
 from .causal_finetuning import ContextParallelFinetuner
 from .post_training import (chunked_lm_log_probs, PreferenceCollator, CausalValueModel, PackedCausalValueModel,
     RewardModel, RewardTrainer, DPOModel, PPOModel, GRPOModel, DPOTrainer, PPOTrainer, GRPOTrainer,
-    generalized_advantage_estimation, select_response_batch)
+    generalized_advantage_estimation, select_response_batch, ContextParallelValueModel, shard_post_training_batch)
 from .training_checkpoint import training_state_dict,validate_training_state_dict,load_training_state_dict
 from .training_autotune import TrainingAutotuner,TrainingPlan,PipelineAutotuner
 from .architecture_cache import KVCache, KDAState, MambaState, ArchitectureCache

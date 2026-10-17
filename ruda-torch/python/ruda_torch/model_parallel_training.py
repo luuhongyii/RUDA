@@ -122,8 +122,13 @@ class ModelParallelTrainingGroup:
 
     def validate_microbatches(self, batches):
         # Inputs are caller-supplied CPU token batches, never GPU activations.
-        prepared = [{key: value.tolist() if isinstance(value, torch.Tensor) else value
-                     for key, value in batch.items()} for batch in batches]
+        def plain(value):
+            if isinstance(value, torch.Tensor):
+                return value.tolist()
+            if isinstance(value, dict):
+                return {key: plain(item) for key, item in value.items()}
+            return value
+        prepared = [plain(batch) for batch in batches]
         peers = self.tensor.gather_metadata(prepared)
         error = None if all(peer == prepared for peer in peers) else 'tensor ranks must execute identical local token batches'
         schedules = (self.context, self.expert, self.tensor) + ((self.data,) if self._fsdp else ())
