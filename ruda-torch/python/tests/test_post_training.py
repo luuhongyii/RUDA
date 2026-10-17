@@ -2,9 +2,13 @@
 import copy
 import importlib
 import math
+from datetime import timedelta
+from pathlib import Path
 
 import pytest
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as multiprocessing
 from torch import nn
 from torch.nn import functional as F
 from architecture_test_utils import NAME
@@ -22,7 +26,7 @@ class Backbone(nn.Module):
         self.block = nn.Sequential(nn.Linear(5, 5), nn.Tanh(), nn.Dropout(0.4))
 
     def forward(self, input_ids, attention_mask):
-        return self.block(self.embedding(input_ids))*attention_mask.unsqueeze(-1)
+        return self.block(self.embedding(input_ids))*attention_mask.unsqueeze(-1)*(1+getattr(self, 'length_scale', 0)*input_ids.shape[1])
 
 
 def policy(kind='dense'):
@@ -67,21 +71,21 @@ def test_log_probs_and_arbitrary_upstream_gradients(kind, recompute):
             torch.testing.assert_close(p.grad, q.grad, msg=name)
 
 
-def make(algorithm):
+def make(algorithm, prefix_scoring=False):
     torch.manual_seed(193)
     actor = policy()
     reference = copy.deepcopy(actor)
     with torch.no_grad():
         reference.head.weight.add_(torch.randn_like(reference.head.weight)*0.1)
     if algorithm == 'dpo':
-        model = pt.DPOModel(actor, reference, reference_id='immutable-ref', beta=0.4)
+        model = pt.DPOModel(actor, reference, reference_id='immutable-ref', beta=0.4, prefix_scoring=prefix_scoring)
         kind = pt.DPOTrainer
     elif algorithm == 'ppo':
         critic = pt.CausalValueModel(Backbone(), nn.Linear(5, 1), activation_checkpointing=True)
-        model = pt.PPOModel(actor, reference, critic, reference_id='immutable-ref', kl_coefficient=0.1)
+        model = pt.PPOModel(actor, reference, critic, reference_id='immutable-ref', kl_coefficient=0.1, prefix_scoring=prefix_scoring)
         kind = pt.PPOTrainer
     else:
-        model = pt.GRPOModel(actor, reference, reference_id='immutable-ref')
+        model = pt.GRPOModel(actor, reference, reference_id='immutable-ref', prefix_scoring=prefix_scoring)
         kind = pt.GRPOTrainer
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=0.01)
     return model, kind(model, optimizer, base_id='initial', run_config={'data': 'exact-input'})
@@ -213,3 +217,58 @@ def test_sampling_and_snapshot_preserve_old_policy(algorithm):
     old = data['old_log_probs'].clone()
     trainer.train_step([data]); trainer.train_step([data])
     torch.testing.assert_close(data['old_log_probs'], old, atol=0, rtol=0)
+
+
+def test_length_dependent_policy_and_critic_are_scored_on_actual_rollout_prefixes():
+    model, trainer = make('ppo', prefix_scoring=True)
+    for m in (model.policy, model.reference, model.critic):
+        m.backbone.length_scale = .1
+    data = rollout('ppo', trainer)
+    for row in range(data['input_ids'].shape[0]):
+        for t in (data['labels'][row, 1:] != -100).nonzero().flatten().tolist():
+            ids, mask = data['input_ids'][row:row+1, :t+1], data['attention_mask'][row:row+1, :t+1]
+            hidden = model.policy.hidden(ids, mask)
+            expected = F.log_softmax(model.policy.head(hidden[:, -1]), -1)[0, int(data['labels'][row, t+1])]
+            torch.testing.assert_close(data['old_log_probs'][row, t], expected.detach())
+            value = model.critic(ids, mask)[0, -1]
+            torch.testing.assert_close(data['old_values'][row, t], value.detach())
+    assert math.isfinite(trainer.train_step([data])['loss'])
+
+
+def _distributed_worker(rank, uri, directory):
+    torch.set_num_threads(1)
+    dist.init_process_group('gloo', init_method=uri, rank=rank, world_size=2, timeout=timedelta(seconds=40))
+    try:
+        replicas = importlib.import_module(NAME+'.distributed_training')
+        for algorithm in ('dpo', 'ppo', 'grpo'):
+            model, original = make(algorithm)
+            group = replicas.ReplicaGroup(device_type='cpu')
+            group.initialize(model)
+            trainer = type(original)(model, original.optimizer, base_id=original.base_id,
+                run_config=original.run_config, replica_group=group)
+            full = rollout(algorithm, trainer)
+            oracle = copy.deepcopy(model)
+            optimizer = torch.optim.AdamW([p for p in oracle.parameters() if p.requires_grad], lr=.01)
+            oracle.train(); oracle(**full).backward(); optimizer.step(); optimizer.zero_grad(set_to_none=True)
+            rows = ([0, 2] if rank == 0 else [1, 3]) if algorithm == 'dpo' else ([0] if rank == 0 else [1, 2, 3])
+            local = {k: v[rows] for k, v in full.items()}
+            trainer.train_step([local])
+            for p, q in zip(model.parameters(), oracle.parameters()):
+                torch.testing.assert_close(p, q, rtol=2e-5, atol=2e-6)
+            trainer.data_state = {'rank': rank, 'fixed_rollout': local, 'epoch': 1}
+            root = Path(directory)/algorithm
+            trainer.save_distributed(root)
+            trainer.train_step([local])
+            expected = [p.detach().clone() for p in model.parameters()]
+            trainer.resume_distributed(root)
+            assert trainer.step == 1 and trainer.data_state['rank'] == rank
+            trainer.train_step([local])
+            for p, q in zip(model.parameters(), expected):
+                torch.testing.assert_close(p, q, atol=0, rtol=0)
+    finally:
+        dist.destroy_process_group()
+
+
+def test_two_process_global_weighting_and_all_rank_post_training_resume(tmp_path):
+    multiprocessing.spawn(_distributed_worker,
+        args=((tmp_path/'rendezvous').resolve().as_uri(), str(tmp_path/'checkpoint')), nprocs=2, join=True)

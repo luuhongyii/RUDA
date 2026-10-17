@@ -268,7 +268,7 @@ Pools are allocated for the configured capacity, not only the tokens currently i
 
 For a custom executor, `ContinuousBatchScheduler::new` retains the non-preempting defaults. Opt in with `new_paged`; inspect `samples_token(&row)` **before completing the batch** to distinguish a final prefill chunk from a chunk whose output token is ignored. Verify batches need logits at every draft position and `complete_verify_batch`, not `complete_batch`. `snapshot()` retains the existing snapshot fields; `paged_snapshot()` / `runner.snapshot()` return `PagedBatchSnapshot` with preemption, prefix-token and draft-acceptance counters. `PagedKvCacheManager::cached_page_count()` reports unreferenced reusable prefix pages.
 
-The dense packed path also uses tiled attention for long prefills and windowed attention. Floating-point loaders read Mistral `sliding_window` from layer zero; Qwen2 enables it only with `use_sliding_window`, starting at `max_window_layers` (defaulting to the layer count). This is configuration-driven, not a server flag.
+The dense packed path also uses tiled attention for long prefills and windowed attention. Floating-point loaders, including TP rank loaders, read Mistral `sliding_window` from layer zero; Qwen2 enables it only with `use_sliding_window`, starting at `max_window_layers` (defaulting to the layer count). This is configuration-driven, not a server flag. Direct paged executors call `engine.forget_request(request_id)` when a request finishes or is cancelled; committed shared-prefix page metadata remains reusable.
 
 ## OpenAI-compatible HTTP server
 

@@ -20,7 +20,7 @@ def _parallel_head(head):
                              ColumnParallelNF4Linear, ColumnParallelPackedLinear))
 
 
-def chunked_lm_log_probs(hidden, head, labels, *, token_chunk_size=32, recompute=True):
+def chunked_lm_log_probs(hidden, head, labels, *, token_chunk_size=32, recompute=True, shift=True):
     """Shifted selected-token log probabilities [B,T-1], zero on -100 labels.
 
     Full-vocabulary softmax is exact. Backward recomputes one vocabulary chunk
@@ -34,8 +34,10 @@ def chunked_lm_log_probs(hidden, head, labels, *, token_chunk_size=32, recompute
     parallel = _parallel_head(head)
     if parallel and head.gather_output:
         raise ValueError('vocabulary-parallel log probabilities require gather_output=False')
-    shape = (hidden.shape[0], hidden.shape[1]-1)
-    flat, targets = hidden[:, :-1].reshape(-1, hidden.shape[-1]), labels[:, 1:].reshape(-1)
+    if shift:
+        hidden, labels = hidden[:, :-1], labels[:, 1:]
+    shape = tuple(labels.shape)
+    flat, targets = hidden.reshape(-1, hidden.shape[-1]), labels.reshape(-1)
     def project(x, target):
         logits = head(x)
         if parallel:
@@ -52,7 +54,7 @@ def chunked_lm_log_probs(hidden, head, labels, *, token_chunk_size=32, recompute
         args = flat[start:start+token_chunk_size], targets[start:start+token_chunk_size]
         pieces.append(checkpoint(project, *args, use_reentrant=False, preserve_rng_state=True)
                       if recompute and torch.is_grad_enabled() else project(*args))
-    return torch.cat(pieces).reshape(shape) if pieces else hidden.sum(-1)[:, :-1] * 0
+    return torch.cat(pieces).reshape(shape) if pieces else hidden.sum(-1) * 0
 
 
 def _response_batch(batch, *, cpu=False):
@@ -128,7 +130,7 @@ def _freeze_reference(reference, *trainable):
 
 
 class _PostTrainingModel(CausalLMFinetuner):
-    def __init__(self, policy, reference, *, reference_id):
+    def __init__(self, policy, reference, *, reference_id, prefix_scoring=False):
         nn.Module.__init__(self)
         if not isinstance(policy, CausalLMFinetuner) or getattr(policy, 'packed_input', False) or getattr(policy, 'context_input', False):
             raise TypeError('post-training requires an explicit padded causal hidden/head policy')
@@ -137,6 +139,9 @@ class _PostTrainingModel(CausalLMFinetuner):
         _freeze_reference(reference, policy)
         self.policy, self.reference = policy, reference
         self.reference_id = reference_id
+        if type(prefix_scoring) is not bool:
+            raise ValueError('prefix_scoring must be boolean')
+        self.prefix_scoring = prefix_scoring
         self.label_smoothing = 0.
 
     def train(self, mode=True):
@@ -150,8 +155,36 @@ class _PostTrainingModel(CausalLMFinetuner):
         return self
 
     def _logp(self, policy, input_ids, attention_mask, labels):
+        if self.prefix_scoring:
+            rows = []
+            for row in range(input_ids.shape[0]):
+                selected = []
+                for t in range(input_ids.shape[1]-1):
+                    if int(labels[row, t+1]) == -100:
+                        selected.append(input_ids.new_zeros((), dtype=torch.float32))
+                        continue
+                    hidden = policy.hidden(input_ids[row:row+1, :t+1], attention_mask[row:row+1, :t+1])[:, -1:]
+                    selected.append(chunked_lm_log_probs(hidden, policy.head, labels[row:row+1, t+1:t+2],
+                        token_chunk_size=1, shift=False).reshape(()))
+                rows.append(torch.stack(selected))
+            return torch.stack(rows)
         return chunked_lm_log_probs(policy.hidden(input_ids, attention_mask), policy.head, labels,
                                    token_chunk_size=policy.token_chunk_size)
+
+    def _values(self, input_ids, attention_mask, labels):
+        if not self.prefix_scoring:
+            return self.critic(input_ids, attention_mask)
+        rows = []
+        for row in range(input_ids.shape[0]):
+            first = int((labels[row] != -100).nonzero()[0, 0])-1
+            end = int(attention_mask[row].sum())
+            selected = [input_ids.new_zeros((), dtype=torch.float32) for _ in range(first)]
+            for t in range(first, end):
+                value = self.critic(input_ids[row:row+1, :t+1], attention_mask[row:row+1, :t+1])
+                selected.append(value[0, -1])
+            selected.extend(input_ids.new_zeros((), dtype=torch.float32) for _ in range(end, input_ids.shape[1]))
+            rows.append(torch.stack(selected))
+        return torch.stack(rows)
 
     def _next_logits(self, input_ids, attention_mask):
         hidden = self.policy.hidden(input_ids, attention_mask)
@@ -171,12 +204,12 @@ class _PostTrainingModel(CausalLMFinetuner):
 
 
 class DPOModel(_PostTrainingModel):
-    def __init__(self, policy, reference, *, reference_id, beta=0.1):
-        super().__init__(policy, reference, reference_id=reference_id)
+    def __init__(self, policy, reference, *, reference_id, beta=0.1, prefix_scoring=False):
+        super().__init__(policy, reference, reference_id=reference_id, prefix_scoring=prefix_scoring)
         self.beta = _positive(beta, 'beta')
 
     def contract(self):
-        return {'algorithm': 'dpo', 'reference_id': self.reference_id, 'beta': self.beta}
+        return {'algorithm': 'dpo', 'reference_id': self.reference_id, 'beta': self.beta, 'prefix_scoring': self.prefix_scoring}
 
     def forward(self, input_ids, attention_mask, labels=None, *, reduction='mean', label_smoothing=0., mode='loss'):
         if mode == 'next_logits':
@@ -226,8 +259,8 @@ def generalized_advantage_estimation(rewards, values, mask, terminal, *, gamma=1
 
 class PPOModel(_PostTrainingModel):
     def __init__(self, policy, reference, critic, *, reference_id, clip_ratio=0.2,
-                 value_clip=0.2, value_coefficient=0.5, gamma=1., gae_lambda=0.95, kl_coefficient=0.):
-        super().__init__(policy, reference, reference_id=reference_id)
+                 value_clip=0.2, value_coefficient=0.5, gamma=1., gae_lambda=0.95, kl_coefficient=0., prefix_scoring=False):
+        super().__init__(policy, reference, reference_id=reference_id, prefix_scoring=prefix_scoring)
         if not isinstance(critic, CausalValueModel):
             raise TypeError('critic must be a CausalValueModel with an independent trainable value path')
         if {id(p) for p in policy.parameters()} & {id(p) for p in critic.parameters()}:
@@ -245,7 +278,7 @@ class PPOModel(_PostTrainingModel):
     def contract(self):
         return dict(algorithm='ppo', reference_id=self.reference_id, clip_ratio=self.clip_ratio,
                     value_clip=self.value_clip, value_coefficient=self.value_coefficient,
-                    gamma=self.gamma, gae_lambda=self.gae_lambda, kl_coefficient=self.kl_coefficient)
+                    gamma=self.gamma, gae_lambda=self.gae_lambda, kl_coefficient=self.kl_coefficient, prefix_scoring=self.prefix_scoring)
 
     def forward(self, input_ids, attention_mask, labels=None, *, old_log_probs=None, old_values=None,
                 advantages=None, returns=None, reduction='mean', mode='loss', label_smoothing=0.):
@@ -253,7 +286,7 @@ class PPOModel(_PostTrainingModel):
             return self._next_logits(input_ids, attention_mask)
         mask = _response_batch(dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels))
         logp = self._logp(self.policy, input_ids, attention_mask, labels)
-        values = self.critic(input_ids, attention_mask)
+        values = self._values(input_ids, attention_mask, labels)
         if mode == 'snapshot':
             with torch.no_grad():
                 ref = self._logp(self.reference, input_ids, attention_mask, labels)
@@ -277,8 +310,8 @@ class PPOModel(_PostTrainingModel):
 
 
 class GRPOModel(_PostTrainingModel):
-    def __init__(self, policy, reference, *, reference_id, clip_ratio=0.2, kl_coefficient=0.04, reward_epsilon=1e-4):
-        super().__init__(policy, reference, reference_id=reference_id)
+    def __init__(self, policy, reference, *, reference_id, clip_ratio=0.2, kl_coefficient=0.04, reward_epsilon=1e-4, prefix_scoring=False):
+        super().__init__(policy, reference, reference_id=reference_id, prefix_scoring=prefix_scoring)
         self.clip_ratio = _clip(clip_ratio)
         self.kl_coefficient = _positive(kl_coefficient, 'kl_coefficient', zero=True)
         self.reward_epsilon = _positive(reward_epsilon, 'reward_epsilon')
@@ -286,7 +319,7 @@ class GRPOModel(_PostTrainingModel):
     def contract(self):
         return dict(algorithm='grpo', reference_id=self.reference_id, clip_ratio=self.clip_ratio,
                     kl_coefficient=self.kl_coefficient, reward_epsilon=self.reward_epsilon,
-                    reward_std='population', reduction='mean_response_token_means')
+                    reward_std='population', reduction='mean_response_token_means', prefix_scoring=self.prefix_scoring)
 
     def forward(self, input_ids, attention_mask, labels=None, *, old_log_probs=None, reference_log_probs=None,
                 advantages=None, reduction='mean', mode='loss', label_smoothing=0.):
@@ -312,7 +345,7 @@ class GRPOModel(_PostTrainingModel):
 class _PostTrainingTrainer(CausalLMTrainer):
     expected_type = _PostTrainingModel
 
-    def __init__(self, model, optimizer, **options):
+    def __init__(self, model, optimizer, *, rollout_group=None, **options):
         if options.get('sampler') is not None:
             raise ValueError('post-training data/rollout cursors are supplied through data_state, not the SFT sampler')
         super().__init__(model, optimizer, **options)
@@ -321,7 +354,7 @@ class _PostTrainingTrainer(CausalLMTrainer):
             raise TypeError(f'trainer requires {self.expected_type.__name__}')
         self._contract = copy.deepcopy(template.contract())
         head = template.policy.head
-        self.sampling_group = head.group if _parallel_head(head) else None
+        self.sampling_group = rollout_group if rollout_group is not None else head.group if _parallel_head(head) else None
         self.data_state = None
         self.executable.train()
 

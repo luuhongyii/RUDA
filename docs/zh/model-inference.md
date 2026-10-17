@@ -268,7 +268,7 @@ KV 池按配置容量分配，不是仅为当前 token 分配。`runner.engine()
 
 自行接入执行器时，`ContinuousBatchScheduler::new` 保留不抢占的默认行为；用 `new_paged` 显式启用新行为。在**完成批次之前**查询 `samples_token(&row)`，区分最终预填充分块与忽略输出 token 的中间分块。Verify 批次需要每个草稿位置的 logits，并通过 `complete_verify_batch` 提交，而非 `complete_batch`。`snapshot()` 保留旧字段；`paged_snapshot()`／`runner.snapshot()` 返回带抢占、前缀 token、草稿接受计数的 `PagedBatchSnapshot`。`PagedKvCacheManager::cached_page_count()` 返回无活跃引用、可复用的前缀页数。
 
-稠密 packed 路径也为长提示预填充和滑动窗口采用分块注意力。浮点加载器对 Mistral 从第 0 层应用 `sliding_window`；Qwen2 仅在 `use_sliding_window` 启用时，从 `max_window_layers` 指定层开始应用，未指定时该值为总层数。这由模型配置控制，不是服务启动参数。
+稠密 packed 路径也为长提示预填充和滑动窗口采用分块注意力。浮点加载器（包括 TP rank 加载器）对 Mistral 从第 0 层应用 `sliding_window`；Qwen2 仅在 `use_sliding_window` 启用时，从 `max_window_layers` 指定层开始应用，未指定时该值为总层数。这由模型配置控制，不是服务启动参数。自行执行分页批次时，请求完成或取消后调用 `engine.forget_request(request_id)` 释放其历史；已提交的共享前缀页元数据仍可复用。
 
 ## OpenAI 风格 HTTP 服务
 
