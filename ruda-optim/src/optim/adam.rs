@@ -146,6 +146,9 @@ impl AdaptiveMomentum {
         momentum_state: Option<AdaptiveMomentumState<B, D>>,
     ) -> (Tensor<B, D>, AdaptiveMomentumState<B, D>) {
         let state = if let Some(mut state) = momentum_state {
+            // Records load floats as the backend default dtype; keep the
+            // moments in the gradient's dtype (e.g. FP32 LoRA on BF16).
+            state = state.with_dtype(grad.dtype());
             let factor = 1.0 - self.beta_1;
             state.moment_1 = state
                 .moment_1
@@ -219,6 +222,17 @@ impl<B: Backend, const D: usize> AdaptiveMomentumState<B, D> {
         self.moment_1 = self.moment_1.to_device(device);
         self.moment_2 = self.moment_2.to_device(device);
         self.max_moment_2 = self.max_moment_2.map(|tensor| tensor.to_device(device));
+        self
+    }
+
+    /// Cast the moments to `dtype` (no-op when they already match).
+    pub fn with_dtype(mut self, dtype: ruda_model::tensor::DType) -> Self {
+        let cast = |tensor: Tensor<B, D>| {
+            if tensor.dtype() == dtype { tensor } else { tensor.cast(dtype) }
+        };
+        self.moment_1 = cast(self.moment_1);
+        self.moment_2 = cast(self.moment_2);
+        self.max_moment_2 = self.max_moment_2.map(cast);
         self
     }
 }

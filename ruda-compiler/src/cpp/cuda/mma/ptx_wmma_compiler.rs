@@ -379,12 +379,16 @@ for (int i = 0; i < {reg_count}; ++i) {{
                     gpu::ElemType::Float(gpu::FloatKind::F16),
                     gpu::ElemType::Float(gpu::FloatKind::F32),
                 ),
-                (
+            ];
+            let mut types = types;
+            // wmma .bf16 requires sm_80+.
+            if arch.get_version() >= 80 {
+                types.push((
                     gpu::ElemType::Float(gpu::FloatKind::BF16),
                     gpu::ElemType::Float(gpu::FloatKind::BF16),
                     gpu::ElemType::Float(gpu::FloatKind::F32),
-                ),
-            ];
+                ));
+            }
             let combinations: SupportedMmaCombinations = types
                 .into_iter()
                 .map(|(a, b, cd)| MmaConfig {

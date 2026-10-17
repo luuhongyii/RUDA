@@ -97,11 +97,6 @@ impl DialectWmmaCompiler<CudaDialect<Self>> for CudaWmmaCompiler {
                     gpu::ElemType::Float(gpu::FloatKind::F32),
                 ),
                 (
-                    gpu::ElemType::Float(gpu::FloatKind::BF16),
-                    gpu::ElemType::Float(gpu::FloatKind::BF16),
-                    gpu::ElemType::Float(gpu::FloatKind::F32),
-                ),
-                (
                     gpu::ElemType::Int(gpu::IntKind::I8),
                     gpu::ElemType::Int(gpu::IntKind::I8),
                     gpu::ElemType::Int(gpu::IntKind::I32),
@@ -112,6 +107,16 @@ impl DialectWmmaCompiler<CudaDialect<Self>> for CudaWmmaCompiler {
                     gpu::ElemType::Int(gpu::IntKind::I32),
                 ),
             ];
+            let mut types = types;
+            // nvcuda::wmma bf16 fragments only exist on sm_80+; advertising
+            // them on Turing makes NVRTC reject the kernel at launch.
+            if arch.get_version() >= 80 {
+                types.push((
+                    gpu::ElemType::Float(gpu::FloatKind::BF16),
+                    gpu::ElemType::Float(gpu::FloatKind::BF16),
+                    gpu::ElemType::Float(gpu::FloatKind::F32),
+                ));
+            }
             let combinations: SupportedMmaCombinations = types
                 .into_iter()
                 .cartesian_product(tdims)

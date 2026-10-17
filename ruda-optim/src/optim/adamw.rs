@@ -176,6 +176,9 @@ impl AdaptiveMomentumW {
         let factor_2 = 1.0 - self.beta_2;
 
         let state = if let Some(mut state) = state {
+            // Records load floats as the backend default dtype; keep the
+            // moments in the gradient's dtype (e.g. FP32 LoRA on BF16).
+            state = state.with_dtype(grad.dtype());
             // Update first moment estimate.
             state.moment_1 = state
                 .moment_1
