@@ -129,6 +129,15 @@ def _freeze_reference(reference, *trainable):
     reference.eval()
 
 
+def _training_hidden(policy, input_ids, attention_mask):
+    # Dropout-free eval mode also disables HF's training-mode checkpoint hooks.
+    # Retain the finetuner's requested activation recomputation explicitly.
+    if policy.activation_checkpointing and torch.is_grad_enabled():
+        return checkpoint(policy.hidden, input_ids, attention_mask, use_reentrant=False,
+                          preserve_rng_state=policy.preserve_rng_state)
+    return policy.hidden(input_ids, attention_mask)
+
+
 class _PostTrainingModel(CausalLMFinetuner):
     def __init__(self, policy, reference, *, reference_id, prefix_scoring=False):
         nn.Module.__init__(self)
@@ -163,12 +172,12 @@ class _PostTrainingModel(CausalLMFinetuner):
                     if int(labels[row, t+1]) == -100:
                         selected.append(input_ids.new_zeros((), dtype=torch.float32))
                         continue
-                    hidden = policy.hidden(input_ids[row:row+1, :t+1], attention_mask[row:row+1, :t+1])[:, -1:]
+                    hidden = _training_hidden(policy, input_ids[row:row+1, :t+1], attention_mask[row:row+1, :t+1])[:, -1:]
                     selected.append(chunked_lm_log_probs(hidden, policy.head, labels[row:row+1, t+1:t+2],
                         token_chunk_size=1, shift=False).reshape(()))
                 rows.append(torch.stack(selected))
             return torch.stack(rows)
-        return chunked_lm_log_probs(policy.hidden(input_ids, attention_mask), policy.head, labels,
+        return chunked_lm_log_probs(_training_hidden(policy, input_ids, attention_mask), policy.head, labels,
                                    token_chunk_size=policy.token_chunk_size)
 
     def _values(self, input_ids, attention_mask, labels):
@@ -228,7 +237,7 @@ class DPOModel(_PostTrainingModel):
 class CausalValueModel(CausalLMFinetuner):
     """Independent value backbone and scalar head; actual trainable parameters."""
     def forward(self, input_ids, attention_mask):
-        values = self.head(self.hidden(input_ids, attention_mask))
+        values = self.head(_training_hidden(self, input_ids, attention_mask))
         if values.shape != (*input_ids.shape, 1):
             raise ValueError('critic head must produce one scalar per token')
         return values.squeeze(-1).float()

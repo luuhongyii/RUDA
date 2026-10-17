@@ -272,3 +272,19 @@ def _distributed_worker(rank, uri, directory):
 def test_two_process_global_weighting_and_all_rank_post_training_resume(tmp_path):
     multiprocessing.spawn(_distributed_worker,
         args=((tmp_path/'rendezvous').resolve().as_uri(), str(tmp_path/'checkpoint')), nprocs=2, join=True)
+
+
+def test_dropout_free_actor_and_critic_still_recompute_backbone_activations():
+    model, trainer = make('ppo')
+    data = rollout('ppo', trainer)
+    calls = {'actor': 0, 'critic': 0}
+    def count(name):
+        def hook(*_):
+            calls[name] += 1
+        return hook
+    actor_hook = model.policy.backbone.register_forward_pre_hook(count('actor'))
+    critic_hook = model.critic.backbone.register_forward_pre_hook(count('critic'))
+    trainer.train_step([data])
+    actor_hook.remove(); critic_hook.remove()
+    assert calls == {'actor': 2, 'critic': 2}
+    assert not model.policy.backbone.training and not model.critic.backbone.training
