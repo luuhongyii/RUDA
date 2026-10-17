@@ -196,3 +196,27 @@ checkpoint／进度文件留在仓库外。扩大工作量前，先评估相同�
 NF4Linear、LoRALinear 的 `get_extra_state()`／`set_extra_state(state)` 在普通模块 state-dict 加载时保存并严格检查版本化尺寸／配置，与仅导出适配器的入口不同，不负责加载缺失的冻结 base。
 
 无效元数据／配置抛出 `ValueError`／`TypeError`；缺失原生能力会报错，不改走 CPU。相关实现：[打包及存档](../../ruda-torch/python/ruda_torch/finetuning.py)、[因果训练](../../ruda-torch/python/ruda_torch/causal_finetuning.py)，其他训练接口见[原生 API 参考](native-pytorch-api.md)。
+
+## DPO、PPO 与 GRPO
+
+Python 导出 `DPOModel`／`DPOTrainer`、`PPOModel`／`PPOTrainer`、`GRPOModel`／`GRPOTrainer`、`CausalValueModel`、`PreferenceCollator` 和 `chunked_lm_log_probs`。策略和独立冻结参考模型遵循带右侧 padding 的 `CausalLMFinetuner` backbone／head 契约，支持 dense／NF4／LoRA；显式提供 `reference_id`。prompt／padding 标签为 `-100`，completion 标签等于输入 token。完整词表 log probability 采用分块投影与反向重算，支持词表并行 head；rollout 和更新都禁用 dropout，但保留可训练参数的梯度。
+
+```python
+objective = DPOModel(policy, reference, reference_id=reference_id, beta=0.1)
+optimizer = torch.optim.AdamW([p for p in objective.parameters() if p.requires_grad], lr=1e-6)
+trainer = DPOTrainer(objective, optimizer, base_id=base_id, run_config=run_config)
+collator = PreferenceCollator(max_length=max_length, pad_token_id=pad_token_id)
+metrics = trainer.train_step([collator(preference_pairs)])
+```
+
+偏好对含具有相同 prompt、显式标签的 `chosen`／`rejected` 样本；collator 先排列全部 chosen，再排列全部 rejected。DPO 使用 completion log probability 之和计算策略／参考对数比，按偏好对平均负 log-sigmoid。
+
+PPO 使用 `PPOModel(policy, reference, critic, reference_id=...)`；critic 为独立的 `CausalValueModel(backbone, scalar_head, ...)`。在包装完成**之后**创建包含 actor 和 critic 可训练参数的优化器，可用不同参数组指定学习率。`PPOTrainer.prepare_rollout(batch, rewards, terminal)` 接收 CPU response 批次、实际逐 token 奖励 `[B,T-1]` 和终止标志 `[B]`，固定旧策略 log probability／value，将 `kl_coefficient * (old_logp-reference_logp)` 从奖励中扣除，再计算 GAE（`gamma`、`gae_lambda`）。真正终止的轨迹用零 bootstrap，长度截断的轨迹使用末状态 critic value。多个 PPO epoch 必须复用同一固定批次，再调用 `train_step`；损失按 completion token 平均，包含 clipped policy 和 `0.5 * value_coefficient` 加权的 clipped value error；`value_clip=None` 禁用 value clipping。不隐式添加熵奖励或奖励函数。
+
+GRPO 使用 `GRPOModel(policy, reference, reference_id=...)` 与 `GRPOTrainer.prepare_groups(batch, rewards, group_ids)`。显式提供结果奖励及每组至少两个、prompt 相同的完整组；优势为组内奖励减均值后除以总体标准差加 `reward_epsilon`，相同奖励得到零优势。固定旧／参考 log probability 后，使用 clipped ratio 和可微的 `exp(reference_logp-logp) - (reference_logp-logp) - 1` KL 估计。归约为各 response 的 token 均值再按 response 平均，不因回答长度不同改变权重。先对完整组取快照，再拆成更新 microbatch。
+
+PPO／GRPO 提供 `sample(prompt, max_new_tokens=..., eos_token_ids=...)`，按完整词表、温度一、不做 top-k／top-p 的 categorical 分布采样，包含生成的 EOS，并区分终止与截断。调用者提供 prompt、分组、奖励；TP 内广播选中 token。请求的 rollout 长度必须在模型上下文容量内。
+
+三个训练器复用 `CausalLMTrainer` 的梯度累积、scheduler／scaler、分布式 coordinator 和原子本地／分布式存档。全局归一化单位依次为偏好对、completion token、response，不平均不等长 microbatch 的均值。指标使用 `normalization_units`，`evaluate` 报告目标函数而非 perplexity。`save`／`resume` 包含 actor、参考模型、PPO critic、优化器状态、算法／参考契约、RNG 和 `trainer.data_state`；存档前将数据游标、固定待处理 rollout、epoch／minibatch 位置及显式 generator 状态放入 `data_state`。不保存半个梯度累积窗口；跨 FSDP／ZeRO／DP／TP 的全 rank 提交使用实际 coordinator 与 `save_distributed`／`resume_distributed`。
+
+Rust 在 `rullm::training` 导出 `DpoTrainer`、`PpoTrainer`、`GrpoTrainer`，actor 接收全参数或 LoRA 的 `SftTrainer`。先构造 `ReferencePolicy::new(model, adapters, identity)`，再调用 `DpoTrainer::new(actor, reference, beta, seed)`、`PpoTrainer::new(actor, ValueCritic::new(critic_backbone, device), critic_train_config, reference, ppo_config, seed)` 或 `GrpoTrainer::new(actor, reference, grpo_config, seed)`。`Response` 分开记录 prompt／completion 与终止状态；`PreferencePair` 保存 chosen／rejected。PPO 的 `prepare_rollout(response, token_rewards)`、GRPO 的 `prepare_group(responses, outcome_rewards)` 返回可序列化的固定统计；`step` 对传入的有效批次真正更新参数，PPO 同时更新独立 critic 优化器。PPO／GRPO 的 `sample` 使用随 checkpoint 保存的采样 RNG。包装之前可对 actor 调用 `with_data_parallel` 接入 ruCCL；每个 rank 的本地批次非空、更新调用顺序一致，归一化权重及 actor／critic 梯度通过同一 peer 归约。`save_checkpoint`／`load_checkpoint` 依照 actor 的保留策略原子保存 actor／优化器、critic／优化器、算法／参考元数据与 `state`；将待处理 rollout、更新位置和数据游标存入 `state.data`，恢复前重载相同的不可变参考及 LoRA 冻结 base。这些 API 不会自动启动 GPU 任务。

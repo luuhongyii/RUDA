@@ -130,6 +130,7 @@ jobs:
             key: rullm-host
             command: |
               cargo test --locked -p ruda-llm --lib --test generation_control --test api_compatibility
+              cargo test --locked -p ruda-llm --features tensor-parallel --lib huggingface::tests::tensor_parallel_config_retains_mistral_and_qwen_window_policy
               cargo check --locked -p ruda-llm --example sampling_bench --example runtime_replicas
           - name: Device libraries compile
             key: device-libraries

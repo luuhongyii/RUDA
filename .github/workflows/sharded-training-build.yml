@@ -100,7 +100,7 @@ jobs:
       - name: Compile native generation continuation
         run: |
           cargo check --locked -p ruda-llm --lib
-          cargo check --locked -p ruda-llm --features nvidia-ptx,gpu-kv,expert-parallel --lib --bin ruda-serve
+          cargo check --locked -p ruda-llm --features nvidia-ptx,gpu-kv,expert-parallel,distributed --lib --tests --bin ruda-serve
       - name: Compile native FFT sparse and solver tuning
         run: |
           cargo check --locked -p ruda-fft --features tensor --lib
@@ -112,3 +112,21 @@ jobs:
           for feature in pooling interpolation grid-sample; do
             cargo check --locked -p ruDNN --no-default-features --features "$feature" --lib
           done
+
+  python-post-training:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install pytest numpy
+      - name: Post-training CPU numerical, update and recovery regressions
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          OMP_NUM_THREADS: '1'
+        run: python -m pytest -q ruda-torch/python/tests/test_post_training.py

@@ -243,7 +243,7 @@ fn generate_from_images(
 
 ## Llama／Qwen2 分页执行
 
-`PagedLlamaEngine` 持有逐层物理 K／V 池，`ContinuousBatchRunner` 将其与请求调度、token 选择连接起来。加载浮点 Llama／Qwen2 后，先调用 `into_packed_inference()`，再构造 runner。此路径接受采用**静态、完整头维 RoPE** 的 F32／F16／BF16 模型；动态或部分头维 RoPE 会被拒绝。它不是 AWQ 加载器，也不同于下文的 Qwen3.5 batch-cache 路径。
+`PagedLlamaEngine` 持有逐层物理 K／V 池，`ContinuousBatchRunner` 将其与请求调度、token 选择连接起来。加载浮点 Llama／Qwen2 后，先调用 `into_packed_inference()`，再构造 runner。此路径支持 F32／F16／BF16、完整或部分旋转维度，以及动态 NTK 和 long-RoPE；逐 token 旋转上下文随共享前缀页、抢占重算和投机接受的输入保留。直接使用 engine 时，调度器提交后须调用 `commit_batch(batch, accepted_input_counts)`，失败后调用 `fail_batch(batch.id)`；runner 自动完成这些操作。它不是 AWQ 加载器，也不同于下文的 Qwen3.5 batch-cache 路径。
 
 在仓库根目录运行 NVIDIA BF16 示例：
 

@@ -243,7 +243,7 @@ API reference: [ruLLM exports](../../ruLLM/src/lib.rs), [Generation options](../
 
 ## Paged Llama/Qwen2 execution
 
-`PagedLlamaEngine` owns per-layer physical K/V pools; `ContinuousBatchRunner` combines that engine with request scheduling and token selection. Load a floating-point Llama/Qwen2 model and call `into_packed_inference()` before constructing the runner. This path accepts F32/F16/BF16 models with **static, full-head RoPE**; dynamic or partial RoPE is rejected. It is not the AWQ loader or the Qwen3.5 batch-cache path below.
+`PagedLlamaEngine` owns per-layer physical K/V pools; `ContinuousBatchRunner` combines that engine with request scheduling and token selection. Load a floating-point Llama/Qwen2 model and call `into_packed_inference()` before constructing the runner. This path accepts F32/F16/BF16 models with full or partial rotary dimensions, including dynamic NTK and long-RoPE. Per-token rotary contexts follow shared prefix pages, preemption/recomputation and accepted speculative inputs. A direct engine executor must call `commit_batch(batch, accepted_input_counts)` after scheduler commit, or `fail_batch(batch.id)` after failure; the runner handles this automatically. It is not the AWQ loader or the Qwen3.5 batch-cache path below.
 
 Run the NVIDIA BF16 example from the repository root:
 
