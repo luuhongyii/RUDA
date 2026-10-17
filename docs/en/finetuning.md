@@ -7,13 +7,75 @@
 | Model interface | Entry point |
 | --- | --- |
 | Rust `ruda-model` model | `ruda_nn::LoRALinearConfig`, with the existing tensor backend and optimizer |
+| Rust packed Llama/Qwen2 | `rullm::SftTrainer`, full-parameter SFT or `LlamaLora` adapters; see below |
 | Ordinary PyTorch model | `ruda_torch.inject_lora`, optionally preceded by `quantize_nf4` |
 | Local Hugging Face safetensors checkpoint | `load_hf_nf4_model` or the architecture-independent `load_nf4_safetensors` |
 | Causal language-model training | `CausalLMFinetuner`, `SFTCollator`, `SFTTrainer` |
 
-These APIs do not select a model family, infer adapter targets, download weights or install missing device operators. The model's actual forward and backward operations must be supported by its execution backend. Native PyTorch uses `ruda:0`, not `torch.cuda` storage. Prepare the matching [native components](../../ruda-torch/README.md#build-and-install), including the NF4 extensions when using packed weights.
+The model-independent APIs do not select a model family, infer adapter targets, download weights or install missing device operators. The model's actual forward and backward operations must be supported by its execution backend. Native PyTorch uses `ruda:0`, not `torch.cuda` storage. Prepare the matching [native components](../../ruda-torch/README.md#build-and-install), including the NF4 extensions when using packed weights.
 
-For safetensors streaming, install `safetensors`. The Hugging Face helper and command-line example also require `transformers` and `accelerate`. The selected architecture must exist in the installed Transformers version without remote code. FP16 is the low-precision option for T4; do not select BF16 on hardware without the required support.
+For Python safetensors streaming, install `safetensors`. The Python Hugging Face helper and command-line example also require `transformers` and `accelerate`. The selected architecture must exist in the installed Transformers version without remote code. FP16 is the low-precision option for T4; do not select BF16 on hardware without the required support.
+
+## Rust ruLLM SFT and LoRA
+
+`rullm::training` trains floating-point `PackedLlamaForCausalLm` models loaded from local Llama/Qwen2 checkpoints. It is separate from the Python `SFTTrainer`, PEFT, and NF4 APIs below; the Rust example does not need Python Transformers. Its backend must implement `AutodiffBackend + TrainingBackend`; the NVIDIA example uses `Autodiff<Cuda<bf16, i32>>`, or `Autodiff<Cuda<f32, i32>>` with `--f32`. This is not AWQ/NF4 quantized-base training or a Qwen3.5 trainer.
+
+### Data and command line
+
+Prepare a local [model directory](model-inference.md#prepare-a-local-model) and a JSONL dataset. Each nonblank line can be one of:
+
+```jsonl
+{"messages":[{"role":"user","content":"What is KV caching?"},{"role":"assistant","content":"It reuses keys and values from previous tokens."}]}
+{"prompt":"Question: 1 + 1?\nAnswer:","completion":" 2"}
+{"text":"A passage for continued causal-language-model training."}
+```
+
+The example uses `TextFormat::QwenChat`: `messages` receive Qwen2 ChatML formatting and only assistant spans are supervised. Prompt/completion records are tokenized as their literal strings, with only the completion supervised; text records supervise the whole text. Labels are unshifted in `SftExample`; `SftBatch::collate` shifts them once and right-pads with ignored targets (`IGNORE_INDEX = -100`). `from_jsonl` truncates to its `max_tokens` argument and returns the number of samples skipped for being too short or having no targets. The CLI passes `--max-length + 1`, producing at most `--max-length` input positions after shifting.
+
+Run from the repository root; the output directory below is outside the checkout:
+
+```powershell
+$env:RUDA_CUDA_COMPILER = 'nvrtc'
+cargo run --release --locked -p ruda-llm --features nvidia --example qwen2_sft -- ./models/qwen2 ../train.jsonl ../qwen2-sft-run --steps 200 --micro-batch 4 --accumulation 4 --max-length 1024 --checkpoint-every 50
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--steps` / `--lr` | `200` / `2e-4` | Total optimizer-step target and peak learning rate |
+| `--micro-batch` / `--accumulation` | `4` / `4` | Examples per microbatch and microbatches per optimizer step |
+| `--max-length` | `1024` | Maximum shifted input length; must fit the model's RoPE capacity |
+| `--rank` / `--alpha` | `16` / `32` | LoRA rank and scaling numerator |
+| `--full` | Not set | Train all model parameters instead of only LoRA adapters |
+| `--checkpoint-every` | `50` | Optimizer steps between saves; 0 saves only at the end |
+| `--f32` | Not set | Use FP32 rather than the default BF16 backend |
+
+BF16 WMMA fragments are advertised only for CUDA sm_80 and newer; the capability check does not make those fragments available on older devices. Select a dtype supported by the model's actual operators; `--f32` is the example's alternative to BF16.
+
+### Training APIs and memory controls
+
+| API | Contract |
+| --- | --- |
+| `model.into_packed_training()` | Pack projections while retaining trainable parameters |
+| `SftTrainer::full(model, config, device)` | Train the full packed model with AdamW |
+| `LlamaLora::new(model.lora_shapes(), lora_config, &device)` | Build FP32 adapters; `SftTrainer::lora` freezes the base |
+| `LoraTargets::ALL` / `ATTENTION` | Select packed qkv/output/gate-up/down projections, or only qkv/output; individual flags are also available |
+| `SftLoader::new(dataset, micro_batch, pad_token_id, seed)` | Repeat seeded shuffled epochs; default length-sorting window is 64 |
+| `trainer.step(&micro_batches)` | Perform one token-normalized accumulated step; caller owns loader-position bookkeeping |
+| `trainer.train(&mut loader, callback)` | Drive to `schedule.total_steps`, save loader position/checkpoints, and invoke a nonblocking progress callback |
+
+LoRA A/B matrices use `[in, rank]` / `[rank, out]`, with a zero-initialized B and update scale `alpha / rank`. They remain FP32 and are cast at the projection boundary. The CLI selects `LoraTargets::ALL` and seed 0. These are ruLLM packed-projection adapters, not a PEFT adapter checkpoint format.
+
+Attention uses tiled causal/windowed forward and recomputed backward probabilities. The vocabulary loss processes full-vocabulary row chunks instead of retaining `[batch, sequence, vocabulary]` logits. `TrainConfig::loss_chunk_bytes` defaults to 128 MiB for one FP32 logits chunk; it is not a total GPU-memory limit. Accumulated losses are divided by the window's total valid-target count, not averaged microbatch means. AdamW defaults are betas 0.9/0.95, epsilon 1e-8, weight decay 0, global-norm clipping at 1.0, and linear warmup followed by cosine decay to 10% of peak. Nonfinite loss/norm skips the update and increments `skipped_steps`.
+
+`TrainProgress` reports step/total, loss, learning rate, gradient norm, tokens, elapsed time, recent token rate, ETA, epoch, and latest-checkpoint age. The CLI emits JSON lines without interactive prompts. The callback does not measure GPU utilization or memory. For explicitly registered ruCCL peers, feature `distributed` adds `with_data_parallel(peer)`; shard the loader with `with_shard(rank, world_size)`. The CLI does not launch ranks or initialize collectives.
+
+### Checkpoints, resume, and export
+
+The CLI writes `<output-dir>/checkpoints/step-NNNNNNNN`, containing `trainable.safetensors`, the optimizer record, and `state.json`; `latest` is a text file naming the newest checkpoint. The API's `keep_checkpoints` defaults to 1, and older step directories are pruned. Model and optimizer files are staged in a temporary directory before promotion. Keep space for the current checkpoint, its replacement, and the final exported weights.
+
+Re-running the same command/output directory calls `trainer.resume()` automatically. Reconstruct the same base model, training mode, adapter layout, dataset/order, microbatch size, and training configuration. LoRA checkpoints contain adapters and optimizer state, **not the frozen base**; they do not replace the original model directory. `train` restores the loader's epoch/cursor/seed, then runs until the configured total step target, not for that many additional steps. `load_checkpoint(path)` selects a specific checkpoint. Adam/AdamW restored moments are converted to the current gradient dtype so FP32 adapters retain compatible optimizer state on a BF16 base.
+
+At the end, the example merges LoRA into the base when applicable and writes `<output-dir>/model.safetensors`. Copy the source `config.json`, tokenizer files, and applicable generation configuration alongside it to form a loadable model directory; do not reuse a sharded-weight index describing the original weights. `export_huggingface_safetensors(&model, path, tie_word_embeddings)` writes HF Llama/Qwen2 tensor names and omits `lm_head.weight` when embeddings are tied. This export is deployment weights, not an optimizer/loader checkpoint for resuming training.
 
 ## Select projections explicitly
 

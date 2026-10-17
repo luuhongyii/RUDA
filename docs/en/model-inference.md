@@ -157,6 +157,19 @@ fn sample_text(
 
 Use `generate_text` for maximum-logit decoding rather than setting temperature to zero. A fixed seed fixes the sampling random sequence, not numerical consistency across models or backends.
 
+### Optional min-p and history penalties
+
+`SamplingConfig` keeps its existing four fields. Pass a separate `SamplingOptions` to `TokenSampler::new_with_options`, `ContinuousBatchScheduler::submit_sampled_with_options`, or `ContinuousBatchRunner::submit_sampled_with_options`. The model-independent streaming entry point is `generate_causal_sampled_stream_with_options`; the existing entry points use default options.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `min_p` | `0.0` | Range [0, 1]; after top-k/top-p, discard tokens below this fraction of the maximum token probability |
+| `repetition_penalty` | `1.0` | Finite and positive; divide positive logits and multiply negative logits for tokens seen in the prompt or generated output |
+| `presence_penalty` | `0.0` | Range [-2, 2]; subtract once for a token present in generated output |
+| `frequency_penalty` | `0.0` | Range [-2, 2]; subtract per occurrence in generated output |
+
+Penalties are applied before temperature and filtering. When using `TokenSampler` directly, call `sample_with_history(logits, prompt_ids, generated_ids)` to supply the history; `sample(logits)` has empty history. `to_state` / `from_state` preserve these options and the exact sampler RNG position; older records without options use their defaults.
+
 ## Load AWQ weights
 
 The AWQ loader takes `CudaRuntime`, not `Cuda<bf16, i32>`, as its generic parameter:
@@ -220,13 +233,73 @@ To integrate your own batch executor, use `ContinuousBatchScheduler`:
 
 1. Create it with `ContinuousBatchScheduler::new(config, kv_config)`. `ContinuousBatchConfig` sets `max_active_sequences` and `max_batch_tokens`. `PagedKvCacheConfig` sets `block_size`, `num_pages`, and `max_sequence_length`. All must be positive.
 2. Submit requests with `submit(prompt_token_ids, generation)` and retain each returned `RequestId`.
-3. Call `schedule()` for a `ScheduledBatch`. Its `kind` distinguishes Prefill/Decode; `sequences` supplies each row's tokens, start position, context length, and block table.
-4. Run the model in row order, write the corresponding KV pages, and select each row's next token. On success, call `complete_batch(batch.id, &generated_token_ids)` with one result token per row. On failure, call `fail_batch(batch.id)` to cancel that batch's page reservations.
+3. Call `schedule()` for a `ScheduledBatch`. Its `kind` distinguishes Prefill/Decode, or Verify when speculative decoding is enabled; `sequences` supplies each row's tokens, start position, context length, and block table.
+4. For Prefill/Decode, run the model in row order, write the corresponding KV pages, and select each row's next token. On success, call `complete_batch(batch.id, &generated_token_ids)` with one result token per row. On failure, call `fail_batch(batch.id)` to cancel that batch's page reservations. Verify batches use `complete_verify_batch`, as described below.
 5. Retrieve completed requests and generated tokens with `pop_finished()`, then continue scheduling.
 
 The scheduler manages requests and page-allocation metadata. The caller's executor owns device KV storage and model execution. Use `token_matrix()`, `context_lengths()`, and `flattened_block_table()` to construct batch inputs. Complete or cancel an outstanding batch before calling `schedule()` again.
 
 API reference: [ruLLM exports](../../ruLLM/src/lib.rs), [Generation options](../../ruLLM/src/generation.rs), [Scheduler](../../ruLLM/src/continuous_batch.rs).
+
+## Paged Llama/Qwen2 execution
+
+`PagedLlamaEngine` owns per-layer physical K/V pools; `ContinuousBatchRunner` combines that engine with request scheduling and token selection. Load a floating-point Llama/Qwen2 model and call `into_packed_inference()` before constructing the runner. This path accepts F32/F16/BF16 models with **static, full-head RoPE**; dynamic or partial RoPE is rejected. It is not the AWQ loader or the Qwen3.5 batch-cache path below.
+
+Run the NVIDIA BF16 example from the repository root:
+
+```powershell
+$env:RUDA_CUDA_COMPILER = 'nvrtc'
+cargo run --release --locked -p ruda-llm --features nvidia --example qwen2_continuous_batch -- ./models/qwen2 32 "Hello" "Explain KV caching"
+```
+
+Arguments are the local model directory, positive maximum new-token count, and one or more raw-text prompts. The example also reruns each request through dense single-sequence generation and reports token comparisons; its total runtime is not a batching-only throughput measurement. BF16 batch and single-sequence kernels can differ near tied logits, so successful execution does not promise identical token IDs.
+
+| API/configuration | Behavior |
+| --- | --- |
+| `ContinuousBatchRunner::new(&model, batching, kv, &device)` | Allocates the pools and enables chunked prefill and recompute preemption |
+| `ContinuousBatchConfig` | `max_active_sequences` bounds active requests; `max_batch_tokens` bounds a device batch and the prefill chunk |
+| `PagedKvCacheConfig` | `block_size` is tokens per page; `num_pages` is the shared pool capacity; `max_sequence_length` is the per-request limit |
+| `submit` / `submit_sampled_with_options` | Submit greedy or sampled token-ID requests; retain the returned `RequestId` |
+| `step(&model, &device)` / `pop_finished()` | Execute one batch and retrieve finished requests; `run_until_idle` drives the loop |
+| `set_prefix_caching(true)` | Reuse matching full-block prefixes; disabled by default on a standalone runner |
+| `set_speculative_decoding(Some(SpeculativeConfig { draft_tokens: 3, ngram: 3 }))` | Enable prompt-lookup drafts for greedy requests; sampled requests continue normal decoding; `None` disables it |
+
+Pools are allocated for the configured capacity, not only the tokens currently in use. `runner.engine().pool_bytes()` reports their payload bytes; model weights and execution workspaces are additional. Recompute preemption releases a newer request's KV pages and later prefills its prompt plus generated history again; it trades extra computation for pool availability, not host offload.
+
+For a custom executor, `ContinuousBatchScheduler::new` retains the non-preempting defaults. Opt in with `new_paged`; inspect `samples_token(&row)` **before completing the batch** to distinguish a final prefill chunk from a chunk whose output token is ignored. Verify batches need logits at every draft position and `complete_verify_batch`, not `complete_batch`. `snapshot()` retains the existing snapshot fields; `paged_snapshot()` / `runner.snapshot()` return `PagedBatchSnapshot` with preemption, prefix-token and draft-acceptance counters. `PagedKvCacheManager::cached_page_count()` reports unreferenced reusable prefix pages.
+
+The dense packed path also uses tiled attention for long prefills and windowed attention. Floating-point loaders read Mistral `sliding_window` from layer zero; Qwen2 enables it only with `use_sliding_window`, starting at `max_window_layers` (defaulting to the layer count). This is configuration-driven, not a server flag.
+
+## OpenAI-compatible HTTP server
+
+The [NVIDIA example](../../ruLLM/examples/qwen2_openai_server.rs) uses `serve_openai` and the paged runner. It needs the same local floating-point Qwen2/Qwen2.5 files as generation, uses BF16, and does not require `--features serving`:
+
+```powershell
+$env:RUDA_CUDA_COMPILER = 'nvrtc'
+cargo run --release --locked -p ruda-llm --features nvidia --example qwen2_openai_server -- ./models/qwen2 --address 127.0.0.1:8000 --kv-gib 1 --max-context 2048
+```
+
+| CLI option | Default | Purpose |
+| --- | --- | --- |
+| `--address` | `127.0.0.1:8000` | Bind address |
+| `--api-key` | Unset | Require an `Authorization: Bearer` token |
+| `--kv-gib` / `--block-size` | `1.0` / `16` | KV payload budget in GiB and tokens per page; excludes weights/workspaces |
+| `--max-context` | Model limit, capped by pool capacity | Per-request context limit |
+| `--max-active` / `--max-batch-tokens` | `16` / `512` | Active-request and batch/prefill-chunk limits |
+| `--no-prefix-cache` | Not set | Disable the server's default prefix caching |
+| `--speculative` | `0` | Draft-token count for greedy prompt-lookup verification; n-gram length is 3 |
+
+Endpoints are `GET /health`, `GET /v1/models`, `POST /v1/completions`, and `POST /v1/chat/completions`. A Bash/curl streaming request is:
+
+```bash
+curl -N http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":32,"temperature":0.8,"top_p":0.9,"min_p":0.05,"stream":true}'
+```
+
+`temperature: 0` selects greedy decoding; omitted temperature defaults to 1. Sampled requests accept `top_k`, `top_p`, `seed`, and the four `SamplingOptions` fields. `max_tokens` defaults to 256; chat also accepts `max_completion_tokens`, which takes precedence. `stop` accepts a string or up to four strings. `stream: true` returns SSE ending with `[DONE]`; false returns a JSON response with usage counts.
+
+This is a text-only HTTP/1.1 subset, not the full OpenAI API: one completion (`n = 1`), text `system`/`user`/`assistant` messages, no tool execution or image inference. Networking uses the standard library, has no TLS, and is unauthenticated unless an API key is configured. `OpenAiServerConfig` exposes the default-token limit and request-body limit (1 MiB by default) for library callers. `model_name` controls the single model advertised by the server.
 
 ## Qwen3.5 fused paged attention
 

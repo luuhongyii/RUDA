@@ -7,13 +7,75 @@
 | 模型接口 | 入口 |
 | --- | --- |
 | Rust `ruda-model` 模型 | `ruda_nn::LoRALinearConfig`，沿用张量后端与优化器 |
+| Rust packed Llama／Qwen2 | `rullm::SftTrainer`，全参数 SFT 或 `LlamaLora` 适配器，见下文 |
 | 普通 PyTorch 模型 | `ruda_torch.inject_lora`，可先执行 `quantize_nf4` |
 | 本地 Hugging Face safetensors 权重 | `load_hf_nf4_model` 或与架构无关的 `load_nf4_safetensors` |
 | 因果语言模型训练 | `CausalLMFinetuner`、`SFTCollator`、`SFTTrainer` |
 
-这些接口不自动选择模型家族、猜测适配器目标、下载权重或补齐缺失设备算子。模型实际调用的前向／反向操作仍须由执行后端支持。原生 PyTorch 使用 `ruda:0`，不是 `torch.cuda` 存储。先准备匹配的[原生组件](../../ruda-torch/README.md#build-and-install)，使用打包权重时还须具备对应 NF4 扩展。
+通用接口不自动选择模型家族、猜测适配器目标、下载权重或补齐缺失设备算子。模型实际调用的前向／反向操作仍须由执行后端支持。原生 PyTorch 使用 `ruda:0`，不是 `torch.cuda` 存储。先准备匹配的[原生组件](../../ruda-torch/README.md#build-and-install)，使用打包权重时还须具备对应 NF4 扩展。
 
-safetensors 流式加载需要 `safetensors`；HF 辅助入口和命令行示例还需要 `transformers`、`accelerate`。所选架构须能由已安装的 Transformers 在不执行远程代码的情况下构造。T4 的低精度路径选择 FP16，不要在缺少相应硬件支持时选择 BF16。
+Python safetensors 流式加载需要 `safetensors`；Python HF 辅助入口和命令行示例还需要 `transformers`、`accelerate`。所选架构须能由已安装的 Transformers 在不执行远程代码的情况下构造。T4 的低精度路径选择 FP16，不要在缺少相应硬件支持时选择 BF16。
+
+## Rust ruLLM SFT 与 LoRA
+
+`rullm::training` 训练从本地 Llama／Qwen2 权重加载的浮点 `PackedLlamaForCausalLm`。它与下文 Python `SFTTrainer`、PEFT、NF4 接口相互独立，Rust 示例不需要 Python Transformers。后端须实现 `AutodiffBackend + TrainingBackend`；NVIDIA 示例使用 `Autodiff<Cuda<bf16, i32>>`，加 `--f32` 则使用 `Autodiff<Cuda<f32, i32>>`。此入口不是 AWQ／NF4 量化 base 训练，也不是 Qwen3.5 训练器。
+
+### 数据与命令行
+
+准备本地[模型目录](model-inference.md#准备本地模型)和 JSONL 数据集。每个非空行可采用以下格式之一：
+
+```jsonl
+{"messages":[{"role":"user","content":"什么是 KV 缓存？"},{"role":"assistant","content":"它复用先前 token 的 key 和 value。"}]}
+{"prompt":"问题：1 + 1？\n答案：","completion":"2"}
+{"text":"用于继续训练因果语言模型的一段文本。"}
+```
+
+示例选择 `TextFormat::QwenChat`：`messages` 按 Qwen2 ChatML 格式化，只监督 assistant 区间；prompt／completion 记录按原字符串分词，仅监督 completion；text 记录监督全文。`SftExample` 中的 labels 不提前错位，由 `SftBatch::collate` 错位一次，并在右侧用忽略标签补齐（`IGNORE_INDEX = -100`）。`from_jsonl` 按 `max_tokens` 截断，返回过短或无监督目标的跳过样本数。CLI 传入 `--max-length + 1`，错位后输入长度最多为 `--max-length`。
+
+在仓库根目录运行，下面的输出目录位于仓库外：
+
+```powershell
+$env:RUDA_CUDA_COMPILER = 'nvrtc'
+cargo run --release --locked -p ruda-llm --features nvidia --example qwen2_sft -- ./models/qwen2 ../train.jsonl ../qwen2-sft-run --steps 200 --micro-batch 4 --accumulation 4 --max-length 1024 --checkpoint-every 50
+```
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--steps`／`--lr` | `200`／`2e-4` | 优化器总步数目标与峰值学习率 |
+| `--micro-batch`／`--accumulation` | `4`／`4` | 每个 microbatch 的样本数、每个优化器 step 累积的 microbatch 数 |
+| `--max-length` | `1024` | 错位后输入长度上限，须在模型 RoPE 容量内 |
+| `--rank`／`--alpha` | `16`／`32` | LoRA 秩与缩放分子 |
+| `--full` | 不设置 | 训练全部模型参数，而非仅训练 LoRA 适配器 |
+| `--checkpoint-every` | `50` | 存档间隔的优化器步数；0 表示仅结束时存档 |
+| `--f32` | 不设置 | 改用 FP32，默认后端为 BF16 |
+
+BF16 WMMA fragment 仅在 CUDA sm_80 及以上宣告支持；能力判断不会让较老设备获得这些 fragment。类型仍须由模型实际算子支持，`--f32` 是本示例提供的 BF16 替代选项。
+
+### 训练接口与内存控制
+
+| 接口 | 契约 |
+| --- | --- |
+| `model.into_packed_training()` | 合并投影并保留参数可训练性 |
+| `SftTrainer::full(model, config, device)` | 用 AdamW 训练整个 packed 模型 |
+| `LlamaLora::new(model.lora_shapes(), lora_config, &device)` | 构造 FP32 适配器；`SftTrainer::lora` 冻结 base |
+| `LoraTargets::ALL`／`ATTENTION` | 选择 packed qkv／output／gate-up／down，或仅 qkv／output；也可逐标志选择 |
+| `SftLoader::new(dataset, micro_batch, pad_token_id, seed)` | 按种子洗牌并循环 epoch，默认长度排序窗口为 64 |
+| `trainer.step(&micro_batches)` | 执行一次按 token 归一化的累积 step；调用方维护 loader 位置 |
+| `trainer.train(&mut loader, callback)` | 驱动到 `schedule.total_steps`，保存 loader 位置／checkpoint，并调用非阻塞进度回调 |
+
+LoRA A／B 形状为 `[in, rank]`／`[rank, out]`，B 初始化为零，更新按 `alpha / rank` 缩放。适配器保留 FP32，在投影边界转换类型。CLI 选择 `LoraTargets::ALL`、seed 0；这是 ruLLM packed 投影适配器，不是 PEFT 适配器存档格式。
+
+注意力采用分块因果／窗口前向，并在反向重算概率。词表损失逐行块处理完整词表，不保留 `[batch, sequence, vocabulary]` 的全部 logits。`TrainConfig::loss_chunk_bytes` 默认 128 MiB，控制单个 FP32 logits 块，不是整个任务的显存上限。累计损失除以整个窗口有效目标 token 总数，不是对 microbatch 均值再平均。AdamW 默认 betas 0.9／0.95、epsilon 1e-8、weight decay 0、全局范数裁剪 1.0；学习率线性预热后余弦衰减到峰值的 10%。非有限 loss／范数跳过更新，并增加 `skipped_steps`。
+
+`TrainProgress` 包含当前／总步数、loss、学习率、梯度范数、token 数、耗时、近期速率、ETA、epoch 及最近存档年龄。CLI 输出 JSON 行，不要求交互输入；回调不测量 GPU 利用率或内存。对于调用方已注册的 ruCCL peers，`distributed` feature 提供 `with_data_parallel(peer)`，loader 对应调用 `with_shard(rank, world_size)`；CLI 不负责启动 ranks 或初始化集合通信。
+
+### 存档、恢复与导出
+
+CLI 在 `<output-dir>/checkpoints/step-NNNNNNNN` 保存 `trainable.safetensors`、优化器记录和 `state.json`；`latest` 是记录最新存档目录名的文本文件。API 的 `keep_checkpoints` 默认 1，会清理较旧的 step 目录。模型与优化器文件先写入临时目录再提升为正式存档；磁盘应容纳当前存档、替换存档及最终导出权重。
+
+同一输出目录重跑命令会自动调用 `trainer.resume()`。恢复时重建相同的 base、训练模式、适配器布局、数据集／顺序、microbatch 大小和训练配置。LoRA 存档包含适配器与优化器状态，**不包含冻结 base**，不能替代原模型目录。`train` 恢复 loader 的 epoch／cursor／seed，再运行到配置的总步数目标，而非额外运行这么多步。`load_checkpoint(path)` 可指定存档。Adam／AdamW 恢复的 moments 会转为当前梯度类型，以便 BF16 base 上的 FP32 适配器继续使用相容的优化器状态。
+
+结束时，示例按需将 LoRA 合并到 base，并写入 `<output-dir>/model.safetensors`。将源模型的 `config.json`、分词器文件及适用的生成配置放在旁边，组成可加载目录；不要沿用描述原权重分片的索引文件。`export_huggingface_safetensors(&model, path, tie_word_embeddings)` 使用 HF Llama／Qwen2 张量名，绑定 embedding 时省略 `lm_head.weight`。这是部署权重，不是用于续训的优化器／loader 存档。
 
 ## 明确选择投影层
 
