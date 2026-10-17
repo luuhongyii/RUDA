@@ -51,3 +51,13 @@ NVIDIA предлагает два пути компиляции:
 Неподдерживаемый IR, метаданные аргумента или целевые условия приводят к ошибкам. Direct PTX сообщает о неподдерживаемых операциях, а не автоматически переключает пути компиляции. См. [Отладка](debugging.md).
 
 `ruda-compiler` также содержит модули WGSL, SPIR-V и MLIR.
+
+## 6. Фронтенд Triton
+
+Компонент `ruda-triton` собирается из исходников и компилирует Triton TTIR через описание SIMT и Ruda IR в прямой PTX. Соберите компилятор командой `cargo build --locked --release -p ruda-triton` и установите `./ruda-triton/python` через pip. Объявлены зависимости Python 3.10+, Triton 3.8+ и PyTorch. Укажите `RUDA_TRITON_PTX` на `target/release/ruda-triton-ptx` (Windows: `.exe`) или добавьте его в PATH.
+
+До импорта Triton задайте `TRITON_DEFAULT_BACKEND=ruda`. Режим по умолчанию `RUDA_TRITON_DEVICE=cuda` использует память и текущий stream `torch.cuda`. Режим `ruda` использует PrivateUse1-память `ruda_torch` и текущий native stream RUDA; ожидающие RUDA-команды этого stream сбрасываются перед запуском. CUDA- и RUDA-указатели не становятся взаимозаменяемыми.
+
+Поддерживается Triton, не Gluon; неподдерживаемый TTIR вызывает ошибку lowering. Это отдельный от Rust Kernel DSL путь, не обещание совместимости с любым Triton-kernel. Режим GX1 требует отдельной библиотеки, отсутствующей в этом software workspace.
+
+[Метаданные установки](../../ruda-triton/python/pyproject.toml), [этапы компиляции](../../ruda-triton/python/ruda_triton/compiler.py), [устройства и stream](../../ruda-triton/python/ruda_triton/driver.py).

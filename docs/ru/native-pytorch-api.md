@@ -2,6 +2,16 @@
 
 [Содержание](README.md) · [Подробная справка методов](../en/native-pytorch-api.md)
 
+## Выбор математического бэкенда
+
+Эти API доступны в текущей сборке из `main`, но не в старых wheel `v0.1.96`. По умолчанию используется native RUDA. До импорта можно задать `RUDA_TORCH_MATH_BACKEND=ruda` или `nvidia`. `get_math_backend()` возвращает выбор текущего контекста; `set_math_backend(name)` меняет его и возвращает прежнее имя. Контекстный менеджер `math_backend(name)` восстанавливает выбор при выходе, включая исключения.
+
+Явные NVIDIA-маршруты вызывают cuBLAS/cuBLASLt, cuSOLVER или cuFFT на RUDA allocations и device service. Это не преобразование в `torch.cuda` и не перенаправление всех операторов. Отсутствие библиотек и неподдерживаемый явный NVIDIA-путь приводят к ошибке.
+
+Пути задаются через `RUDA_TORCH_CUBLAS_LIBRARY`, `RUDA_TORCH_CUBLASLT_LIBRARY`, `RUDA_TORCH_CUSOLVER_LIBRARY`, `RUDA_TORCH_CUFFT_LIBRARY`; `RUDA_TORCH_DLL_DIR` добавляет каталоги поиска, `RUDA_TORCH_CUDA_LIBRARY` указывает драйвер. Метаданные wheel привязаны к minor-версии Python и точной версии PyTorch при сборке. При смене окружения Rust и C++ пересобираются вместе.
+
+Комплексный linalg, LDL, общие собственные значения, матричная экспонента и ограничения FP16/complex32 FFT описаны в [подробном API](../en/native-pytorch-api.md#scientific-operations). [Выбор](../../ruda-torch/python/ruda_torch/math_backend.py), [загрузка библиотек](../../ruda-torch/python/ruda_torch/_vendor_runtime.py), [метаданные сборки](../../ruda-torch/python/setup.py).
+
 ## Packed-квантизация и квантованные KV-кеши
 
 Packed API 1 предоставляет INT2/3/4/5/6/8, FP4 E2M1 и FP8 E4M3/E5M2 через `PackedQuantizedTensor`, `PackedLinear` и `PackedEmbedding`. Linear поддерживает градиенты входа при замороженных весах; используется скалярное накопление FP32, не Tensor Core GEMM. `scaled_float8_mm` возвращает FP16/BF16/FP32. MinMax/Percentile/MSE, `QuantizationObserver` и `affine_fake_quantize` предоставляют калибровку/QAT.

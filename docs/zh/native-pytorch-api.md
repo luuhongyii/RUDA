@@ -4,6 +4,22 @@
 
 [全部公开签名](python-api-signatures.md) · [并行训练、数据与恢复](parallel-and-data.md)
 
+## 数学后端选择
+
+以下选择接口属于当前 `main` 的源码构建，旧的 `v0.1.96` wheel 不包含它们。默认使用原生 RUDA 数学实现；导入前可设置 `RUDA_TORCH_MATH_BACKEND=ruda` 或 `nvidia` 选择初始值。
+
+| 公开调用 | 契约 |
+| --- | --- |
+| `get_math_backend()` | 返回当前上下文的 `"ruda"` 或 `"nvidia"`。 |
+| `set_math_backend(name)` | 设置当前上下文的后端，返回之前的名称。 |
+| `math_backend(name)` | 上下文管理器，退出时恢复原选择，包括异常退出。 |
+
+显式 NVIDIA 路径在 RUDA 分配和设备服务上调用 cuBLAS／cuBLASLt、cuSOLVER 或 cuFFT，不将张量转换为 `torch.cuda` 张量。选择是上下文级的，不是将全部 PyTorch 算子统一重定向。缺失库或不支持的显式 NVIDIA 路径报错，不悄悄选择 CPU fallback。
+
+可用 `RUDA_TORCH_CUBLAS_LIBRARY`、`RUDA_TORCH_CUBLASLT_LIBRARY`、`RUDA_TORCH_CUSOLVER_LIBRARY`、`RUDA_TORCH_CUFFT_LIBRARY` 指定库路径；`RUDA_TORCH_DLL_DIR` 增加搜索目录。CUDA 驱动加载还接受 `RUDA_TORCH_CUDA_LIBRARY`。
+
+源码构建的 wheel 元数据绑定编译时的 Python 次版本和准确 PyTorch 版本。改变构建环境时须一起重建 Rust 库和 C++ 扩展；可选分发注册不代表任意 PyTorch 版本均兼容。源码：[后端选择](../../ruda-torch/python/ruda_torch/math_backend.py)、[动态库加载](../../ruda-torch/python/ruda_torch/_vendor_runtime.py)、[构建元数据](../../ruda-torch/python/setup.py)。
+
 ## 随机数生成器与可恢复状态
 
 `Generator(seed=None)` 使用 Philox4x32-10 和 RUDA 自有 seed/counter。`manual_seed(seed)` 重置并返回默认生成器；`manual_seed_all(seed)` 设置同一单设备生成器。seed 可为有符号／无符号 64 位整数。显式生成器通过 `Generator.manual_seed`、`initial_seed`、`get_state`、`set_state` 管理状态；状态是带 RUDA 版本标记的 24 字节 CPU uint8 tensor，不是 CUDA RNG 状态。
@@ -38,7 +54,7 @@ Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、trai
 
 ## 科学计算算子
 
-以下功能使用原生 RUDA GPU kernel，不以 CPU 数值运算回退，也不是 NVIDIA 库的 ABI 包装。scientific API 1 提供 FP64 与复数存储；dtype 支持按算子划分，不代表所有随机、注意力、训练或图算子都支持这些类型。基础 FP64／复数算术、归约、矩阵乘、索引及实数／复数 view 转换可用；FP64 `erf` 要求 `RUDA_CUDA_COMPILER=nvrtc`，直接 PTX 不支持。
+默认 `ruda` 数学后端使用原生 RUDA GPU kernel，不以 CPU 数值运算回退；显式 `nvidia` 选择使用上文所述已接入的厂商库路径。scientific API 1 提供 FP64 与复数存储；dtype 支持按算子划分，不代表所有随机、注意力、训练或图算子都支持这些类型。基础 FP64／复数算术、归约、矩阵乘、索引及实数／复数 view 转换可用；FP64 `erf` 要求 `RUDA_CUDA_COMPILER=nvrtc`，直接 PTX 不支持。
 
 ### BLAS
 
@@ -53,7 +69,7 @@ Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、trai
 
 ### 线性代数
 
-导入后，以下标准 PyTorch API 所需的后端 kernel 自动接入实数 FP32／FP64 RUDA 张量；公共 composite 算子保留 PyTorch 自身的 autograd 公式。
+导入后，以下标准 PyTorch API 所需的后端 kernel 自动接入 FP32／FP64 与 complex64／complex128 RUDA 张量；公共 composite 算子保留 PyTorch 自身的 autograd 公式及不支持 backward 的限制。
 
 | 算子族 | 公开 PyTorch 入口 |
 | --- | --- |
@@ -61,14 +77,21 @@ Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、trai
 | Cholesky | `torch.linalg.cholesky`、`cholesky_ex`、`torch.cholesky_solve`、`torch.cholesky_inverse` |
 | 三角方程 | `torch.linalg.solve_triangular`、旧式 `torch.triangular_solve` |
 | Householder QR | `torch.linalg.qr`、`torch.geqrf`、`torch.ormqr` |
-| 实对称特征分解 | `torch.linalg.eigh`、`eigvalsh` |
+| 对称／Hermitian 特征分解 | `torch.linalg.eigh`、`eigvalsh` |
+| 一般特征问题 | `torch.linalg.eig`、`eigvals` |
+| 带主元 LDL | `torch.linalg.ldl_factor`、`ldl_factor_ex`、`ldl_solve` |
+| Householder 乘积与矩阵指数 | `torch.linalg.householder_product`、`torch.linalg.matrix_exp` |
 | 奇异值分解 | `torch.linalg.svd`、`svdvals` |
 | 逆矩阵与行列式 | `torch.linalg.inv`、`inv_ex`、`det`、`slogdet` |
 | 满秩最小二乘 | `torch.linalg.lstsq` |
 
 在算子允许的范围内广播前导 batch；求解的向量 RHS 遵循 PyTorch 的向量 shape 规则。PyTorch LU pivots 为从 1 开始的 int32；`_ex` 变体返回 int32 `info`，`check_errors` 控制显式状态检查，检查可能同步并读取小型状态张量。独立 LU／Cholesky 分解失败时保留部分因子，不能将非零 info 当作成功因子继续使用。
 
-QR 支持 `reduced`、`complete`、`r`；complete QR 与 `svd(full_matrices=True)` 返回完整正交基。`geqrf` 和 QR 的 `r` 模式保留 PyTorch 不支持 backward 的行为。SVD 使用原生 Jacobi，接受 `driver=None`，拒绝 `gesvd`／`gesvda` 等 NVIDIA 命名驱动。最小二乘在高矩阵上使用 Householder QR，在宽矩阵上对转置做 QR 得到最小范数解；要求满秩，仅接受 `driver=None`／`gels`，不替换成正规方程或秩揭示驱动。设备 solver 不支持复数输入。
+QR 支持 `reduced`、`complete`、`r`；complete QR 与 `svd(full_matrices=True)` 返回完整正交基。`geqrf` 和 QR 的 `r` 模式保留 PyTorch 不支持 backward 的行为。原生 RUDA SVD 使用单边 Jacobi，仅接受 `driver=None`；显式 NVIDIA SVD 接受 `None`、`gesvdj`、`gesvd`，不接受 `gesvda`。最小二乘要求满秩，仅接受 `driver=None`／`gels`，使用基于 QR 的求解，不替换成正规方程或秩揭示驱动。
+
+一般特征问题对 FP32／complex64 输入返回 complex64，对 FP64／complex128 输入返回 complex128。LDL 返回 int32 主元；`ldl_solve` 要求主元 shape 等于 `LD.shape[:-1]`，支持对称或 Hermitian 模式。矩阵指数还接受 FP16／BF16／complex32。显式 NVIDIA solver 路径未实现 LDL、一般 eig 或矩阵指数，会返回不支持的 command 错误。具体 dtype 和路径契约见 [linalg 分发](../../ruda-torch/python/ruda_torch/linalg.py)及 [NVIDIA solver 分发](../../ruda-torch/python/ruda_torch/_vendor_solver.py)。
+
+`torch.sparse.spsolve(A, B, left=True)` 的原生 CSR 路径要求 A 为非 batch 的 FP32／FP64 方阵，B 为同 dtype 的一维 strided 右端项；CSR 索引为宽度一致的 int32／int64。拒绝 `left=False`，显式 NVIDIA 路径不可用。见[稀疏求解](../../ruda-torch/python/ruda_torch/_sparse_solve.py)。
 
 ### FFT 与显式 plan
 
@@ -81,7 +104,7 @@ QR 支持 `reduced`、`complete`、`r`；complete QR 与 `svd(full_matrices=True
 | nD | `fftn`、`ifftn`、`rfftn`、`irfftn`、`hfftn`、`ihfftn` |
 | 布局／频率 | `fftshift`、`ifftshift`、`fftfreq`、`rfftfreq` |
 
-变换支持 FP32／FP64 与 complex64／complex128；整数输入转换为所选 FP32／FP64 默认 dtype。FP16／BF16／complex32 明确拒绝，不悄悄提升类型；频率输出为 FP32／FP64。`n`／`s` 对相应变换维度截取或补零，最后一个变换轴是 Hermitian 压缩轴；`irfft`／`hfft` 系列展开压缩输入时，应明确指定原始奇数长度。`norm=None`／`backward` 归一化逆变换，`forward` 归一化正变换，`ortho` 使用平方根归一化。非二次幂长度通过 Bluestein 卷积计算真实请求长度，不将长度改成二次幂，也不执行 CPU DFT。
+变换支持 FP16／FP32／FP64 与 complex32／complex64／complex128；FP16／complex32 要求每个变换轴的长度均为二次幂。BF16 明确拒绝，不悄悄提升类型。整数输入转换为所选 FP16／FP32／FP64 默认 dtype，频率辅助函数接受这三种实数 dtype。`n`／`s` 对相应变换维度截取或补零，最后一个变换轴是 Hermitian 压缩轴；`irfft`／`hfft` 系列展开压缩输入时，应明确指定原始奇数长度。`norm=None`／`backward` 归一化逆变换，`forward` 归一化正变换，`ortho` 使用平方根归一化。原生 FP32／FP64 的非二次幂长度通过 Bluestein 卷积计算真实请求长度，不改变请求长度，也不执行 CPU DFT。显式 NVIDIA 选择使用 cuFFT，见 [FFT 分发与 dtype 检查](../../ruda-torch/python/ruda_torch/fft.py)。
 
 变换 `out=` 会调整 shape 并复制结果，但在参与输入／输出需要梯度时拒绝 autograd；非 `out` 变换有原生 adjoint backward，并支持高阶线性梯度。Plan 是显式、绑定执行队列的所有者，不建立无界全局缓存：
 

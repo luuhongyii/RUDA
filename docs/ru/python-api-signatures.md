@@ -6,6 +6,14 @@
 
 Сигнатуры packed-квантизации, калибровки/QAT, GPTQ/GGUF и квантованных KV-кешей приведены в [справке packed API](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import).
 
+## Выбор математического бэкенда
+
+| API | Source |
+| --- | --- |
+| `ruda_torch.get_math_backend()` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.set_math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+
 ## `__init__`
 
 | Публичное имя / вызов | Исходный код |

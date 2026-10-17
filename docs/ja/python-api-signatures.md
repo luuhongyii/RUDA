@@ -6,6 +6,14 @@ RUDA が定義するコンストラクタとメソッドを示します。PyTorc
 
 Packed 量子化、校正／QAT、GPTQ／GGUF、量子化 KV キャッシュのシグネチャは [packed API 参照](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import)を参照してください。
 
+## 数学バックエンドの選択
+
+| API | Source |
+| --- | --- |
+| `ruda_torch.get_math_backend()` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.set_math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+
 ## `__init__`
 
 | 公開名／呼び出し | ソース |

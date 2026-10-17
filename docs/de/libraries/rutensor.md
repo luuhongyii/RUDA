@@ -146,10 +146,20 @@ Wählen Sie `Identity`, `Negate`, `Abs`, `Sqrt`, `Exp`, `Log`, `Sin`, `Cos`, `Ta
 - `ComputeType::F32` oder `F64` steuert die Eingabekonvertierung, unäre Transformationen, Produkte, Reduktionen und Skalararithmetik. F64-Eingaben erfordern eine F64-Berechnung.
 - Standardmäßig wird die F64-Arithmetik verwendet, wenn eine Eingabe F64 ist, andernfalls F32. Identische Eingabespeichertypen behalten diesen Ausgabetyp bei; Gemischte Eingaben erzeugen F64, wenn eine Eingabe F64 ist, andernfalls F32.
 - Fordern Sie eine explizite Ausgabe dtype für eine Speicherung mit höherer Genauigkeit an. Eine Erhöhung der Speichergenauigkeit kann die bereits in einer Eingabe verlorene Präzision nicht wiederherstellen.
-- Die Ausgabekonvertierung erfolgt beim letzten Schreibvorgang. Eingaben mit einem anderen dtype als dem Rechentyp erfordern Gerätekonvertierungspuffer; übereinstimmende Eingaben werden in ihrem ursprünglichen Layout gelesen.
+- Der allgemeine Kernel liest jeden Operanden direkt im F16-/BF16-/F32-/F64-Speicherlayout und konvertiert Werte in Registern in den Rechentyp. Die Ausgabekonvertierung erfolgt beim letzten Schreiben; vollständige Konvertierungspuffer für alle gemischten Eingaben entfallen.
 - Reduzierungen nutzen die parallele Zusammenführung von Arbeitsgruppenbäumen. Die Reihenfolge der Gleitkomma-Addition und -Multiplikation kann von der seriellen Auswertung abweichen.
 - Leere Ausgaben übermitteln keine Berechnung; Ausgänge mit Rang Null enthalten einen Skalar. Form-, Schritt- und Adressberechnungen verwenden die Plattform `usize`; Dispatches unterliegen auch Backend-Ressourcenlimits.
 - Zurückgegebene `Result`-Werte melden Ausdrucks-, Deskriptor-, Form-, Geräte- und Versandbereichsfehler. Die Geräteübermittlung folgt der Fehlerbehandlung der Laufzeit; Asynchrone Ausführungsfehler treten bei der Synchronisierung oder dem Rücklesen auf.
-- Allgemeine Kontraktionen durchlaufen direkt Reduktionskoordinaten. Sie suchen nicht nach Kontraktionspfaden mit mehreren Eingaben und senken sich nicht automatisch auf die Tensor-Core-Matrixmultiplikation ab. Die Speicherkonvertierung erfordert zusätzlichen Gerätespeicher.
+- Allgemeine Kontraktionen behalten den direkten Reduktionskernel. Geeignete Matrixkontraktionen können ruBLAS nutzen; die Suche für mehrere Eingaben wird explizit mit `EinsumPlan::optimize()` aktiviert.
+
+## 7. Kontraktionspfade und ruBLAS-Dispatch
+
+`EinsumPlan::new(...)` und `with_options(...)` suchen keine Kontraktionsreihenfolge. `plan.optimize()?` konsumiert den Plan und wählt einen binären Kontraktionsbaum mit minimaler geschätzter Anzahl skalarer Produkte. `planned_scalar_products()` liefert `Some(u128)` bei gewähltem Pfad, sonst `None`, auch für einen einzelnen Operanden.
+
+Die vollständige Teilmengen-Dynamikprogrammierung hat exponentiellen Aufwand in der Operandenzahl; verwenden Sie den Plan bei festen Deskriptoren erneut. Optimiert wird die Produktanzahl, nicht gemessene Latenz oder maximaler Speicherbedarf. Die Umordnung verändert die Gleitkomma-Reihenfolge. Zwischenwerte verwenden den Rechentyp, nur das Endergebnis den Ausgabespeichertyp.
+
+Zwei-Eingabe-Kontraktionen können ruBLAS verwenden: gleicher F16-/BF16-/F32-Speichertyp, F32-Berechnung, genau eine gemeinsame K-Achse und M/N als letzte Ausgabeachsen. Diagonallabel sind ausgeschlossen, unäre Transformationen auf Identity/Conjugate beschränkt; Batch-Achsen dürfen broadcasten. Andere Fälle sowie abgelehnte matmul-Setups verwenden den allgemeinen Kernel. Startfehler werden zurückgegeben, nicht verborgen. Alpha/Beta-Epilog, optionales C und Ausgabedeskriptor bleiben erhalten.
+
+[Pfadplanung](../../../ruTENSOR/src/path.rs), [Matrixdispatch](../../../ruTENSOR/src/matmul.rs), [einsum-Plan](../../../ruTENSOR/src/einsum.rs).
 
 ruTENSOR macht einen Ruda Rust API sichtbar, nicht den NVIDIA cuTENSOR C ABI. Das Gerät muss die ausgewählten Speicher- und Rechentypen unterstützen.

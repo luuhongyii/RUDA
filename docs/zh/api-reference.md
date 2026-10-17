@@ -33,6 +33,7 @@ Cargo 包名、仓库目录名和 Rust 导入名可能不同。例如 ruFFT 位�
 | [`ruda`](../../ruda/Cargo.toml) | [`ruda`](../../ruda/src/lib.rs) | GPU Kernel 门面与运行时重导出；编写 GPU 内核的入口 |
 | [`ruda-core`](../../ruda-core/Cargo.toml) | [`ruda_core`](../../ruda-core/src/lib.rs) | 共享 IR、张量数据、dtype、设备与内存契约 |
 | [`ruda-compiler`](../../ruda-compiler/Cargo.toml) | [`ruda_compiler`](../../ruda-compiler/src/lib.rs) | 内核前端与目标代码生成 |
+| [`ruda-triton`](../../ruda-triton/Cargo.toml) | [`ruda_triton`](../../ruda-triton/src/lib.rs) | Triton SIMT 描述 → Ruda IR → PTX；源码构建接入，不是 crates.io 安装包 |
 | [`ruda-kernel`](../../ruda-kernel/Cargo.toml) | [`ruda_kernel`](../../ruda-kernel/src/lib.rs) | Rust Kernel DSL、启动接口和设备张量工具 |
 | [`ruda-runtime`](../../ruda-runtime/Cargo.toml) | [`ruda_runtime`](../../ruda-runtime/src/lib.rs) | 计算客户端／服务端、存储、流与调度 |
 | [`ruda-kernel-macros`](../../ruda-kernel-macros/Cargo.toml) | [`ruda_kernel_macros`](../../ruda-kernel-macros/src/lib.rs) | 将 Kernel Rust 转为 IR 的过程宏 |

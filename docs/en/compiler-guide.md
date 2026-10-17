@@ -49,3 +49,13 @@ The CUDA driver's direct PTX cache namespace includes the backend identifier, SM
 Unsupported IR, argument metadata, or target conditions produce errors. Direct PTX reports unsupported operations rather than automatically switching compilation paths. See [Debugging](debugging.md).
 
 `ruda-compiler` also contains WGSL, SPIR-V, and MLIR modules.
+
+## 6. Triton frontend
+
+The source-only `ruda-triton` workspace member compiles Triton TTIR through a SIMT description and Ruda IR to direct PTX. Build its compiler with `cargo build --locked --release -p ruda-triton`, then install `./ruda-triton/python` with pip. Its Python package declares Python 3.10+, Triton 3.8+ and PyTorch dependencies. Set `RUDA_TRITON_PTX` to the built `target/release/ruda-triton-ptx` executable (`.exe` on Windows), or put it on PATH.
+
+Set `TRITON_DEFAULT_BACKEND=ruda` before importing Triton. `RUDA_TRITON_DEVICE=cuda` is the default: tensors use `torch.cuda` storage and its current stream. `RUDA_TRITON_DEVICE=ruda` uses `ruda_torch` PrivateUse1 storage and RUDA's current native stream, flushing pending RUDA work before launch. These modes do not make CUDA and RUDA pointers interchangeable.
+
+This frontend accepts Triton, not Gluon, and unsupported TTIR operations raise lowering errors. It is separate from the Rust kernel DSL; selecting it does not imply compatibility with every Triton kernel. GX1 mode requires a separate GX1 library not included in this software workspace.
+
+Source: [Python installation metadata](../../ruda-triton/python/pyproject.toml), [compiler stages](../../ruda-triton/python/ruda_triton/compiler.py), [device/stream adapter](../../ruda-triton/python/ruda_triton/driver.py).

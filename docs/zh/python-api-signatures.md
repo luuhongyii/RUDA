@@ -6,6 +6,14 @@
 
 Packed 量化、校准／QAT、GPTQ／GGUF 导入与量化 KV 缓存的签名见 [packed API 参考](native-pytorch-api.md#packed-量化与权重导入)。
 
+## 数学后端选择
+
+| API | Source |
+| --- | --- |
+| `ruda_torch.get_math_backend()` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.set_math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+
 ## 科学计算 BLAS 与 FFT
 
 参数契约与标准 `torch.linalg` 分发见[科学计算 API](native-pytorch-api.md#科学计算算子)。

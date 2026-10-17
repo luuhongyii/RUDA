@@ -4,6 +4,8 @@
 
 From your first GPU kernel to compute libraries, tensor training, and local model inference. Start with your task, then explore the programming guides and API references.
 
+These guides follow remote `main` at `04fb9b6b` (2026-10-16), whose workspace version is `0.1.98`. Individual crate versions are listed in the [Rust API reference](rust-api.md). Release-wheel instructions still target the published `v0.1.96` wheels; a `main`-only API requires a matching source build.
+
 ## Start here
 
 | Your task | Reading path |

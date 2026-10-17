@@ -144,10 +144,20 @@ Select `Identity`, `Negate`, `Abs`, `Sqrt`, `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, 
 - `ComputeType::F32` or `F64` controls input conversion, unary transforms, products, reductions, and scalar arithmetic. F64 inputs require F64 computation.
 - Defaults use F64 arithmetic if any input is F64, otherwise F32. Identical input storage types preserve that output type; mixed inputs produce F64 if any input is F64, otherwise F32.
 - Request an explicit output dtype for higher-precision storage; increasing storage precision cannot recover precision already lost in an input.
-- Output conversion happens at the final write. Inputs with a different dtype from the compute type require device conversion buffers; matching inputs are read in their original layout.
+- The general kernel reads each operand in its F16, BF16, F32, or F64 storage layout and converts values to the compute type in registers. Output conversion happens at the final write; it no longer requires a full converted buffer for every mixed-storage input.
 - Reductions use parallel workgroup tree merging. Floating-point addition and multiplication order can differ from serial evaluation.
 - Empty outputs submit no computation; rank-zero outputs contain one scalar. Shape, stride, and address calculations use platform `usize`; dispatches also obey backend resource limits.
 - Returned `Result` values report expression, descriptor, shape, device, and dispatch-range errors. Device submission follows the Runtime's error handling; asynchronous execution errors surface at synchronization or readback.
-- General contractions directly traverse reduction coordinates. They do not search multi-input contraction paths or automatically lower to Tensor Core matrix multiplication. Storage conversion requires additional device memory.
+- General contractions retain the direct reduction kernel. Eligible matrix contractions can use ruBLAS; multi-input path search is explicitly enabled with `EinsumPlan::optimize()` as described below.
+
+## 7. Contraction paths and ruBLAS dispatch
+
+`EinsumPlan::new(...)` and `with_options(...)` do not search contraction orders. Call `plan.optimize()?` to consume the plan and select a binary contraction tree minimizing the estimated number of scalar products. `planned_scalar_products()` returns `Some(u128)` for a selected path and `None` when no path is selected, including a one-input expression.
+
+The search uses exhaustive subset dynamic programming and is exponential in the number of operands; reuse the resulting plan for fixed descriptors. The cost is a scalar-product estimate, not measured latency or peak-memory optimization. Reassociation changes floating-point operation order. Intermediate tensors use the declared compute dtype; only the final result uses the output storage dtype.
+
+Two-input contractions may dispatch to ruBLAS when both inputs have the same F16/BF16/F32 storage, computation is F32, and the labels describe a single shared K axis with M/N as the last two output axes. Inputs must have no diagonal labels and use Identity/Conjugate transforms; batch axes may broadcast. Other contractions retain the general kernel. A rejected matmul setup uses that kernel, but a matmul launch error is returned rather than hidden. The alpha/beta epilogue, optional C, and output descriptor are retained.
+
+See [path planning](../../../ruTENSOR/src/path.rs), [matrix dispatch](../../../ruTENSOR/src/matmul.rs), and [einsum plan methods](../../../ruTENSOR/src/einsum.rs).
 
 ruTENSOR exposes a Ruda Rust API, not the NVIDIA cuTENSOR C ABI. The device must support the selected storage and compute types.

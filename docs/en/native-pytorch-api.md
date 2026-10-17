@@ -4,6 +4,22 @@
 
 [All public signatures](python-api-signatures.md) · [Parallel training, data and recovery](parallel-and-data.md)
 
+## Math backend selection
+
+These selectors are available in the current `main` source build, not the older `v0.1.96` wheels. The default is native RUDA math. Set `RUDA_TORCH_MATH_BACKEND=ruda` or `nvidia` before import to choose the initial value.
+
+| Public call | Contract |
+| --- | --- |
+| `get_math_backend()` | Returns the current context's `"ruda"` or `"nvidia"`. |
+| `set_math_backend(name)` | Sets that context's backend and returns the previous name. |
+| `math_backend(name)` | Context manager; restores the previous selection on exit, including exceptions. |
+
+The explicit NVIDIA routes use cuBLAS/cuBLASLt, cuSOLVER or cuFFT on RUDA allocations and its device service; they do not turn tensors into `torch.cuda` tensors. Selection is per context, not a universal redirection of every PyTorch operator. Missing libraries or unsupported explicit NVIDIA paths raise errors rather than silently selecting a CPU fallback.
+
+Library paths may be specified with `RUDA_TORCH_CUBLAS_LIBRARY`, `RUDA_TORCH_CUBLASLT_LIBRARY`, `RUDA_TORCH_CUSOLVER_LIBRARY` and `RUDA_TORCH_CUFFT_LIBRARY`; `RUDA_TORCH_DLL_DIR` adds search directories. CUDA driver loading also accepts `RUDA_TORCH_CUDA_LIBRARY`.
+
+Source builds pin their wheel metadata to the Python minor version and exact installed PyTorch version used during compilation. Rebuild the Rust library and C++ extension together when changing the build environment; optional dispatch registrations are not a guarantee for every PyTorch version. See [backend selection](../../ruda-torch/python/ruda_torch/math_backend.py), [library loading](../../ruda-torch/python/ruda_torch/_vendor_runtime.py), and [build metadata](../../ruda-torch/python/setup.py).
+
 ## Random generators and reproducible state
 
 `Generator(seed=None)` uses Philox4x32-10 with RUDA-owned seed/counter state. `manual_seed(seed)` resets the default generator and returns it; `manual_seed_all(seed)` seeds that same single-device generator. Seeds fit signed/unsigned 64-bit integers. `Generator.manual_seed`, `initial_seed`, `get_state`, and `set_state` manage an explicit generator. State is a 24-byte CPU uint8 tensor with RUDA's version marker, not a CUDA RNG state.
@@ -38,7 +54,7 @@ The eager native backend does not install a generic CPU fallback. Unsupported op
 
 ## Scientific operations
 
-These operations use native RUDA GPU kernels, not a CPU numerical fallback or NVIDIA library ABI wrappers. FP64 and complex storage are provided by scientific API 1. Dtype support is per operation: it does not extend all random, attention, training or graph operators. Basic FP64/complex arithmetic, reductions, matrix multiplication, indexing and real/complex view conversion are available; FP64 `erf` requires `RUDA_CUDA_COMPILER=nvrtc` and is not supported by direct PTX.
+With the default `ruda` math backend, these operations use native RUDA GPU kernels rather than a CPU numerical fallback. Explicit `nvidia` selection uses the implemented vendor-library routes described above. FP64 and complex storage are provided by scientific API 1. Dtype support is per operation: it does not extend all random, attention, training or graph operators. Basic FP64/complex arithmetic, reductions, matrix multiplication, indexing and real/complex view conversion are available; FP64 `erf` requires `RUDA_CUDA_COMPILER=nvrtc` and is not supported by direct PTX.
 
 ### BLAS
 
@@ -53,7 +69,7 @@ These four public BLAS functions provide first-order autograd and reject higher-
 
 ### Linear algebra
 
-Import installs the backend kernels used by the following standard PyTorch APIs on real FP32/FP64 RUDA tensors. Public composite operators retain PyTorch's own autograd formulas.
+Import installs the backend kernels used by the following standard PyTorch APIs on FP32/FP64 and complex64/complex128 RUDA tensors. Public composite operators retain PyTorch's own autograd formulas and their unsupported-backward restrictions.
 
 | Family | Public PyTorch entry points |
 | --- | --- |
@@ -61,14 +77,21 @@ Import installs the backend kernels used by the following standard PyTorch APIs 
 | Cholesky | `torch.linalg.cholesky`, `cholesky_ex`, `torch.cholesky_solve`, `torch.cholesky_inverse` |
 | Triangular systems | `torch.linalg.solve_triangular`, legacy `torch.triangular_solve` |
 | Householder QR | `torch.linalg.qr`, `torch.geqrf`, `torch.ormqr` |
-| Symmetric eigenproblem | `torch.linalg.eigh`, `eigvalsh` |
+| Symmetric/Hermitian eigenproblem | `torch.linalg.eigh`, `eigvalsh` |
+| General eigenproblem | `torch.linalg.eig`, `eigvals` |
+| Pivoted LDL | `torch.linalg.ldl_factor`, `ldl_factor_ex`, `ldl_solve` |
+| Householder product and matrix exponential | `torch.linalg.householder_product`, `torch.linalg.matrix_exp` |
 | Singular-value decomposition | `torch.linalg.svd`, `svdvals` |
 | Inverse and determinants | `torch.linalg.inv`, `inv_ex`, `det`, `slogdet` |
 | Full-rank least squares | `torch.linalg.lstsq` |
 
 Leading batches broadcast where the operation allows it. Solve vector RHS follows PyTorch's vector-shape rules; LU pivots exposed to PyTorch are one-based int32. `_ex` variants return int32 `info`, with `check_errors` controlling explicit status checking. Status checking may synchronize and read the small status tensor. Standalone LU/Cholesky factorization retains partial factors on failure; do not treat nonzero info as a usable successful factorization.
 
-QR accepts `reduced`, `complete` and `r`; complete QR and `svd(full_matrices=True)` return full orthogonal bases. `geqrf` and QR mode `r` retain PyTorch's unsupported-backward behavior. SVD uses the native Jacobi implementation with `driver=None`; named NVIDIA drivers such as `gesvd`/`gesvda` are rejected. Least squares uses Householder QR for tall systems or QR of the transpose for wide minimum-norm systems, requires full rank, and accepts only `driver=None`/`gels`; it does not substitute normal equations or a rank-revealing driver. Complex solver inputs are not supported.
+QR accepts `reduced`, `complete` and `r`; complete QR and `svd(full_matrices=True)` return full orthogonal bases. `geqrf` and QR mode `r` retain PyTorch's unsupported-backward behavior. Native RUDA SVD uses one-sided Jacobi and accepts only `driver=None`; explicit NVIDIA SVD accepts `None`, `gesvdj` or `gesvd`, not `gesvda`. Least squares requires full rank and accepts only `driver=None`/`gels`, using QR-based solves rather than normal equations or a rank-revealing substitute.
+
+General eigenproblems return complex64 for FP32/complex64 input and complex128 for FP64/complex128 input. LDL uses int32 pivots; `ldl_solve` requires pivot shape equal to `LD.shape[:-1]` and supports symmetric or Hermitian mode. Matrix exponential additionally accepts FP16/BF16/complex32. The explicit NVIDIA solver route does not implement LDL, general eig or matrix exponential and reports an unsupported-command error. These dtype and route contracts are defined in [linalg dispatch](../../ruda-torch/python/ruda_torch/linalg.py) and [NVIDIA solver dispatch](../../ruda-torch/python/ruda_torch/_vendor_solver.py).
+
+`torch.sparse.spsolve(A, B, left=True)` has a native CSR route for non-batched square FP32/FP64 A and a matching one-dimensional strided RHS; CSR indices use matching int32/int64 widths. `left=False` is rejected, and explicit NVIDIA selection is unavailable. See [sparse solve](../../ruda-torch/python/ruda_torch/_sparse_solve.py).
 
 ### FFT and explicit plans
 
@@ -81,7 +104,7 @@ Standard `torch.fft` APIs dispatch to RUDA without replacing the global Python f
 | nD | `fftn`, `ifftn`, `rfftn`, `irfftn`, `hfftn`, `ihfftn` |
 | Layout/frequencies | `fftshift`, `ifftshift`, `fftfreq`, `rfftfreq` |
 
-Transforms use FP32/FP64 and complex64/complex128 storage; integer input converts to the selected FP32/FP64 default dtype. FP16/BF16/complex32 are rejected, not silently promoted. Frequencies use FP32/FP64. `n`/`s` crop or zero-pad the transformed dimensions; the final transform axis is the compressed Hermitian axis. Supply the original odd length when expanding compressed input with the `irfft`/`hfft` families. `norm=None`/`backward` normalizes the inverse, `forward` normalizes the forward, and `ortho` uses square-root normalization. Exact non-power-of-two lengths use Bluestein convolution rather than rounding the transform length or executing a CPU DFT.
+Transforms use FP16/FP32/FP64 and complex32/complex64/complex128 storage; FP16/complex32 require power-of-two lengths on every transformed axis. BF16 is rejected rather than silently promoted. Integer input converts to the selected FP16/FP32/FP64 default dtype; frequency helpers accept those real dtypes. `n`/`s` crop or zero-pad the transformed dimensions; the final transform axis is the compressed Hermitian axis. Supply the original odd length when expanding compressed input with the `irfft`/`hfft` families. `norm=None`/`backward` normalizes the inverse, `forward` normalizes the forward, and `ortho` uses square-root normalization. Native FP32/FP64 non-power-of-two lengths use Bluestein convolution rather than rounding the transform length or executing a CPU DFT. Explicit NVIDIA selection uses cuFFT; see [FFT dispatch and dtype checks](../../ruda-torch/python/ruda_torch/fft.py).
 
 Transform `out=` variants resize/copy the result but reject autograd when a participating input/output requires gradients. Non-`out` transforms provide native adjoint backward, including higher-order linear gradients. Plans are explicit, queue-bound owners, not an unbounded global cache:
 

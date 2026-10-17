@@ -2,6 +2,16 @@
 
 [Inhalt](README.md) · [Ausführliche Methodenreferenz](../en/native-pytorch-api.md)
 
+## Auswahl des Mathematik-Backends
+
+Diese APIs gehören zum aktuellen `main`-Quellcode, nicht zu den älteren `v0.1.96`-Wheels. Standard ist native RUDA-Mathematik. `RUDA_TORCH_MATH_BACKEND=ruda` oder `nvidia` setzt vor dem Import den Anfangswert. `get_math_backend()` liest die Auswahl des aktuellen Kontexts. `set_math_backend(name)` setzt sie und liefert den vorherigen Namen. Der Kontextmanager `math_backend(name)` stellt die Auswahl auch bei Ausnahmen wieder her.
+
+Explizite NVIDIA-Pfade verwenden cuBLAS/cuBLASLt, cuSOLVER oder cuFFT auf RUDA-Allokationen und dessen Gerätedienst. Sie wandeln Tensoren nicht in `torch.cuda` um und leiten nicht jeden Operator um. Fehlende Bibliotheken und nicht unterstützte explizite NVIDIA-Pfade führen zu Fehlern.
+
+Bibliothekspfade werden über `RUDA_TORCH_CUBLAS_LIBRARY`, `RUDA_TORCH_CUBLASLT_LIBRARY`, `RUDA_TORCH_CUSOLVER_LIBRARY` und `RUDA_TORCH_CUFFT_LIBRARY` angegeben. `RUDA_TORCH_DLL_DIR` ergänzt Suchverzeichnisse; `RUDA_TORCH_CUDA_LIBRARY` benennt den Treiber. Wheels binden sich an die Python-Minor-Version und exakte PyTorch-Version des Builds. Rust und C++ müssen bei einem Umgebungswechsel gemeinsam neu gebaut werden.
+
+Komplexes linalg, LDL, allgemeine Eigenwerte, Matrixexponential und FP16-/complex32-FFT sind in der [ausführlichen API](../en/native-pytorch-api.md#scientific-operations) beschrieben. [Auswahl](../../ruda-torch/python/ruda_torch/math_backend.py), [Bibliothekssuche](../../ruda-torch/python/ruda_torch/_vendor_runtime.py), [Buildmetadaten](../../ruda-torch/python/setup.py).
+
 ## Packed-Quantisierung und quantisierte KV-Caches
 
 Packed-API 1 ergänzt INT2/3/4/5/6/8, FP4 E2M1 und FP8 E4M3/E5M2 mit `PackedQuantizedTensor`, `PackedLinear` und `PackedEmbedding`. Linear unterstützt Eingabegradienten bei eingefrorenen Gewichten; die Berechnung nutzt skalare FP32-Akkumulation, nicht Tensor Core GEMM. `scaled_float8_mm` liefert FP16/BF16/FP32. MinMax/Percentile/MSE, `QuantizationObserver` und `affine_fake_quantize` ergänzen Kalibrierung/QAT.

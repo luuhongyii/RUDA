@@ -4,6 +4,8 @@
 
 本页按设备、内存和执行职责介绍当前通用运行时入口。模块位于 `ruda::runtime`，需要 `ruda/runtime` feature；具体后端还需对应驱动 crate。
 
+CUDA 将 shape 和 strides 均为空的零维复制描述符按一个标量元素处理，而不是空张量；某一维长度为零才表示空传输。见 [CUDA 复制实现](../../ruda-driver-cuda/src/execution/command.rs)。
+
 ## 1. 核心类型
 
 | 类型 | 职责 | 定义 |

@@ -2,6 +2,16 @@
 
 [目次](README.md) · [詳細なメソッド参照](../en/native-pytorch-api.md)
 
+## 数学バックエンドの選択
+
+以下は現在の `main` ソースビルドの API で、古い `v0.1.96` wheel には含まれません。既定は native RUDA です。import 前の `RUDA_TORCH_MATH_BACKEND=ruda` または `nvidia` で初期値を指定できます。`get_math_backend()` は現在の context の選択を返し、`set_math_backend(name)` は変更前の名前を返します。`math_backend(name)` は終了時や例外時に元の選択を復元する context manager です。
+
+NVIDIA 経路は RUDA の allocation と device service 上で cuBLAS／cuBLASLt、cuSOLVER、cuFFT を呼びます。`torch.cuda` への変換でも、すべての演算のリダイレクトでもありません。ライブラリ不足や未対応の明示的 NVIDIA 経路はエラーになります。
+
+`RUDA_TORCH_CUBLAS_LIBRARY`／`CUBLASLT_LIBRARY`／`CUSOLVER_LIBRARY`／`CUFFT_LIBRARY` はそれぞれ完全な `RUDA_TORCH_` 接頭辞で指定します。`RUDA_TORCH_DLL_DIR` は検索ディレクトリ、`RUDA_TORCH_CUDA_LIBRARY` は driver の指定です。wheel はビルド時の Python minor と正確な PyTorch バージョンに結び付き、環境変更時には Rust と C++ を同時に再ビルドします。
+
+複素 linalg、LDL／一般固有値／行列指数、FP16／complex32 FFT の条件は[英語 API](../en/native-pytorch-api.md#scientific-operations)を参照してください。[選択実装](../../ruda-torch/python/ruda_torch/math_backend.py)・[ライブラリ探索](../../ruda-torch/python/ruda_torch/_vendor_runtime.py)・[ビルド設定](../../ruda-torch/python/setup.py)。
+
 ## Packed 量子化と量子化 KV キャッシュ
 
 Packed API 1 は `PackedQuantizedTensor`、`PackedLinear`、`PackedEmbedding` による INT2/3/4/5/6/8、FP4 E2M1、FP8 E4M3/E5M2 を提供します。Linear は凍結重みへの入力勾配を扱い、スカラー FP32 累積を使います。Tensor Core GEMM ではありません。`scaled_float8_mm` の出力は FP16/BF16/FP32 です。MinMax／Percentile／MSE、`QuantizationObserver`、`affine_fake_quantize` が校正／QAT を提供します。

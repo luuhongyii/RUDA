@@ -69,3 +69,15 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 已跟踪张量使用 `ruda_autodiff::collective` 中的 `all_gather`、`reduce_scatter_sum`、`reduce_scatter_mean`、`all_reduce_sum`、`all_reduce_mean`、`broadcast`；聚合／分片的 `_dim` 版本接受任意正轴或负轴。各 rank 的前向和反向须保持匹配的调用顺序、shape、dtype、梯度跟踪和 root。[训练指南](../training.md#副本训练与可微分张量集合通信)列出反向规则及按 token 加权的 `DataParallel::reduce_fp32`。
 
 `DataParallel<B, C>` 接受 `DataParallelCommunicator<B::InnerBackend>`；[rust-ascend](https://github.com/shuqi2077/rust-ascend) 提供原生 HCCL 张量传输，TCP 仅传递训练 metadata。替换通信器不改变参数 ID、冻结／共享语义或 token／样本加权。
+
+## 8. 流式 all-gather 与 rank 本地矩阵乘
+
+`DeviceCollective::all_gather_ring_stream(input, consume)` 按到达顺序调用 `consume(source_rank, shard)`：先处理本 rank，再处理环上传来的分片，并非按 rank 排序。每次回调获得独立设备存储；主机 worker 在调用方计算期间继续转发分片，队列中最多保留一个尚未消费的分片。
+
+所有 rank 须按一致顺序调用，分片长度和元素类型相同。回调不得在同一 session 内发起集合通信。回调错误或 panic 会中止 session，reset 不是 checkpoint。
+
+`RankCommunicator<TensorDevice<B>>::all_gather_matmul_float(input, weight)` 计算 `cat(rank_shards, 0) @ weight`，返回输出及 `CollectiveStats`。输入分片为 `[M,K]`，本地权重为 `[K,N]`，输出 `[world_size*M,N]` 按全局 rank 排列。输入与权重须同为 F32／F16／BF16，位于通信器的设备上，且原内容保持不变。所有 rank 的分片 shape／dtype 和调用顺序须一致；各 rank 可使用不同权重。
+
+每个分片的矩阵乘在消费下个分片前同步，使惰性后端也在主机通信期间执行计算。这是 host-staged 重叠，不代表 GPU P2P、设备融合内核或加速保证。
+
+源码：[流式环](../../../ruCCL/src/rank/device_collective/all_gather_stream.rs)、[张量矩阵乘适配](../../../ruCCL/src/tensor_device/all_gather_matmul.rs)。

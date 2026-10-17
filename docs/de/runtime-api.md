@@ -6,6 +6,8 @@
 
 Die allgemeine Laufzeit befindet sich in `ruda::runtime` und wird durch die Funktion `ruda/runtime` aktiviert. Jedes Backend benötigt außerdem seine entsprechende Treiberkiste.
 
+CUDA behandelt einen Kopierdeskriptor mit leerer Form und leeren Strides als einen Skalar, nicht als leeren Tensor. Eine Achse der Länge null beschreibt dagegen eine leere Übertragung. Siehe [CUDA-Kopierimplementierung](../../ruda-driver-cuda/src/execution/command.rs).
+
 ## 1. Kerntypen
 
 |Typ|Verantwortung|Definition|

@@ -38,3 +38,11 @@ Preserve the argument layout, entry point, and shared memory requirements when c
 Unsupported IR returns `CompilationError::UnsupportedInstruction`. Invalid configuration or structure returns `CompilationError::Validation`. Diagnostics include the `Direct PTX:` prefix. The backend does not automatically fall back to NVRTC.
 
 Definitions: [PTX module](../../ruda-compiler/src/ptx/mod.rs), [compiler tests](../../ruda-compiler/src/ptx/tests.rs), and [runtime backend selection](../../ruda-driver-cuda/src/compiler_backend.rs).
+
+## 5. Packed FP4 transport and NVFP4 scaled MMA
+
+`StorageType::Packed(ElemType::Float(FloatKind::E2M1), 2)` stores two FP4 values per byte. Direct PTX supports bit-preserving copy/index/select/reinterpret and memory transport for this storage. It does not treat a packed byte as a scalar FP4 arithmetic value; unsupported arithmetic or conversion returns an error. Transport alone does not require an `sm_120a` target.
+
+`CoopMma::ExecuteScaled` currently accepts only SM 120 with PTX 8.7 or newer, a `16×8×64` tile, packed E2M1x2 A/B, F32 C/D, E4M3 scales, and `scales_factor = 4`. It emits the `mxf4nvf4.block_scale.scale_vec::4X` instruction and changes the generated target to `sm_120a`. Other architectures, tile shapes, scale formats or factors are rejected; sufficient fragment register capacity is also required.
+
+See [packed operation handling](../../ruda-compiler/src/ptx/packed.rs), [scaled MMA lowering](../../ruda-compiler/src/ptx/matrix/scaled.rs), and the [packed transport/layout example](../../ruda-driver-cuda/examples/ptx_packed.rs). That example consumes exported PTX files and checks byte transport and fragment coordinates; it does not execute NVFP4 MMA arithmetic.

@@ -33,6 +33,7 @@ The tables cover the resolved workspace, including the path-dependent CANN drive
 | [`ruda`](../../ruda/Cargo.toml) | [`ruda`](../../ruda/src/lib.rs) | Kernel facade and runtime re-exports; start here for GPU kernels |
 | [`ruda-core`](../../ruda-core/Cargo.toml) | [`ruda_core`](../../ruda-core/src/lib.rs) | Shared IR, tensor data, dtype, device, and memory contracts |
 | [`ruda-compiler`](../../ruda-compiler/Cargo.toml) | [`ruda_compiler`](../../ruda-compiler/src/lib.rs) | Kernel frontends and target code generation |
+| [`ruda-triton`](../../ruda-triton/Cargo.toml) | [`ruda_triton`](../../ruda-triton/src/lib.rs) | Triton SIMT description → Ruda IR → PTX; source-build integration, not a crates.io package |
 | [`ruda-kernel`](../../ruda-kernel/Cargo.toml) | [`ruda_kernel`](../../ruda-kernel/src/lib.rs) | Rust kernel DSL, launch interfaces, and device tensor utilities |
 | [`ruda-runtime`](../../ruda-runtime/Cargo.toml) | [`ruda_runtime`](../../ruda-runtime/src/lib.rs) | Compute clients/servers, storage, streams, and scheduling |
 | [`ruda-kernel-macros`](../../ruda-kernel-macros/Cargo.toml) | [`ruda_kernel_macros`](../../ruda-kernel-macros/src/lib.rs) | Procedural macros translating kernel Rust to IR |

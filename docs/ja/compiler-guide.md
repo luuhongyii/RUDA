@@ -51,3 +51,13 @@ CUDA ドライバーの直接 PTX キャッシュ名前空間には、バック�
 サポートされていない IR、引数メタデータ、またはターゲット条件によりエラーが発生します。ダイレクト PTX は、コンパイル パスを自動的に切り替えるのではなく、サポートされていない操作を報告します。 [デバッグ](debugging.md)を参照してください。
 
 `ruda-compiler` には、WGSL、SPIR-V、および MLIR モジュールも含まれています。
+
+## 6. Triton フロントエンド
+
+ソースビルド専用の `ruda-triton` は、Triton TTIR → SIMT 記述 → Ruda IR → 直接 PTX を実装します。`cargo build --locked --release -p ruda-triton` でコンパイラーを作り、pip で `./ruda-triton/python` をインストールします。宣言された依存関係は Python 3.10+、Triton 3.8+、PyTorch です。`RUDA_TRITON_PTX` を `target/release/ruda-triton-ptx`（Windows は `.exe`）へ設定するか PATH に追加します。
+
+Triton の import 前に `TRITON_DEFAULT_BACKEND=ruda` を設定します。既定の `RUDA_TRITON_DEVICE=cuda` は `torch.cuda` ストレージと現在の CUDA stream を使います。`ruda` は `ruda_torch` PrivateUse1 ストレージと現在の RUDA stream を使い、起動前に同 stream の RUDA キューを flush します。CUDA と RUDA のポインターは交換できません。
+
+Triton が対象で Gluon は対象外です。未対応 TTIR は lowering エラーになります。Rust Kernel DSL とは別経路で、すべての Triton kernel への対応を意味しません。GX1 モードにはこの workspace 外の独立ライブラリが必要です。
+
+[依存関係](../../ruda-triton/python/pyproject.toml)・[コンパイラー](../../ruda-triton/python/ruda_triton/compiler.py)・[デバイス／stream](../../ruda-triton/python/ruda_triton/driver.py)。

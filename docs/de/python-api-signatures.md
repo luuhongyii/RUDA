@@ -6,6 +6,14 @@ Die von RUDA definierten Konstruktoren und Methoden stehen unten. Geerbte PyTorc
 
 Signaturen für Packed-Quantisierung, Kalibrierung/QAT, GPTQ/GGUF und quantisierte KV-Caches: [Packed-API-Referenz](../en/native-pytorch-api.md#packed-quantization-and-checkpoint-import).
 
+## Mathematik-Backend-Auswahl
+
+| API | Source |
+| --- | --- |
+| `ruda_torch.get_math_backend()` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.set_math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+
 ## `__init__`
 
 | Öffentlicher Name / Aufruf | Quellcode |

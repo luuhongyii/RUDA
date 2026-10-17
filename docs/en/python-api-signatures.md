@@ -6,6 +6,14 @@ Constructors and methods defined by RUDA are listed below. Standard inherited Py
 
 Packed quantization, calibration/QAT, GPTQ/GGUF import and quantized KV cache signatures are documented in the [packed API reference](native-pytorch-api.md#packed-quantization-and-checkpoint-import).
 
+## Math backend selectors
+
+| API | Source |
+| --- | --- |
+| `ruda_torch.get_math_backend()` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.set_math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+
 ## Scientific BLAS and FFT
 
 Contracts and standard `torch.linalg` dispatch: [scientific API](native-pytorch-api.md#scientific-operations).

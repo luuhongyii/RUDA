@@ -40,3 +40,11 @@
 サポートされていない IR は `CompilationError::UnsupportedInstruction` を返します。無効な構成または構造は、`CompilationError::Validation` を返します。診断には、`Direct PTX:` プレフィックスが含まれます。バックエンドは自動的に NVRTC にフォールバックしません。
 
 定義: [PTX モジュール](../../ruda-compiler/src/ptx/mod.rs)、[コンパイラー テスト](../../ruda-compiler/src/ptx/tests.rs)、および [ランタイム バックエンドの選択](../../ruda-driver-cuda/src/compiler_backend.rs)。
+
+## 5. Packed FP4 転送と NVFP4 scaled MMA
+
+`StorageType::Packed(ElemType::Float(FloatKind::E2M1), 2)` は 1 byte に FP4 値を 2 個格納します。直接 PTX はビットを保持する copy／index／select／reinterpret とメモリ転送に対応します。packed byte を単一 FP4 算術値として扱わず、未対応の演算や変換はエラーになります。転送のみでは `sm_120a` は不要です。
+
+`CoopMma::ExecuteScaled` は SM 120、PTX 8.7 以上、`16×8×64` tile、packed E2M1x2 A／B、F32 C／D、E4M3 scale、`scales_factor = 4` のみ受け付けます。`mxf4nvf4.block_scale.scale_vec::4X` を生成し、出力 target は `sm_120a` になります。他のアーキテクチャ、tile、scale 型や係数は拒否され、fragment のレジスタ容量も必要です。
+
+[Packed 処理](../../ruda-compiler/src/ptx/packed.rs)・[scaled MMA](../../ruda-compiler/src/ptx/matrix/scaled.rs)・[転送／配置サンプル](../../ruda-driver-cuda/examples/ptx_packed.rs)。サンプルは出力済み PTX を読み、byte 転送と fragment 座標を調べるもので、NVFP4 MMA 算術は実行しません。

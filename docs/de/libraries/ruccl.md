@@ -59,3 +59,15 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 `run` erfordert ein Verzeichnis, das noch nicht existiert. Es speichert das Modell und den Optimierer jedes Rangs nach der ersten Aktualisierung und führt dann die zweite Aktualisierung aus. `resume` stellt dieses Verzeichnis wieder her und führt das zweite Update aus. Wenn CUDA aktiviert ist, verwenden beide logischen Ränge in diesem Beispiel dasselbe Standardgerät.
 
 Die vollständige Anrufsequenz finden Sie im [Beispiel für ein gemeinsames Training](../../../ruda-optim/examples/collective_training.rs). Um auch den Planerstatus und die ausstehenden akkumulierten Verläufe zu speichern, verwenden Sie `TrainingRecord` aus [Trainings- und Speicherstatus](../training.md).
+
+## 8. Streaming-All-Gather und rank-lokales Matmul
+
+`DeviceCollective::all_gather_ring_stream(input, consume)` ruft `consume(source_rank, shard)` zuerst für den lokalen Rank und danach in Ring-Ankunftsreihenfolge auf, nicht nach Rank sortiert. Jeder Aufruf erhält unabhängigen Gerätespeicher. Ein Host-Worker leitet Shards während der Berechnung weiter; höchstens ein unverarbeiteter Shard wartet in der Queue.
+
+Alle Ranks müssen Aufrufreihenfolge, Shard-Länge und Elementtyp abstimmen. Der Callback darf keine Collectives derselben Session aufrufen. Callback-Fehler und Panics brechen die Session ab; ein Reset ist kein Checkpoint.
+
+`RankCommunicator<TensorDevice<B>>::all_gather_matmul_float(input, weight)` berechnet `cat(rank_shards, 0) @ weight` und liefert Ausgabe plus `CollectiveStats`. Shards sind `[M,K]`, lokale Gewichte `[K,N]`, die Ausgabe `[world_size*M,N]` ist nach globalem Rank geordnet. Eingaben und Gewichte bleiben unverändert und müssen denselben F32-/F16-/BF16-Typ auf dem Gerät des Kommunikators verwenden. Shard-Form, dtype und Aufrufreihenfolge stimmen über alle Ranks überein; Gewichte dürfen je Rank abweichen.
+
+Jedes Shard-Matmul wird vor dem nächsten Shard synchronisiert, damit auch verzögerte Backends während der Host-Kommunikation rechnen. Dies ist host-staged Überlappung, keine GPU-P2P-Übertragung, kein fusionierter Gerätekernel und keine Beschleunigungsgarantie.
+
+[Streaming-Ring](../../../ruCCL/src/rank/device_collective/all_gather_stream.rs), [Tensor-Matmul-Adapter](../../../ruCCL/src/tensor_device/all_gather_matmul.rs).

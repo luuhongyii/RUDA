@@ -69,3 +69,15 @@ See the [collective training example](../../../ruda-optim/examples/collective_tr
 Use `ruda_autodiff::collective` for tracked `all_gather`, `reduce_scatter_sum`, `reduce_scatter_mean`, `all_reduce_sum`, `all_reduce_mean` and `broadcast`. The gather/scatter `_dim` variants accept arbitrary positive or negative axes. Forward and backward must have matching rank order, shapes, dtypes, gradient tracking and root. The [training guide](../training.md#replicated-training-and-differentiable-tensor-collectives) describes each backward rule and token-weighted `DataParallel::reduce_fp32`.
 
 `DataParallel<B, C>` accepts a `DataParallelCommunicator<B::InnerBackend>`; [rust-ascend](https://github.com/shuqi2077/rust-ascend) supplies native HCCL tensor transport while retaining TCP only for training metadata. Changing transport does not change parameter IDs, frozen/tied semantics or token/sample weighting.
+
+## 8. Streaming all-gather and rank-local matmul
+
+`DeviceCollective::all_gather_ring_stream(input, consume)` delivers each shard to `consume(source_rank, shard)`, starting with the local rank and then following ring arrival order, not sorted rank order. Each callback receives independent device storage. A host worker forwards shards while the caller computes, with at most one unconsumed shard queued.
+
+All ranks must call in matching order with equal shard lengths and element types. The callback must not issue collectives on the same session. Callback errors or panics abort the session; a reset is not a checkpoint.
+
+`RankCommunicator<TensorDevice<B>>::all_gather_matmul_float(input, weight)` computes `cat(rank_shards, 0) @ weight` and returns the output plus `CollectiveStats`. Input shards are `[M,K]`, local weights `[K,N]`, and output `[world_size*M,N]` is in global rank order. Inputs and weights use matching F32/F16/BF16 storage on the communicator's device and remain unchanged. All ranks use the same shard shape/dtype and call order; weights may differ by rank.
+
+Each shard's matmul is synchronized before the next shard is consumed, so lazy backends compute during host communication. This is host-staged overlap, not GPU peer-memory transfer, a fused device kernel, or an acceleration guarantee.
+
+Source: [streaming ring](../../../ruCCL/src/rank/device_collective/all_gather_stream.rs), [tensor matmul adapter](../../../ruCCL/src/tensor_device/all_gather_matmul.rs).

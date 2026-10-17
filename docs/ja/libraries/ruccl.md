@@ -59,3 +59,15 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 `run` にはまだ存在しないディレクトリが必要です。最初の更新後に各ランクのモデルとオプティマイザーを保存し、2 番目の更新を実行します。 `resume` はそのディレクトリを復元し、2 番目の更新を実行します。 CUDA が有効になっている場合、この例の両方の論理ランクは同じデフォルト デバイスを使用します。
 
 完全な呼び出しシーケンスについては、[集合トレーニングの例](../../../ruda-optim/examples/collective_training.rs) を参照してください。スケジューラーの状態と保留中の累積勾配も保存するには、[トレーニングと状態の保存](../training.md) の `TrainingRecord` を使用します。
+
+## 8. ストリーミング all-gather と rank ローカル行列積
+
+`DeviceCollective::all_gather_ring_stream(input, consume)` はローカル rank から開始し、リング到着順に `consume(source_rank, shard)` を呼びます。rank の昇順ではありません。各 shard は独立したデバイスストレージです。ホスト worker が転送を続ける間に呼び出し元が計算し、未消費 shard のキューは最大 1 個です。
+
+全 rank で呼び出し順、shard 長、要素型を一致させます。コールバックから同じ session の collective を呼んではいけません。エラーや panic は session を中止します。reset は checkpoint ではありません。
+
+`RankCommunicator<TensorDevice<B>>::all_gather_matmul_float(input, weight)` は `cat(rank_shards, 0) @ weight` を計算し、結果と `CollectiveStats` を返します。shard は `[M,K]`、ローカル重みは `[K,N]`、出力はグローバル rank 順の `[world_size*M,N]` です。入力と重みは通信器のデバイス上で同じ F32／F16／BF16 型を使い、変更されません。全 rank の shard shape／dtype と呼び出し順は同じで、重みは rank ごとに変えられます。
+
+shard ごとに matmul を同期するため、遅延バックエンドでもホスト通信中に計算します。host-staged な重複実行であり、GPU P2P、デバイス融合、速度向上を保証しません。
+
+[リング実装](../../../ruCCL/src/rank/device_collective/all_gather_stream.rs)・[行列積アダプター](../../../ruCCL/src/tensor_device/all_gather_matmul.rs)。
