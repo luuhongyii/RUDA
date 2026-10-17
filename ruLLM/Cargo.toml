@@ -24,7 +24,7 @@ expert-parallel = ["tensor-parallel"]
 gpu-kv = ["serving", "nvidia", "ruda-driver-cuda/ucx-bridge"]
 
 [dependencies]
-ruda-driver-cann = { version = "0.1.98", path = "../ruda-driver-cann", optional = true }
+ruda-driver-cann = { version = "0.1.99", path = "../ruda-driver-cann", optional = true }
 ruda-model = { version = "0.21.60", path = "../ruda-model", default-features = false, features = ["std"] }
 ruda-nn = { version = "0.21.69", path = "../ruda-nn", default-features = false, features = ["std"] }
 ruda-tensor = { version = "0.21.71", path = "../ruda-tensor", default-features = false, features = ["std", "kernel"] }
