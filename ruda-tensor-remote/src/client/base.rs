@@ -112,7 +112,7 @@ impl RemoteSender {
 
         let close_task = ClientRequest::WithoutCallback(Task::Close(self.session_id));
 
-        sender.send_blocking(close_task).unwrap();
+        let _ = sender.send_blocking(close_task);
     }
 }
 

@@ -46,27 +46,45 @@ pub use __client::*;
 #[cfg(all(test, feature = "client", feature = "server"))]
 mod tests {
     use crate::RemoteBackend;
+    use ruda_communication::{CommunicationChannel, ProtocolClient, websocket::WsClient};
     use ruda_tensor_host::Host;
     use ruda_tensor::api::{Distribution, Tensor};
+    use std::time::Duration;
+
+    fn start_server(rt: &tokio::runtime::Runtime) -> super::RemoteDevice {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let server = rt.spawn(crate::server::start_websocket_async::<Host>(
+            Default::default(),
+            port,
+        ));
+        let device = super::RemoteDevice::new(&format!("ws://127.0.0.1:{port}"));
+        rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    assert!(!server.is_finished(), "test server stopped before becoming ready");
+                    if let Some(mut channel) = WsClient::connect(device.address.clone(), "request").await {
+                        channel.close().await.unwrap();
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }).await.expect("test server did not become ready");
+        });
+        device
+    }
 
     #[test]
     pub fn test_to_device_over_websocket() {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_io()
+            .enable_time()
             .build()
             .unwrap();
 
-        rt.spawn(crate::server::start_websocket_async::<Host>(
-            Default::default(),
-            3000,
-        ));
-        rt.spawn(crate::server::start_websocket_async::<Host>(
-            Default::default(),
-            3010,
-        ));
-
-        let remote_device_1 = super::RemoteDevice::new("ws://127.0.0.1:3000");
-        let remote_device_2 = super::RemoteDevice::new("ws://127.0.0.1:3010");
+        let remote_device_1 = start_server(&rt);
+        let remote_device_2 = start_server(&rt);
 
         // Some random input
         let input_shape = [1, 28, 28];
@@ -103,14 +121,8 @@ mod tests {
             .enable_time()
             .build()
             .unwrap();
-        rt.spawn(crate::server::start_websocket_async::<Host>(
-            Default::default(),
-            3020,
-        ));
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
         type Client = <RemoteProtocol as Protocol>::Client;
-        let device = super::RemoteDevice::new("ws://127.0.0.1:3020");
+        let device = start_server(&rt);
         let client_a = RemoteClient::init::<Client>(device.clone());
         let client_b = RemoteClient::init::<Client>(device);
 
