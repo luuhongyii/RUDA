@@ -1,5 +1,5 @@
 use ruda_autodiff::{Autodiff, checkpoint::strategy::{BalancedCheckpointing, NoCheckpointing}};
-use ruda_model::tensor::{BackendTypes, Tensor};
+use ruda_model::tensor::{backend::BackendTypes, Tensor};
 
 macro_rules! tape_suite {
     ($name:ident, $strategy:ty) => {

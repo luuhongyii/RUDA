@@ -52,7 +52,7 @@ impl<B: FusionBackend> Backend for Fusion<B> {
         client.sync(move || B::seed(&device, seed));
     }
 
-    fn rng_state(device: &B::Device) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+    fn rng_state(device: &B::Device) -> Result<Vec<u8>, ExecutionError> {
         Self::sync(device)?;
         let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
         let device = device.clone();

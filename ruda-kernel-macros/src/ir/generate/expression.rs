@@ -282,6 +282,13 @@ impl Expression {
                     }
                 }
             }
+            Expression::MethodCall { receiver, method, args, span, .. }
+                if method == "clone" && args.is_empty() => {
+                let receiver = receiver.as_const(context)
+                    .unwrap_or_else(|| receiver.to_tokens(context));
+                let snapshot = snapshot_value(quote![(#receiver).clone()]);
+                with_debug_call(context, *span, snapshot)
+            }
             Expression::MethodCall {
                 receiver,
                 method,
@@ -536,8 +543,13 @@ impl Expression {
                     quote! {{ let _reference = #input; #into_mut::expand_reborrow(_reference.clone(), scope, #writable) }}
                 } else {
                     let inner = inner.to_tokens(context);
-                    let into_mut = frontend_type("IntoMut");
-                    quote! {{ let _value = #inner; #into_mut::expand_reference(_value.clone(), scope, #writable) }}
+                    let snapshot = frontend_type("ValueSnapshot");
+                    let fallback = frontend_type("ValueSnapshotFallback");
+                    quote! {{
+                        use #fallback as _;
+                        let _value = #inner;
+                        #snapshot(_value.clone()).reference(scope, #writable)
+                    }}
                 }
             }
             Expression::StructInit { path, fields } => {

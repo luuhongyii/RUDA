@@ -245,17 +245,26 @@ impl<T: IntoMut> ValueSnapshot<T> {
     pub fn snapshot(self, scope: &mut Scope) -> T {
         self.0.expand_reference_value(scope)
     }
+
+    pub fn reference(self, scope: &mut Scope, writable: bool) -> T {
+        self.0.expand_reference(scope, writable)
+    }
 }
 
 #[doc(hidden)]
 pub trait ValueSnapshotFallback {
     type Value;
     fn snapshot(self, scope: &mut Scope) -> Self::Value;
+    fn reference(self, scope: &mut Scope, writable: bool) -> Self::Value;
 }
 
 impl<T: Clone> ValueSnapshotFallback for &ValueSnapshot<T> {
     type Value = T;
     fn snapshot(self, _scope: &mut Scope) -> T {
+        self.0.clone()
+    }
+
+    fn reference(self, _scope: &mut Scope, _writable: bool) -> T {
         self.0.clone()
     }
 }

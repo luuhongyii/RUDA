@@ -120,7 +120,7 @@ impl ComputeServer for HipServer {
     fn write(&mut self, descriptors: Vec<(CopyDescriptor, Bytes)>, stream_id: StreamId) {
         for (descriptor, data) in descriptors {
             if data.is_empty() || descriptor.shape.contains(&0) { continue; }
-            match self.command(
+            let failed = match self.command(
                 stream_id,
                 core::iter::once(&descriptor.handle),
                 StreamErrorMode { ignore: true, flush: false },
@@ -129,11 +129,13 @@ impl ComputeServer for HipServer {
                     if let Err(error) = command.write_to_gpu(descriptor, data) {
                         command.error(error.into());
                     }
+                    None
                 }
-                Err(error) => {
-                    self.ctx.timestamps.error(ProfileError::Server(Box::new(error.clone())));
-                    ruda::runtime::server::WriteScope::new(vec![descriptor.handle]).fail(error);
-                }
+                Err(error) => Some((descriptor.handle, error)),
+            };
+            if let Some((handle, error)) = failed {
+                self.ctx.timestamps.error(ProfileError::Server(Box::new(error.clone())));
+                ruda::runtime::server::WriteScope::new(vec![handle]).fail(error);
             }
         }
     }
