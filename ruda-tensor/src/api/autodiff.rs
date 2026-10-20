@@ -47,8 +47,8 @@ macro_rules! value_autodiff_context {
     };
 }
 
-value_autodiff_context!(crate::Int, int_autodiff_context, int_with_autodiff_context);
-value_autodiff_context!(crate::Bool, bool_autodiff_context, bool_with_autodiff_context);
+value_autodiff_context!(crate::api::Int, int_autodiff_context, int_with_autodiff_context);
+value_autodiff_context!(crate::api::Bool, bool_autodiff_context, bool_with_autodiff_context);
 
 impl<const D: usize, B: AutodiffBackend> Tensor<B, D> {
     /// Backward pass of the tensor.

@@ -622,7 +622,7 @@ impl Display for Instruction {
             }
             Instruction::IndexAssignView { list, index, value, width } => {
                 let stored = list.item().vectorization_factor();
-                let scalar_type = Item::Scalar(*list.elem());
+                let scalar_type = Item::Scalar(list.elem());
                 for lane in 0..*width {
                     let scalar = format!("({index} * {width}u + {lane}u)");
                     let place = if stored == 1 { format!("{list}[{scalar}]") }

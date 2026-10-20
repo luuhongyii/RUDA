@@ -1,7 +1,7 @@
 use super::{TuneReport, TimeLimit, TuneFailure, cache::split_scoped_key, engine::SearchTrace};
 use ruda_core::environment::records::{Record, RecordEffect, Span};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{string::{String, ToString}, time::Duration, vec::Vec};
 
 /// The result of a shared-controller search in the active environment.
 #[derive(Debug, Clone, Serialize, Deserialize)]

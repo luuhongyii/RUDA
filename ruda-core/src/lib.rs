@@ -31,7 +31,7 @@ pub mod device;
 
 /// Device handle module.
 pub mod device_handle {
-    pub use super::device::handle::DeviceHandle;
+    pub use super::device::handle::{DeviceHandle, ServiceCreationError};
 }
 
 /// Utilities module to manipulate bytes.
