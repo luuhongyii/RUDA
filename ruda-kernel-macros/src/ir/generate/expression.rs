@@ -159,8 +159,8 @@ impl Expression {
                 if matches!(**left, Expression::Unary { operator: Operator::Deref, .. }) =>
             {
                 let Expression::Unary { input, .. } = &**left else { unreachable!() };
-                let reference = input.to_tokens(context);
                 let right = right.to_tokens(context);
+                let reference = input.to_tokens(context);
                 let into_mut = frontend_type("IntoMut");
                 quote! {{
                     let _value = #right;
