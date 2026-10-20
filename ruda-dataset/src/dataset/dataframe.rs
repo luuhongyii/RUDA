@@ -76,6 +76,22 @@ impl<I> Dataset<I> for DataframeDataset<I>
 where
     I: Clone + Send + Sync + DeserializeOwned,
 {
+    fn is_read_order_independent(&self) -> bool { true }
+
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&(1u32, self.len, &self.column_name_mapping))
+            .map_err(|error| error.to_string())
+    }
+
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        let (version, len, columns): (u32, usize, Vec<usize>) =
+            serde_json::from_slice(state).map_err(|error| error.to_string())?;
+        if version != 1 || len != self.len || columns != self.column_name_mapping {
+            return Err("DataFrame dataset configuration differs from checkpoint".into());
+        }
+        Ok(())
+    }
+
     /// Get an item from the dataset at the specified index
     ///
     /// # Arguments

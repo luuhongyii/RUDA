@@ -72,6 +72,12 @@ pub enum RunEvent {
 }
 
 pub trait EventProcessorTraining<T, V>: Send {
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        Err(TrainingError("This event processor does not support continuation".into()))
+    }
+    fn restore_checkpoint(&mut self, _: &[u8]) -> Result<(), TrainingError> {
+        Err(TrainingError("This event processor does not support continuation".into()))
+    }
     fn process_run(&mut self, _: RunEvent) -> Result<(), TrainingError> {
         Ok(())
     }
@@ -202,6 +208,17 @@ struct SplitMetrics<T> {
     lr: Option<LearningRate>,
     finalized: bool,
 }
+
+#[derive(Serialize, Deserialize)]
+struct SplitMetricsRecord {
+    metrics: Vec<(String, Vec<u8>)>,
+    epoch: usize,
+    iteration: usize,
+    processed: usize,
+    total: usize,
+    lr: Option<LearningRate>,
+    finalized: bool,
+}
 impl<T> Default for SplitMetrics<T> {
     fn default() -> Self {
         Self {
@@ -216,6 +233,31 @@ impl<T> Default for SplitMetrics<T> {
     }
 }
 impl<T> SplitMetrics<T> {
+    fn checkpoint(&mut self) -> Result<SplitMetricsRecord, TrainingError> {
+        let mut metrics = Vec::with_capacity(self.metrics.len());
+        for metric in &mut self.metrics {
+            metrics.push((metric.entry().name, metric.checkpoint()?));
+        }
+        Ok(SplitMetricsRecord {
+            metrics, epoch: self.epoch, iteration: self.iteration, processed: self.processed,
+            total: self.total, lr: self.lr, finalized: self.finalized,
+        })
+    }
+    fn restore_checkpoint(&mut self, state: SplitMetricsRecord) -> Result<(), TrainingError> {
+        if state.metrics.len() != self.metrics.len()
+            || state.metrics.iter().zip(&self.metrics).any(|((name, _), metric)| *name != metric.entry().name)
+        { return Err(TrainingError("Metric registration differs from checkpoint".into())); }
+        for (metric, (_, state)) in self.metrics.iter_mut().zip(state.metrics) {
+            metric.restore_checkpoint(&state)?;
+        }
+        self.epoch = state.epoch;
+        self.iteration = state.iteration;
+        self.processed = state.processed;
+        self.total = state.total;
+        self.lr = state.lr;
+        self.finalized = state.finalized;
+        Ok(())
+    }
     fn process(
         &mut self,
         event: LearnerEvent<T>,
@@ -488,6 +530,25 @@ impl<T, V> MetricsProcessor<T, V> {
     }
 }
 impl<T, V> EventProcessorTraining<T, V> for MetricsProcessor<T, V> {
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        self.flush()?;
+        crate::continuation::encode(&(
+            1u32, self.train.checkpoint()?, self.valid.checkpoint()?, self.valid_split,
+            self.store.checkpoint()?,
+        ))
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (version, train, valid, split, store):
+            (u32, SplitMetricsRecord, SplitMetricsRecord, Split, Vec<u8>) =
+            crate::continuation::decode(bytes)?;
+        if version != 1 || split != self.valid_split {
+            return Err(TrainingError("Metric processor configuration differs from checkpoint".into()));
+        }
+        self.train.restore_checkpoint(train)?;
+        self.valid.restore_checkpoint(valid)?;
+        self.store.restore_checkpoint(&store)?;
+        Ok(())
+    }
     fn process_run(&mut self, event: RunEvent) -> Result<(), TrainingError> {
         if !self.renderers.is_empty()
             && matches!(

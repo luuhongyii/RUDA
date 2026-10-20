@@ -11,9 +11,7 @@ use crate::ir::{
 
 impl RudaTypeEnum {
     pub fn generate_runtime(&self, with_launch: bool) -> TokenStream {
-        if let Err(err) = self.validate() {
-            return err.into_compile_error();
-        }
+        if self.uses_runtime_slots() { return self.generate_runtime_slots(with_launch); }
 
         if with_launch {
             let args_ty = self.args_ty();
@@ -42,33 +40,6 @@ impl RudaTypeEnum {
         }
     }
 
-    fn validate(&self) -> Result<(), syn::Error> {
-        let types = self
-            .variants
-            .iter()
-            .filter_map(|v| match v.kind {
-                VariantKind::Named => Some(Err(syn::Error::new(
-                    self.ident.span(),
-                    "Named enum fields are not supported for runtime enums",
-                ))),
-                VariantKind::Unnamed if v.fields.len() > 1 => Some(Err(syn::Error::new(
-                    self.ident.span(),
-                    "Only single value is supported for runtime enums",
-                ))),
-                VariantKind::Unnamed => Some(Ok(v.fields.iter().next().unwrap().ty.clone())),
-                VariantKind::Empty => None,
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if types.len() > 1 {
-            Err(syn::Error::new(
-                self.ident.span(),
-                "Only one value type is allowed for runtime enums",
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
     fn expand_value_ty(&self) -> proc_macro2::TokenStream {
         let ruda_enum = prelude_type("RudaEnum");
         let expand_elem = frontend_type("NativeExpand");
@@ -92,6 +63,7 @@ impl RudaTypeEnum {
         let name = &self.ident;
         let name_expand = &self.name_expand;
         let (generics, generic_names, where_clause) = self.generics.split_for_impl();
+        let accessors = self.runtime_field_accessors(false);
 
         let constructors = if self.with_constructors {
             let new_variant_functions = self.variants.iter().map(|v| {
@@ -100,6 +72,7 @@ impl RudaTypeEnum {
                     name_expand,
                     &generic_names,
                     self.value_ty(),
+                    self.reference_value_ty(),
                 )
             });
 
@@ -124,6 +97,12 @@ impl RudaTypeEnum {
                         value: #into_mut::into_mut(self.value, scope)
                     }
                 }
+                fn expand_reference_value(self, scope: &mut #scope) -> Self {
+                    Self {
+                        discriminant: #into_mut::expand_reference_value(self.discriminant, scope),
+                        value: #into_mut::expand_reference_value(self.value, scope),
+                    }
+                }
             }
 
             impl #generics #debug for #name #generic_names #where_clause {}
@@ -138,6 +117,7 @@ impl RudaTypeEnum {
                 }
             }
 
+            #accessors
             #constructors
         }
     }
@@ -154,9 +134,24 @@ impl RudaTypeEnum {
             .unwrap_or_else(|| quote![()])
     }
 
+    fn reference_value_ty(&self) -> bool {
+        fn is_reference(ty: &syn::Type) -> bool {
+            match ty {
+                syn::Type::Reference(_) => true,
+                syn::Type::Group(ty) => is_reference(&ty.elem),
+                syn::Type::Paren(ty) => is_reference(&ty.elem),
+                _ => false,
+            }
+        }
+        self.variants.iter().find_map(|variant| variant.fields.iter().next())
+            .is_some_and(|field| is_reference(&field.ty))
+    }
+
     fn ruda_type_impl_runtime(&self) -> proc_macro2::TokenStream {
         let ruda_type = prelude_type("RudaType");
         let ruda_enum = prelude_type("RudaEnum");
+        let into_mut = prelude_type("IntoMut");
+        let scope = prelude_type("Scope");
         let expand_elem = frontend_type("NativeExpand");
 
         let name = &self.ident;
@@ -165,6 +160,8 @@ impl RudaTypeEnum {
         let (generics, generic_names, where_clause) = self.generics.split_for_impl();
 
         let value_ty = self.value_ty();
+        let turbofish = generic_names.as_turbofish();
+        let first = self.variants.first().map_or(0, |variant| variant.discriminant);
 
         let body_discriminants = self.match_impl(
             quote! {variant_name},
@@ -182,9 +179,19 @@ impl RudaTypeEnum {
         quote! {
             impl #generics #ruda_type for #name #generic_names #where_clause {
                 type ExpandType = #name_expand #generic_names;
+                fn __expand_inactive_value(scope: &mut #scope) -> Self::ExpandType {
+                    #name_expand #turbofish {
+                        discriminant: #first.into(),
+                        value: <#value_ty as #ruda_type>::__expand_inactive_value(scope),
+                    }
+                }
             }
             impl #generics #ruda_enum for #name_expand #generic_names #where_clause {
                 type RuntimeValue = <#value_ty as #ruda_type>::ExpandType;
+
+                fn snapshot_for_match(self, scope: &mut #scope) -> Self {
+                    #into_mut::expand_reference_value(self, scope)
+                }
 
                 fn discriminant(&self) -> #expand_elem<i32> {
                     self.discriminant.clone()
@@ -201,7 +208,7 @@ impl RudaTypeEnum {
         }
     }
 
-    fn args_ty_runtime(&self) -> proc_macro2::TokenStream {
+    pub(super) fn args_ty_runtime(&self) -> proc_macro2::TokenStream {
         let launch_name = format_ident!("{}Launch", self.ident);
         let args_name = format_ident!("{}Args", self.ident);
         let vis = &self.vis;
@@ -489,11 +496,15 @@ impl RudaTypeVariant {
         ident_ty_expand: &Ident,
         generics: &syn::TypeGenerics,
         value_ty: TokenStream,
+        reference_value: bool,
     ) -> TokenStream {
         let core = core_path();
         let scope = prelude_type("Scope");
         let ruda_type = prelude_type("RudaType");
         let into_runtime = prelude_type("IntoRuntime");
+        let into_mut = prelude_type("IntoMut");
+        let ruda_reference = prelude_type("RudaReference");
+        let turbofish = generics.as_turbofish();
         let ident = &self.ident;
         let base_function = Ident::new(&format!("new_{ident}"), ident.span());
         let expand_function = Ident::new(&format!("__expand_new_{ident}"), ident.span());
@@ -510,24 +521,32 @@ impl RudaTypeVariant {
                         #core::unexpanded!()
                     }
 
-                    pub fn #expand_function(_: &mut #scope, value: <#ty as #ruda_type>::ExpandType) -> #ident_ty_expand #generics {
-                        #ident_ty_expand #generics {
+                    pub fn #expand_function(scope: &mut #scope, value: <#ty as #ruda_type>::ExpandType) -> #ident_ty_expand #generics {
+                        #ident_ty_expand #turbofish {
                             discriminant: #index.into(),
-                            value
+                            value: #into_mut::expand_reference_value(value, scope),
                         }
                     }
                 }
             }
             VariantKind::Empty => {
+                let (bound, empty) = if reference_value {
+                    (quote![], quote![<#value_ty as #ruda_reference>::__expand_absent(scope)])
+                } else {
+                    (
+                        quote![where #value_ty: Default + #into_runtime],
+                        quote![<#value_ty as #into_runtime>::__expand_runtime_method(Default::default(), scope)],
+                    )
+                };
                 quote! {
                     pub fn #base_function() -> Self {
                         #core::unexpanded!()
                     }
 
-                    pub fn #expand_function(scope: &mut #scope) -> #ident_ty_expand #generics {
-                        #ident_ty_expand #generics {
+                    pub fn #expand_function(scope: &mut #scope) -> #ident_ty_expand #generics #bound {
+                        #ident_ty_expand #turbofish {
                             discriminant: #index.into(),
-                            value: <#value_ty as #into_runtime>::__expand_runtime_method(Default::default(), scope),
+                            value: #empty,
                         }
                     }
                 }

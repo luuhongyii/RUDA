@@ -495,6 +495,20 @@ impl<B: Backend, const D: usize> DiceMetric<B, D> {
 }
 impl<B: Backend, const D: usize> Metric for DiceMetric<B, D> {
     numeric_attributes!(None, true, 4);
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        crate::continuation::encode(&(self.config.epsilon, self.config.include_background,
+            self.numerator, self.denominator, self.count, self.current, self.current_count))
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (epsilon, background, numerator, denominator, count, current, current_count):
+            (f64, bool, f64, f64, usize, f64, usize) = crate::continuation::decode(bytes)?;
+        if epsilon != self.config.epsilon || background != self.config.include_background {
+            return Err(TrainingError("Dice metric configuration differs from checkpoint".into()));
+        }
+        self.numerator = numerator; self.denominator = denominator; self.count = count;
+        self.current = current; self.current_count = current_count;
+        Ok(())
+    }
     fn current_value(&self) -> Option<NumericEntry> {
         Some(NumericEntry::Aggregated { aggregated_value: self.current, count: self.current_count })
     }

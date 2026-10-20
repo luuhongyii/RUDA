@@ -93,6 +93,12 @@ pub trait RunnerClient: Clone + Send + Sync + Sized {
     fn read_tensor_async(&self, tensor: TensorIr) -> DynFut<Result<TensorData, ExecutionError>>;
     /// Sync the runner, ensure that all computations are finished.
     fn sync(&self) -> Result<(), ExecutionError>;
+    fn rng_state(&self) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+        Err(ExecutionError::WithContext { reason: "This runner does not support RNG continuation".into() })
+    }
+    fn restore_rng_state(&self, _state: &[u8]) -> Result<(), ExecutionError> {
+        Err(ExecutionError::WithContext { reason: "This runner does not support RNG continuation".into() })
+    }
     /// Open a profiling window on the backend executing these operations.
     fn profile_start(&self) -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> { Ok(None) }
     /// Close the original window, forwarding its queue-flush policy.

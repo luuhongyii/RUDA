@@ -11,6 +11,29 @@ where
     D: Dataset<I>,
     I: Clone,
 {
+    fn is_read_order_independent(&self) -> bool {
+        self.datasets.iter().all(|dataset| dataset.is_read_order_independent())
+    }
+
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        let sources = self.datasets.iter().map(|dataset| {
+            Ok((dataset.len(), dataset.checkpoint()?))
+        }).collect::<Result<Vec<_>, String>>()?;
+        serde_json::to_vec(&(1u32, sources)).map_err(|error| error.to_string())
+    }
+
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        let (version, sources): (u32, Vec<(usize, Vec<u8>)>) =
+            serde_json::from_slice(state).map_err(|error| error.to_string())?;
+        if version != 1 || sources.len() != self.datasets.len()
+            || sources.iter().zip(&self.datasets).any(|((len, _), dataset)| *len != dataset.len())
+        { return Err("Composed dataset sources differ from checkpoint".into()); }
+        for ((_, state), dataset) in sources.iter().zip(&self.datasets) {
+            dataset.restore_checkpoint(state)?;
+        }
+        Ok(())
+    }
+
     fn get(&self, index: usize) -> Option<I> {
         let mut current_index = 0;
         for dataset in self.datasets.iter() {

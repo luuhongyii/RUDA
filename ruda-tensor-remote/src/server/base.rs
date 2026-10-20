@@ -287,6 +287,8 @@ impl<B: BackendIr, P: Protocol> RemoteServer<B, P> {
                         .await
                 }
                 ComputeTask::Seed(seed) => stream.seed(seed).await,
+                ComputeTask::RngState => stream.rng_state(connection_id).await,
+                ComputeTask::RestoreRngState(state) => stream.restore_rng_state(connection_id, state).await,
                 ComputeTask::ExposeTensorCapability { tensor, count, capability, target } => {
                     stream.expose_tensor_capability(tensor, count, capability, target).await
                 }

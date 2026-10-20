@@ -5,6 +5,10 @@ use crate::dsl::prelude::*;
 
 impl RudaType for e2m3 {
     type ExpandType = NativeExpand<e2m3>;
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let ty = <Self as RudaPrimitive>::as_type(scope);
+        scope.reference_absent(ty, writable).into()
+    }
 }
 
 impl Scalar for e2m3 {}
@@ -33,6 +37,10 @@ impl NativeAssign for e2m3 {}
 
 impl RudaType for e3m2 {
     type ExpandType = NativeExpand<e3m2>;
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let ty = <Self as RudaPrimitive>::as_type(scope);
+        scope.reference_absent(ty, writable).into()
+    }
 }
 
 impl Scalar for e3m2 {}

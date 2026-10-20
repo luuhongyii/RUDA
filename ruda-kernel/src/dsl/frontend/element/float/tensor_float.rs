@@ -8,6 +8,10 @@ use super::{RudaPrimitive, RudaType, Float, IntoRuntime, NativeAssign, NativeExp
 
 impl RudaType for tf32 {
     type ExpandType = NativeExpand<tf32>;
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let ty = <Self as RudaPrimitive>::as_type(scope);
+        scope.reference_absent(ty, writable).into()
+    }
 }
 
 impl Scalar for tf32 {}

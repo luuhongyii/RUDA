@@ -27,12 +27,17 @@ pub type ValuePtrExpand<E, S, A = ReadOnly> = NativeExpand<ValuePtr<E, S, A>>;
 
 impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaType for ValuePtr<E, S, A> {
     type ExpandType = NativeExpand<Self>;
-}
-impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaType for &ValuePtr<E, S, A> {
-    type ExpandType = NativeExpand<ValuePtr<E, S, A>>;
-}
-impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaType for &mut ValuePtr<E, S, A> {
-    type ExpandType = NativeExpand<ValuePtr<E, S, A>>;
+
+    fn __expand_inactive_value(scope: &mut Scope) -> Self::ExpandType {
+        let ty = PointerType {
+            pointee: E::as_type(scope),
+            address_space: S::SPACE,
+            access: A::ACCESS,
+        }.value_type();
+        let out = scope.create_local(ty);
+        scope.register(Instruction::new(PointerOp::Absent, *out));
+        out.into()
+    }
 }
 impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> NativeAssign for ValuePtr<E, S, A> {}
 impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> Assign for ValuePtr<E, S, A> {

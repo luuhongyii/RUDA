@@ -1,7 +1,9 @@
 use crate::Dataset;
 use crate::transform::{RngSource, SizeConfig};
+use chacha20::ChaCha12Rng;
 use rand::prelude::SliceRandom;
-use rand::{RngExt, distr::Uniform, rngs::StdRng, seq::IteratorRandom};
+use rand::{RngExt, SeedableRng, TryRng, distr::Uniform, rngs::StdRng, seq::IteratorRandom};
+use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, ops::DerefMut, sync::Mutex};
 
 /// Options to configure a [SamplerDataset].
@@ -131,8 +133,80 @@ pub struct SamplerDataset<D, I> {
     input: PhantomData<I>,
 }
 enum SamplerState {
-    WithReplacement(StdRng),
-    WithoutReplacement(StdRng, Vec<usize>),
+    WithReplacement(SamplerRng),
+    WithoutReplacement(SamplerRng, Vec<usize>),
+}
+
+enum SamplerRng {
+    Checkpoint(ChaCha12Rng),
+    Supplied(StdRng),
+}
+
+impl From<RngSource> for SamplerRng {
+    fn from(source: RngSource) -> Self {
+        match source {
+            RngSource::Default => Self::Checkpoint(
+                ChaCha12Rng::try_from_rng(&mut rand::rngs::SysRng).unwrap(),
+            ),
+            RngSource::Seed(seed) => Self::Checkpoint(ChaCha12Rng::seed_from_u64(seed)),
+            RngSource::Rng(rng) => Self::Supplied(rng),
+        }
+    }
+}
+
+impl TryRng for SamplerRng {
+    type Error = core::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        match self {
+            Self::Checkpoint(rng) => rng.try_next_u32(),
+            Self::Supplied(rng) => rng.try_next_u32(),
+        }
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        match self {
+            Self::Checkpoint(rng) => rng.try_next_u64(),
+            Self::Supplied(rng) => rng.try_next_u64(),
+        }
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+        match self {
+            Self::Checkpoint(rng) => rng.try_fill_bytes(dest),
+            Self::Supplied(rng) => rng.try_fill_bytes(dest),
+        }
+    }
+}
+
+impl SamplerRng {
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Checkpoint(rng) => Ok(rng.serialize_state().to_vec()),
+            Self::Supplied(_) => Err(
+                "An externally supplied StdRng has no portable state export; construct the sampler with a seed or system RNG for continuation".into(),
+            ),
+        }
+    }
+
+    fn restore(state: &[u8]) -> Result<Self, String> {
+        if state.len() != 49 || state[48] & 0xf0 != 0 {
+            return Err("Invalid sampler ChaCha12 RNG state".into());
+        }
+        let state = state.try_into().map_err(|_| "Invalid sampler RNG state size")?;
+        Ok(Self::Checkpoint(ChaCha12Rng::deserialize_state(state)))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SamplerCheckpoint {
+    version: u32,
+    size: usize,
+    source_len: usize,
+    with_replacement: bool,
+    rng: Vec<u8>,
+    remaining: Vec<usize>,
+    source: Vec<u8>,
 }
 
 impl<D, I> SamplerDataset<D, I>
@@ -291,6 +365,49 @@ where
     D: Dataset<I>,
     I: Send + Sync,
 {
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        let state = self.state.lock().map_err(|_| "Sampler state lock is poisoned")?;
+        let (rng, with_replacement, remaining) = match &*state {
+            SamplerState::WithReplacement(rng) => (rng, true, Vec::new()),
+            SamplerState::WithoutReplacement(rng, remaining) => (rng, false, remaining.clone()),
+        };
+        let checkpoint = SamplerCheckpoint {
+            version: 1,
+            size: self.size,
+            source_len: self.dataset.len(),
+            with_replacement,
+            rng: rng.checkpoint()?,
+            remaining,
+            source: self.dataset.checkpoint()?,
+        };
+        serde_json::to_vec(&checkpoint).map_err(|error| error.to_string())
+    }
+
+    fn restore_checkpoint(&self, record: &[u8]) -> Result<(), String> {
+        let checkpoint: SamplerCheckpoint =
+            serde_json::from_slice(record).map_err(|error| error.to_string())?;
+        let mut state = self.state.lock().map_err(|_| "Sampler state lock is poisoned")?;
+        let with_replacement = matches!(&*state, SamplerState::WithReplacement(_));
+        if checkpoint.version != 1
+            || checkpoint.size != self.size
+            || checkpoint.source_len != self.dataset.len()
+            || checkpoint.with_replacement != with_replacement
+            || checkpoint.remaining.len() > self.size
+            || (with_replacement && !checkpoint.remaining.is_empty())
+            || checkpoint.remaining.iter().any(|index| *index >= self.dataset.len())
+        {
+            return Err("Sampler checkpoint does not match the dataset and sampling configuration".into());
+        }
+        let rng = SamplerRng::restore(&checkpoint.rng)?;
+        self.dataset.restore_checkpoint(&checkpoint.source)?;
+        *state = if with_replacement {
+            SamplerState::WithReplacement(rng)
+        } else {
+            SamplerState::WithoutReplacement(rng, checkpoint.remaining)
+        };
+        Ok(())
+    }
+
     fn get(&self, index: usize) -> Option<I> {
         if index >= self.size {
             return None;

@@ -120,6 +120,7 @@ where
     pub(crate) optim: O,
     pub(crate) scheduler: S,
     pub(crate) state: EpochState,
+    pub(crate) accumulator: GradientsAccumulator<M>,
     marker: PhantomData<B>,
 }
 
@@ -136,6 +137,7 @@ where
             optim,
             scheduler,
             state: EpochState::default(),
+            accumulator: GradientsAccumulator::new(),
             marker: PhantomData,
         }
     }
@@ -146,8 +148,10 @@ where
         &self.state
     }
     pub fn fork(self, device: &B::Device) -> Self {
+        let accumulator = self.accumulator.to_device::<B>(device, &self.model);
         Self {
             model: self.model.fork(device),
+            accumulator,
             ..self
         }
     }
@@ -159,7 +163,7 @@ where
             &self.model,
             &self.optim,
             &self.scheduler,
-            &GradientsAccumulator::new(),
+            &self.accumulator,
             self.state.clone(),
         )?)
     }
@@ -178,7 +182,30 @@ where
         self.optim = restored.optimizer;
         self.scheduler = restored.scheduler;
         self.state = restored.state;
+        self.accumulator = restored.accumulator;
         Ok(())
+    }
+
+    pub(crate) fn batch_record(
+        &self, state: crate::BatchContinuation,
+    ) -> Result<crate::BatchLearnerRecord<B, M, O, S>, TrainingError> {
+        Ok(crate::BatchLearnerRecord(TrainingRecord::capture_with_dtypes(
+            &self.model, &self.optim, &self.scheduler, &self.accumulator, state,
+        )?))
+    }
+
+    pub(crate) fn restore_batch(
+        &mut self, record: crate::BatchLearnerRecord<B, M, O, S>, device: &B::Device,
+    ) -> Result<crate::BatchContinuation, TrainingError> {
+        let restored = record.0.restore_with_dtypes(
+            self.model.clone(), self.optim.clone(), self.scheduler.clone(), device,
+        )?;
+        self.model = restored.model;
+        self.optim = restored.optimizer;
+        self.scheduler = restored.scheduler;
+        self.accumulator = restored.accumulator;
+        self.state = restored.state.counters.clone();
+        Ok(restored.state)
     }
 }
 

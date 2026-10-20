@@ -384,6 +384,23 @@ impl<I: DeserializeOwned> IndexedJsonlDataset<I> {
 }
 
 impl<I: DeserializeOwned> Dataset<I> for IndexedJsonlDataset<I> {
+    fn is_read_order_independent(&self) -> bool { true }
+
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        self.state.identity.check(&self.file.file).map_err(|error| error.to_string())?;
+        serde_json::to_vec(&(1u32, &self.state.options, &self.state.identity, self.state.records.len()))
+            .map_err(|error| error.to_string())
+    }
+
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        let (version, options, identity, len): (u32, JsonlIndexOptions, FileIdentity, usize) =
+            serde_json::from_slice(state).map_err(|error| error.to_string())?;
+        if version != 1 || options != self.state.options || identity != self.state.identity
+            || len != self.state.records.len()
+        { return Err("Indexed JSONL source or indexing policy differs from checkpoint".into()); }
+        self.state.identity.check(&self.file.file).map_err(|error| error.to_string())
+    }
+
     /// The collection interface cannot carry errors: malformed/I/O-failed rows
     /// panic rather than masquerading as absent data. Use get_result to handle them.
     fn get(&self, index: usize) -> Option<I> {

@@ -204,7 +204,7 @@ pub struct MetricSnapshot {
     pub serialized: SerializedEntry,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct NumericMetricState {
     sum: f64,
     weight: usize,
@@ -297,6 +297,13 @@ macro_rules! numeric_attributes {
 }
 macro_rules! numeric_state_metric {
     ($unit:expr, $higher:expr, $precision:expr) => {
+        fn checkpoint(&mut self) -> Result<Vec<u8>, $crate::TrainingError> {
+            $crate::continuation::encode(&self.state)
+        }
+        fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), $crate::TrainingError> {
+            self.state = $crate::continuation::decode(bytes)?;
+            Ok(())
+        }
         numeric_attributes!($unit, $higher, $precision);
         fn current_value(&self) -> Option<$crate::metric::NumericEntry> {
             Some(self.state.current_value())

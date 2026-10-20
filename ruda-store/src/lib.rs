@@ -77,6 +77,9 @@
 
 extern crate alloc;
 
+#[cfg(feature = "std")]
+pub mod gguf;
+
 mod adapter;
 mod applier;
 mod apply_result;

@@ -10,6 +10,9 @@ pub trait PrecisionSettings:
 
     /// Integer element type.
     type IntElem: Element + Serialize + DeserializeOwned;
+
+    /// Retain each tensor's original storage dtype instead of converting it.
+    const PRESERVE_DTYPE: bool = false;
 }
 
 /// Default precision settings.
@@ -23,6 +26,16 @@ pub struct HalfPrecisionSettings;
 /// Precision settings optimized for precision.
 #[derive(Debug, Default, Clone)]
 pub struct DoublePrecisionSettings;
+
+/// Lossless tensor recording, including mixed storage dtypes.
+#[derive(Debug, Default, Clone)]
+pub struct NativePrecisionSettings;
+
+impl PrecisionSettings for NativePrecisionSettings {
+    type FloatElem = f64;
+    type IntElem = i64;
+    const PRESERVE_DTYPE: bool = true;
+}
 
 impl PrecisionSettings for FullPrecisionSettings {
     type FloatElem = f32;

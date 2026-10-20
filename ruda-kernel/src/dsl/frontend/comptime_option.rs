@@ -1042,12 +1042,20 @@ mod impls {
                 }
             }
 
-            pub fn __expand_as_ref_method(self, _scope: &mut Scope) -> Self {
-                self
+            pub fn __expand_as_ref_method<'a>(&self, scope: &mut Scope) -> ComptimeOptionExpand<&'a T>
+            where T: 'a {
+                match self {
+                    Some(value) => ComptimeOptionExpand::Some(value.clone().expand_reference(scope, false)),
+                    None => ComptimeOptionExpand::None,
+                }
             }
 
-            pub fn __expand_as_mut_method(self, _scope: &mut Scope) -> Self {
-                self
+            pub fn __expand_as_mut_method<'a>(&mut self, scope: &mut Scope) -> ComptimeOptionExpand<&'a mut T>
+            where T: 'a {
+                match self {
+                    Some(value) => ComptimeOptionExpand::Some(value.clone().expand_reference(scope, true)),
+                    None => ComptimeOptionExpand::None,
+                }
             }
 
             fn __expand_len_method(&self, _scope: &mut Scope) -> usize {
@@ -1102,7 +1110,8 @@ mod impls {
                 F: FnOnce(&mut Scope, T::ExpandType),
             {
                 if let Some(x) = self.clone() {
-                    f(scope, x);
+                    let borrowed = x.expand_reference(scope, false);
+                    f(scope, borrowed);
                 }
 
                 self
@@ -1156,26 +1165,32 @@ mod impls {
                 }
             }
 
-            pub fn __expand_as_deref_method(
-                self,
+            pub fn __expand_as_deref_method<'a>(
+                &self,
                 scope: &mut Scope,
-            ) -> ComptimeOptionExpand<T::Target>
+            ) -> ComptimeOptionExpand<&'a T::Target>
             where
-                T: Deref<Target: RudaType + Sized>,
-                T::ExpandType: Deref<Target = <T::Target as RudaType>::ExpandType>,
+                T: Deref<Target: RudaType + 'a>,
+                T::ExpandType: DerefExpand<T::Target>,
             {
-                self.__expand_map_method(scope, |_, it| (*it).clone())
+                match self {
+                    Some(value) => Some(<T::ExpandType as DerefExpand<T::Target>>::expand_deref_reference(value, scope, false)),
+                    None => None,
+                }
             }
 
-            pub fn __expand_as_deref_mut_method(
-                self,
+            pub fn __expand_as_deref_mut_method<'a>(
+                &mut self,
                 scope: &mut Scope,
-            ) -> ComptimeOptionExpand<T::Target>
+            ) -> ComptimeOptionExpand<&'a mut T::Target>
             where
-                T: DerefMut<Target: RudaType + Sized>,
-                T::ExpandType: Deref<Target = <T::Target as RudaType>::ExpandType>,
+                T: DerefMut<Target: RudaType + 'a>,
+                T::ExpandType: DerefExpand<T::Target>,
             {
-                self.__expand_map_method(scope, |_, it| (*it).clone())
+                match self {
+                    Some(value) => Some(<T::ExpandType as DerefExpand<T::Target>>::expand_deref_reference(value, scope, true)),
+                    None => None,
+                }
             }
 
             pub fn __expand_and_then_method<U, F>(
@@ -1197,12 +1212,12 @@ mod impls {
             where
                 P: FnOnce(&mut Scope, T::ExpandType) -> bool,
             {
-                if let Some(x) = self
-                    && predicate(scope, x.clone())
-                {
-                    Some(x)
-                } else {
-                    None
+                match self {
+                    Some(x) => {
+                        let borrowed = x.clone().expand_reference(scope, false);
+                        if predicate(scope, borrowed) { Some(x) } else { None }
+                    }
+                    None => None,
                 }
             }
 
@@ -1220,7 +1235,30 @@ mod impls {
                 }
             }
 
-            // Entry methods that return &mut T excluded for now
+            pub fn __expand_insert_method(&mut self, scope: &mut Scope, value: T::ExpandType) -> T::ExpandType {
+                *self = Some(value.into_mut(scope));
+                let Some(value) = self else { unreachable!() };
+                value.clone().expand_reference(scope, true)
+            }
+
+            pub fn __expand_get_or_insert_method(
+                &mut self, scope: &mut Scope, value: T::ExpandType,
+            ) -> T::ExpandType {
+                self.__expand_get_or_insert_with_method(scope, |_| value)
+            }
+
+            pub fn __expand_get_or_insert_with_method(
+                &mut self, scope: &mut Scope, make: impl FnOnce(&mut Scope) -> T::ExpandType,
+            ) -> T::ExpandType {
+                if matches!(self, None) { *self = Some(make(scope).into_mut(scope)); }
+                let Some(value) = self else { unreachable!() };
+                value.clone().expand_reference(scope, true)
+            }
+
+            pub fn __expand_get_or_insert_default_method(&mut self, scope: &mut Scope) -> T::ExpandType
+            where T: Default + IntoRuntime {
+                self.__expand_get_or_insert_with_method(scope, |scope| T::default().__expand_runtime_method(scope))
+            }
 
             pub fn __expand_take_method(&mut self, _scope: &mut Scope) -> ComptimeOptionExpand<T> {
                 core::mem::take(self)
@@ -1234,12 +1272,14 @@ mod impls {
             where
                 P: FnOnce(&mut Scope, T::ExpandType) -> bool,
             {
-                match self {
-                    Some(value) if predicate(scope, value.clone()) => {
-                        self.__expand_take_method(scope)
+                let take = match self {
+                    Some(value) => {
+                        let borrowed = value.clone().expand_reference(scope, true);
+                        predicate(scope, borrowed)
                     }
-                    _ => None,
-                }
+                    None => false,
+                };
+                if take { self.__expand_take_method(scope) } else { None }
             }
 
             pub fn __expand_replace_method(

@@ -63,7 +63,11 @@ impl<'de, S: PrecisionSettings> Deserialize<'de> for FloatTensorSerde<S> {
     where
         De: serde::Deserializer<'de>,
     {
-        let data = deserialize_data::<S::FloatElem, De>(deserializer)?;
+        let data = if S::PRESERVE_DTYPE {
+            TensorData::deserialize(deserializer)?
+        } else {
+            deserialize_data::<S::FloatElem, De>(deserializer)?
+        };
 
         Ok(Self::new(data))
     }
@@ -83,7 +87,11 @@ impl<'de, S: PrecisionSettings> Deserialize<'de> for IntTensorSerde<S> {
     where
         De: serde::Deserializer<'de>,
     {
-        let data = deserialize_data::<S::IntElem, De>(deserializer)?;
+        let data = if S::PRESERVE_DTYPE {
+            TensorData::deserialize(deserializer)?
+        } else {
+            deserialize_data::<S::IntElem, De>(deserializer)?
+        };
 
         Ok(Self::new(data))
     }
@@ -120,7 +128,7 @@ impl<B: Backend, const D: usize> Record<B> for Tensor<B, D> {
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         let data = self.into_data();
-        let data = if let DType::QFloat(_) = data.dtype {
+        let data = if S::PRESERVE_DTYPE || matches!(data.dtype, DType::QFloat(_)) {
             data // do not convert quantized tensors
         } else {
             data.convert::<S::FloatElem>()
@@ -129,12 +137,13 @@ impl<B: Backend, const D: usize> Record<B> for Tensor<B, D> {
     }
 
     fn from_item<S: PrecisionSettings>(item: Self::Item<S>, device: &B::Device) -> Self {
-        let data = if let DType::QFloat(_) = item.data.dtype {
+        let data = if S::PRESERVE_DTYPE || matches!(item.data.dtype, DType::QFloat(_)) {
             item.data // do not convert quantized tensors
         } else {
             item.data.convert::<B::FloatElem>()
         };
-        Tensor::from_data(data, device)
+        let dtype = data.dtype;
+        Tensor::from_data(data, (device, dtype))
     }
 }
 
@@ -146,11 +155,14 @@ impl<B: Backend, const D: usize> Record<B> for Tensor<B, D, Int> {
     }
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
-        IntTensorSerde::new(self.into_data().convert::<S::IntElem>())
+        let data = self.into_data();
+        IntTensorSerde::new(if S::PRESERVE_DTYPE { data } else { data.convert::<S::IntElem>() })
     }
 
     fn from_item<S: PrecisionSettings>(item: Self::Item<S>, device: &B::Device) -> Self {
-        Tensor::from_data(item.data.convert::<B::IntElem>(), device)
+        let data = if S::PRESERVE_DTYPE { item.data } else { item.data.convert::<B::IntElem>() };
+        let dtype = data.dtype;
+        Tensor::from_data(data, (device, dtype))
     }
 }
 

@@ -3,6 +3,7 @@ mod batch;
 mod builder;
 mod multithread;
 mod strategy;
+mod resumable;
 
 /// Module for batching items.
 pub mod batcher;
@@ -14,3 +15,4 @@ pub use batch::*;
 pub use builder::*;
 pub use multithread::*;
 pub use strategy::*;
+pub use resumable::{DataLoaderState, ResumableDataLoader};

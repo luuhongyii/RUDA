@@ -28,6 +28,7 @@ ruda-store = { path = "../ruda-store", optional = true, default-features = false
 dirs = { version = "=6.0.0", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.148"
+bincode = { version = "=2.0.1", features = ["serde"] }
 rand = { version = "=0.10.3", optional = true }
 sysinfo = { version = "=0.39.6", optional = true }
 systemstat = { version = "=0.2.7", optional = true }

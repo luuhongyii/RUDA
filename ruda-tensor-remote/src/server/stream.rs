@@ -221,6 +221,14 @@ where
         self.submit(ProcessorTask::Seed(seed)).await
     }
 
+    pub async fn rng_state(&self, id: ConnectionId) -> Result<(), StreamClosed> {
+        self.submit_with_response(|sender| ProcessorTask::RngState(id, sender)).await
+    }
+
+    pub async fn restore_rng_state(&self, id: ConnectionId, state: Vec<u8>) -> Result<(), StreamClosed> {
+        self.submit_with_response(|sender| ProcessorTask::RestoreRngState(id, state, sender)).await
+    }
+
     pub async fn dtype_usage(&self, id: ConnectionId, dtype: DType) -> Result<(), StreamClosed> {
         self.submit_with_response(|sender| ProcessorTask::DTypeUsage(id, dtype, sender)).await
     }

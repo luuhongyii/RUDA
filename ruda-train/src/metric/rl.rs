@@ -24,6 +24,13 @@ macro_rules! episode_metric {
             }
         }
         impl Metric for $metric {
+            fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+                crate::continuation::encode(&self.state)
+            }
+            fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+                self.state = crate::continuation::decode(bytes)?;
+                Ok(())
+            }
             type Input = $input;
             fn name(&self) -> &str {
                 $name

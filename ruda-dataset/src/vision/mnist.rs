@@ -41,6 +41,12 @@ struct MnistItemRaw {
 struct BytesToImage;
 
 impl Mapper<MnistItemRaw, MnistItem> for BytesToImage {
+    fn is_read_order_independent(&self) -> bool { true }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> { Ok(Vec::new()) }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        if state.is_empty() { Ok(()) } else { Err("Invalid MNIST mapper checkpoint".into()) }
+    }
+
     /// Convert a raw MNIST item (image bytes) to a MNIST item (2D array image).
     fn map(&self, item: &MnistItemRaw) -> MnistItem {
         // Ensure the image dimensions are correct.
@@ -72,6 +78,12 @@ pub struct MnistDataset {
 }
 
 impl Dataset<MnistItem> for MnistDataset {
+    fn is_read_order_independent(&self) -> bool { self.dataset.is_read_order_independent() }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> { self.dataset.checkpoint() }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        self.dataset.restore_checkpoint(state)
+    }
+
     fn get(&self, index: usize) -> Option<MnistItem> {
         self.dataset.get(index)
     }

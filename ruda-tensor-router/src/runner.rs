@@ -405,6 +405,15 @@ impl<B: BackendIr> RunnerClient for Runner<B> {
         B::sync(&self.device)
     }
 
+    fn rng_state(&self) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+        self.sync()?;
+        B::rng_state(&self.device)
+    }
+    fn restore_rng_state(&self, state: &[u8]) -> Result<(), ExecutionError> {
+        self.sync()?;
+        B::restore_rng_state(&self.device, state)
+    }
+
     fn flush(&self) -> Result<(), ExecutionError> {
         B::flush(&self.device)
     }

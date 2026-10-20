@@ -109,6 +109,16 @@ fn parse_text_content(text_path: &PathBuf) -> String {
 }
 
 impl Mapper<TextDatasetItemRaw, TextDatasetItem> for PathToTextDatasetItem {
+    fn is_read_order_independent(&self) -> bool { true }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&self.classes).map_err(|error| error.to_string())
+    }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        let classes: HashMap<String, usize> =
+            serde_json::from_slice(state).map_err(|error| error.to_string())?;
+        if classes == self.classes { Ok(()) } else { Err("Text class mapping differs from checkpoint".into()) }
+    }
+
     /// Convert a raw text dataset item (path-like) to text content with a target label.
     fn map(&self, item: &TextDatasetItemRaw) -> TextDatasetItem {
         let label = *self.classes.get(&item.label).unwrap();
@@ -157,6 +167,12 @@ pub struct TextFolderDataset {
 }
 
 impl Dataset<TextDatasetItem> for TextFolderDataset {
+    fn is_read_order_independent(&self) -> bool { self.dataset.is_read_order_independent() }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> { self.dataset.checkpoint() }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        self.dataset.restore_checkpoint(state)
+    }
+
     fn get(&self, index: usize) -> Option<TextDatasetItem> {
         self.dataset.get(index)
     }

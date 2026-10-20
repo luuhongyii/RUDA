@@ -7,6 +7,7 @@
 mod backend;
 mod element;
 mod ops;
+mod rng;
 mod tensor;
 
 #[cfg(test)]

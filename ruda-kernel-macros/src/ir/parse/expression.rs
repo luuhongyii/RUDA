@@ -7,7 +7,6 @@ use syn::{
 
 use crate::ir::{
     expression::{Block, Expression, MatchArm, is_intrinsic},
-    generate::expression::inner_pat,
     operator::Operator,
     parse::{branch::expand_if_let, helpers::is_comptime_attr},
     scope::Context,
@@ -320,22 +319,19 @@ impl Expression {
                     let mut arms = Vec::new();
 
                     for arm in mat.arms.iter() {
-                        let (expr, _) = context.in_scope(|context| {
-                            add_variables_from_pat(&arm.pat, context);
-                            Self::from_expr(arm.body.as_ref().clone(), context)
-                        })?;
-                        arms.push(MatchArm {
-                            pat: arm.pat.clone(),
-                            expr: Box::new(expr),
-                        });
+                        for pat in runtime_pattern_alternatives(&arm.pat) {
+                            let (expr, _) = context.in_scope(|context| {
+                                add_variables_from_pat(&pat, context);
+                                Self::from_expr(arm.body.as_ref().clone(), context)
+                            })?;
+                            arms.push(MatchArm { pat, expr: Box::new(expr) });
+                        }
                     }
 
                     let runtime_compatible = arms
                         .iter()
                         .all(|arm| is_runtime_compatible_variant(&arm.pat));
-                    let num_values = arms.iter().filter_map(|arm| inner_pat(&arm.pat)).count();
                     let maybe_runtime = runtime_compatible
-                    && num_values <= 1
                     // Code won't work properly if there's no case. Empty or wildcard only matches
                     // are always resolved at comptime anyways.
                     && !arms.is_empty()
@@ -432,29 +428,39 @@ impl Expression {
 }
 
 pub(crate) fn add_variables_from_pat(pat: &Pat, context: &mut Context) {
+    add_variables_from_pat_with_const(pat, context, false);
+}
+
+pub(crate) fn add_variables_from_pat_with_const(pat: &Pat, context: &mut Context, is_const: bool) {
     match pat {
         Pat::Ident(pat) => {
             context.push_variable(
                 pat.ident.clone(),
                 None,
-                false,
+                is_const && pat.mutability.is_none(),
                 pat.by_ref.is_some(),
                 pat.mutability.is_some(),
             );
+            if let Some((_, inner)) = &pat.subpat {
+                add_variables_from_pat_with_const(inner, context, is_const);
+            }
         }
         Pat::Or(pat) => pat
             .cases
             .iter()
-            .for_each(|pat| add_variables_from_pat(pat, context)),
+            .for_each(|pat| add_variables_from_pat_with_const(pat, context, is_const)),
         Pat::Struct(pat) => pat.fields.iter().for_each(|f| {
-            add_variables_from_pat(f.pat.as_ref(), context);
+            add_variables_from_pat_with_const(f.pat.as_ref(), context, is_const);
         }),
         Pat::TupleStruct(pat) => pat.elems.iter().for_each(|pat| {
-            add_variables_from_pat(pat, context);
+            add_variables_from_pat_with_const(pat, context, is_const);
         }),
         Pat::Tuple(pat) => pat.elems.iter().for_each(|pat| {
-            add_variables_from_pat(pat, context);
+            add_variables_from_pat_with_const(pat, context, is_const);
         }),
+        Pat::Paren(pat) => add_variables_from_pat_with_const(&pat.pat, context, is_const),
+        Pat::Reference(pat) => add_variables_from_pat_with_const(&pat.pat, context, is_const),
+        Pat::Type(pat) => add_variables_from_pat_with_const(&pat.pat, context, is_const),
         _ => {}
     }
 }
@@ -544,11 +550,33 @@ pub(crate) fn unwrap_noop(expr: Expr) -> Expr {
 
 pub(crate) fn is_runtime_compatible_variant(pat: &Pat) -> bool {
     match pat {
+        Pat::Ident(syn::PatIdent { subpat: Some((_, inner)), .. }) => is_runtime_compatible_variant(inner),
         Pat::Ident(_) => true,
         Pat::Paren(pat) => is_runtime_compatible_variant(&pat.pat),
         Pat::Path(PatPath { .. }) => true,
-        Pat::TupleStruct(pat) => pat.elems.len() == 1,
+        Pat::TupleStruct(pat) => pat.elems.iter().all(is_runtime_binding_pattern),
+        Pat::Struct(pat) => pat.fields.iter().all(|field| is_runtime_binding_pattern(&field.pat)),
         Pat::Wild(_) => true,
         _ => false,
+    }
+}
+
+fn is_runtime_binding_pattern(pat: &Pat) -> bool {
+    match pat {
+        Pat::Ident(pat) => pat.subpat.as_ref().is_none_or(|(_, pat)| is_runtime_binding_pattern(pat)),
+        Pat::Wild(_) | Pat::Rest(_) => true,
+        Pat::Tuple(pat) => pat.elems.iter().all(is_runtime_binding_pattern),
+        Pat::Paren(pat) => is_runtime_binding_pattern(&pat.pat),
+        Pat::Reference(pat) => is_runtime_binding_pattern(&pat.pat),
+        Pat::Type(pat) => is_runtime_binding_pattern(&pat.pat),
+        _ => false,
+    }
+}
+
+fn runtime_pattern_alternatives(pat: &Pat) -> Vec<Pat> {
+    match pat {
+        Pat::Or(pat) => pat.cases.iter().flat_map(runtime_pattern_alternatives).collect(),
+        Pat::Paren(pat) => runtime_pattern_alternatives(&pat.pat),
+        _ => vec![pat.clone()],
     }
 }

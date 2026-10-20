@@ -87,6 +87,21 @@ where
     D: Dataset<I>,
     I: Clone + Send + Sync,
 {
+    fn is_read_order_independent(&self) -> bool { self.dataset.is_read_order_independent() }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        let mut state = Vec::new();
+        state.extend_from_slice(&(self.start_index as u64).to_le_bytes());
+        state.extend_from_slice(&(self.end_index as u64).to_le_bytes());
+        state.extend_from_slice(&self.dataset.checkpoint()?);
+        Ok(state)
+    }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        if state.len() < 16
+            || state[..8] != (self.start_index as u64).to_le_bytes()
+            || state[8..16] != (self.end_index as u64).to_le_bytes()
+        { return Err("Partial dataset bounds differ from checkpoint".into()); }
+        self.dataset.restore_checkpoint(&state[16..])
+    }
     fn get(&self, index: usize) -> Option<I> {
         let index = index + self.start_index;
         if index < self.start_index || index >= self.end_index {

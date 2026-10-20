@@ -33,6 +33,15 @@ impl<M> GradientsAccumulator<M> {
     /// Borrow pending gradients without clearing an accumulation window.
     pub fn pending(&self) -> &GradientsParams { &self.grads }
 
+    /// Move pending gradients without resetting the accumulation window.
+    pub fn to_device<B: AutodiffBackend>(mut self, device: &B::Device, model: &M) -> Self
+    where
+        M: AutodiffModule<B>,
+    {
+        self.grads = self.grads.to_device::<B, M>(device, model);
+        self
+    }
+
     /// Snapshot pending gradients without resetting the accumulation window.
     pub fn try_to_record<B: AutodiffBackend>(&self) -> Result<GradientsParamsRecord, RecorderError>
     where

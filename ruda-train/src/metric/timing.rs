@@ -58,7 +58,20 @@ impl IterationSpeedMetric {
     }
 }
 impl Metric for IterationSpeedMetric {
-    numeric_state_metric!(Some("iter/sec"), true, 2);
+    numeric_attributes!(Some("iter/sec"), true, 2);
+    fn current_value(&self) -> Option<super::NumericEntry> { Some(self.state.current_value()) }
+    fn running_value(&self) -> Option<super::NumericEntry> { Some(self.state.running_value()) }
+    fn final_value(&self) -> super::NumericEntry { self.state.final_value() }
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        crate::continuation::encode(&(self.state.clone(), self.instant.map(|start| start.elapsed())))
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (state, elapsed): (NumericMetricState, Option<std::time::Duration>) = crate::continuation::decode(bytes)?;
+        self.state = state;
+        self.instant = elapsed.map(|elapsed| Instant::now().checked_sub(elapsed)
+            .ok_or_else(|| TrainingError("Iteration timer duration cannot be restored".into()))).transpose()?;
+        Ok(())
+    }
     type Input = ();
     fn name(&self) -> &str {
         "Iteration Speed"

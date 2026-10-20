@@ -13,6 +13,8 @@ use ruda_model::{
 use ruda_optim::{GradientsAccumulator, Optimizer, lr_scheduler::LrScheduler};
 use std::{path::Path, sync::Arc};
 
+mod batch;
+
 pub type TrainLoader<B, M> = Arc<dyn DataLoader<B, <M as TrainStep<B>>::Input>>;
 pub type ValidInput<B, M> = <<M as AutodiffModule<B>>::InnerModule as InferenceStep<
     <B as AutodiffBackend>::InnerBackend,
@@ -41,9 +43,8 @@ impl<M: core::fmt::Debug> LearningResult<M> {
 
 /// Single-device supervised training with summed-gradient accumulation.
 ///
-/// Checkpoints are saved only after a complete train/validation epoch. Restore
-/// resumes at the following epoch and restores model/optimizer/scheduler state.
-/// Dataloader shuffle state and backend RNG state remain owned by the caller.
+/// Epoch checkpoints retain the legacy record format. Batch checkpoints also
+/// persist input cursors, pending gradients, RNGs, metrics and early stopping.
 pub struct SupervisedTraining<B, M, O, S>
 where
     B: AutodiffBackend,
@@ -63,6 +64,9 @@ where
     store: EventStore,
     checkpointer: Option<Box<dyn Checkpointer<LearnerRecord<B, M, O, S>>>>,
     restore_epoch: Option<usize>,
+    batch_checkpointer: Option<Box<dyn Checkpointer<crate::BatchLearnerRecord<B, M, O, S>>>>,
+    batch_interval: usize,
+    restore_batch: Option<usize>,
     early_stopping: Option<Box<dyn EarlyStoppingStrategy>>,
     label: Option<String>,
     summary: bool,
@@ -91,6 +95,9 @@ where
             store,
             checkpointer: None,
             restore_epoch: None,
+            batch_checkpointer: None,
+            batch_interval: 1,
+            restore_batch: None,
             early_stopping: None,
             label: None,
             summary: false,
@@ -196,6 +203,24 @@ where
         self.restore_epoch = Some(epoch);
         self
     }
+    pub fn with_batch_checkpointer<C: Checkpointer<crate::BatchLearnerRecord<B, M, O, S>> + 'static>(
+        mut self, checkpointer: C, interval: usize,
+    ) -> Self {
+        assert!(interval > 0, "Batch checkpoint interval must be positive");
+        self.batch_checkpointer = Some(Box::new(checkpointer));
+        self.batch_interval = interval;
+        self
+    }
+    pub fn with_batch_file_checkpointer<F: FileRecorder<B> + 'static>(
+        self, directory: impl AsRef<Path>, recorder: F, interval: usize, keep: usize,
+    ) -> Self {
+        let checkpointer = FileCheckpointer::new(directory, recorder, self.device.clone());
+        self.with_batch_checkpointer(KeepLastNCheckpoints::new(checkpointer, keep), interval)
+    }
+    pub fn batch_checkpoint(mut self, batch: usize) -> Self {
+        self.restore_batch = Some(batch);
+        self
+    }
     pub fn early_stopping<E: EarlyStoppingStrategy + 'static>(mut self, strategy: E) -> Self {
         self.early_stopping = Some(Box::new(strategy));
         self
@@ -209,6 +234,9 @@ where
     }
 
     fn fit_on_device(mut self, learner: Learner<B, M, O, S>) -> LearningResult<M::InnerModule> {
+        if self.batch_checkpointer.is_some() || self.restore_batch.is_some() {
+            return self.fit_batches(learner);
+        }
         let mut learner = learner.fork(&self.device);
         let mut train = self.train.to_device(&self.device);
         if let Some(policy) = self.gradient_checkpointing {

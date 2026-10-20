@@ -62,17 +62,11 @@ impl FromDeriveInput for RudaTypeEnum {
                 variants: variants
                     .iter()
                     .map(|a| -> Result<_, syn::Error> {
-                        let mut kind = if a.fields.is_empty() {
-                            VariantKind::Empty
-                        } else {
-                            VariantKind::Unnamed
+                        let kind = match &a.fields {
+                            syn::Fields::Named(_) => VariantKind::Named,
+                            syn::Fields::Unnamed(_) => VariantKind::Unnamed,
+                            syn::Fields::Unit => VariantKind::Empty,
                         };
-
-                        for field in a.fields.iter() {
-                            if field.ident.is_some() {
-                                kind = VariantKind::Named;
-                            }
-                        }
 
                         let discriminant = if let Some((_, disc)) = &a.discriminant {
                             let value = parse_discriminant(disc)?;
@@ -127,7 +121,7 @@ impl RudaTypeEnum {
     pub fn is_empty(&self) -> bool {
         self.variants
             .iter()
-            .all(|it| matches!(it.kind, VariantKind::Empty))
+            .all(|it| it.fields.is_empty())
     }
 }
 

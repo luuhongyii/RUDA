@@ -150,6 +150,12 @@ impl SpeechCommandsDataset {
 }
 
 impl Dataset<SpeechItem> for SpeechCommandsDataset {
+    fn is_read_order_independent(&self) -> bool { self.dataset.is_read_order_independent() }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> { self.dataset.checkpoint() }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        self.dataset.restore_checkpoint(state)
+    }
+
     fn get(&self, index: usize) -> Option<SpeechItem> {
         self.dataset.get(index)
     }
@@ -195,6 +201,12 @@ impl ConvertSamples {
 }
 
 impl Mapper<SpeechItemRaw, SpeechItem> for ConvertSamples {
+    fn is_read_order_independent(&self) -> bool { true }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> { Ok(Vec::new()) }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        if state.is_empty() { Ok(()) } else { Err("Invalid speech mapper checkpoint".into()) }
+    }
+
     /// Convert audio bytes into samples of floats [-1.0, 1.0]
     /// and the label to enum class with the target word, other and silence classes.
     fn map(&self, item: &SpeechItemRaw) -> SpeechItem {

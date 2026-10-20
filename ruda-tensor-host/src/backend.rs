@@ -127,6 +127,15 @@ impl Backend for Host {
         rurand_host::seed(seed)
     }
 
+    fn rng_state(_device: &Self::Device) -> Result<alloc::vec::Vec<u8>, ruda_tensor::ExecutionError> {
+        Ok(rurand_host::rng_state())
+    }
+
+    fn restore_rng_state(_device: &Self::Device, state: &[u8]) -> Result<(), ruda_tensor::ExecutionError> {
+        rurand_host::restore_rng_state(state)
+            .map_err(|reason| ruda_tensor::ExecutionError::WithContext { reason: reason.into() })
+    }
+
     fn device_count(_type_id: u16) -> usize {
         1
     }

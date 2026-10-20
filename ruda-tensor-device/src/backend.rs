@@ -60,6 +60,17 @@ where
         rurand::seed(seed);
     }
 
+    fn rng_state(device: &Self::Device) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+        Self::sync(device)?;
+        Ok(rurand::rng_state())
+    }
+
+    fn restore_rng_state(device: &Self::Device, state: &[u8]) -> Result<(), ExecutionError> {
+        Self::sync(device)?;
+        rurand::restore_rng_state(state)
+            .map_err(|reason| ExecutionError::WithContext { reason: reason.into() })
+    }
+
     fn ad_enabled(_device: &Self::Device) -> bool {
         false
     }

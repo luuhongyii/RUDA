@@ -10,6 +10,8 @@ enum Message<T, V> {
     Train(StreamId, LearnerEvent<T>),
     Valid(StreamId, LearnerEvent<V>),
     Flush(SyncSender<()>),
+    Checkpoint(SyncSender<Result<Vec<u8>, TrainingError>>),
+    Restore(Vec<u8>, SyncSender<Result<(), TrainingError>>),
 }
 
 /// Ordered, bounded event processing on a separate thread. `flush` waits for all
@@ -75,6 +77,16 @@ impl<T: Send + 'static, V: Send + 'static> AsyncProcessorTraining<T, V> {
                             let _ = callback.send(());
                             continue;
                         }
+                        Message::Checkpoint(callback) => {
+                            let result = processor.flush().and_then(|_| processor.checkpoint());
+                            let _ = callback.send(result);
+                            continue;
+                        }
+                        Message::Restore(state, callback) => {
+                            let result = processor.flush().and_then(|_| processor.restore_checkpoint(&state));
+                            let _ = callback.send(result);
+                            continue;
+                        }
                     };
                     if let Err(error) = result {
                         let _ = error_sender.send(error);
@@ -120,6 +132,20 @@ impl<T: Send + 'static, V: Send + 'static> AsyncProcessorTraining<T, V> {
 impl<T: Send + 'static, V: Send + 'static> EventProcessorTraining<T, V>
     for AsyncProcessorTraining<T, V>
 {
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.send(Message::Checkpoint(sender));
+        let result = match receiver.recv() { Ok(result) => result, Err(_) => self.died() };
+        self.check_errors()?;
+        result
+    }
+    fn restore_checkpoint(&mut self, state: &[u8]) -> Result<(), TrainingError> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.send(Message::Restore(state.to_vec(), sender));
+        let result = match receiver.recv() { Ok(result) => result, Err(_) => self.died() };
+        self.check_errors()?;
+        result
+    }
     fn process_run(&mut self, event: RunEvent) -> Result<(), TrainingError> {
         self.send(Message::Run(event));
         self.check_errors()

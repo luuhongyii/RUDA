@@ -5,7 +5,35 @@ use ruda_model::tensor::{
     activation::{log_softmax, sigmoid},
     backend::Backend,
 };
+use ruda_model::tensor::{TensorData, backend::{Device, DeviceId}};
 use std::{marker::PhantomData, num::NonZeroUsize};
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MetricTensor {
+    data: TensorData,
+    device: (u16, u16),
+}
+impl MetricTensor {
+    fn capture<B: Backend, const D: usize>(tensor: &Tensor<B, D>) -> Result<Self, TrainingError> {
+        let id = tensor.device().to_id();
+        let data = tensor.clone().try_into_data().map_err(|error| TrainingError(error.to_string()))?;
+        Ok(Self { data, device: (id.type_id, id.index_id) })
+    }
+    fn capture_bool<B: Backend, const D: usize>(tensor: &Tensor<B, D, Bool>) -> Result<Self, TrainingError> {
+        let id = tensor.device().to_id();
+        let data = tensor.clone().try_into_data().map_err(|error| TrainingError(error.to_string()))?;
+        Ok(Self { data, device: (id.type_id, id.index_id) })
+    }
+    fn restore<B: Backend, const D: usize>(self) -> Tensor<B, D> {
+        let device = B::Device::from_id(DeviceId::new(self.device.0, self.device.1));
+        let dtype = self.data.dtype;
+        Tensor::from_data(self.data, (&device, dtype))
+    }
+    fn restore_bool<B: Backend, const D: usize>(self) -> Tensor<B, D, Bool> {
+        let device = B::Device::from_id(DeviceId::new(self.device.0, self.device.1));
+        Tensor::from_data(self.data, &device)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub enum ClassReduction {
@@ -296,6 +324,24 @@ struct ConfusionMetric<B: Backend> {
     count: usize,
 }
 impl<B: Backend> ConfusionMetric<B> {
+    fn checkpoint(&self) -> Result<Vec<u8>, TrainingError> {
+        let counts = self.counts.as_ref().map(|counts| counts.iter()
+            .map(MetricTensor::capture).collect::<Result<Vec<_>, _>>()).transpose()?;
+        crate::continuation::encode(&(counts, self.value, self.current, self.current_count, self.count))
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (counts, value, current, current_count, count):
+            (Option<Vec<MetricTensor>>, Option<f64>, Option<f64>, usize, usize) = crate::continuation::decode(bytes)?;
+        self.counts = counts.map(|counts| {
+            let tensors: Vec<Tensor<B, 1>> = counts.into_iter().map(MetricTensor::restore).collect();
+            tensors.try_into().map_err(|_| TrainingError("Invalid confusion metric counts".into()))
+        }).transpose()?;
+        self.value = value;
+        self.current = current;
+        self.current_count = current_count;
+        self.count = count;
+        Ok(())
+    }
     fn new(score: Score, decision: DecisionRule, reduction: ClassReduction) -> Self {
         let title = match score {
             Score::Precision => "Precision".into(),
@@ -400,6 +446,8 @@ macro_rules! confusion_metric {
         pub struct $name<B: Backend>(ConfusionMetric<B>);
         impl<B: Backend> Metric for $name<B> {
             numeric_attributes!(Some("%"), true, 2);
+            fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> { self.0.checkpoint() }
+            fn restore_checkpoint(&mut self, state: &[u8]) -> Result<(), TrainingError> { self.0.restore_checkpoint(state) }
             fn current_value(&self) -> Option<NumericEntry> {
                 self.0.current.map(|aggregated_value| NumericEntry::Aggregated {
                     aggregated_value, count: self.0.current_count,
@@ -521,6 +569,19 @@ impl<B: Backend> Default for EpochPredictions<B> {
     }
 }
 impl<B: Backend> EpochPredictions<B> {
+    fn checkpoint(&self) -> Result<Vec<u8>, TrainingError> {
+        let scores = self.scores.iter().map(MetricTensor::capture).collect::<Result<Vec<_>, _>>()?;
+        let targets = self.targets.iter().map(MetricTensor::capture_bool).collect::<Result<Vec<_>, _>>()?;
+        crate::continuation::encode(&(scores, targets, self.value))
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (scores, targets, value): (Vec<MetricTensor>, Vec<MetricTensor>, Option<f64>) = crate::continuation::decode(bytes)?;
+        if scores.len() != targets.len() { return Err(TrainingError("Prediction metric checkpoint batch counts differ".into())); }
+        self.scores = scores.into_iter().map(MetricTensor::restore).collect();
+        self.targets = targets.into_iter().map(MetricTensor::restore_bool).collect();
+        self.value = value;
+        Ok(())
+    }
     fn update(&mut self, input: &ConfusionStatsInput<B>) {
         assert_eq!(input.predictions.dims(), input.targets.dims());
         if input.predictions.dims()[0] > 0 {
@@ -565,6 +626,8 @@ macro_rules! auc_metric {
         }
         impl<B: Backend> Metric for $name<B> {
             fn attributes(&self) -> super::MetricAttributes { $attributes }
+            fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> { self.state.checkpoint() }
+            fn restore_checkpoint(&mut self, state: &[u8]) -> Result<(), TrainingError> { self.state.restore_checkpoint(state) }
             fn format_options(&self) -> super::FormatOptions {
                 super::FormatOptions::new(std::sync::Arc::new(self.name().into())).unit("%").precision(2)
             }

@@ -92,9 +92,14 @@ impl SystemInfo {
             }
         } else {
             let libtorch = Self::prepare_libtorch_dir(os)?;
+            let include_root = if libtorch.ends_with("lib") {
+                libtorch.parent().unwrap_or(&libtorch).to_path_buf()
+            } else {
+                libtorch.clone()
+            };
             let includes = env_var_rerun("LIBTORCH_INCLUDE")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| libtorch.clone());
+                .unwrap_or(include_root);
             let lib = env_var_rerun("LIBTORCH_LIB")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| libtorch.clone());
@@ -226,6 +231,25 @@ impl SystemInfo {
             println!("cargo:rustc-link-lib=cudart");
         }
     }
+
+    fn make_rng(system: Option<&Self>) {
+        println!("cargo:rerun-if-changed=src/rng.cpp");
+        let mut build = cc::Build::new();
+        build.cpp(true).pic(true).warnings(false).file("src/rng.cpp");
+        if let Some(system) = system {
+            build.includes(&system.libtorch_include_dirs);
+            build.define("RUDA_TCH_RNG", None);
+        }
+        if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+            build.flag("/std:c++17");
+        } else {
+            build.flag("-std=c++17");
+            if let Some(system) = system {
+                build.flag(format!("-D_GLIBCXX_USE_CXX11_ABI={}", system.cxx11_abi));
+            }
+        }
+        build.compile("ruda-tch-rng");
+    }
 }
 
 fn check_out_dir() -> Option<PathBuf> {
@@ -237,6 +261,7 @@ fn check_out_dir() -> Option<PathBuf> {
 fn main() {
     let system_info = SystemInfo::new();
     let out_dir = env_var_rerun("OUT_DIR").expect("Failed to get out dir");
+    SystemInfo::make_rng(system_info.as_ref());
 
     let mut gpu_found = false;
     let found_dir = system_info.is_some();

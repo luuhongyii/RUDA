@@ -63,6 +63,16 @@ pub(super) fn parse_image_annotation(
 }
 
 impl Mapper<ImageDatasetItemRaw, ImageDatasetItem> for PathToImageDatasetItem {
+    fn is_read_order_independent(&self) -> bool { true }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&self.classes).map_err(|error| error.to_string())
+    }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        let classes: HashMap<String, usize> =
+            serde_json::from_slice(state).map_err(|error| error.to_string())?;
+        if classes == self.classes { Ok(()) } else { Err("Image class mapping differs from checkpoint".into()) }
+    }
+
     /// Convert a raw image dataset item (path-like) to a 3D image array with a target label.
     fn map(&self, item: &ImageDatasetItemRaw) -> ImageDatasetItem {
         let annotation = parse_image_annotation(&item.annotation, &self.classes);

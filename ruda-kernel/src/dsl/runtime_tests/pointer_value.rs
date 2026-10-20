@@ -1,4 +1,64 @@
 use crate::dsl::prelude::*;
+use ruda_kernel_macros::RudaTypeMut;
+
+#[derive(RudaType, RudaTypeMut, Clone)]
+struct ReferencePair<'a> {
+    first: &'a f32,
+    second: &'a f32,
+}
+
+#[derive(RudaType, Clone)]
+enum ReferenceChoice<'a> {
+    Pair(ReferencePair<'a>),
+}
+
+#[ruda]
+fn reference_pair_sum(pair: ReferencePair<'_>) -> f32 {
+    *pair.first + *pair.second
+}
+
+#[ruda(launch)]
+fn nested_reference_kernel(output: &mut Array<f32>, count: u32) {
+    let a = 1.0f32;
+    let b = 3.0f32;
+    let c = 9.0f32;
+    let mut p = &a;
+    let mut q = &b;
+    let pair = ReferencePair { first: p, second: q };
+    let saved = ReferenceChoice::Pair(pair.clone());
+    {
+        let mut selected = &mut p;
+        for i in 0..count {
+            if i % 2 == 0 { selected = &mut p; }
+            else { selected = &mut q; }
+            *selected = &c;
+        }
+    }
+    let mut vector = Vector::<f32, Const<4>>::new(2.0f32);
+    for lane in 0..4 {
+        let element = &mut vector[lane];
+        *element = *element + lane as f32;
+    }
+    output[0] = *p;
+    output[1] = *q;
+    output[2] = match saved { ReferenceChoice::Pair(value) => reference_pair_sum(value) };
+    output[3] = reference_pair_sum(pair);
+    for lane in 0..4 { output[4 + lane] = vector[lane]; }
+    let mut writable = 7.0f32;
+    let merged: &f32 = if count > 1 { &mut writable } else { &a };
+    output[8] = *merged;
+}
+
+pub fn test_nested_reference_bindings_and_aggregate_copies<R: Runtime>() {
+    let client = R::client(&Default::default());
+    let output = client.empty(9 * core::mem::size_of::<f32>());
+    unsafe {
+        nested_reference_kernel::launch::<R>(&client, RudaCount::new_single(), RudaDim::new_single(),
+            ArrayArg::from_raw_parts(output.clone(), 9), 4);
+    }
+    assert_eq!(f32::from_bytes(&client.read_one_unchecked(output)),
+        &[9.0, 9.0, 4.0, 4.0, 2.0, 3.0, 4.0, 5.0, 7.0]);
+}
 
 #[ruda]
 fn pointer_value_helper(pointer: ValuePtr<f32, GlobalSpace>) -> ValuePtr<f32, GlobalSpace> {
@@ -194,6 +254,10 @@ pub fn test_native<R: Runtime>() {
 #[macro_export]
 macro_rules! testgen_pointer_value {
     () => {
+        #[test]
+        fn test_nested_reference_bindings_and_aggregate_copies() {
+            $crate::dsl::runtime_tests::pointer_value::test_nested_reference_bindings_and_aggregate_copies::<TestRuntime>();
+        }
         #[test]
         fn test_pointer_value_branch_loop_select_and_spaces() {
             $crate::dsl::runtime_tests::pointer_value::test_branch_loop_select_and_spaces::<

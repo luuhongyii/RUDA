@@ -7,6 +7,7 @@ use hashbrown::HashMap;
 pub enum PointerOp {
     Address(TypedPointer),
     Offset(BinaryOperator),
+    Component(BinaryOperator),
     ReadOnly(UnaryOperator),
     Select(Select),
     Load {
@@ -39,12 +40,15 @@ pub enum PointerOp {
         reference: Variable,
         value: Variable,
     },
+    EraseSpace(UnaryOperator),
+    Absent,
 }
 
 #[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PointerOpCode {
     Address(PointerType, bool, usize),
     Offset,
+    Component,
     ReadOnly,
     Select,
     Load(bool),
@@ -55,6 +59,8 @@ pub enum PointerOpCode {
     UniformLoad,
     ReferenceLoad,
     ReferenceStore,
+    EraseSpace,
+    Absent,
 }
 
 #[cfg(feature = "ir-serde")]
@@ -103,16 +109,20 @@ impl OperationReflect for PointerOp {
             self,
             Self::Address(_)
                 | Self::Offset(_)
+                | Self::Component(_)
                 | Self::ReadOnly(_)
                 | Self::Select(_)
                 | Self::NativeAddress(_)
                 | Self::FromNative { .. }
+                | Self::EraseSpace(_)
+                | Self::Absent
         )
     }
     fn op_code(&self) -> Self::OpCode {
         match self {
             Self::Address(p) => PointerOpCode::Address(p.ty, p.checked, p.unroll_factor),
             Self::Offset(_) => PointerOpCode::Offset,
+            Self::Component(_) => PointerOpCode::Component,
             Self::ReadOnly(_) => PointerOpCode::ReadOnly,
             Self::Select(_) => PointerOpCode::Select,
             Self::Load { checked, .. } => PointerOpCode::Load(*checked),
@@ -123,12 +133,14 @@ impl OperationReflect for PointerOp {
             Self::UniformLoad { .. } => PointerOpCode::UniformLoad,
             Self::ReferenceLoad { .. } => PointerOpCode::ReferenceLoad,
             Self::ReferenceStore { .. } => PointerOpCode::ReferenceStore,
+            Self::EraseSpace(_) => PointerOpCode::EraseSpace,
+            Self::Absent => PointerOpCode::Absent,
         }
     }
     fn args(&self) -> Option<Vec<Variable>> {
         Some(match self {
             Self::Address(p) => vec![p.base, p.index],
-            Self::Offset(p) => vec![p.lhs, p.rhs],
+            Self::Offset(p) | Self::Component(p) => vec![p.lhs, p.rhs],
             Self::ReadOnly(p) | Self::NativeAddress(p) => vec![p.input],
             Self::Select(p) => vec![p.cond, p.then, p.or_else],
             Self::Load { pointer, .. } | Self::UniformLoad { pointer } => vec![*pointer],
@@ -143,6 +155,8 @@ impl OperationReflect for PointerOp {
             Self::FromNative { address, .. } => vec![*address],
             Self::ReferenceLoad { reference } => vec![*reference],
             Self::ReferenceStore { reference, value } => vec![*reference, *value],
+            Self::EraseSpace(op) => vec![op.input],
+            Self::Absent => vec![],
         })
     }
     fn from_code_and_args(code: Self::OpCode, args: &[Variable]) -> Option<Self> {
@@ -159,6 +173,9 @@ impl OperationReflect for PointerOp {
             (PointerOpCode::Offset, [lhs, rhs]) => Self::Offset(BinaryOperator {
                 lhs: *lhs,
                 rhs: *rhs,
+            }),
+            (PointerOpCode::Component, [lhs, rhs]) => Self::Component(BinaryOperator {
+                lhs: *lhs, rhs: *rhs,
             }),
             (PointerOpCode::ReadOnly, [input]) => Self::ReadOnly(UnaryOperator { input: *input }),
             (PointerOpCode::Select, [cond, then, or_else]) => Self::Select(Select {
@@ -194,6 +211,8 @@ impl OperationReflect for PointerOp {
             (PointerOpCode::ReferenceStore, [reference, value]) => Self::ReferenceStore {
                 reference: *reference, value: *value,
             },
+            (PointerOpCode::EraseSpace, [input]) => Self::EraseSpace(UnaryOperator { input: *input }),
+            (PointerOpCode::Absent, []) => Self::Absent,
             _ => return None,
         })
     }
@@ -217,6 +236,16 @@ impl PointerOp {
             }
         };
         match self {
+            Self::Absent => {
+                let ty = pointer_ty(output()?)?;
+                if ty.width == 0 { return Err("absent reference requires a sized pointee".into()); }
+                Ok(())
+            }
+            Self::EraseSpace(op) => {
+                let mut ty = pointer_ty(op.input)?;
+                ty.address_space = AddressSpace::Generic;
+                same(output()?.ty, Type::Pointer(ty))
+            }
             Self::ReferenceLoad { .. } | Self::ReferenceStore { .. } => {
                 Err("reference binding operations must be lowered before pointer validation".into())
             }
@@ -230,6 +259,17 @@ impl PointerOp {
                 if !op.rhs.ty.is_unsigned_int() || op.rhs.ty.vector_size() != 1 {
                     return Err("pointer offset must be a scalar unsigned integer".into());
                 }
+                Ok(())
+            }
+            Self::Component(op) => {
+                let source = pointer_ty(op.lhs)?;
+                let destination = pointer_ty(output()?)?;
+                let mut scalar = source;
+                scalar.width = 1;
+                if destination.access == PointerAccess::ReadOnly { scalar.access = PointerAccess::ReadOnly; }
+                if source.width == 0 || scalar != destination
+                    || !op.rhs.ty.is_unsigned_int() || op.rhs.ty.vector_size() != 1
+                { return Err("pointer component requires a scalar index and compatible scalar view".into()); }
                 Ok(())
             }
             Self::ReadOnly(op) => {
@@ -325,6 +365,7 @@ impl PointerOp {
 enum Origin {
     Storage(Variable, usize),
     Native,
+    Absent,
 }
 
 #[derive(Clone, Copy)]
@@ -403,6 +444,10 @@ impl PointerValueLowering {
             } else if let Operation::Pointer(op) = &inst.operation {
                 op.validate(inst.out)?;
                 match op {
+                    PointerOp::Absent => {
+                        let id = lowering.origin_id(Origin::Absent);
+                        lowering.reachable.entry(inst.out()).or_default().push(id);
+                    }
                     PointerOp::Address(p) => {
                         if p.index.ty.size() > lowering.index_ty.size() {
                             lowering.index_ty = p.index.ty;
@@ -415,13 +460,13 @@ impl PointerValueLowering {
                         let id = lowering.origin_id(Origin::Native);
                         lowering.reachable.entry(inst.out()).or_default().push(id);
                     }
-                    PointerOp::Offset(p) => {
+                    PointerOp::Offset(p) | PointerOp::Component(p) => {
                         if p.rhs.ty.size() > lowering.index_ty.size() {
                             lowering.index_ty = p.rhs.ty;
                         }
                         edges.push((inst.out(), p.lhs));
                     }
-                    PointerOp::ReadOnly(p) => edges.push((inst.out(), p.input)),
+                    PointerOp::ReadOnly(p) | PointerOp::EraseSpace(p) => edges.push((inst.out(), p.input)),
                     PointerOp::Select(p) => {
                         edges.push((inst.out(), p.then));
                         edges.push((inst.out(), p.or_else));
@@ -573,11 +618,23 @@ impl PointerValueLowering {
             _ => true,
         };
         match origin {
+            Origin::Absent => {
+                scope.register(Instruction::no_out(Branch::Unreachable));
+            }
             Origin::Storage(base, unroll_factor) => {
+                let mut view = ty.view();
+                if view.address_space == AddressSpace::Generic {
+                    view.address_space = match base.kind {
+                        VariableKind::GlobalInputArray(_) | VariableKind::GlobalOutputArray(_) => AddressSpace::Global,
+                        VariableKind::SharedArray { .. } => AddressSpace::Shared,
+                        VariableKind::LocalArray { .. } | VariableKind::ConstantArray { .. } => AddressSpace::Local,
+                        _ => return Err("reference origin is not addressable storage".into()),
+                    };
+                }
                 let ptr = TypedPointer {
                     base,
                     index: handle.index,
-                    ty: ty.view(),
+                    ty: view,
                     checked,
                     unroll_factor,
                 };
@@ -739,6 +796,17 @@ impl PointerValueLowering {
             let modes = inst.modes;
             match inst.operation {
                 Operation::Pointer(ref op) => match op {
+                    PointerOp::Absent => {
+                        let handle = self.handle(scope, inst.out());
+                        let origin = self.origin_id(Origin::Absent);
+                        scope.register(Instruction::new(Operation::Copy((origin as u32).into()), handle.origin));
+                        scope.register(Instruction::new(
+                            Operation::Copy(self.index_ty.constant(0u32.into())), handle.index,
+                        ));
+                        if let Some(native) = handle.native {
+                            scope.register(Instruction::new(Operation::Copy(0u64.into()), native));
+                        }
+                    }
                     PointerOp::ReferenceLoad { .. } | PointerOp::ReferenceStore { .. } => {
                         return Err("reference binding operations must be lowered before pointer values".into());
                     }
@@ -771,7 +839,7 @@ impl PointerValueLowering {
                             handle.native.unwrap(),
                         ));
                     }
-                    PointerOp::ReadOnly(p) => {
+                    PointerOp::ReadOnly(p) | PointerOp::EraseSpace(p) => {
                         let dest = self.handle(scope, inst.out());
                         let source = self.handle(scope, p.input);
                         Self::copy(scope, dest, source);
@@ -813,6 +881,37 @@ impl PointerValueLowering {
                             ));
                         }
                     }
+                    PointerOp::Component(p) => {
+                        let source = self.handle(scope, p.lhs);
+                        let dest = self.handle(scope, inst.out());
+                        let width = pointer_ty(p.lhs)?.width;
+                        let index = Self::cast(scope, p.rhs, self.index_ty);
+                        scope.register(Instruction::new(Operation::Copy(source.origin), dest.origin));
+                        let start = *scope.create_local(self.index_ty);
+                        scope.register(Instruction::new(Arithmetic::Mul(BinaryOperator {
+                            lhs: source.index, rhs: self.index_ty.constant((width as u64).into()),
+                        }), start));
+                        let offset = *scope.create_local(self.index_ty);
+                        scope.register(Instruction::new(Arithmetic::Add(BinaryOperator { lhs: start, rhs: index }), offset));
+                        let in_bounds = *scope.create_local(Type::scalar(ElemType::Bool));
+                        scope.register(Instruction::new(Comparison::Lower(BinaryOperator {
+                            lhs: index, rhs: self.index_ty.constant((width as u64).into()),
+                        }), in_bounds));
+                        let invalid = if self.index_ty.size() == 8 { u64::MAX } else { u32::MAX as u64 };
+                        scope.register(Instruction::new(Operator::Select(Select {
+                            cond: in_bounds, then: offset, or_else: self.index_ty.constant(invalid.into()),
+                        }), dest.index));
+                        if let Some(native) = dest.native {
+                            let delta = Self::cast(scope, index, UIntKind::U64.into());
+                            let bytes = *scope.create_local(UIntKind::U64.into());
+                            scope.register(Instruction::new(Arithmetic::Mul(BinaryOperator {
+                                lhs: delta, rhs: (pointer_ty(inst.out())?.pointee().size() as u64).into(),
+                            }), bytes));
+                            scope.register(Instruction::new(Arithmetic::Add(BinaryOperator {
+                                lhs: source.native.unwrap(), rhs: bytes,
+                            }), native));
+                        }
+                    }
                     PointerOp::Select(p) => {
                         let dest = self.handle(scope, inst.out());
                         let then = self.handle(scope, p.then);
@@ -849,6 +948,12 @@ impl PointerValueLowering {
                         let handle = self.handle(scope, *pointer);
                         let roots = self.reachable[pointer].clone();
                         if roots.len() == 1 {
+                            if self.origins[roots[0]] == Origin::Absent {
+                                scope.instructions.push(Instruction {
+                                    operation: Branch::Unreachable.into(), out: None, ..inst.clone()
+                                });
+                                break;
+                            }
                             self.access(
                                 scope,
                                 self.origins[roots[0]],

@@ -38,6 +38,18 @@ impl Backend for Dispatch {
         }
         native_dispatch!(device, call)
     }
+    fn rng_state(device: &DispatchDevice) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+        macro_rules! call {
+            ($B:ty, $variant:ident, $device:expr) => { <$B>::rng_state($device) };
+        }
+        native_dispatch!(device, call)
+    }
+    fn restore_rng_state(device: &DispatchDevice, state: &[u8]) -> Result<(), ExecutionError> {
+        macro_rules! call {
+            ($B:ty, $variant:ident, $device:expr) => { <$B>::restore_rng_state($device, state) };
+        }
+        native_dispatch!(device, call)
+    }
     fn sync(device: &DispatchDevice) -> Result<(), ExecutionError> {
         macro_rules! call {
             ($B:ty, $variant:ident, $device:expr) => { <$B>::sync($device) };

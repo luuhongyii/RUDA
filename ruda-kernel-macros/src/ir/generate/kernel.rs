@@ -55,6 +55,32 @@ impl KernelFn {
         } else {
             (TokenStream::new(), Vec::new())
         };
+        let body = match &sig.returns {
+            KernelReturns::ExpandType(ty) => {
+                let mut ty = ty;
+                loop {
+                    ty = match ty {
+                        syn::Type::Group(group) => &group.elem,
+                        syn::Type::Paren(paren) => &paren.elem,
+                        _ => break,
+                    };
+                }
+                if let syn::Type::Reference(reference) = ty {
+                    let ruda_type = prelude_type("RudaType");
+                    let into_mut = prelude_type("IntoMut");
+                    let writable = reference.mutability.is_some();
+                    quote! {
+                        {
+                            let __ruda_return: <#ty as #ruda_type>::ExpandType = #body;
+                            #into_mut::expand_return_reference(__ruda_return, scope, #writable)
+                        }
+                    }
+                } else {
+                    quote![#body]
+                }
+            }
+            KernelReturns::Plain(_) => quote![#body],
+        };
         let body = self
             .args
             .fast_math

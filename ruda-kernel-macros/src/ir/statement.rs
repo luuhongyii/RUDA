@@ -1,12 +1,17 @@
 use crate::ir::{expression::Expression, scope::ManagedVar};
 use proc_macro2::TokenStream;
-use syn::{Ident, Type};
+use syn::{Ident, Pat, Type};
 
 #[derive(Clone, Debug)]
 pub enum Statement {
     Local {
         variable: ManagedVar,
         init: Option<Box<Expression>>,
+    },
+    Destructure {
+        pattern: Pat,
+        init: Box<Expression>,
+        is_const: bool,
     },
     Define {
         name: Ident,

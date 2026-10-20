@@ -245,14 +245,6 @@ impl<T: RudaType> RudaType for *mut Tensor<T> {
     type ExpandType = NativeExpand<Tensor<T>>;
 }
 
-impl<T: RudaType> RudaType for &mut Tensor<T> {
-    type ExpandType = NativeExpand<Tensor<T>>;
-}
-
-impl<T: RudaType> RudaType for &Tensor<T> {
-    type ExpandType = NativeExpand<Tensor<T>>;
-}
-
 impl<C: RudaType> IntoMut for NativeExpand<Tensor<C>> {
     fn into_mut(self, _scope: &mut Scope) -> Self {
         self

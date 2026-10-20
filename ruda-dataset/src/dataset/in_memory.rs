@@ -24,6 +24,11 @@ impl<I> Dataset<I> for InMemDataset<I>
 where
     I: Clone + Send + Sync,
 {
+    fn is_read_order_independent(&self) -> bool { true }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> { Ok(Vec::new()) }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        if state.is_empty() { Ok(()) } else { Err("Invalid in-memory source state".into()) }
+    }
     fn get(&self, index: usize) -> Option<I> {
         self.items.get(index).cloned()
     }

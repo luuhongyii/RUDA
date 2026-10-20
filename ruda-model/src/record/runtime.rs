@@ -20,15 +20,21 @@ pub trait RuntimeRecord<B: Backend>: Record<B> {
 pub struct RuntimePrecision {
     float: fn(TensorData) -> TensorData,
     int: fn(TensorData) -> TensorData,
+    preserve_dtype: bool,
     pub(crate) id: TypeId,
 }
 
 impl RuntimePrecision {
     /// Retain the caller's actual floating and integer element conversions.
     pub fn new<S: PrecisionSettings>() -> Self {
-        Self { float: |data| data.convert::<S::FloatElem>(),
-            int: |data| data.convert::<S::IntElem>(),
-            id: TypeId::of::<(S::FloatElem, S::IntElem)>() }
+        Self { float: |data| if S::PRESERVE_DTYPE { data } else { data.convert::<S::FloatElem>() },
+            int: |data| if S::PRESERVE_DTYPE { data } else { data.convert::<S::IntElem>() },
+            preserve_dtype: S::PRESERVE_DTYPE,
+            id: if S::PRESERVE_DTYPE {
+                TypeId::of::<super::NativePrecisionSettings>()
+            } else {
+                TypeId::of::<(S::FloatElem, S::IntElem)>()
+            } }
     }
 
     /// Quantized tensors keep their packed representation.
@@ -51,6 +57,8 @@ pub enum RuntimeRecordValue {
     Bool(TensorData),
     Fields(u32, Vec<Self>),
     Adapter(String, Box<Self>),
+    NativeFloat(TensorData),
+    NativeInt(TensorData),
 }
 
 impl RuntimeRecordValue {
@@ -81,8 +89,14 @@ impl RuntimeRecordValue {
 
     pub fn convert_precision(self, precision: RuntimePrecision) -> Self {
         match self {
-            Self::Float(data) => Self::Float(precision.float(data)),
-            Self::Int(data) => Self::Int(precision.int(data)),
+            Self::Float(data) | Self::NativeFloat(data) => {
+                let data = precision.float(data);
+                if precision.preserve_dtype { Self::NativeFloat(data) } else { Self::Float(data) }
+            }
+            Self::Int(data) | Self::NativeInt(data) => {
+                let data = precision.int(data);
+                if precision.preserve_dtype { Self::NativeInt(data) } else { Self::Int(data) }
+            }
             Self::Fields(tag, values) => Self::Fields(tag, values.into_iter()
                 .map(|value| value.convert_precision(precision)).collect()),
             Self::Adapter(name, value) => Self::Adapter(name, Box::new(value.convert_precision(precision))),
@@ -138,22 +152,32 @@ impl<B: Backend> RuntimeRecord<B> for EmptyRecord {
 
 impl<B: Backend, const D: usize> RuntimeRecord<B> for Tensor<B, D> {
     fn into_runtime(self, precision: RuntimePrecision) -> RuntimeRecordValue {
-        RuntimeRecordValue::Float(precision.float(self.into_data()))
+        RuntimeRecordValue::Float(self.into_data()).convert_precision(precision)
     }
     fn from_runtime(value: RuntimeRecordValue, device: &B::Device) -> Self {
-        let RuntimeRecordValue::Float(data) = value else { panic!("Expected a floating tensor record") };
-        let data = if matches!(data.dtype, DType::QFloat(_)) { data } else { data.convert::<B::FloatElem>() };
-        Tensor::from_data(data, device)
+        let data = match value {
+            RuntimeRecordValue::NativeFloat(data) => data,
+            RuntimeRecordValue::Float(data) if matches!(data.dtype, DType::QFloat(_)) => data,
+            RuntimeRecordValue::Float(data) => data.convert::<B::FloatElem>(),
+            _ => panic!("Expected a floating tensor record"),
+        };
+        let dtype = data.dtype;
+        Tensor::from_data(data, (device, dtype))
     }
 }
 
 impl<B: Backend, const D: usize> RuntimeRecord<B> for Tensor<B, D, Int> {
     fn into_runtime(self, precision: RuntimePrecision) -> RuntimeRecordValue {
-        RuntimeRecordValue::Int(precision.int(self.into_data()))
+        RuntimeRecordValue::Int(self.into_data()).convert_precision(precision)
     }
     fn from_runtime(value: RuntimeRecordValue, device: &B::Device) -> Self {
-        let RuntimeRecordValue::Int(data) = value else { panic!("Expected an integer tensor record") };
-        Tensor::from_data(data.convert::<B::IntElem>(), device)
+        let data = match value {
+            RuntimeRecordValue::NativeInt(data) => data,
+            RuntimeRecordValue::Int(data) => data.convert::<B::IntElem>(),
+            _ => panic!("Expected an integer tensor record"),
+        };
+        let dtype = data.dtype;
+        Tensor::from_data(data, (device, dtype))
     }
 }
 

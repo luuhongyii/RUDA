@@ -249,14 +249,6 @@ impl<E: RudaPrimitive, IO: SliceVisibility> RudaType for Slice<E, IO> {
     type ExpandType = SliceExpand<E, IO>;
 }
 
-impl<E: RudaPrimitive, IO: SliceVisibility> RudaType for &Slice<E, IO> {
-    type ExpandType = SliceExpand<E, IO>;
-}
-
-impl<E: RudaPrimitive, IO: SliceVisibility> RudaType for &mut Slice<E, IO> {
-    type ExpandType = SliceExpand<E, IO>;
-}
-
 impl<E: RudaPrimitive, IO: SliceVisibility> IntoMut for SliceExpand<E, IO> {
     fn into_mut(self, _scope: &mut ruda_core::ir::Scope) -> Self {
         self

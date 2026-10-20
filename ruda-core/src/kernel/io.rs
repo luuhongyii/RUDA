@@ -53,7 +53,9 @@ impl KernelIo {
     /// Analyze a structured, lowered kernel without changing its compilation pipeline.
     pub fn analyze(kernel: &KernelDefinition) -> Self {
         let mut analysis = BufferIoAnalysis::new(&kernel.buffers, &kernel.tensor_maps);
-        analysis.scope(&kernel.body);
+        let mut body = kernel.body.clone();
+        body.lower_reference_values().expect("valid reference bindings before kernel IO analysis");
+        analysis.scope(&body);
         analysis.finish()
     }
 }
@@ -157,13 +159,20 @@ impl BufferIoAnalysis {
                 TypedMemory::Store { pointer, .. } => self.effect(pointer.base, W, false),
             },
             Operation::Pointer(op) => match op {
+                PointerOp::Absent => {}
+                PointerOp::EraseSpace(op) => aliases.push(op.input),
                 PointerOp::Address(pointer) => aliases.push(pointer.base),
-                PointerOp::Offset(op) => aliases.push(op.lhs),
+                PointerOp::Offset(op) | PointerOp::Component(op) => aliases.push(op.lhs),
                 PointerOp::ReadOnly(op) | PointerOp::NativeAddress(op) => aliases.push(op.input),
                 PointerOp::Select(op) => aliases.extend([op.then, op.or_else]),
                 PointerOp::FromNative { address, .. } => aliases.push(*address),
                 PointerOp::Load { pointer, .. } | PointerOp::UniformLoad { pointer } => self.effect(*pointer, R, true),
                 PointerOp::Store { pointer, .. } => self.effect(*pointer, W, true),
+                PointerOp::ReferenceLoad { reference } => self.effect(*reference, R, true),
+                PointerOp::ReferenceStore { reference, .. } => {
+                    self.effect(*reference, W, true);
+                    definition = false;
+                }
                 PointerOp::Atomic { pointer, operation, .. } => self.effect(*pointer, match operation {
                     AtomicOpCode::Load => R,
                     AtomicOpCode::Store => W,

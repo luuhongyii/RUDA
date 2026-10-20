@@ -14,6 +14,8 @@ pub const QPARAM_ALIGN: usize = core::mem::align_of::<f32>();
 
 mod params;
 mod packing;
+mod ggml;
+pub use ggml::GgmlType;
 
 #[cfg(feature = "tensor-data")]
 mod bytes;

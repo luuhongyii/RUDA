@@ -125,6 +125,8 @@ impl KernelDefinition {
             }
             Ok(())
         }
-        visit(self, &self.body)
+        let mut body = self.body.clone();
+        body.lower_reference_values()?;
+        visit(self, &body)
     }
 }

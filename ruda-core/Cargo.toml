@@ -30,7 +30,7 @@ tensor-device-settings = ["tensor", "dep:thiserror"]
 tensor-device-settings-std = ["tensor-device-settings", "std"]
 communication = ["dep:ahash"]
 argument-layout = ["compiler", "tensor"]
-cache = [ "std", "serde_json", "dirs", "sanitize-filename",]
+cache = [ "std", "dep:serde_json", "dirs", "sanitize-filename",]
 compilation-cache = [ "cache", "dep:ciborium",]
 environment = ["serde", "dep:serde_json", "dep:ciborium"]
 environment-persistence = ["environment", "std", "dep:turso", "dep:async-channel", "dep:web-sys", "dep:js-sys", "dep:wasm-bindgen"]
@@ -83,7 +83,7 @@ optional = true
 default-features = false
 
 [dependencies.turso]
-version = "0.8.2"
+version = "=0.8.2"
 optional = true
 default-features = false
 
@@ -170,6 +170,11 @@ default-features = false
 [dependencies.rand]
 version = "0.10.0"
 features = [ "std_rng",]
+default-features = false
+
+[dependencies.chacha20]
+version = "=0.10.2"
+features = ["rng"]
 default-features = false
 
 [dependencies.sanitize-filename]

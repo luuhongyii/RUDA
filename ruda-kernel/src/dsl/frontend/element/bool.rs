@@ -23,6 +23,10 @@ impl BoolOps for bool {}
 
 impl RudaType for bool {
     type ExpandType = NativeExpand<Self>;
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let ty = <Self as RudaPrimitive>::as_type(scope);
+        scope.reference_absent(ty, writable).into()
+    }
 }
 
 impl Scalar for bool {}

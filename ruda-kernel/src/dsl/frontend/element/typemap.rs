@@ -233,6 +233,10 @@ impl<Marker: 'static> NumCast for DynamicScalar<Marker> {
 
 impl<Marker: 'static> RudaType for DynamicScalar<Marker> {
     type ExpandType = NativeExpand<DynamicScalar<Marker>>;
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let ty = <Self as RudaPrimitive>::as_type(scope);
+        scope.reference_absent(ty, writable).into()
+    }
 }
 
 impl<Marker: 'static> Scalar for DynamicScalar<Marker> {}

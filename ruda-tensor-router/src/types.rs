@@ -245,6 +245,19 @@ macro_rules! impl_multi_backend_types {
                     }
                 }
 
+                fn rng_state(&self) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.rng_state(),
+                        $(Self::$OtherBackend(runner) => runner.rng_state(),)+
+                    }
+                }
+                fn restore_rng_state(&self, state: &[u8]) -> Result<(), ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.restore_rng_state(state),
+                        $(Self::$OtherBackend(runner) => runner.restore_rng_state(state),)+
+                    }
+                }
+
                 fn graph_prepare(&self) -> Result<(), ExecutionError> {
                     match self {
                         Self::$DefaultBackend(runner) => runner.graph_prepare(),

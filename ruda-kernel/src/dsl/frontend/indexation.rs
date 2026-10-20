@@ -143,12 +143,13 @@ pub(crate) fn expand_index_reference_native<A: RudaType + RudaIndex>(
 where A::Output: RudaPrimitive {
     use ruda_core::ir::{AddressSpace, PointerAccess, PointerType, TypedPointer};
     let original = *array.expand;
-    let base = if original.is_array() {
-        original
-    } else {
-        scope.reference_borrow(array.expand, writable).expect("addressable indexed value");
-        scope.reference_storage(original).expect("indexed references require addressable storage")
-    };
+    if !original.is_array() {
+        let reference = if scope.reference_target(original).is_some() { array.expand }
+            else { scope.reference_borrow(array.expand, writable).expect("addressable indexed value") };
+        return scope.reference_component(*reference, *index.expand, writable)
+            .expect("addressable vector component").into();
+    }
+    let base = original;
     let (address_space, unroll_factor) = match base.kind {
         VariableKind::GlobalInputArray(_) | VariableKind::GlobalOutputArray(_) => (AddressSpace::Global, 1),
         VariableKind::SharedArray { unroll_factor, .. } => (AddressSpace::Shared, unroll_factor),
@@ -186,6 +187,26 @@ pub(crate) fn expand_index_assign_native<A: RudaType<ExpandType = NativeExpand<A
         VariableKind::Constant(value) => Variable::constant(value, usize::as_type(scope)),
         _ => index,
     };
+
+    if !array.expand.is_array()
+        && (scope.reference_target(*array.expand).is_some()
+            || scope.reference_storage(*array.expand).is_some())
+    {
+        let reference = if scope.reference_target(*array.expand).is_some() {
+            array.expand
+        } else {
+            scope.reference_borrow(array.expand, true).expect("addressable indexed value")
+        };
+        let component = scope.reference_component(*reference, index, true)
+            .expect("writable vector component");
+        let pointer = scope.reference_pointer(*component).expect("vector component pointer");
+        scope.register(Instruction::no_out(ruda_core::ir::PointerOp::Store {
+            pointer,
+            value: value.expand.into(),
+            checked,
+        }));
+        return;
+    }
 
     let vector_size = vector_size.unwrap_or(0);
     if checked {

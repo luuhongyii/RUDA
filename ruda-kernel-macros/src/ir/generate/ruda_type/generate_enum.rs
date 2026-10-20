@@ -53,10 +53,11 @@ impl RudaTypeEnum {
         let name = &self.name_expand;
         let variants = self.variants.iter().map(RudaTypeVariant::expand_variant);
         let generics = &self.generics;
+        let where_clause = &self.generics.where_clause;
         let vis = &self.vis;
 
         quote! {
-            #vis enum #name #generics {
+            #vis enum #name #generics #where_clause {
                 #(#variants),*
             }
         }
@@ -65,6 +66,8 @@ impl RudaTypeEnum {
     fn ruda_type_impl(&self) -> proc_macro2::TokenStream {
         let ruda_type = prelude_type("RudaType");
         let ruda_enum = prelude_type("RudaEnum");
+        let into_mut = prelude_type("IntoMut");
+        let scope = prelude_type("Scope");
         let expand_elem = frontend_type("NativeExpand");
 
         let name = &self.ident;
@@ -112,6 +115,10 @@ impl RudaTypeEnum {
             impl #generics #ruda_enum for #name_expand #generic_names #where_clause {
                 type RuntimeValue = ();
 
+                fn snapshot_for_match(self, scope: &mut #scope) -> Self {
+                    #into_mut::expand_reference_value(self, scope)
+                }
+
                 fn discriminant(&self) -> #expand_elem<i32>{
                     #body_discriminant.into()
                 }
@@ -135,12 +142,19 @@ impl RudaTypeEnum {
         let name = &self.ident;
         let name_expand = &self.name_expand;
         let (generics, generic_names, where_clause) = self.generics.split_for_impl();
+        let accessors = self.comptime_field_accessors();
 
         let body_init = self.match_impl(
             quote! {self},
             self.variants
                 .iter()
                 .map(|v| v.map_body(name_expand, |f| quote!(#into_mut::into_mut(#f, scope))))
+                .collect(),
+        );
+        let body_snapshot = self.match_impl(
+            quote! {self},
+            self.variants.iter()
+                .map(|v| v.map_body(name_expand, |f| quote!(#into_mut::expand_reference_value(#f, scope))))
                 .collect(),
         );
 
@@ -175,6 +189,9 @@ impl RudaTypeEnum {
                 fn into_mut(self, scope: &mut #scope) -> Self {
                     #body_init
                 }
+                fn expand_reference_value(self, scope: &mut #scope) -> Self {
+                    #body_snapshot
+                }
             }
 
             impl #generics #debug for #name #generic_names #where_clause {}
@@ -187,6 +204,7 @@ impl RudaTypeEnum {
                 }
             }
 
+            #accessors
             #constructors
         }
     }
@@ -420,7 +438,7 @@ impl RudaTypeEnum {
         );
 
         quote! {
-            #vis enum #name #generics {
+            #vis enum #name #generics #where_clause {
                 #(
                     #variants
                 ),*
@@ -577,7 +595,7 @@ impl RudaTypeEnum {
             .iter()
             .flat_map(|it| it.fields.iter())
             .cloned();
-        if self.runtime_variants {
+        if self.runtime_variants && !self.uses_runtime_slots() {
             bounded_where_clause(
                 &self.generics,
                 fields,
@@ -724,6 +742,7 @@ impl RudaTypeVariant {
     ) -> TokenStream {
         let core = core_path();
         let ruda_type = prelude_type("RudaType");
+        let into_mut = prelude_type("IntoMut");
         let scope = prelude_type("Scope");
         let ident = &self.ident;
         let base_function = Ident::new(&format!("new_{ident}"), ident.span());
@@ -749,14 +768,17 @@ impl RudaTypeVariant {
                     }
                 });
 
-                let args = self.fields.iter().map(|f| &f.ident);
+                let args = self.fields.iter().map(|f| {
+                    let name = &f.ident;
+                    quote![#name: #into_mut::expand_reference_value(#name, scope)]
+                });
 
                 quote! {
                     pub fn #base_function(#(#args_with_base_types),*) -> Self {
                         #core::unexpanded!()
                     }
 
-                    pub fn #expand_function(_: &mut #scope, #(#args_with_expand_types),*) -> #ident_ty_expand #generics {
+                    pub fn #expand_function(scope: &mut #scope, #(#args_with_expand_types),*) -> #ident_ty_expand #generics {
                         #ident_ty_expand #turbofish ::#ident {#(#args),*}
                     }
                 }
@@ -782,14 +804,17 @@ impl RudaTypeVariant {
                     .fields
                     .iter()
                     .enumerate()
-                    .map(|(i, _)| Ident::new(&format!("_{i}"), Span::call_site()));
+                    .map(|(i, _)| {
+                        let name = Ident::new(&format!("_{i}"), Span::call_site());
+                        quote![#into_mut::expand_reference_value(#name, scope)]
+                    });
 
                 quote! {
                     pub fn #base_function(#(#args_with_base_types),*) -> Self {
                         #core::unexpanded!()
                     }
 
-                    pub fn #expand_function(_: &mut #scope, #(#args_with_expand_types),*) -> #ident_ty_expand #generics {
+                    pub fn #expand_function(scope: &mut #scope, #(#args_with_expand_types),*) -> #ident_ty_expand #generics {
                         #ident_ty_expand #turbofish ::#ident(#(#args),*)
                     }
                 }

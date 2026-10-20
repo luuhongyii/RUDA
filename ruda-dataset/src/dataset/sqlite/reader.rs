@@ -138,6 +138,22 @@ impl<I> Dataset<I> for SqliteDataset<I>
 where
     I: Clone + Send + Sync + DeserializeOwned,
 {
+    fn is_read_order_independent(&self) -> bool { true }
+
+    fn checkpoint(&self) -> core::result::Result<Vec<u8>, String> {
+        serde_json::to_vec(&(1u32, &self.split, &self.columns, self.len, self.row_serialized))
+            .map_err(|error| error.to_string())
+    }
+
+    fn restore_checkpoint(&self, state: &[u8]) -> core::result::Result<(), String> {
+        let (version, split, columns, len, row_serialized): (u32, String, Vec<String>, usize, bool) =
+            serde_json::from_slice(state).map_err(|error| error.to_string())?;
+        if version != 1 || split != self.split || columns != self.columns || len != self.len
+            || row_serialized != self.row_serialized
+        { return Err("SQLite dataset configuration differs from checkpoint".into()); }
+        Ok(())
+    }
+
     /// Get an item from the dataset.
     fn get(&self, index: usize) -> Option<I> {
         let connection = self.conn_pool.get().unwrap();

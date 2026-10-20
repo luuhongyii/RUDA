@@ -1,4 +1,6 @@
 use super::*;
+#[path = "batch_tests.rs"]
+mod batch_tests;
 #[path = "metric_tests.rs"]
 mod metric_tests;
 #[path = "numeric_metric_tests.rs"]

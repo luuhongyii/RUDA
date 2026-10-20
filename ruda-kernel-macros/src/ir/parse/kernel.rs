@@ -405,6 +405,8 @@ pub struct KernelParam {
     pub is_const: bool,
     pub is_mut: bool,
     pub is_ref: bool,
+    pub binding_mut: bool,
+    pub binding_ref: Option<bool>,
     pub mut_token: Option<Mut>,
 }
 
@@ -442,6 +444,8 @@ impl KernelParam {
                     is_const: false,
                     is_mut,
                     is_ref,
+                    binding_mut: is_mut && !is_ref,
+                    binding_ref: None,
                     mut_token,
                 });
             }
@@ -452,6 +456,8 @@ impl KernelParam {
             mut is_mut,
             ..
         } = parse_pat(*param.pat.clone())?;
+        let binding_mut = is_mut && !is_ref;
+        let binding_ref = is_ref.then_some(is_mut);
         let mut is_const = false;
         let mut defines = Vec::new();
 
@@ -496,6 +502,8 @@ impl KernelParam {
             is_const,
             is_mut,
             is_ref,
+            binding_mut,
+            binding_ref,
             mut_token,
         })
     }
@@ -669,7 +677,21 @@ impl KernelFn {
         let into_mut = frontend_type("IntoMut");
 
         for s in sig.parameters.iter() {
-            if !s.is_ref && s.is_mut {
+            if let Some(writable) = s.binding_ref {
+                let name = &s.name;
+                let binding = if s.is_const {
+                    let mutable = writable.then(|| quote![mut]);
+                    quote![let ref #mutable #name = #name;]
+                } else {
+                    quote![let #name = #into_mut::expand_reference(#name, scope, #writable);]
+                };
+                mappings.push(Statement::Expression {
+                    expression: Box::new(Expression::Verbatim {
+                        tokens: binding,
+                    }),
+                    terminated: false,
+                });
+            } else if s.binding_mut || (!s.is_ref && s.is_mut) {
                 let name = s.name.clone();
                 let expression = Expression::Verbatim {
                     tokens: quote! {

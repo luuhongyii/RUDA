@@ -178,6 +178,16 @@ where
                 .batch_reading(self.batch_reading),
         )
     }
+
+    pub fn build_resumable<D>(self, dataset: D) -> Arc<dyn DataLoader<B, O>>
+    where D: Dataset<I> + 'static
+    {
+        let batch_size = self.strategy.as_ref().and_then(|strategy| strategy.batch_size()).unwrap_or(1);
+        Arc::new(super::ResumableDataLoader::new(
+            Arc::new(dataset), self.batcher, self.device.unwrap_or_default(),
+            batch_size, self.shuffle, self.num_threads.unwrap_or(0), self.batch_reading,
+        ).reuse_workers(self.reuse_workers))
+    }
 }
 
 #[cfg(test)]

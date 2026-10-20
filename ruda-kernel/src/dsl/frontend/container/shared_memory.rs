@@ -106,8 +106,8 @@ impl<T: RudaPrimitive> AsRef<T> for Shared<T> {
     }
 }
 impl<T: RudaPrimitive> AsRefExpand<T> for SharedExpand<T> {
-    fn __expand_as_ref_method(self, _scope: &mut Scope) -> <T as RudaType>::ExpandType {
-        self.expand.into()
+    fn __expand_as_ref_method(self, scope: &mut Scope) -> <T as RudaType>::ExpandType {
+        scope.reference_borrow(self.expand, false).expect("addressable shared value").into()
     }
 }
 
@@ -117,8 +117,8 @@ impl<T: RudaPrimitive> AsMut<T> for Shared<T> {
     }
 }
 impl<T: RudaPrimitive> AsMutExpand<T> for SharedExpand<T> {
-    fn __expand_as_mut_method(self, _scope: &mut Scope) -> <T as RudaType>::ExpandType {
-        self.expand.into()
+    fn __expand_as_mut_method(self, scope: &mut Scope) -> <T as RudaType>::ExpandType {
+        scope.reference_borrow(self.expand, true).expect("addressable shared value").into()
     }
 }
 

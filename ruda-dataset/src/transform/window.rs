@@ -135,6 +135,22 @@ where
     D: Dataset<I>,
     I: Send + Sync,
 {
+    fn is_read_order_independent(&self) -> bool { self.dataset.is_read_order_independent() }
+
+    fn checkpoint(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&(1u32, self.size.get(), self.dataset.checkpoint()?))
+            .map_err(|error| error.to_string())
+    }
+
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        let (version, size, dataset): (u32, usize, Vec<u8>) =
+            serde_json::from_slice(state).map_err(|error| error.to_string())?;
+        if version != 1 || size != self.size.get() {
+            return Err("Window dataset size differs from checkpoint".into());
+        }
+        self.dataset.restore_checkpoint(&dataset)
+    }
+
     /// Retrieves a window of items from the dataset.
     ///
     /// # Parameters

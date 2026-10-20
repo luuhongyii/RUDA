@@ -9,6 +9,10 @@ macro_rules! declare_uint {
     ($primitive:ident, $kind:ident) => {
         impl RudaType for $primitive {
             type ExpandType = NativeExpand<Self>;
+            fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+                let ty = <Self as RudaPrimitive>::as_type(scope);
+                scope.reference_absent(ty, writable).into()
+            }
         }
 
         impl Scalar for $primitive {}
@@ -69,6 +73,10 @@ declare_uint!(u64, U64);
 
 impl RudaType for usize {
     type ExpandType = NativeExpand<Self>;
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let ty = <Self as RudaPrimitive>::as_type(scope);
+        scope.reference_absent(ty, writable).into()
+    }
 }
 
 impl Scalar for usize {}
@@ -123,6 +131,10 @@ impl Int for usize {
 
 impl RudaType for isize {
     type ExpandType = NativeExpand<Self>;
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let ty = <Self as RudaPrimitive>::as_type(scope);
+        scope.reference_absent(ty, writable).into()
+    }
 }
 
 impl Scalar for isize {}

@@ -97,9 +97,14 @@ macro_rules! map_kind {
     ($method:ident, $kind:ty, $variant:ident, $convert:expr) => {
         fn $method<const D: usize>(&mut self, param: Param<Tensor<B, D, $kind>>) -> Param<Tensor<B, D, $kind>> {
             let Some((id, value)) = self.take() else { return param; };
+            let (value, backend_dtype) = match value {
+                Value::NativeFloat(data) => (Value::Float(data), false),
+                Value::NativeInt(data) => (Value::Int(data), false),
+                value => (value, self.backend_dtype),
+            };
             let Value::$variant(data) = value else { panic!("Adapter parameter kind mismatch at {}", self.path.join(".")); };
             assert_eq!(data.shape, param.lazy_shape(), "Adapter parameter shape mismatch at {}", self.path.join("."));
-            let data = ($convert)(data, self.backend_dtype);
+            let data = ($convert)(data, backend_dtype);
             let dtype = data.dtype;
             let device = param.lazy_device();
             let tensor = B::memory_persistent_allocations(&device, data,

@@ -117,6 +117,10 @@ macro_rules! impl_float {
     ($primitive:ident, $kind:ident, $new:expr) => {
         impl RudaType for $primitive {
             type ExpandType = NativeExpand<$primitive>;
+            fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+                let ty = <Self as RudaPrimitive>::as_type(scope);
+                scope.reference_absent(ty, writable).into()
+            }
         }
 
         impl Scalar for $primitive {}

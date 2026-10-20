@@ -1,11 +1,11 @@
-use darling::{FromDeriveInput, FromField, ast::Data, uses_type_params, util::Flag};
+use darling::{FromDeriveInput, FromField, ast::{Data, Style}, uses_type_params, util::Flag};
 use quote::format_ident;
 use syn::{Generics, Ident, Type, Visibility, parse_quote};
 
 use crate::ir::{generate::RuntimeField, paths::prelude_type};
 
 #[derive(FromDeriveInput, Debug)]
-#[darling(supports(struct_named, struct_unit), attributes(expand, ruda, launch), map = unwrap_fields)]
+#[darling(supports(struct_any), attributes(expand, ruda, launch), map = unwrap_fields)]
 pub struct RudaTypeStruct {
     pub ident: Ident,
     pub name_launch: Option<Ident>,
@@ -52,6 +52,10 @@ fn unwrap_fields(mut ty: RudaTypeStruct) -> RudaTypeStruct {
 }
 
 impl RudaTypeStruct {
+    pub fn style(&self) -> Style {
+        self.data.as_ref().take_struct().unwrap().style
+    }
+
     pub fn expanded_generics(&self) -> Generics {
         let runtime = prelude_type("LaunchMarker");
         let mut generics = self.generics.clone();

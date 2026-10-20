@@ -130,6 +130,16 @@ impl<E: TchElement> Backend for LibTorch<E> {
         tch::manual_seed(seed as i64);
     }
 
+    fn rng_state(device: &Self::Device) -> Result<Vec<u8>, ExecutionError> {
+        Self::sync(device)?;
+        crate::rng::capture(device)
+    }
+
+    fn restore_rng_state(device: &Self::Device, state: &[u8]) -> Result<(), ExecutionError> {
+        Self::sync(device)?;
+        crate::rng::restore(device, state)
+    }
+
     fn ad_enabled(_device: &Self::Device) -> bool {
         false
     }

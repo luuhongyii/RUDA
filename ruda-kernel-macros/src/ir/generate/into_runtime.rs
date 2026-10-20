@@ -7,7 +7,7 @@ use quote::{ToTokens, format_ident, quote};
 use syn::{DeriveInput, Index, WhereClause};
 
 use crate::ir::{
-    generate::bounded_where_clause,
+    generate::{bounded_where_clause, runtime_enum_uses_slots},
     parse::into_runtime::{IntoRuntime, IntoRuntimeVariant},
     paths::{core_type, prelude_type},
 };
@@ -40,8 +40,21 @@ impl ToTokens for IntoRuntime {
 }
 
 impl IntoRuntime {
+    fn uses_runtime_slots(&self) -> bool {
+        match &self.data {
+            Data::Enum(variants) => runtime_enum_uses_slots(variants.iter().map(|variant| {
+                (variant.fields.style == Style::Struct
+                    || (variant.fields.style == Style::Tuple && variant.fields.is_empty()),
+                    variant.fields.iter().map(|field| &field.ty).collect())
+            })),
+            _ => false,
+        }
+    }
+
     fn init_struct(&self) -> TokenStream {
         let into_runtime = core_type("IntoRuntime");
+        let expand_name = self.name_expand.clone()
+            .unwrap_or_else(|| format_ident!("{}Expand", self.ident));
 
         let struct_ = self.data.as_ref().take_struct().unwrap();
 
@@ -57,9 +70,9 @@ impl IntoRuntime {
             }
         });
         match struct_.style {
-            Style::Tuple => quote![_Ty(#(#fields,)*)],
+            Style::Tuple => quote![#expand_name(#(#fields,)*)],
             Style::Struct => quote![_Ty { #(#fields,)* }],
-            Style::Unit => quote![_Ty],
+            Style::Unit => quote![#expand_name],
         }
     }
 
@@ -109,10 +122,12 @@ impl IntoRuntime {
     }
 
     fn init_runtime_enum(&self) -> TokenStream {
+        if self.uses_runtime_slots() { return self.init_runtime_slots(); }
         let into_runtime = core_type("IntoRuntime");
 
         let name = &self.ident;
-        let expand_name = format_ident!("{name}Expand");
+        let expand_name = self.name_expand.clone()
+            .unwrap_or_else(|| format_ident!("{name}Expand"));
         let (_, generic_names, _) = self.generics.split_for_impl();
         let generic_names = generic_names.as_turbofish();
         let variants = self.data.as_ref().take_enum().unwrap();
@@ -163,6 +178,33 @@ impl IntoRuntime {
         }
     }
 
+    fn init_runtime_slots(&self) -> TokenStream {
+        let into_runtime = core_type("IntoRuntime");
+        let name = &self.ident;
+        let expand = self.name_expand.clone().unwrap_or_else(|| format_ident!("{}Expand", name));
+        let (_, names, _) = self.generics.split_for_impl();
+        let turbofish = names.as_turbofish();
+        let variants = self.data.as_ref().take_enum().unwrap();
+        let arms = variants.iter().map(|variant| {
+            let variant_name = &variant.ident;
+            let construct = format_ident!("__expand_runtime_{}", variant_name);
+            let args: Vec<_> = variant.fields.iter().enumerate()
+                .map(|(i, field)| field.ident.clone().unwrap_or_else(|| format_ident!("arg_{i}"))).collect();
+            let pattern = match variant.fields.style {
+                Style::Struct => quote![#name::#variant_name { #(#args,)* }],
+                Style::Tuple => quote![#name::#variant_name(#(#args,)*)],
+                Style::Unit => quote![#name::#variant_name],
+            };
+            quote! {
+                #pattern => {
+                    #(let #args = #into_runtime::__expand_runtime_method(#args, scope);)*
+                    #expand #turbofish::#construct(scope, #(#args),*)
+                }
+            }
+        });
+        quote![match self { #(#arms,)* }]
+    }
+
     fn runtime_variant_value(&self, variant: &IntoRuntimeVariant) -> TokenStream {
         let enum_name = &self.ident;
         let variant_name = &variant.ident;
@@ -191,7 +233,7 @@ impl IntoRuntime {
                 .cloned()
                 .collect(),
         };
-        if self.runtime_variants.is_present() && self.data.is_enum() {
+        if self.runtime_variants.is_present() && self.data.is_enum() && !self.uses_runtime_slots() {
             bounded_where_clause(
                 &self.generics,
                 fields,

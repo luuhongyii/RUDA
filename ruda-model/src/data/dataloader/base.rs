@@ -18,12 +18,28 @@ pub struct Progress {
 pub trait DataLoaderIterator<O>: Iterator<Item = O> {
     /// Returns the progress of the data loader.
     fn progress(&self) -> Progress;
+
+    fn checkpoint(&self) -> Result<super::DataLoaderState, String> {
+        Err("This iterator does not implement persistent continuation".into())
+    }
 }
 
 /// A data loader that can be used to iterate over a dataset.
 pub trait DataLoader<B: Backend, O>: Send + Sync {
+    fn checkpoint_source(&self) -> Result<Vec<u8>, String> {
+        Err("This data loader does not implement source continuation".into())
+    }
+    fn restore_source(&self, _state: &[u8]) -> Result<(), String> {
+        Err("This data loader does not implement source continuation".into())
+    }
     /// Returns a boxed [iterator](DataLoaderIterator) to iterate over the data loader.
     fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<O> + 'a>;
+
+    fn iter_from_checkpoint<'a>(&'a self, _state: Option<&super::DataLoaderState>)
+        -> Result<Box<dyn DataLoaderIterator<O> + 'a>, String>
+    {
+        Err("This data loader does not implement persistent continuation".into())
+    }
 
     /// The number of items (not the number of batches nor the number of iterations),
     /// corresponding to the items_total of the progress returned by the iterator.

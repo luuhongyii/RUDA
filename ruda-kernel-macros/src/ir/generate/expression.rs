@@ -219,11 +219,18 @@ impl Expression {
             } => {
                 let (args, arg_names) = map_args(args, context);
                 let (generics, path) = split_generics(func, context);
-
+                let constructor = matches!(&**func, Expression::Path { path, .. }
+                    if path.segments.last().is_some_and(|segment|
+                        segment.ident.to_string().chars().next().is_some_and(char::is_uppercase)));
+                let invocation = if constructor {
+                    quote![#path #generics ::expand(scope, #(#arg_names),*)]
+                } else {
+                    quote![#path::expand #generics(scope, #(#arg_names),*)]
+                };
                 let call = with_debug_call(
                     context,
                     *span,
-                    quote![#path::expand #generics(scope, #(#arg_names),*)],
+                    invocation,
                 );
 
                 quote_spanned! {*span=>
@@ -486,8 +493,19 @@ impl Expression {
                 if let Some(constant) = self.as_const(context) {
                     constant
                 } else {
-                    let elements = elements.iter().map(|it| it.to_tokens(context));
-                    quote![(#(#elements),*)]
+                    let into_mut = frontend_type("IntoMut");
+                    let elements = elements.iter().map(|it| {
+                        let value = it.to_tokens(context);
+                        if it.is_const() {
+                            value
+                        } else {
+                            quote! {{
+                                let _value = #value;
+                                #into_mut::expand_reference_value(_value.clone(), scope)
+                            }}
+                        }
+                    });
+                    quote![(#(#elements,)*)]
                 }
             }
             Expression::Slice { span, .. } => {
@@ -612,7 +630,10 @@ impl Expression {
                 let default = default
                     .as_ref()
                     .map(|arm| arm.to_tokens(context, true, false))
-                    .map(|(_, block)| quote![.default(scope, |scope, value| #block)]);
+                    .map(|(pat, block)| {
+                        let bindings = runtime_pattern_bindings(&pat, quote![__ruda_match_value]);
+                        quote![.default(scope, |scope, _value| { #bindings #block })]
+                    });
 
                 let cases = arms
                     .iter()
@@ -620,15 +641,8 @@ impl Expression {
                     .map(|(i, (pat, block))| -> Option<_> {
                         let _ = variant_name(pat)?;
                         let discriminant = format_ident!("_disc_{i}");
-                        let block = match inner_pat(pat) {
-                            Some(inner) => {
-                                quote! {{
-                                    let #inner = value;
-                                    #block
-                                }}
-                            }
-                            None => block.clone(),
-                        };
+                        let bindings = runtime_pattern_bindings(pat, quote![__ruda_match_value]);
+                        let block = quote! {{ #bindings #block }};
                         Some((discriminant, block))
                     })
                     .collect::<Option<Vec<_>>>();
@@ -637,18 +651,19 @@ impl Expression {
                     let discriminants = arms.iter().enumerate().map(|(i, (pat, _))| {
                         let name = variant_name(pat).expect("Already checked");
                         let ident = format_ident!("_disc_{i}");
-                        quote![let #ident = #expr.discriminant_of_value(#name);]
+                        quote![let #ident = __ruda_match_value.discriminant_of_value(#name);]
                     });
 
                     // Needed so type inference can actually work
                     let (disc0, block0) = cases.remove(0);
                     let cases = cases
                         .iter()
-                        .map(|(disc, block)| quote![.case(scope, #disc, |scope, value| #block)]);
+                        .map(|(disc, block)| quote![.case(scope, #disc, |scope, _value| #block)]);
                     quote! {
                         {
+                            let __ruda_match_value = (#expr).clone();
                             #(#discriminants)*
-                            #branch::#match_(scope, #expr, #disc0, |scope, value| #block0)
+                            #branch::#match_(scope, __ruda_match_value.clone(), #disc0, |scope, _value| #block0)
                                 #(#cases)*
                                 #default
                                 .finish(scope)
@@ -667,9 +682,17 @@ impl Expression {
             } => {
                 let is_const = self.is_const();
 
-                let expr = expr
-                    .as_const(context)
-                    .unwrap_or_else(|| expr.to_tokens(context));
+                let expr = match expr.as_const(context) {
+                    Some(expr) => expr,
+                    None => {
+                        let expr = expr.to_tokens(context);
+                        let into_mut = frontend_type("IntoMut");
+                        quote! {{
+                            let __ruda_match_value = #expr;
+                            #into_mut::expand_reference_value(__ruda_match_value, scope)
+                        }}
+                    }
+                };
 
                 let arms = arms
                     .iter()
@@ -696,15 +719,8 @@ impl Expression {
 
                     let (pat, block) = arm.to_tokens(context, true, false);
 
-                    let block = match inner_pat(&pat) {
-                        Some(inner) => {
-                            quote! {{
-                                let #inner = #expr.runtime_value();
-                                #block
-                            }}
-                        }
-                        None => block,
-                    };
+                    let bindings = runtime_pattern_bindings(&pat, quote![__ruda_match_value]);
+                    let block = quote! {{ #bindings #block }};
 
                     let expand = match else_branch {
                         Some(else_branch) if else_branch.needs_terminator() => {
@@ -723,8 +739,9 @@ impl Expression {
                     };
 
                     quote! {{
-                        let __disc = #expr.discriminant_of_value(#name);
-                        let __cond = eq::expand(scope, #expr.discriminant(), __disc.into());
+                        let __ruda_match_value = (#expr).clone();
+                        let __disc = __ruda_match_value.discriminant_of_value(#name);
+                        let __cond = eq::expand(scope, __ruda_match_value.discriminant(), __disc.into());
 
                         #expand
                     }}
@@ -748,9 +765,17 @@ impl Expression {
                 else_branch,
             } => {
                 let is_const = self.is_const();
-                let expr = expr
-                    .as_const(context)
-                    .unwrap_or_else(|| expr.to_tokens(context));
+                let expr = match expr.as_const(context) {
+                    Some(expr) => expr,
+                    None => {
+                        let expr = expr.to_tokens(context);
+                        let into_mut = frontend_type("IntoMut");
+                        quote! {{
+                            let __ruda_match_value = #expr;
+                            #into_mut::expand_reference_value(__ruda_match_value, scope)
+                        }}
+                    }
+                };
                 let (pat, body) = arm.to_tokens(context, *runtime_variants, is_const);
                 let else_branch = else_branch
                     .as_ref()
@@ -1011,6 +1036,7 @@ fn with_debug_call(context: &Context, span: Span, tokens: TokenStream) -> TokenS
 
 fn variant_name(pat: &Pat) -> Option<String> {
     match pat {
+        Pat::Ident(PatIdent { subpat: Some((_, pat)), .. }) => variant_name(pat),
         Pat::Ident(pat) => Some(pat.ident.to_string()),
         Pat::Paren(pat) => variant_name(&pat.pat),
         Pat::Path(PatPath { path, .. })
@@ -1022,12 +1048,118 @@ fn variant_name(pat: &Pat) -> Option<String> {
     }
 }
 
-pub(crate) fn inner_pat(pat: &Pat) -> Option<Pat> {
+fn runtime_pattern_bindings(pat: &Pat, value: TokenStream) -> TokenStream {
+    use crate::ir::generate::{runtime_field_accessor, runtime_reverse_accessor};
     match pat {
-        Pat::Ident(_) => None,
-        Pat::Paren(pat) => inner_pat(&pat.pat),
-        Pat::Path(PatPath { .. }) => None,
-        Pat::TupleStruct(pat) => pat.elems.first().cloned(),
-        _ => None,
+        Pat::Paren(pat) => runtime_pattern_bindings(&pat.pat, value),
+        Pat::TupleStruct(pat) => {
+            let variant = &pat.path.segments.last().unwrap().ident;
+            let rest = pat.elems.iter().position(|pat| matches!(pat, Pat::Rest(_)));
+            let fields = pat.elems.iter().enumerate().filter_map(|(i, pat_inner)| {
+                if matches!(pat_inner, Pat::Rest(_)) { return None; }
+                let accessor = if rest.is_some_and(|rest| i > rest) {
+                    runtime_reverse_accessor(variant, pat.elems.len() - i - 1)
+                } else {
+                    runtime_field_accessor(variant, &Member::Unnamed(syn::Index::from(i)))
+                };
+                Some(bind_runtime_value(pat_inner, quote![#value.#accessor()]))
+            });
+            quote![#(#fields)*]
+        }
+        Pat::Struct(pat) => {
+            let variant = &pat.path.segments.last().unwrap().ident;
+            let fields = pat.fields.iter().map(|field| {
+                let accessor = runtime_field_accessor(variant, &field.member);
+                bind_runtime_value(&field.pat, quote![#value.#accessor()])
+            });
+            quote![#(#fields)*]
+        }
+        Pat::Ident(PatIdent { subpat: Some((_, inner)), .. }) => {
+            let mut binding = pat.clone();
+            if let Pat::Ident(binding) = &mut binding { binding.subpat = None; }
+            let outer = bind_runtime_value(&binding, quote![#value.clone()]);
+            let inner = runtime_pattern_bindings(inner, value);
+            quote![#outer #inner]
+        }
+        Pat::Ident(ident) if ident.ident != "None" => bind_runtime_value(pat, quote![#value.clone()]),
+        _ => quote![],
     }
 }
+
+pub(crate) fn bind_runtime_value(pat: &Pat, value: TokenStream) -> TokenStream {
+    fn bind(pat: &Pat, value: TokenStream, next: &mut usize) -> TokenStream {
+        let into_mut = frontend_type("IntoMut");
+        match pat {
+            Pat::Paren(pat) => bind(&pat.pat, value, next),
+            Pat::Reference(pat) => bind(&pat.pat, quote![#into_mut::expand_deref(#value, scope)], next),
+            Pat::Ident(PatIdent { subpat: Some((_, inner)), .. }) => {
+                let temp = format_ident!("__ruda_pattern_{}", *next);
+                *next += 1;
+                let mut outer = pat.clone();
+                if let Pat::Ident(outer) = &mut outer { outer.subpat = None; }
+                let outer = bind(&outer, quote![#temp.clone()], next);
+                let inner = bind(inner, quote![#temp], next);
+                quote![let #temp = #value; #outer #inner]
+            }
+            Pat::Ident(pat) => {
+                let name = &pat.ident;
+                let writable = pat.mutability.is_some();
+                if pat.by_ref.is_some() {
+                    quote![let #name = #into_mut::expand_reference(#value, scope, #writable);]
+                } else if writable {
+                    quote![let mut #name = #into_mut::into_mut(#value, scope);]
+                } else {
+                    quote![let #name = #into_mut::expand_reference_value(#value, scope);]
+                }
+            }
+            Pat::Tuple(pat) => {
+                let mut names = Vec::new();
+                let mut fields = Vec::new();
+                for field in &pat.elems {
+                    if matches!(field, Pat::Rest(_)) {
+                        names.push(quote![..]);
+                    } else {
+                        let temp = format_ident!("__ruda_pattern_{}", *next);
+                        *next += 1;
+                        names.push(quote![#temp]);
+                        fields.push((field, temp));
+                    }
+                }
+                let fields = fields.into_iter().map(|(field, temp)| bind(field, quote![#temp], next));
+                quote![let (#(#names,)*) = #value; #(#fields)*]
+            }
+            Pat::Struct(pat) => {
+                let temp = format_ident!("__ruda_pattern_{}", *next);
+                *next += 1;
+                let fields = pat.fields.iter().map(|field| {
+                    let member = &field.member;
+                    bind(&field.pat, quote![#temp.#member.clone()], next)
+                });
+                quote![let #temp = #value; #(#fields)*]
+            }
+            Pat::TupleStruct(pat) => {
+                let temp = format_ident!("__ruda_pattern_{}", *next);
+                *next += 1;
+                let rest = pat.elems.iter().position(|pat| matches!(pat, Pat::Rest(_)));
+                let fields = pat.elems.iter().enumerate().filter_map(|(i, field)| {
+                    if matches!(field, Pat::Rest(_)) { return None; }
+                    let field_value = if rest.is_some_and(|rest| i > rest) {
+                        let accessor = format_ident!(
+                            "__expand_tuple_field_reverse_{}", pat.elems.len() - i - 1,
+                        );
+                        quote![#temp.#accessor()]
+                    } else {
+                        let member = syn::Index::from(i);
+                        quote![#temp.#member.clone()]
+                    };
+                    Some(bind(field, field_value, next))
+                });
+                quote![let #temp = #value; #(#fields)*]
+            }
+            Pat::Type(pat) => bind(&pat.pat, value, next),
+            _ => quote![let #pat = #value;],
+        }
+    }
+    bind(pat, value, &mut 0)
+}
+

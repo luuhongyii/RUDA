@@ -407,11 +407,13 @@ impl<C: Assign> IfElseExprExpand<C> {
         match self {
             Self::Runtime {
                 runtime_cond,
-                mut out,
-                then_child,
+                out: then_value,
+                mut then_child,
             } => {
                 let mut else_child = scope.child();
                 let ret = else_block(&mut else_child);
+                let mut out = then_value.init_mut_join(scope, &ret);
+                out.expand_assign(&mut then_child, then_value);
                 out.expand_assign(&mut else_child, ret);
 
                 scope.register(Branch::IfElse(Box::new(IfElse {
@@ -442,12 +444,9 @@ pub fn if_else_expr_expand<C: Assign>(
         None => {
             let mut then_child = scope.child();
             let ret = then_block(&mut then_child);
-            let mut out = ret.init_mut(scope);
-            out.expand_assign(&mut then_child, ret);
-
             IfElseExprExpand::Runtime {
                 runtime_cond: condition,
-                out,
+                out: ret,
                 then_child,
             }
         }
@@ -507,7 +506,7 @@ pub struct SwitchExpandExpr<I: Int, C: Assign> {
     value: NativeExpand<I>,
     out: C,
     default: Scope,
-    cases: Vec<(NativeExpand<I>, Scope)>,
+    cases: Vec<(NativeExpand<I>, Scope, C)>,
 }
 
 impl<I: Int, C: Assign> SwitchExpandExpr<I, C> {
@@ -520,23 +519,25 @@ impl<I: Int, C: Assign> SwitchExpandExpr<I, C> {
         let value = I::from(value).unwrap();
         let mut case_child = scope.child();
         let ret = block(&mut case_child);
-        self.out.expand_assign(&mut case_child, ret);
-        self.cases.push((value.into(), case_child));
+        self.cases.push((value.into(), case_child, ret));
         self
     }
 
-    pub fn finish(self, scope: &mut Scope) -> C {
+    pub fn finish(mut self, scope: &mut Scope) -> C {
         let value_var = *self.value.expand;
+        let mut out = self.out.init_mut(scope);
+        for (_, _, value) in &self.cases { out = out.init_mut_join(scope, value); }
+        out.expand_assign(&mut self.default, self.out);
+        let cases = self.cases.into_iter().map(|(value, mut child, result)| {
+            out.expand_assign(&mut child, result);
+            (*value.expand, child)
+        }).collect();
         scope.register(Branch::Switch(Box::new(Switch {
             value: value_var,
             scope_default: self.default,
-            cases: self
-                .cases
-                .into_iter()
-                .map(|it| (*it.0.expand, it.1))
-                .collect(),
+            cases,
         })));
-        self.out
+        out
     }
 }
 
@@ -547,12 +548,9 @@ pub fn switch_expand_expr<I: Int, C: Assign>(
 ) -> SwitchExpandExpr<I, C> {
     let mut default_child = scope.child();
     let default = default_block(&mut default_child);
-    let mut out = default.init_mut(scope);
-    out.expand_assign(&mut default_child, default);
-
     SwitchExpandExpr {
         value,
-        out,
+        out: default,
         default: default_child,
         cases: Vec::new(),
     }
@@ -665,6 +663,7 @@ pub fn match_expand<T: RudaEnum>(
     discriminant0: i32,
     arm0: impl FnOnce(&mut Scope, T::RuntimeValue),
 ) -> MatchExpand<T> {
+    let value = value.snapshot_for_match(scope);
     let discriminant = value.discriminant();
     match discriminant.constant() {
         Some(const_variant) if const_variant.as_i32() == discriminant0 => {
@@ -706,10 +705,9 @@ pub enum MatchExpandExpr<T: RudaEnum, C: Assign> {
     },
     RuntimeVariant {
         variant: NativeExpand<i32>,
-        out: C,
-        cases: Vec<(NativeExpand<i32>, Scope)>,
+        cases: Vec<(NativeExpand<i32>, Scope, C)>,
         runtime_value: T::RuntimeValue,
-        default: Option<Scope>,
+        default: Option<(Scope, C)>,
     },
 }
 
@@ -723,14 +721,12 @@ impl<T: RudaEnum, C: Assign> MatchExpandExpr<T, C> {
         match &mut self {
             Self::RuntimeVariant {
                 cases,
-                out,
                 runtime_value,
                 ..
             } => {
                 let mut case_child = scope.child();
                 let ret_val = block(&mut case_child, runtime_value.clone());
-                out.expand_assign(&mut case_child, ret_val);
-                cases.push((value.into(), case_child));
+                cases.push((value.into(), case_child, ret_val));
             }
             Self::ComptimeVariant {
                 variant,
@@ -755,14 +751,12 @@ impl<T: RudaEnum, C: Assign> MatchExpandExpr<T, C> {
         match &mut self {
             Self::RuntimeVariant {
                 runtime_value,
-                out,
                 default,
                 ..
             } => {
                 let mut case_child = scope.child();
                 let ret_val = block(&mut case_child, runtime_value.clone());
-                out.expand_assign(&mut case_child, ret_val);
-                *default = Some(case_child);
+                *default = Some((case_child, ret_val));
             }
             Self::ComptimeVariant {
                 runtime_value,
@@ -787,20 +781,29 @@ impl<T: RudaEnum, C: Assign> MatchExpandExpr<T, C> {
             MatchExpandExpr::RuntimeVariant {
                 variant,
                 cases,
-                out,
                 default,
                 ..
             } => {
                 let variant_var = *variant.expand;
-                let scope_default = default.unwrap_or_else(|| {
+                let mut out = cases[0].2.init_mut(scope);
+                for (_, _, value) in &cases { out = out.init_mut_join(scope, value); }
+                if let Some((_, value)) = &default { out = out.init_mut_join(scope, value); }
+                let scope_default = if let Some((mut child, value)) = default {
+                    out.expand_assign(&mut child, value);
+                    child
+                } else {
                     let mut scope_default = scope.child();
                     unreachable_unchecked::expand(&mut scope_default);
                     scope_default
-                });
+                };
+                let cases = cases.into_iter().map(|(value, mut child, result)| {
+                    out.expand_assign(&mut child, result);
+                    (*value.expand, child)
+                }).collect();
                 scope.register(Branch::Switch(Box::new(Switch {
                     value: variant_var,
                     scope_default,
-                    cases: cases.into_iter().map(|it| (*it.0.expand, it.1)).collect(),
+                    cases,
                 })));
                 out
             }
@@ -814,6 +817,7 @@ pub fn match_expand_expr<T: RudaEnum, C: Assign>(
     discriminant0: i32,
     arm0: impl FnOnce(&mut Scope, T::RuntimeValue) -> C,
 ) -> MatchExpandExpr<T, C> {
+    let value = value.snapshot_for_match(scope);
     let discriminant = value.discriminant();
     match discriminant.constant() {
         Some(const_variant) if const_variant.as_i32() == discriminant0 => {
@@ -837,13 +841,9 @@ pub fn match_expand_expr<T: RudaEnum, C: Assign>(
             let mut case_child = scope.child();
             let ret_val = arm0(&mut case_child, runtime_value.clone());
 
-            let mut out = ret_val.init_mut(scope);
-            out.expand_assign(&mut case_child, ret_val);
-
             MatchExpandExpr::RuntimeVariant {
                 variant: discriminant,
-                out,
-                cases: alloc::vec![(discriminant0.into(), case_child)],
+                cases: alloc::vec![(discriminant0.into(), case_child, ret_val)],
                 runtime_value,
                 default: None,
             }

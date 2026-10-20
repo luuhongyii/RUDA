@@ -12,6 +12,7 @@ use crate::ir::generate::RuntimeField;
 #[darling(attributes(ruda), allow_unknown_fields)]
 pub struct Assign {
     pub ident: Ident,
+    pub name_expand: Option<Ident>,
     pub generics: Generics,
     pub data: Data<AssignVariant, AssignField>,
     pub runtime_variants: Flag,

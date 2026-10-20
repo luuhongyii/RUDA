@@ -153,6 +153,8 @@ pub enum ComputeTask {
     QueueGraphReplay { id: GraphId, bindings: GraphBindings },
     QueueGraphRelease(GraphId),
     QueueAlias { destination: TensorId, source: TensorId },
+    RngState,
+    RestoreRngState(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 #[allow(missing_docs)]
@@ -177,4 +179,6 @@ pub enum TaskResponseContent {
     ProfileEnd(Result<Option<core::time::Duration>, ExecutionError>),
     DeviceInfo(RemoteDeviceInfo),
     SyncCollective(Result<(), ExecutionError>),
+    RngState(Result<Vec<u8>, ExecutionError>),
+    RestoreRngState(Result<(), ExecutionError>),
 }

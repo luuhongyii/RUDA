@@ -275,14 +275,10 @@ mod bool_or {
 
 impl<P: Scalar, N: Size> RudaType for Vector<P, N> {
     type ExpandType = NativeExpand<Self>;
-}
-
-impl<P: Scalar, N: Size> RudaType for &Vector<P, N> {
-    type ExpandType = NativeExpand<Vector<P, N>>;
-}
-
-impl<P: Scalar, N: Size> RudaType for &mut Vector<P, N> {
-    type ExpandType = NativeExpand<Vector<P, N>>;
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let ty = <Self as RudaPrimitive>::as_type(scope);
+        scope.reference_absent(ty, writable).into()
+    }
 }
 
 impl<P: Scalar, N: Size> NativeAssign for Vector<P, N> {

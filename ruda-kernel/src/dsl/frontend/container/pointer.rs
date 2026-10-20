@@ -107,9 +107,6 @@ impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaDebug for PtrE
 impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaType for Ptr<E, S, A> {
     type ExpandType = PtrExpand<E, S, A>;
 }
-impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaType for &Ptr<E, S, A> {
-    type ExpandType = PtrExpand<E, S, A>;
-}
 
 impl PointerNode {
     fn value(&self, scope: &mut Scope) -> ManagedVariable {
@@ -305,9 +302,6 @@ impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaDebug
 {
 }
 impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaType for TypedSlice<E, S, A> {
-    type ExpandType = TypedSliceExpand<E, S, A>;
-}
-impl<E: RudaPrimitive, S: PointerSpace, A: PointerPermission> RudaType for &TypedSlice<E, S, A> {
     type ExpandType = TypedSliceExpand<E, S, A>;
 }
 

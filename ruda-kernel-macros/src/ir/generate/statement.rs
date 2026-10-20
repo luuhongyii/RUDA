@@ -4,6 +4,7 @@ use syn::{Token, spanned::Spanned};
 
 use crate::ir::{
     expression::Expression,
+    generate::expression::bind_runtime_value,
     paths::{frontend_type, prelude_type},
     scope::Context,
     statement::{DefineKind, Statement},
@@ -103,6 +104,15 @@ impl Statement {
                     quote![let #mutable #name #ty;]
                 }
             }
+            Statement::Destructure { pattern, init, is_const } => {
+                if *is_const {
+                    let init = init.as_const(context).unwrap_or_else(|| init.to_tokens(context));
+                    quote![let #pattern = #init;]
+                } else {
+                    let init = destructure_initializer(init, context);
+                    bind_runtime_value(pattern, init)
+                }
+            }
             Statement::Define { name, kind, init } => {
                 let value = init
                     .as_const(context)
@@ -137,6 +147,27 @@ impl Statement {
             }
             Statement::Verbatim { tokens } => tokens.clone(),
         }
+    }
+}
+
+fn destructure_initializer(init: &Expression, context: &mut Context) -> TokenStream {
+    if let Expression::Tuple { elements, .. } = init {
+        let values = elements.iter().map(|element| destructure_initializer(element, context));
+        quote![(#(#values,)*)]
+    } else if let Expression::Reference { inner, writable } = init
+        && init.is_const()
+    {
+        let value = destructure_initializer(inner, context);
+        let into_mut = frontend_type("IntoMut");
+        quote! {{
+            let __ruda_pattern_value = #value;
+            #into_mut::expand_reference(__ruda_pattern_value, scope, #writable)
+        }}
+    } else if let Some(value) = init.as_const(context) {
+        let into_runtime = frontend_type("IntoRuntime");
+        quote![#into_runtime::__expand_runtime_method(#value, scope)]
+    } else {
+        init.to_tokens(context)
     }
 }
 

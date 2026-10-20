@@ -67,6 +67,13 @@ impl<R: RunnerChannel> Backend for BackendRouter<R> {
         client.seed(seed);
     }
 
+    fn rng_state(device: &Self::Device) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+        get_client::<R>(device).rng_state()
+    }
+    fn restore_rng_state(device: &Self::Device, state: &[u8]) -> Result<(), ExecutionError> {
+        get_client::<R>(device).restore_rng_state(state)
+    }
+
     fn sync(device: &Self::Device) -> Result<(), ExecutionError> {
         let client = get_client::<R>(device);
         client.sync()

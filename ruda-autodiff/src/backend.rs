@@ -60,6 +60,14 @@ impl<B: Backend, C: CheckpointStrategy> Backend for Autodiff<B, C> {
         B::seed(device, seed)
     }
 
+    fn rng_state(device: &B::Device) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+        B::rng_state(device)
+    }
+
+    fn restore_rng_state(device: &B::Device, state: &[u8]) -> Result<(), ExecutionError> {
+        B::restore_rng_state(device, state)
+    }
+
     fn sync(device: &B::Device) -> Result<(), ExecutionError> {
         B::sync(device)
     }

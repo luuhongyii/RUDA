@@ -1,6 +1,7 @@
 use proc_macro2::TokenStream;
-use quote::quote;
-use syn::{Ident, Type, Visibility, WhereClause};
+use darling::ast::Style;
+use quote::{format_ident, quote};
+use syn::{Ident, Index, Member, WhereClause};
 
 use crate::ir::{
     generate::bounded_where_clause,
@@ -25,12 +26,14 @@ impl RudaTypeStruct {
             let clone_expand = self.clone_expand();
             let ruda_type_impl = self.ruda_type_impl();
             let expand_type_impl = self.expand_type_impl();
+            let constructor = self.tuple_constructor();
 
             quote! {
                 #expand_ty
                 #clone_expand
                 #ruda_type_impl
                 #expand_type_impl
+                #constructor
             }
         }
     }
@@ -40,18 +43,81 @@ impl RudaTypeStruct {
         let name = &self.name_expand;
         let generics = &self.generics;
         let vis = &self.vis;
+        let where_clause = &self.generics.where_clause;
 
+        match self.style() {
+            Style::Struct => quote![#vis struct #name #generics #where_clause { #(#fields),* }],
+            Style::Tuple => quote![#vis struct #name #generics (#(#fields,)*) #where_clause;],
+            Style::Unit => quote![#vis struct #name #generics #where_clause;],
+        }
+    }
+
+    fn construct(&self, name: TokenStream, values: impl Iterator<Item = TokenStream>) -> TokenStream {
+        match self.style() {
+            Style::Struct => {
+                let fields = self.fields.iter().zip(values).map(|(field, value)| {
+                    let member = &field.ident;
+                    quote![#member: #value]
+                });
+                quote![#name { #(#fields),* }]
+            }
+            Style::Tuple => quote![#name(#(#values,)*)],
+            Style::Unit => quote![#name],
+        }
+    }
+
+    fn tuple_constructor(&self) -> TokenStream {
+        if self.style() != Style::Tuple { return quote![]; }
+        let name = &self.ident;
+        let name_expand = &self.name_expand;
+        let scope = prelude_type("Scope");
+        let ruda_type = prelude_type("RudaType");
+        let into_mut = prelude_type("IntoMut");
+        let vis = &self.vis;
+        let (generics, names, where_clause) = self.generics.split_for_impl();
+        let args = self.fields.iter().enumerate().map(|(i, field)| {
+            let name = field.argument_ident(i);
+            let ty = &field.ty;
+            if field.comptime.is_present() { quote![#name: #ty] }
+            else { quote![#name: <#ty as #ruda_type>::ExpandType] }
+        });
+        let values = self.fields.iter().enumerate().map(|(i, field)| {
+            let name = field.argument_ident(i);
+            if field.comptime.is_present() { quote![#name] }
+            else { quote![#into_mut::expand_reference_value(#name, scope)] }
+        });
+        let accessors = self.fields.iter().enumerate().map(|(i, field)| {
+            let accessor = format_ident!("__expand_tuple_field_reverse_{}", self.fields.len() - i - 1);
+            let member = field.member(i);
+            let ty = &field.ty;
+            let ty = if field.comptime.is_present() { quote![#ty] }
+                else { quote![<#ty as #ruda_type>::ExpandType] };
+            quote! {
+                pub fn #accessor(&self) -> #ty {
+                    self.#member.clone()
+                }
+            }
+        });
         quote! {
-            #vis struct #name #generics {
-                #(#fields),*
+            impl #generics #name #names #where_clause {
+                #vis fn expand(scope: &mut #scope, #(#args),*) -> #name_expand #names {
+                    #name_expand(#(#values,)*)
+                }
+            }
+            impl #generics #name_expand #names #where_clause {
+                #(#accessors)*
             }
         }
     }
 
     fn clone_expand(&self) -> proc_macro2::TokenStream {
         let scope = prelude_type("Scope");
+        let into_mut = prelude_type("IntoMut");
 
-        let fields = self.fields.iter().map(TypeField::clone_field);
+        let body = self.construct(quote![Self], self.fields.iter().enumerate().map(|(i, field)| {
+            let member = field.member(i);
+            quote![self.#member.clone()]
+        }));
         let name = &self.name_expand;
         let generics = &self.generics;
 
@@ -60,15 +126,13 @@ impl RudaTypeStruct {
         quote! {
             impl #generics_impl Clone for #name #generics_use #where_clause {
                 fn clone(&self) -> Self {
-                    Self {
-                        #(#fields),*
-                    }
+                    #body
                 }
             }
 
             impl #generics_impl #name #generics_use #where_clause {
-                pub fn __expand_clone_method(&self, _scope: &mut #scope) -> Self {
-                    self.clone()
+                pub fn __expand_clone_method(&self, scope: &mut #scope) -> Self {
+                    #into_mut::expand_reference_value(self.clone(), scope)
                 }
             }
         }
@@ -76,7 +140,7 @@ impl RudaTypeStruct {
 
     fn launch_ty(&self) -> proc_macro2::TokenStream {
         let name = &self.name_launch;
-        let fields = self.fields.iter().map(TypeField::launch_field);
+        let fields = self.fields.iter().enumerate().map(|(i, field)| field.launch_field(i));
         let generics = self.expanded_generics();
         let where_clause = self.launch_arg_where();
         let vis = &self.vis;
@@ -90,8 +154,8 @@ impl RudaTypeStruct {
     }
 
     fn launch_new(&self) -> proc_macro2::TokenStream {
-        let args = self.fields.iter().map(TypeField::launch_new_arg);
-        let fields = self.fields.iter().map(|field| &field.ident);
+        let args = self.fields.iter().enumerate().map(|(i, field)| field.launch_new_arg(i));
+        let fields = self.fields.iter().enumerate().map(|(i, field)| field.argument_ident(i));
         let name = &self.name_launch;
 
         let generics = self.expanded_generics();
@@ -118,13 +182,12 @@ impl RudaTypeStruct {
         let launch_marker = prelude_type("LaunchMarker");
         let launch_arg = prelude_type("LaunchArg");
         let compilation_ty = self.compilation_ty_ident();
-        let fields =
-            self.fields.iter().map(TypeField::split).map(
-                |(_, ident, ty, comptime)| match comptime {
-                    true => quote![#ident: arg.#ident],
-                    false => quote![#ident: <#ty as #launch_arg>::register(arg.#ident, launcher)],
-                },
-            );
+        let fields = self.fields.iter().enumerate().map(|(i, field)| {
+            let ident = field.argument_ident(i);
+            let ty = &field.ty;
+            if field.comptime.is_present() { quote![#ident: arg.#ident] }
+            else { quote![#ident: <#ty as #launch_arg>::register(arg.#ident, launcher)] }
+        });
 
         quote! {
             fn register<R: #launch_marker>(arg: Self::RuntimeArg<R>, launcher: &mut #kernel_launcher<R>) -> Self::CompilationArg {
@@ -137,14 +200,30 @@ impl RudaTypeStruct {
 
     fn ruda_type_impl(&self) -> proc_macro2::TokenStream {
         let ruda_type = prelude_type("RudaType");
+        let scope = prelude_type("Scope");
         let name = &self.ident;
         let name_expand = &self.name_expand;
 
         let (generics, generic_names, where_clause) = self.generics.split_for_impl();
+        let inactive = if self.fields.iter().any(|field| field.comptime.is_present()) {
+            quote![]
+        } else {
+            let turbofish = generic_names.as_turbofish();
+            let value = self.construct(quote![#name_expand #turbofish], self.fields.iter().map(|field| {
+                let ty = &field.ty;
+                quote![<#ty as #ruda_type>::__expand_inactive_value(scope)]
+            }));
+            quote! {
+                fn __expand_inactive_value(scope: &mut #scope) -> Self::ExpandType {
+                    #value
+                }
+            }
+        };
 
         quote! {
             impl #generics #ruda_type for #name #generic_names #where_clause {
                 type ExpandType = #name_expand #generic_names;
+                #inactive
             }
         }
     }
@@ -158,7 +237,7 @@ impl RudaTypeStruct {
 
     fn compilation_ty(&self, name: &Ident) -> proc_macro2::TokenStream {
         let name_debug = &self.ident;
-        let fields = self.fields.iter().map(TypeField::compilation_arg_field);
+        let fields = self.fields.iter().enumerate().map(|(i, field)| field.compilation_arg_field(i));
         let generics = &self.generics;
         let (type_generics_names, impl_generics, _) = self.generics.split_for_impl();
         let where_generics = self.launch_arg_where();
@@ -169,7 +248,8 @@ impl RudaTypeStruct {
             func: F,
         ) -> Vec<TokenStream> {
             fields
-                .map(|field| func(field.ident.as_ref().unwrap()))
+                .enumerate()
+                .map(|(i, field)| func(&field.argument_ident(i)))
                 .collect::<Vec<_>>()
         }
 
@@ -222,32 +302,21 @@ impl RudaTypeStruct {
 
     fn launch_arg_impl(&self) -> proc_macro2::TokenStream {
         let launch_arg = prelude_type("LaunchArg");
-        let body_input =
-            self.fields
-                .iter()
-                .map(TypeField::split)
-                .map(|(_vis, name, ty, is_comptime)| {
-                    if is_comptime {
-                        quote![#name: arg.#name.clone()]
-                    } else {
-                        quote![#name: <#ty as #launch_arg>::expand(&arg.#name, builder)]
-                    }
-                });
-        let body_output =
-            self.fields
-                .iter()
-                .map(TypeField::split)
-                .map(|(_vis, name, ty, is_comptime)| {
-                    if is_comptime {
-                        quote![#name: arg.#name.clone()]
-                    } else {
-                        quote![#name: <#ty as #launch_arg>::expand_output(&arg.#name, builder)]
-                    }
-                });
-
         let name = &self.ident;
         let name_launch = &self.name_launch;
         let name_expand = &self.name_expand;
+        let body_input = self.construct(quote![#name_expand], self.fields.iter().enumerate().map(|(i, field)| {
+            let name = field.argument_ident(i);
+            let ty = &field.ty;
+            if field.comptime.is_present() { quote![arg.#name.clone()] }
+            else { quote![<#ty as #launch_arg>::expand(&arg.#name, builder)] }
+        }));
+        let body_output = self.construct(quote![#name_expand], self.fields.iter().enumerate().map(|(i, field)| {
+            let name = field.argument_ident(i);
+            let ty = &field.ty;
+            if field.comptime.is_present() { quote![arg.#name.clone()] }
+            else { quote![<#ty as #launch_arg>::expand_output(&arg.#name, builder)] }
+        }));
 
         let (type_generics, type_generic_names, _) = self.generics.split_for_impl();
         let where_clause = self.launch_arg_where();
@@ -275,17 +344,13 @@ impl RudaTypeStruct {
                     arg: &Self::CompilationArg,
                     builder: &mut KernelBuilder,
                 ) -> <Self as RudaType>::ExpandType {
-                    #name_expand {
-                        #(#body_input),*
-                    }
+                    #body_input
                 }
                 fn expand_output(
                     arg: &Self::CompilationArg,
                     builder: &mut KernelBuilder,
                 ) -> <Self as RudaType>::ExpandType {
-                    #name_expand {
-                        #(#body_output),*
-                    }
+                    #body_output
                 }
             }
         }
@@ -297,24 +362,24 @@ impl RudaTypeStruct {
         let scope = prelude_type("Scope");
         let name_expand = &self.name_expand;
         let (generics, generic_names, where_clause) = self.generics.split_for_impl();
-        let body = self
-            .fields
-            .iter()
-            .map(TypeField::split)
-            .map(|(_, ident, _, is_comptime)| {
-                if is_comptime {
-                    quote![#ident: self.#ident]
-                } else {
-                    quote![#ident: #into_mut::into_mut(self.#ident, scope)]
-                }
-            });
+        let body = self.construct(quote![Self], self.fields.iter().enumerate().map(|(i, field)| {
+            let member = field.member(i);
+            if field.comptime.is_present() { quote![self.#member] }
+            else { quote![#into_mut::into_mut(self.#member, scope)] }
+        }));
+        let snapshot = self.construct(quote![Self], self.fields.iter().enumerate().map(|(i, field)| {
+            let member = field.member(i);
+            if field.comptime.is_present() { quote![self.#member] }
+            else { quote![#into_mut::expand_reference_value(self.#member, scope)] }
+        }));
 
         quote! {
             impl #generics #into_mut for #name_expand #generic_names #where_clause {
                 fn into_mut(self, scope: &mut #scope) -> Self {
-                    Self {
-                        #(#body),*
-                    }
+                    #body
+                }
+                fn expand_reference_value(self, scope: &mut #scope) -> Self {
+                    #snapshot
                 }
             }
 
@@ -341,27 +406,30 @@ impl RudaTypeStruct {
 }
 
 impl TypeField {
+    fn argument_ident(&self, index: usize) -> Ident {
+        self.ident.clone().unwrap_or_else(|| format_ident!("arg_{index}"))
+    }
+
+    fn member(&self, index: usize) -> Member {
+        self.ident.clone().map(Member::Named).unwrap_or_else(|| Member::Unnamed(Index::from(index)))
+    }
+
     pub fn expand_field(&self) -> TokenStream {
         let ruda_type = prelude_type("RudaType");
         let vis = &self.vis;
-        let name = self.ident.as_ref().unwrap();
+        let name = self.ident.as_ref().map(|name| quote![#name:]);
         let ty = &self.ty;
         if self.comptime.is_present() {
-            quote![#vis #name: #ty]
+            quote![#vis #name #ty]
         } else {
-            quote![#vis #name: <#ty as #ruda_type>::ExpandType]
+            quote![#vis #name <#ty as #ruda_type>::ExpandType]
         }
     }
 
-    pub fn clone_field(&self) -> TokenStream {
-        let name = self.ident.as_ref().unwrap();
-        quote![#name: self.#name.clone()]
-    }
-
-    pub fn launch_field(&self) -> TokenStream {
+    pub fn launch_field(&self, index: usize) -> TokenStream {
         let launch_arg = prelude_type("LaunchArg");
         let vis = &self.vis;
-        let name = self.ident.as_ref().unwrap();
+        let name = self.argument_ident(index);
         let ty = &self.ty;
 
         if !self.comptime.is_present() {
@@ -371,9 +439,9 @@ impl TypeField {
         }
     }
 
-    pub fn launch_new_arg(&self) -> TokenStream {
+    pub fn launch_new_arg(&self, index: usize) -> TokenStream {
         let launch_arg = prelude_type("LaunchArg");
-        let name = self.ident.as_ref().unwrap();
+        let name = self.argument_ident(index);
         let ty = &self.ty;
 
         if !self.comptime.is_present() {
@@ -383,10 +451,10 @@ impl TypeField {
         }
     }
 
-    pub fn compilation_arg_field(&self) -> TokenStream {
+    pub fn compilation_arg_field(&self, index: usize) -> TokenStream {
         let launch_arg = prelude_type("LaunchArg");
         let vis = &self.vis;
-        let name = self.ident.as_ref().unwrap();
+        let name = self.argument_ident(index);
         let ty = &self.ty;
 
         if !self.comptime.is_present() {
@@ -396,12 +464,4 @@ impl TypeField {
         }
     }
 
-    pub fn split(&self) -> (&Visibility, &Ident, &Type, bool) {
-        (
-            &self.vis,
-            self.ident.as_ref().unwrap(),
-            &self.ty,
-            self.comptime.is_present(),
-        )
-    }
 }

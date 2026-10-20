@@ -26,10 +26,63 @@ use variadics_please::{all_tuples, all_tuples_enumerated};
 #[diagnostic::on_unimplemented(note = "Consider using `#[derive(RudaType)]` on `{Self}`")]
 pub trait RudaType {
     type ExpandType: Clone + IntoMut + RudaDebug;
+
+    fn __expand_inactive_value(scope: &mut Scope) -> Self::ExpandType {
+        Self::__expand_absent_reference(scope, false).expand_inactive_value(scope)
+    }
+
+    fn __expand_absent_reference(_scope: &mut Scope, _writable: bool) -> Self::ExpandType {
+        panic!("This RudaType does not define an absent reference representation")
+    }
+}
+
+impl<T: RudaType + ?Sized> RudaType for &T {
+    type ExpandType = T::ExpandType;
+
+    fn __expand_inactive_value(scope: &mut Scope) -> Self::ExpandType {
+        T::__expand_absent_reference(scope, false)
+    }
+
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let inner = T::__expand_absent_reference(scope, false);
+        inner.expand_absent_reference(scope, writable)
+    }
+}
+
+impl<T: RudaType + ?Sized> RudaType for &mut T {
+    type ExpandType = T::ExpandType;
+
+    fn __expand_inactive_value(scope: &mut Scope) -> Self::ExpandType {
+        T::__expand_absent_reference(scope, true)
+    }
+
+    fn __expand_absent_reference(scope: &mut Scope, writable: bool) -> Self::ExpandType {
+        let inner = T::__expand_absent_reference(scope, true);
+        inner.expand_absent_reference(scope, writable)
+    }
+}
+
+/// A reference payload whose absence is represented without borrowing storage.
+pub trait RudaReference: RudaType {
+    fn __expand_absent(scope: &mut Scope) -> Self::ExpandType;
+}
+
+impl<T: RudaType + ?Sized> RudaReference for &T {
+    fn __expand_absent(scope: &mut Scope) -> Self::ExpandType {
+        T::__expand_absent_reference(scope, false)
+    }
+}
+
+impl<T: RudaType + ?Sized> RudaReference for &mut T {
+    fn __expand_absent(scope: &mut Scope) -> Self::ExpandType {
+        T::__expand_absent_reference(scope, true)
+    }
 }
 
 pub trait RudaEnum: Sized {
     type RuntimeValue: Clone + RudaDebug;
+
+    fn snapshot_for_match(self, _scope: &mut Scope) -> Self { self }
 
     fn discriminant(&self) -> NativeExpand<i32>;
 
@@ -49,6 +102,9 @@ pub trait Assign {
     fn expand_assign(&mut self, scope: &mut Scope, value: Self);
     /// Create a new mutable variable of this type in `scope`.
     fn init_mut(&self, scope: &mut Scope) -> Self;
+    fn init_mut_join(&self, scope: &mut Scope, _other: &Self) -> Self {
+        self.init_mut(scope)
+    }
 }
 
 impl<T: RudaPrimitive> Assign for T {
@@ -61,6 +117,12 @@ impl<T: RudaPrimitive> Assign for T {
 }
 
 impl<T: NativeAssign> Assign for NativeExpand<T> {
+    fn init_mut_join(&self, scope: &mut Scope, other: &Self) -> Self {
+        match scope.reference_join(*self.expand, *other.expand) {
+            Some(reference) => reference.into(),
+            None => self.init_mut(scope),
+        }
+    }
     fn expand_assign(&mut self, scope: &mut Scope, value: Self) {
         if scope.reference_target(*self.expand).is_some() {
             scope.reference_assign(*self.expand, *value.expand).expect("compatible reference assignment");
@@ -69,7 +131,7 @@ impl<T: NativeAssign> Assign for NativeExpand<T> {
         assign::expand(scope, value, self.clone());
     }
     fn init_mut(&self, scope: &mut Scope) -> Self {
-        if let Some(reference) = scope.reference_copy(*self.expand, true) {
+        if let Some(reference) = scope.reference_empty_mut(*self.expand) {
             return reference.into();
         }
         T::elem_init_mut(scope, self.expand.clone()).into()
@@ -77,6 +139,13 @@ impl<T: NativeAssign> Assign for NativeExpand<T> {
 }
 
 impl<T: Assign> Assign for Option<T> {
+    fn init_mut_join(&self, scope: &mut Scope, other: &Self) -> Self {
+        match (self, other) {
+            (Some(a), Some(b)) => Some(a.init_mut_join(scope, b)),
+            (None, None) => None,
+            _ => panic!("Can't join mismatched enum variants"),
+        }
+    }
     fn expand_assign(&mut self, scope: &mut Scope, value: Self) {
         match (self, value) {
             (Some(this), Some(other)) => this.expand_assign(scope, other),
@@ -90,6 +159,10 @@ impl<T: Assign> Assign for Option<T> {
 }
 
 impl<T: Assign> Assign for Vec<T> {
+    fn init_mut_join(&self, scope: &mut Scope, other: &Self) -> Self {
+        assert_eq!(self.len(), other.len(), "Can't join mismatched vector lengths");
+        self.iter().zip(other).map(|(a, b)| a.init_mut_join(scope, b)).collect()
+    }
     fn expand_assign(&mut self, scope: &mut Scope, value: Self) {
         assert!(
             self.len() == value.len(),
@@ -108,9 +181,9 @@ pub trait CloneExpand {
     fn __expand_clone_method(&self, scope: &mut Scope) -> Self;
 }
 
-impl<C: Clone> CloneExpand for C {
-    fn __expand_clone_method(&self, _scope: &mut Scope) -> Self {
-        self.clone()
+impl<C: Clone + IntoMut> CloneExpand for C {
+    fn __expand_clone_method(&self, scope: &mut Scope) -> Self {
+        self.clone().expand_reference_value(scope)
     }
 }
 
@@ -138,13 +211,41 @@ pub trait IntoMut: Sized {
     /// Convert the variable into a potentially new mutable variable in `scope`, copying if needed.
     fn into_mut(self, scope: &mut Scope) -> Self;
 
+    fn expand_inactive_value(self, _scope: &mut Scope) -> Self {
+        panic!("This expansion does not define inactive enum storage")
+    }
+
     fn expand_reference(self, _scope: &mut Scope, _writable: bool) -> Self { self }
+    fn expand_absent_reference(self, _scope: &mut Scope, _writable: bool) -> Self {
+        panic!("This expansion does not define an absent nested reference")
+    }
     fn expand_reference_value(self, _scope: &mut Scope) -> Self { self }
     fn expand_reborrow(self, _scope: &mut Scope, _writable: bool) -> Self { self }
+    fn expand_return_reference(self, scope: &mut Scope, writable: bool) -> Self {
+        self.expand_reborrow(scope, writable)
+    }
     fn expand_deref(self, _scope: &mut Scope) -> Self { self }
     fn expand_deref_assign(mut self, scope: &mut Scope, value: Self)
     where Self: Assign {
         self.expand_assign(scope, value);
+    }
+}
+
+pub trait DerefExpand<T: RudaType + ?Sized> {
+    fn expand_deref_reference(&self, scope: &mut Scope, writable: bool) -> T::ExpandType;
+}
+
+impl<T: RudaType + ?Sized, E: core::ops::Deref<Target = T::ExpandType>> DerefExpand<T> for E {
+    fn expand_deref_reference(&self, scope: &mut Scope, writable: bool) -> T::ExpandType {
+        core::ops::Deref::deref(self).clone().expand_reference(scope, writable)
+    }
+}
+
+impl<P: NativeAssign, T: RudaType<ExpandType = NativeExpand<P>> + ?Sized> DerefExpand<T>
+    for NativeExpand<P>
+{
+    fn expand_deref_reference(&self, scope: &mut Scope, writable: bool) -> T::ExpandType {
+        self.clone().expand_reborrow(scope, writable)
     }
 }
 
@@ -352,6 +453,10 @@ macro_rules! tuple_ruda_type {
     ($($P:ident),*) => {
         impl<$($P: RudaType),*> RudaType for ($($P,)*) {
             type ExpandType = ($($P::ExpandType,)*);
+            #[allow(unused)]
+            fn __expand_inactive_value(scope: &mut Scope) -> Self::ExpandType {
+                ($($P::__expand_inactive_value(scope),)*)
+            }
         }
     }
 }
@@ -397,6 +502,10 @@ macro_rules! tuple_assign {
     ($(($n: tt, $P:ident)),*) => {
         impl<$($P: Assign),*> Assign for ($($P,)*) {
             #[allow(non_snake_case, unused, clippy::unused_unit)]
+            fn init_mut_join(&self, scope: &mut Scope, other: &Self) -> Self {
+                ($(self.$n.init_mut_join(scope, &other.$n),)*)
+            }
+            #[allow(non_snake_case, unused, clippy::unused_unit)]
             fn expand_assign(&mut self, scope: &mut Scope, value: Self) {
                 let ($($P,)*) = self;
                 $(
@@ -430,6 +539,12 @@ pub trait NativeAssign: RudaType {
 }
 
 impl<T: NativeAssign> IntoMut for NativeExpand<T> {
+    fn expand_inactive_value(self, _scope: &mut Scope) -> Self {
+        assert!(!self.expand.ty.is_pointer() && !self.expand.ty.is_semantic()
+            && !self.expand.ty.is_atomic(), "inactive native value requires ordinary storage");
+        self.expand.ty.constant(ConstantValue::UInt(0)).into()
+    }
+
     fn into_mut(self, scope: &mut Scope) -> Self {
         if let Some(reference) = scope.reference_copy(*self.expand, true) {
             return reference.into();
@@ -441,9 +556,20 @@ impl<T: NativeAssign> IntoMut for NativeExpand<T> {
         scope.reference_borrow(self.expand, writable).expect("addressable reference").into()
     }
 
+    fn expand_absent_reference(self, scope: &mut Scope, writable: bool) -> Self {
+        scope.reference_absent_binding(*self.expand, writable).expect("reference payload").into()
+    }
+
     fn expand_reference_value(self, scope: &mut Scope) -> Self {
         match scope.reference_copy(*self.expand, false) {
             Some(value) => value.into(),
+            None if matches!(self.expand.kind, VariableKind::LocalMut { .. }) => {
+                let out = scope.create_local(self.expand.ty);
+                scope.register(crate::dsl::ir::Instruction::new(
+                    crate::dsl::ir::Operation::Copy(*self.expand), *out,
+                ));
+                out.into()
+            }
             None => self,
         }
     }
@@ -453,6 +579,10 @@ impl<T: NativeAssign> IntoMut for NativeExpand<T> {
             return self;
         }
         scope.reference_reborrow(*self.expand, writable).expect("valid reborrow").into()
+    }
+
+    fn expand_return_reference(self, scope: &mut Scope, writable: bool) -> Self {
+        self.expand_reborrow(scope, writable).expand_reference_value(scope)
     }
 
     fn expand_deref(self, scope: &mut Scope) -> Self {
@@ -566,10 +696,6 @@ impl<T: IntoMut> IntoMut for Option<T> {
 }
 
 impl<T: RudaType> RudaType for Vec<T> {
-    type ExpandType = Vec<T::ExpandType>;
-}
-
-impl<T: RudaType> RudaType for &mut Vec<T> {
     type ExpandType = Vec<T::ExpandType>;
 }
 

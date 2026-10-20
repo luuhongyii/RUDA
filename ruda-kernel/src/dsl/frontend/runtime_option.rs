@@ -1,4 +1,4 @@
-use ruda_kernel_macros::derive_expand;
+use ruda_kernel_macros::{derive_expand, intrinsic};
 
 use crate::dsl::prelude::*;
 
@@ -136,22 +136,35 @@ pub trait RudaOption<T: RudaType> {
     fn none_with_default(_0: T) -> Option<T> {
         Option::None
     }
+    /// Construct an empty reference option without a borrowed default payload.
+    fn none_ref() -> Option<T>
+    where T: RudaReference {
+        Option::None
+    }
+
+    fn __expand_none_ref(scope: &mut Scope) -> OptionExpand<T>
+    where T: RudaReference {
+        OptionExpand {
+            discriminant: discriminant("None").into(),
+            value: T::__expand_absent(scope),
+        }
+    }
 
     #[doc(hidden)]
     fn __expand_Some(scope: &mut Scope, value: T::ExpandType) -> OptionExpand<T> {
         Self::__expand_new_Some(scope, value)
     }
     #[doc(hidden)]
-    fn __expand_new_Some(_scope: &mut Scope, value: T::ExpandType) -> OptionExpand<T> {
+    fn __expand_new_Some(scope: &mut Scope, value: T::ExpandType) -> OptionExpand<T> {
         OptionExpand::<T> {
             discriminant: discriminant("Some").into(),
-            value,
+            value: value.expand_reference_value(scope),
         }
     }
-    fn __expand_none_with_default(_scope: &mut Scope, value: T::ExpandType) -> OptionExpand<T> {
+    fn __expand_none_with_default(scope: &mut Scope, value: T::ExpandType) -> OptionExpand<T> {
         OptionExpand {
             discriminant: discriminant("None").into(),
-            value,
+            value: value.expand_reference_value(scope),
         }
     }
 }
@@ -205,12 +218,87 @@ mod impls {
                 .finish(scope)
         }
 
-        pub fn __expand_as_ref_method(&self, _scope: &mut Scope) -> OptionExpand<T> {
-            self.clone()
+        pub fn __expand_as_ref_method<'a>(&self, scope: &mut Scope) -> OptionExpand<&'a T>
+        where T: 'a {
+            OptionExpand {
+                discriminant: self.discriminant.clone().expand_reference_value(scope),
+                value: self.value.clone().expand_reference(scope, false),
+            }
         }
 
-        pub fn __expand_as_mut_method(&mut self, _scope: &mut Scope) -> OptionExpand<T> {
-            self.clone()
+        pub fn __expand_as_mut_method<'a>(&mut self, scope: &mut Scope) -> OptionExpand<&'a mut T>
+        where T: 'a {
+            OptionExpand {
+                discriminant: self.discriminant.clone().expand_reference_value(scope),
+                value: self.value.clone().expand_reference(scope, true),
+            }
+        }
+
+        pub fn __expand_take_method(&mut self, scope: &mut Scope) -> Self
+        where T::ExpandType: Assign {
+            let previous = into_mut_assign(self.clone(), scope);
+            self.discriminant.expand_assign(scope, discriminant("None").into());
+            previous
+        }
+
+        pub fn __expand_replace_method(&mut self, scope: &mut Scope, value: T::ExpandType) -> Self
+        where T::ExpandType: Assign {
+            let previous = into_mut_assign(self.clone(), scope);
+            self.value.expand_assign(scope, value);
+            self.discriminant.expand_assign(scope, discriminant("Some").into());
+            previous
+        }
+
+        pub fn __expand_insert_method(&mut self, scope: &mut Scope, value: T::ExpandType) -> T::ExpandType
+        where T::ExpandType: Assign {
+            self.value.expand_assign(scope, value);
+            self.discriminant.expand_assign(scope, discriminant("Some").into());
+            self.value.clone().expand_reference(scope, true)
+        }
+
+        pub fn __expand_get_or_insert_method(
+            &mut self, scope: &mut Scope, value: T::ExpandType,
+        ) -> T::ExpandType
+        where T::ExpandType: Assign {
+            self.__expand_get_or_insert_with_method(scope, |_| value)
+        }
+
+        pub fn __expand_get_or_insert_with_method(
+            &mut self, scope: &mut Scope, make: impl FnOnce(&mut Scope) -> T::ExpandType,
+        ) -> T::ExpandType
+        where T::ExpandType: Assign {
+            let missing = eq::expand(scope, self.discriminant.clone(), discriminant("None").into());
+            if_expand(scope, missing, |scope| {
+                let value = make(scope);
+                self.value.expand_assign(scope, value);
+                self.discriminant.expand_assign(scope, discriminant("Some").into());
+            });
+            self.value.clone().expand_reference(scope, true)
+        }
+
+        pub fn __expand_get_or_insert_default_method(&mut self, scope: &mut Scope) -> T::ExpandType
+        where T: Default + IntoRuntime, T::ExpandType: Assign {
+            self.__expand_get_or_insert_with_method(scope, |scope| T::default().__expand_runtime_method(scope))
+        }
+
+        pub fn __expand_take_if_method(
+            &mut self, scope: &mut Scope,
+            predicate: impl FnOnce(&mut Scope, T::ExpandType) -> NativeExpand<bool>,
+        ) -> Self
+        where T::ExpandType: Assign {
+            let mut result = into_mut_assign(Self {
+                discriminant: discriminant("None").into(), value: self.value.clone(),
+            }, scope);
+            let present = eq::expand(scope, self.discriminant.clone(), discriminant("Some").into());
+            if_expand(scope, present, |scope| {
+                let value = self.value.clone().expand_reference(scope, true);
+                let take = predicate(scope, value);
+                if_expand(scope, take, |scope| {
+                    result.expand_assign(scope, self.clone());
+                    self.discriminant.expand_assign(scope, discriminant("None").into());
+                });
+            });
+            result
         }
 
         pub fn __expand_expect_method(self, scope: &mut Scope, msg: &str) -> T::ExpandType
@@ -255,10 +343,11 @@ mod impls {
 
         pub fn __expand_inspect_method<F>(self, scope: &mut Scope, f: F) -> Self
         where
-            F: FnOnce(&mut Scope, &T::ExpandType),
+            F: FnOnce(&mut Scope, T::ExpandType),
         {
             match_expand(scope, self.clone(), discriminant("Some"), |scope, value| {
-                f(scope, &value)
+                let borrowed = value.expand_reference(scope, false);
+                f(scope, borrowed)
             })
             .case(scope, discriminant("None"), |_, _| {})
             .finish(scope);
@@ -273,7 +362,7 @@ mod impls {
         ) -> U::ExpandType
         where
             F: FnOnce(&mut Scope, T::ExpandType) -> U::ExpandType,
-            U: RudaType + Default + IntoRuntime,
+            U: RudaType,
             U::ExpandType: Assign,
         {
             match_expand_expr(scope, self, discriminant("Some"), f)
@@ -290,7 +379,7 @@ mod impls {
         where
             D: FnOnce(&mut Scope) -> U::ExpandType,
             F: FnOnce(&mut Scope, T::ExpandType) -> U::ExpandType,
-            U: RudaType + Default + IntoRuntime,
+            U: RudaType,
             U::ExpandType: Assign,
         {
             match_expand_expr(scope, self, discriminant("Some"), f)
@@ -311,22 +400,26 @@ mod impls {
                 .finish(scope)
         }
 
-        pub fn __expand_as_deref_method(self, scope: &mut Scope) -> OptionExpand<T::Target>
+        pub fn __expand_as_deref_method<'a>(&self, scope: &mut Scope) -> OptionExpand<&'a T::Target>
         where
-            T: Deref<Target: RudaType + Default + IntoRuntime>,
-            T::ExpandType: Deref<Target = <T::Target as RudaType>::ExpandType>,
-            <T::Target as RudaType>::ExpandType: Assign,
+            T: Deref<Target: RudaType + 'a>,
+            T::ExpandType: DerefExpand<T::Target>,
         {
-            self.__expand_map_method(scope, |_, value| (*value).clone())
+            OptionExpand {
+                discriminant: self.discriminant.clone().expand_reference_value(scope),
+                value: <T::ExpandType as DerefExpand<T::Target>>::expand_deref_reference(&self.value, scope, false),
+            }
         }
 
-        pub fn __expand_as_deref_mut_method(self, scope: &mut Scope) -> OptionExpand<T::Target>
+        pub fn __expand_as_deref_mut_method<'a>(&mut self, scope: &mut Scope) -> OptionExpand<&'a mut T::Target>
         where
-            T: DerefMut<Target: RudaType + Default + IntoRuntime>,
-            T::ExpandType: Deref<Target = <T::Target as RudaType>::ExpandType>,
-            <T::Target as RudaType>::ExpandType: Assign,
+            T: DerefMut<Target: RudaType + 'a>,
+            T::ExpandType: DerefExpand<T::Target>,
         {
-            self.__expand_map_method(scope, |_, value| (*value).clone())
+            OptionExpand {
+                discriminant: self.discriminant.clone().expand_reference_value(scope),
+                value: <T::ExpandType as DerefExpand<T::Target>>::expand_deref_reference(&self.value, scope, true),
+            }
         }
 
         pub fn __expand_and_then_method<U, F>(self, scope: &mut Scope, f: F) -> OptionExpand<U>
@@ -345,18 +438,19 @@ mod impls {
         pub fn __expand_filter_method<P>(self, scope: &mut Scope, predicate: P) -> Self
         where
             P: FnOnce(&mut Scope, T::ExpandType) -> NativeExpand<bool>,
-            T: Default + IntoRuntime,
             Self: Assign,
         {
-            match_expand_expr(scope, self, discriminant("Some"), |scope, value| {
-                let cond = predicate(scope, value.clone());
-                if_else_expr_expand(scope, cond, |scope| Option::__expand_new_Some(scope, value))
-                    .or_else(scope, |scope| Option::__expand_new_None(scope))
-            })
-            .case(scope, discriminant("None"), |scope, _| {
-                Option::__expand_new_None(scope)
-            })
-            .finish(scope)
+            let mut result = into_mut_assign(self, scope);
+            let present = eq::expand(scope, result.discriminant.clone(), discriminant("Some").into());
+            if_expand(scope, present, |scope| {
+                let borrowed = result.value.clone().expand_reference(scope, false);
+                let keep = predicate(scope, borrowed);
+                let reject = eq::expand(scope, keep, false.into());
+                if_expand(scope, reject, |scope| {
+                    result.discriminant.expand_assign(scope, discriminant("None").into());
+                });
+            });
+            result
         }
 
         pub fn __expand_or_else_method<F>(self, scope: &mut Scope, f: F) -> OptionExpand<T>
@@ -622,13 +716,17 @@ mod impls {
         /// ```
         pub fn and<U>(self, optb: Option<U>) -> Option<U>
         where
-            U: RudaType + IntoRuntime + Default,
+            U: RudaType,
             U::ExpandType: Assign,
         {
-            match self {
-                Option::Some(_) => optb,
-                Option::None => Option::new_None(),
-            }
+            intrinsic!(|scope| {
+                let present = eq::expand(scope, self.discriminant, discriminant("Some").into());
+                let tag = optb.discriminant.expand_reference_value(scope);
+                OptionExpand {
+                    discriminant: select::expand(scope, present, tag, discriminant("None").into()),
+                    value: optb.value.expand_reference_value(scope),
+                }
+            })
         }
 
         /// Returns the option if it contains a value, otherwise returns `optb`.
@@ -688,23 +786,24 @@ mod impls {
         /// ```
         pub fn xor(self, optb: Option<T>) -> Option<T>
         where
-            T: Default + IntoRuntime,
             T::ExpandType: Assign,
         {
-            if self.is_some() && optb.is_none() {
-                self
-            } else if self.is_none() && optb.is_some() {
-                optb
-            } else {
-                Option::new_None()
-            }
+            intrinsic!(|scope| {
+                let left = eq::expand(scope, self.discriminant.clone(), discriminant("Some").into());
+                let right = eq::expand(scope, optb.discriminant.clone(), discriminant("Some").into());
+                let present = ne::expand(scope, left.clone(), right);
+                let mut value = if_else_expr_expand(scope, left, |_| self)
+                    .or_else(scope, |_| optb);
+                value.discriminant = select::expand(
+                    scope, present, discriminant("Some").into(), discriminant("None").into(),
+                );
+                value
+            })
         }
 
         /////////////////////////////////////////////////////////////////////////
         // Misc
         /////////////////////////////////////////////////////////////////////////
-
-        // TODO: `take`/`take_if`/`replace`
 
         /// Zips `self` with another `Option`.
         ///
@@ -724,24 +823,27 @@ mod impls {
         pub fn zip<U>(self, other: Option<U>) -> Option<(T, U)>
         where
             U: RudaType,
-            (T, U): Default + IntoRuntime,
             (T::ExpandType, U::ExpandType): Into<<(T, U) as RudaType>::ExpandType>,
             OptionExpand<(T, U)>: Assign,
         {
-            match self {
-                Some(a) => match other {
-                    Some(b) => Option::Some((a, b)),
-                    None => Option::new_None(),
-                },
-                None => Option::new_None(),
-            }
+            intrinsic!(|scope| {
+                let present = eq::expand(scope, self.discriminant, discriminant("Some").into());
+                let tag = other.discriminant.expand_reference_value(scope);
+                OptionExpand {
+                    discriminant: select::expand(scope, present, tag, discriminant("None").into()),
+                    value: (
+                        self.value.expand_reference_value(scope),
+                        other.value.expand_reference_value(scope),
+                    ),
+                }
+            })
         }
     }
 
     #[ruda(expand_only)]
     impl<
-        T: RudaType<ExpandType: Assign> + IntoRuntime + Default,
-        U: RudaType<ExpandType: Assign> + IntoRuntime + Default,
+        T: RudaType<ExpandType: Assign>,
+        U: RudaType<ExpandType: Assign>,
     > Option<(T, U)>
     {
         /// Unzips an option containing a tuple of two options.
@@ -760,10 +862,19 @@ mod impls {
         /// ```
         #[inline]
         pub fn unzip(self) -> (Option<T>, Option<U>) {
-            match self {
-                Option::Some(value) => (Option::Some(value.0), Option::Some(value.1)),
-                Option::None => (Option::new_None(), Option::new_None()),
-            }
+            intrinsic!(|scope| {
+                let tag = self.discriminant.expand_reference_value(scope);
+                (
+                    OptionExpand {
+                        discriminant: tag.clone(),
+                        value: self.value.0.expand_reference_value(scope),
+                    },
+                    OptionExpand {
+                        discriminant: tag,
+                        value: self.value.1.expand_reference_value(scope),
+                    },
+                )
+            })
         }
     }
 }

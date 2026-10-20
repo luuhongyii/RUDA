@@ -192,6 +192,11 @@ where
         recorder.record(self, args)
     }
 
+    /// Update caller state after component capture without recapturing tensors.
+    pub fn state_mut(&mut self) -> &mut U {
+        &mut self.state
+    }
+
     /// Read a combined record using the selected recorder and device.
     pub fn load<R: Recorder<B>>(
         recorder: &R,

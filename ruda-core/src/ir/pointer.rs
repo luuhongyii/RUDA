@@ -12,6 +12,8 @@ pub enum AddressSpace {
     Global,
     Shared,
     Local,
+    /// Reference values whose concrete storage space is selected by their origin.
+    Generic,
 }
 
 #[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]

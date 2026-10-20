@@ -6,6 +6,7 @@ use syn::{
 
 use crate::ir::{
     expression::Expression,
+    parse::expression::add_variables_from_pat_with_const,
     parse::helpers::is_helper,
     scope::Context,
     statement::{DefineKind, Pattern, Statement},
@@ -39,17 +40,20 @@ impl Statement {
                         .map(|init| Expression::from_expr(*init.expr, context))
                         .transpose()?
                         .map(Box::new);
-                    let Pattern {
-                        ident,
-                        ty,
-                        is_ref,
-                        is_mut,
-                    } = parse_pat(local.pat)?;
                     let is_const = init.as_ref().is_some_and(|init| init.is_const());
-
-                    let variable =
-                        context.push_variable(ident, ty, is_const && !is_mut, is_ref, is_mut);
-                    Self::Local { variable, init }
+                    if is_single_value_binding(&local.pat) {
+                        let Pattern { ident, ty, is_ref, is_mut } = parse_pat(local.pat)?;
+                        let variable =
+                            context.push_variable(ident, ty, is_const && !is_mut, is_ref, is_mut);
+                        Self::Local { variable, init }
+                    } else {
+                        let init = init.ok_or_else(|| syn::Error::new_spanned(
+                            &local.pat, "A destructuring binding requires an initializer",
+                        ))?;
+                        let is_const = is_const && !pattern_requires_runtime(&local.pat);
+                        add_variables_from_pat_with_const(&local.pat, context, is_const);
+                        Self::Destructure { pattern: local.pat, init, is_const }
+                    }
                 }
             }
             Stmt::Expr(expr, semi) => {
@@ -71,6 +75,29 @@ impl Statement {
             }
         };
         Ok(statement)
+    }
+}
+
+fn is_single_value_binding(pat: &Pat) -> bool {
+    match pat {
+        Pat::Ident(pat) => pat.by_ref.is_none() && pat.subpat.is_none(),
+        Pat::Type(pat) => is_single_value_binding(&pat.pat),
+        Pat::Wild(_) => true,
+        _ => false,
+    }
+}
+
+fn pattern_requires_runtime(pat: &Pat) -> bool {
+    match pat {
+        Pat::Ident(pat) => pat.by_ref.is_some() || pat.mutability.is_some()
+            || pat.subpat.as_ref().is_some_and(|(_, pat)| pattern_requires_runtime(pat)),
+        Pat::Tuple(pat) => pat.elems.iter().any(pattern_requires_runtime),
+        Pat::TupleStruct(pat) => pat.elems.iter().any(pattern_requires_runtime),
+        Pat::Struct(pat) => pat.fields.iter().any(|field| pattern_requires_runtime(&field.pat)),
+        Pat::Paren(pat) => pattern_requires_runtime(&pat.pat),
+        Pat::Reference(pat) => pattern_requires_runtime(&pat.pat),
+        Pat::Type(pat) => pattern_requires_runtime(&pat.pat),
+        _ => false,
     }
 }
 

@@ -96,6 +96,12 @@ pub trait Metric: Send {
         }
     }
     fn clear(&mut self);
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        Err(TrainingError(format!("Metric {} does not support continuation", self.name())))
+    }
+    fn restore_checkpoint(&mut self, _: &[u8]) -> Result<(), TrainingError> {
+        Err(TrainingError(format!("Metric {} does not support continuation", self.name())))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -234,6 +240,18 @@ pub struct EventStore {
     named_tests: Arc<Mutex<BTreeMap<(usize, String), Vec<MetricEntry>>>>,
 }
 impl EventStore {
+    pub(crate) fn checkpoint(&self) -> Result<Vec<u8>, TrainingError> {
+        crate::continuation::encode(&(
+            self.entries.lock().unwrap().clone(),
+            self.named_tests.lock().unwrap().clone(),
+        ))
+    }
+    pub(crate) fn restore_checkpoint(&self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (entries, named_tests) = crate::continuation::decode(bytes)?;
+        *self.entries.lock().unwrap() = entries;
+        *self.named_tests.lock().unwrap() = named_tests;
+        Ok(())
+    }
     pub fn test_metrics(&self, epoch: usize, name: &str) -> Vec<MetricEntry> {
         self.named_tests
             .lock()
@@ -275,13 +293,19 @@ impl EventStore {
 
 pub trait EarlyStoppingStrategy: Send {
     fn should_stop(&mut self, epoch: usize, store: &EventStore) -> bool;
+    fn checkpoint(&self) -> Result<Vec<u8>, TrainingError> {
+        Err(TrainingError("This early stopping strategy does not support continuation".into()))
+    }
+    fn restore_checkpoint(&mut self, _: &[u8]) -> Result<(), TrainingError> {
+        Err(TrainingError("This early stopping strategy does not support continuation".into()))
+    }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Direction {
     Lowest,
     Highest,
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MetricEarlyStoppingStrategy {
     name: String,
     split: Split,
@@ -317,6 +341,20 @@ impl MetricEarlyStoppingStrategy {
     }
 }
 impl EarlyStoppingStrategy for MetricEarlyStoppingStrategy {
+    fn checkpoint(&self) -> Result<Vec<u8>, TrainingError> {
+        crate::continuation::encode(self)
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let saved: Self = crate::continuation::decode(bytes)?;
+        if self.name != saved.name || self.split != saved.split
+            || self.direction != saved.direction || self.patience != saved.patience
+            || self.warmup != saved.warmup
+        {
+            return Err(TrainingError("Early stopping configuration differs from checkpoint".into()));
+        }
+        *self = saved;
+        Ok(())
+    }
     fn should_stop(&mut self, epoch: usize, store: &EventStore) -> bool {
         let Some(value) = store.find_metric(&self.name, epoch, self.split) else {
             return false;
@@ -345,12 +383,20 @@ pub(crate) trait OutputMetric<T>: Send {
     fn entry(&self) -> MetricEntry;
     fn snapshot(&self, finalized: bool) -> MetricSnapshot;
     fn clear(&mut self);
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError>;
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError>;
 }
 struct AdaptedMetric<T, M> {
     metric: M,
     marker: PhantomData<fn(T)>,
 }
 impl<T: Adaptor<M::Input>, M: Metric> OutputMetric<T> for AdaptedMetric<T, M> {
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        self.metric.checkpoint()
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        self.metric.restore_checkpoint(bytes)
+    }
     fn is_numeric(&self) -> bool { self.metric.is_numeric() }
     fn definition(&self) -> MetricDefinition { self.metric.definition() }
     fn snapshot(&self, finalized: bool) -> MetricSnapshot {

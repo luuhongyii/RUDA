@@ -63,6 +63,8 @@ pub enum ProcessorTask {
     ReadTensor(ConnectionId, TensorIr, Callback<TaskResponse>),
     Sync(ConnectionId, Callback<TaskResponse>),
     Seed(u64),
+    RngState(ConnectionId, Callback<TaskResponse>),
+    RestoreRngState(ConnectionId, Vec<u8>, Callback<TaskResponse>),
     DTypeUsage(ConnectionId, DType, Callback<TaskResponse>),
     Close,
     RegisterGraph(ConnectionId, GraphIr, Callback<TaskResponse>),
@@ -289,6 +291,18 @@ where
                         break;
                     }
                     ProcessorTask::Seed(seed) => stream.executes(|| runner.seed(seed)),
+                    ProcessorTask::RngState(id, callback) => {
+                        let result = stream.executes(|| runner.rng_state());
+                        let _ = callback.send(TaskResponse {
+                            content: TaskResponseContent::RngState(result), id,
+                        }).await;
+                    }
+                    ProcessorTask::RestoreRngState(id, state, callback) => {
+                        let result = stream.executes(|| runner.restore_rng_state(&state));
+                        let _ = callback.send(TaskResponse {
+                            content: TaskResponseContent::RestoreRngState(result), id,
+                        }).await;
+                    }
                     ProcessorTask::DTypeUsage(id, dtype, callback) => {
                         let result = stream.executes(|| runner.dtype_usage(dtype));
                         let _ = callback

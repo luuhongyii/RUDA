@@ -15,6 +15,41 @@ pub mod kernel;
 pub mod launch;
 pub mod statement;
 
+pub(crate) fn runtime_enum_uses_slots<'a>(
+    variants: impl IntoIterator<Item = (bool, Vec<&'a Type>)>,
+) -> bool {
+    let mut first = None;
+    for (structured, fields) in variants {
+        if structured || fields.len() > 1 { return true; }
+        if let Some(ty) = fields.first() {
+            let ty = quote::quote![#ty].to_string();
+            if first.as_ref().is_some_and(|first| first != &ty) { return true; }
+            first = Some(ty);
+        }
+    }
+    false
+}
+
+pub(crate) fn runtime_slot_name(variant: usize, field: usize) -> syn::Ident {
+    quote::format_ident!("__ruda_variant_{variant}_{field}")
+}
+
+pub(crate) fn runtime_field_accessor(variant: &syn::Ident, field: &syn::Member) -> syn::Ident {
+    let variant = variant.to_string();
+    let field = match field {
+        syn::Member::Named(name) => format!("named_{}", name.to_string().trim_start_matches("r#")),
+        syn::Member::Unnamed(index) => format!("index_{}", index.index),
+    };
+    let variant = variant.trim_start_matches("r#");
+    quote::format_ident!("__expand_field_{}_{}_{}", variant.len(), variant, field)
+}
+
+pub(crate) fn runtime_reverse_accessor(variant: &syn::Ident, index: usize) -> syn::Ident {
+    let variant = variant.to_string();
+    let variant = variant.trim_start_matches("r#");
+    quote::format_ident!("__expand_field_{}_{}_reverse_{}", variant.len(), variant, index)
+}
+
 pub trait RuntimeField: Clone + UsesTypeParams {
     fn ty(self) -> Type;
 }

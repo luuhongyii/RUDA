@@ -15,6 +15,12 @@ use crate::{Dataset, InMemDataset};
 const SUPPORTED_FILES: [&str; 4] = ["bmp", "jpg", "jpeg", "png"];
 
 impl Dataset<ImageDatasetItem> for ImageFolderDataset {
+    fn is_read_order_independent(&self) -> bool { self.dataset.is_read_order_independent() }
+    fn checkpoint(&self) -> Result<Vec<u8>, String> { self.dataset.checkpoint() }
+    fn restore_checkpoint(&self, state: &[u8]) -> Result<(), String> {
+        self.dataset.restore_checkpoint(state)
+    }
+
     fn get(&self, index: usize) -> Option<ImageDatasetItem> {
         self.dataset.get(index)
     }

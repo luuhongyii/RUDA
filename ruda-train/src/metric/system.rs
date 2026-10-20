@@ -68,6 +68,17 @@ impl Clone for CpuUse {
     }
 }
 impl Metric for CpuUse {
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        crate::continuation::encode(&(self.current, self.refresh_frequency, self.last_refresh.elapsed()))
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (current, frequency, elapsed): (f64, Duration, Duration) = crate::continuation::decode(bytes)?;
+        self.current = current;
+        self.refresh_frequency = frequency;
+        self.last_refresh = Instant::now().checked_sub(elapsed)
+            .ok_or_else(|| TrainingError("CPU metric timer cannot be restored".into()))?;
+        Ok(())
+    }
     numeric_attributes!(Some("%"), false, 2);
     instantaneous_metric!();
     type Input = ();
@@ -111,6 +122,13 @@ impl Default for CpuTemperature {
     }
 }
 impl Metric for CpuTemperature {
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        crate::continuation::encode(&self.temp_celsius)
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        self.temp_celsius = crate::continuation::decode(bytes)?;
+        Ok(())
+    }
     numeric_attributes!(Some("°C"), false, 2);
     instantaneous_metric!();
     type Input = ();
@@ -178,6 +196,18 @@ impl Clone for CpuMemory {
     }
 }
 impl Metric for CpuMemory {
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        crate::continuation::encode(&(self.ram_bytes_total, self.ram_bytes_used, self.refresh_frequency, self.last_refresh.elapsed()))
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (total, used, frequency, elapsed) = crate::continuation::decode(bytes)?;
+        self.ram_bytes_total = total;
+        self.ram_bytes_used = used;
+        self.refresh_frequency = frequency;
+        self.last_refresh = Instant::now().checked_sub(elapsed)
+            .ok_or_else(|| TrainingError("CPU memory metric timer cannot be restored".into()))?;
+        Ok(())
+    }
     numeric_attributes!(Some("Gb"), false, 2);
     instantaneous_metric!();
     type Input = ();
@@ -274,6 +304,14 @@ impl Default for CudaMetric {
     }
 }
 impl Metric for CudaMetric {
+    fn checkpoint(&mut self) -> Result<Vec<u8>, TrainingError> {
+        crate::continuation::encode(&(&self.entry.formatted, &self.entry.serialized))
+    }
+    fn restore_checkpoint(&mut self, bytes: &[u8]) -> Result<(), TrainingError> {
+        let (formatted, serialized) = crate::continuation::decode(bytes)?;
+        self.entry = SerializedEntry::new(formatted, serialized);
+        Ok(())
+    }
     fn is_numeric(&self) -> bool { false }
     type Input = ();
     fn name(&self) -> &str {

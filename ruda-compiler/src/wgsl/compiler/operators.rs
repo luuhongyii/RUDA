@@ -141,6 +141,14 @@ impl<P: WgslLowering> WgslCompiler<P> {
                 out: self.compile_variable(out),
             }),
             ruda::Operator::Index(op) | ruda::Operator::UncheckedIndex(op) => {
+                let width = if op.vector_size == 0 { op.list.vector_size() } else { op.vector_size };
+                if op.list.is_array() && width != op.list.vector_size() {
+                    instructions.push(wgsl::Instruction::IndexView {
+                        list: self.compile_variable(op.list), index: self.compile_variable(op.index),
+                        out: self.compile_variable(out), width,
+                    });
+                    return;
+                }
                 instructions.push(wgsl::Instruction::Index {
                     lhs: self.compile_variable(op.list),
                     rhs: self.compile_variable(op.index),
@@ -148,6 +156,14 @@ impl<P: WgslLowering> WgslCompiler<P> {
                 });
             }
             ruda::Operator::IndexAssign(op) | ruda::Operator::UncheckedIndexAssign(op) => {
+                let width = if op.vector_size == 0 { out.vector_size() } else { op.vector_size };
+                if out.is_array() && width != out.vector_size() {
+                    instructions.push(wgsl::Instruction::IndexAssignView {
+                        list: self.compile_variable(out), index: self.compile_variable(op.index),
+                        value: self.compile_variable(op.value), width,
+                    });
+                    return;
+                }
                 instructions.push(wgsl::Instruction::IndexAssign {
                     index: self.compile_variable(op.index),
                     rhs: self.compile_variable(op.value),

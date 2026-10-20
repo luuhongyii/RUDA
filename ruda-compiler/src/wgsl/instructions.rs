@@ -74,6 +74,18 @@ pub enum Instruction {
         rhs: Variable,
         out: Variable,
     },
+    IndexView {
+        list: Variable,
+        index: Variable,
+        out: Variable,
+        width: usize,
+    },
+    IndexAssignView {
+        list: Variable,
+        index: Variable,
+        value: Variable,
+        width: usize,
+    },
     // Index handles casting to correct local variable.
     Assign {
         input: Variable,
@@ -596,6 +608,30 @@ impl Display for Instruction {
                 writeln!(f, "{out} = !{input};")
             }
             Instruction::Index { lhs, rhs, out } => index(f, lhs, rhs, out, None, None),
+            Instruction::IndexView { list, index, out, width } => {
+                let stored = list.item().vectorization_factor();
+                let mut values = Vec::with_capacity(*width);
+                for lane in 0..*width {
+                    let scalar = format!("({index} * {width}u + {lane}u)");
+                    let value = if stored == 1 { format!("{list}[{scalar}]") }
+                        else { format!("{list}[{scalar} / {stored}u][{scalar} % {stored}u]") };
+                    values.push(value);
+                }
+                let value = if *width == 1 { values.remove(0) } else { format!("{}({})", out.item(), values.join(", ")) };
+                writeln!(f, "{} = {value};", out.fmt_left())
+            }
+            Instruction::IndexAssignView { list, index, value, width } => {
+                let stored = list.item().vectorization_factor();
+                let scalar_type = Item::Scalar(*list.elem());
+                for lane in 0..*width {
+                    let scalar = format!("({index} * {width}u + {lane}u)");
+                    let place = if stored == 1 { format!("{list}[{scalar}]") }
+                        else { format!("{list}[{scalar} / {stored}u][{scalar} % {stored}u]") };
+                    let value = value.index(lane).fmt_cast(scalar_type);
+                    writeln!(f, "{place} = {value};")?;
+                }
+                Ok(())
+            }
             Instruction::IndexAssign {
                 index: lhs,
                 rhs,

@@ -242,10 +242,6 @@ impl<C: RudaType> RudaType for Array<C> {
     type ExpandType = NativeExpand<Array<C>>;
 }
 
-impl<C: RudaType> RudaType for &Array<C> {
-    type ExpandType = NativeExpand<Array<C>>;
-}
-
 impl<C: RudaType> IntoMut for NativeExpand<Array<C>> {
     fn into_mut(self, _scope: &mut crate::dsl::ir::Scope) -> Self {
         // The type can't be deeply cloned/copied.

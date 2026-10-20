@@ -262,6 +262,20 @@ impl RunnerClient for RemoteClient {
         self.sender.send(ComputeTask::Seed(seed));
     }
 
+    fn rng_state(&self) -> Result<Vec<u8>, ExecutionError> {
+        match self.graph_request(ComputeTask::RngState)? {
+            TaskResponseContent::RngState(result) => result,
+            _ => Err(graph_rpc_error("Invalid RNG checkpoint response")),
+        }
+    }
+
+    fn restore_rng_state(&self, state: &[u8]) -> Result<(), ExecutionError> {
+        match self.graph_request(ComputeTask::RestoreRngState(state.to_vec()))? {
+            TaskResponseContent::RestoreRngState(result) => result,
+            _ => Err(graph_rpc_error("Invalid RNG restore response")),
+        }
+    }
+
     fn create_empty_handle(&self) -> ruda_tensor::graph::TensorId {
         self.sender.new_tensor_id()
     }
@@ -299,6 +313,24 @@ impl RemoteClient {
         async move { match response.await? {
             TaskResponseContent::SyncBackend(result) => result,
             _ => Err(graph_rpc_error("Invalid synchronization response")),
+        } }
+    }
+
+    pub fn rng_state_async(&self)
+        -> impl core::future::Future<Output = Result<Vec<u8>, ExecutionError>> + Send + use<> {
+        let response = self.request_async(ComputeTask::RngState);
+        async move { match response.await? {
+            TaskResponseContent::RngState(result) => result,
+            _ => Err(graph_rpc_error("Invalid RNG checkpoint response")),
+        } }
+    }
+
+    pub fn restore_rng_state_async(&self, state: &[u8])
+        -> impl core::future::Future<Output = Result<(), ExecutionError>> + Send + use<> {
+        let response = self.request_async(ComputeTask::RestoreRngState(state.to_vec()));
+        async move { match response.await? {
+            TaskResponseContent::RestoreRngState(result) => result,
+            _ => Err(graph_rpc_error("Invalid RNG restore response")),
         } }
     }
 

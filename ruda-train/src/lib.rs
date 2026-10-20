@@ -2,6 +2,7 @@
 
 mod async_processor;
 mod checkpoint;
+mod continuation;
 mod event;
 mod learner;
 mod lazy;
@@ -18,6 +19,7 @@ pub mod rl;
 
 pub use async_processor::*;
 pub use checkpoint::*;
+pub use continuation::{BatchContinuation, BatchLearnerRecord, ContinuationPhase};
 pub use event::*;
 pub use learner::*;
 pub use lazy::*;

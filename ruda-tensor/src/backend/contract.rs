@@ -151,6 +151,14 @@ pub trait Backend:
     /// In all cases, this should ensure deterministic execution for a single-threaded program.
     fn seed(device: &Self::Device, seed: u64);
 
+    fn rng_state(_device: &Self::Device) -> Result<alloc::vec::Vec<u8>, ExecutionError> {
+        Err(ExecutionError::WithContext { reason: "This backend does not implement RNG checkpoints".into() })
+    }
+
+    fn restore_rng_state(_device: &Self::Device, _state: &[u8]) -> Result<(), ExecutionError> {
+        Err(ExecutionError::WithContext { reason: "This backend does not implement RNG restoration".into() })
+    }
+
     /// Sync the backend, ensure that all computation are finished.
     fn sync(_device: &Self::Device) -> Result<(), ExecutionError> {
         Ok(())
