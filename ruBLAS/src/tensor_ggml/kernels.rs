@@ -301,15 +301,19 @@ pub(super) fn matmul<F: Float + RudaElement>(
 #[ruda(launch)]
 pub(super) fn matmul_selected<F: Float + RudaElement, I: Int + RudaElement>(
     input: &Tensor<F>, indices: &Tensor<I>, packed: &Tensor<u8>, table: &Tensor<u8>,
-    output: &mut Tensor<F>, width: usize, columns: usize, experts: usize,
+    output: &mut Tensor<F>, status: &mut Array<Atomic<u32>>, width: usize, columns: usize, experts: usize,
     selected: usize, input_slots: usize, row_bytes: usize,
     #[comptime] block: usize, #[comptime] bytes: usize, #[comptime] format: u32, #[comptime] big: bool,
 ) {
     let position = ABSOLUTE_POS;
     if position < output.len() {
         let slot = position / columns;
-        let expert = usize::cast_from(indices[slot]);
-        assert!(expert < experts, "GGUF expert index out of bounds");
+        let index = indices[slot];
+        let expert = usize::cast_from(index);
+        if index < I::cast_from(0) || I::cast_from(expert) != index || expert >= experts {
+            status[0].store(1u32);
+            terminate!();
+        }
         let token = slot / selected;
         let input_row = token * input_slots + slot % selected % input_slots;
         let weight_row = expert * columns + position % columns;
@@ -325,13 +329,18 @@ pub(super) fn matmul_selected<F: Float + RudaElement, I: Int + RudaElement>(
 #[ruda(launch)]
 pub(super) fn gather<F: Float + RudaElement, I: Int + RudaElement>(
     indices: &Tensor<I>, packed: &Tensor<u8>, table: &Tensor<u8>, output: &mut Tensor<F>,
+    status: &mut Array<Atomic<u32>>,
     width: usize, rows: usize, row_bytes: usize,
     #[comptime] block: usize, #[comptime] bytes: usize, #[comptime] format: u32, #[comptime] big: bool,
 ) {
     let position = ABSOLUTE_POS;
     if position < output.len() {
-        let row = usize::cast_from(indices[position / width]);
-        assert!(row < rows, "GGUF embedding index out of bounds");
+        let index = indices[position / width];
+        let row = usize::cast_from(index);
+        if index < I::cast_from(0) || I::cast_from(row) != index || row >= rows {
+            status[0].store(1u32);
+            terminate!();
+        }
         let k = position % width;
         output[position] = F::cast_from(weight(packed, table, row * row_bytes + k / block * bytes, k % block, format, big));
     }
