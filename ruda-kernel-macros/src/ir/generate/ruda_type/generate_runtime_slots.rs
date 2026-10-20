@@ -116,7 +116,7 @@ impl RudaTypeEnum {
             let disc = variant.discriminant;
             quote! {
                 pub fn #method(scope: &mut #scope, #(#args: <#types as #ruda_type>::ExpandType),*) -> Self {
-                    Self { discriminant: #disc.into(), value: #payload #turbofish { #(#values,)* } }
+                    Self { discriminant: (#disc).into(), value: #payload #turbofish { #(#values,)* } }
                 }
             }
         });
@@ -179,7 +179,7 @@ impl RudaTypeEnum {
             impl #generics #ruda_type for #name #names #clause {
                 type ExpandType = #expand #names;
                 fn __expand_inactive_value(scope: &mut #scope) -> Self::ExpandType {
-                    #expand #turbofish { discriminant: #first.into(), value: #payload #turbofish { #(#inactive,)* } }
+                    #expand #turbofish { discriminant: (#first).into(), value: #payload #turbofish { #(#inactive,)* } }
                 }
             }
             impl #generics #ruda_enum for #expand #names #clause {

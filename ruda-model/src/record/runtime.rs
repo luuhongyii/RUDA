@@ -1,6 +1,6 @@
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use core::any::TypeId;
-use ruda_tensor::{Backend, Bool, DType, Int, Tensor, TensorData};
+use ruda_tensor::{Backend, DType, TensorData, api::{Bool, Int, Tensor}};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{PrecisionSettings, Record};

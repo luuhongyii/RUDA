@@ -1,6 +1,6 @@
 use alloc::{string::{String, ToString}, vec, vec::Vec};
 use hashbrown::HashMap;
-use ruda_tensor::{Backend, Bool, DType, Float, Int, Tensor, TensorData};
+use ruda_tensor::{Backend, DType, TensorData, api::{Bool, Float, Int, Tensor}};
 use crate::module::{Module, ModuleMapper, ModuleVisitor, Param, ParamId};
 use super::{RuntimePrecision, RuntimeRecordValue as Value};
 

@@ -246,7 +246,7 @@ impl<'a, E: Numeric, N: Size, C: Coordinates + 'static> RunWithQuantType
     }
 }
 
-pub(crate) struct RegisterDynamic<'a, E: RudaPrimitive, C: Coordinates + 'static, R: Runtime> {
+pub(crate) struct RegisterDynamic<'a, E: RudaPrimitive, C: Coordinates + 'static, R: LaunchMarker> {
     pub values: ViewArg<C, R>,
     pub scales: ViewArg<C, R>,
     pub scheme: QuantScheme,
@@ -254,7 +254,7 @@ pub(crate) struct RegisterDynamic<'a, E: RudaPrimitive, C: Coordinates + 'static
     pub _ty: PhantomData<E>,
 }
 
-impl<'a, E: RudaPrimitive, C: Coordinates + 'static, R: Runtime> RunWithQuantType
+impl<'a, E: RudaPrimitive, C: Coordinates + 'static, R: LaunchMarker> RunWithQuantType
     for RegisterDynamic<'a, E, C, R>
 {
     type Output = ViewCompilationArg<C>;

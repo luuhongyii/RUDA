@@ -4,7 +4,7 @@ use super::param::transform::{self, ParamTransform, TransformRecord};
 use crate::record::{PrecisionSettings, Record, RuntimePrecision, RuntimeRecord};
 use alloc::{string::{String, ToString}, vec::Vec};
 use core::{any::Any, marker::PhantomData, ops::Deref};
-use ruda_tensor::{Backend, AutodiffBackend, Tensor, Int, Bool};
+use ruda_tensor::{Backend, AutodiffBackend, api::{Tensor, Int, Bool}};
 
 /// A module whose state transforms a stored floating-point parameter.
 pub trait Reparameterization<B: Backend>: Module<B> + Sync + 'static {
@@ -239,7 +239,7 @@ struct Map<'a, R, M> {
 impl<B: Backend, R: Reparameterization<B>, M: ModuleMapper<B>> ModuleMapper<B> for Map<'_, R, M> {
     fn handles_reparameterizations(&self) -> bool { true }
     fn attaches_reparameterizations(&self) -> bool { self.mapper.attaches_reparameterizations() }
-    fn map_tensor<const D: usize, K: ruda_tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
+    fn map_tensor<const D: usize, K: ruda_tensor::tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
         self.mapper.map_tensor(tensor)
     }
     fn materialize_reparameterizations(&self) -> bool { self.mapper.materialize_reparameterizations() }

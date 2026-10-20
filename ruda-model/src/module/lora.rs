@@ -1,5 +1,5 @@
 use super::{Module, Param, ParamGroup, Quantizer, Reparameterization, Reparameterizer};
-use ruda_tensor::{Backend, Tensor, Distribution, FloatDType};
+use ruda_tensor::{Backend, api::Tensor, Distribution, FloatDType};
 
 /// Low-rank state for a structural matrix parameter.
 #[derive(Module, Debug)]

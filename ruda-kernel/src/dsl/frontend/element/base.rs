@@ -102,7 +102,7 @@ pub trait Assign {
     fn expand_assign(&mut self, scope: &mut Scope, value: Self);
     /// Create a new mutable variable of this type in `scope`.
     fn init_mut(&self, scope: &mut Scope) -> Self;
-    fn init_mut_join(&self, scope: &mut Scope, _other: &Self) -> Self {
+    fn init_mut_join(&self, scope: &mut Scope, _other: &Self) -> Self where Self: Sized {
         self.init_mut(scope)
     }
 }
@@ -233,6 +233,28 @@ pub trait IntoMut: Sized {
 
 pub trait DerefExpand<T: RudaType + ?Sized> {
     fn expand_deref_reference(&self, scope: &mut Scope, writable: bool) -> T::ExpandType;
+}
+
+#[doc(hidden)]
+pub struct ValueSnapshot<T>(pub T);
+
+impl<T: IntoMut> ValueSnapshot<T> {
+    pub fn snapshot(self, scope: &mut Scope) -> T {
+        self.0.expand_reference_value(scope)
+    }
+}
+
+#[doc(hidden)]
+pub trait ValueSnapshotFallback {
+    type Value;
+    fn snapshot(self, scope: &mut Scope) -> Self::Value;
+}
+
+impl<T: Clone> ValueSnapshotFallback for &ValueSnapshot<T> {
+    type Value = T;
+    fn snapshot(self, _scope: &mut Scope) -> T {
+        self.0.clone()
+    }
 }
 
 impl<T: RudaType + ?Sized, E: core::ops::Deref<Target = T::ExpandType>> DerefExpand<T> for E {
@@ -542,7 +564,7 @@ impl<T: NativeAssign> IntoMut for NativeExpand<T> {
     fn expand_inactive_value(self, _scope: &mut Scope) -> Self {
         assert!(!self.expand.ty.is_pointer() && !self.expand.ty.is_semantic()
             && !self.expand.ty.is_atomic(), "inactive native value requires ordinary storage");
-        self.expand.ty.constant(ConstantValue::UInt(0)).into()
+        ManagedVariable::Plain(self.expand.ty.constant(ConstantValue::UInt(0))).into()
     }
 
     fn into_mut(self, scope: &mut Scope) -> Self {

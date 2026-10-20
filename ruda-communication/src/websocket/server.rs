@@ -109,7 +109,7 @@ impl ProtocolServer for WsServer {
             format!("/{path}")
         };
 
-        let method = get(|ws: WebSocketUpgrade, ConnectInfo(peer): ConnectInfo<SocketAddr>, _: State<()>| async {
+        let method = get(|ws: WebSocketUpgrade, ConnectInfo(peer): ConnectInfo<SocketAddr>, _: State<()>| async move {
             ws.on_upgrade(async move |socket| {
                 callback(WsServerChannel { inner: socket, peer }).await;
             })

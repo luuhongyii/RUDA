@@ -455,7 +455,7 @@ pub trait ModuleMapper<B: Backend> {
     #[doc(hidden)]
     fn attaches_reparameterizations(&self) -> bool { false }
     #[doc(hidden)]
-    fn map_tensor<const D: usize, K: ruda_tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
+    fn map_tensor<const D: usize, K: ruda_tensor::tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
         tensor
     }
     #[doc(hidden)]

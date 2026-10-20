@@ -493,15 +493,15 @@ impl Expression {
                 if let Some(constant) = self.as_const(context) {
                     constant
                 } else {
-                    let into_mut = frontend_type("IntoMut");
                     let elements = elements.iter().map(|it| {
                         let value = it.to_tokens(context);
                         if it.is_const() {
                             value
                         } else {
+                            let snapshot = snapshot_value(quote![_value.clone()]);
                             quote! {{
                                 let _value = #value;
-                                #into_mut::expand_reference_value(_value.clone(), scope)
+                                #snapshot
                             }}
                         }
                     });
@@ -686,10 +686,10 @@ impl Expression {
                     Some(expr) => expr,
                     None => {
                         let expr = expr.to_tokens(context);
-                        let into_mut = frontend_type("IntoMut");
+                        let snapshot = snapshot_value(quote![__ruda_match_value]);
                         quote! {{
                             let __ruda_match_value = #expr;
-                            #into_mut::expand_reference_value(__ruda_match_value, scope)
+                            #snapshot
                         }}
                     }
                 };
@@ -769,10 +769,10 @@ impl Expression {
                     Some(expr) => expr,
                     None => {
                         let expr = expr.to_tokens(context);
-                        let into_mut = frontend_type("IntoMut");
+                        let snapshot = snapshot_value(quote![__ruda_match_value]);
                         quote! {{
                             let __ruda_match_value = #expr;
-                            #into_mut::expand_reference_value(__ruda_match_value, scope)
+                            #snapshot
                         }}
                     }
                 };
@@ -948,6 +948,15 @@ fn split_generics(path: &Expression, context: &mut Context) -> (PathArguments, T
     (generics, quote![#path])
 }
 
+pub(crate) fn snapshot_value(value: TokenStream) -> TokenStream {
+    let snapshot = frontend_type("ValueSnapshot");
+    let fallback = frontend_type("ValueSnapshotFallback");
+    quote! {{
+        use #fallback as _;
+        #snapshot(#value).snapshot(scope)
+    }}
+}
+
 fn map_args(args: &[Expression], context: &mut Context) -> (Vec<TokenStream>, Vec<TokenStream>) {
     let names: Vec<_> = (0..args.len()).map(|i| format_ident!("_arg_{i}")).collect();
     let values = names
@@ -961,10 +970,10 @@ fn map_args(args: &[Expression], context: &mut Context) -> (Vec<TokenStream>, Ve
                     quote_spanned![tokens.span()=> let #i = #tokens;]
                 } else {
                     let tokens = value.to_tokens(context);
-                    let into_mut = frontend_type("IntoMut");
-                    quote_spanned![tokens.span()=> let #i = {
+                    let snapshot = snapshot_value(quote![_value]);
+                    quote![let #i = {
                         let _value = #tokens;
-                        #into_mut::expand_reference_value(_value.into(), scope)
+                        #snapshot
                     };]
                 }
             }
@@ -976,8 +985,6 @@ fn map_args(args: &[Expression], context: &mut Context) -> (Vec<TokenStream>, Ve
         .map(|(name, value)| {
             if matches!(value, Expression::Closure { .. }) {
                 value.to_tokens(context)
-            } else if !value.is_const() {
-                quote![#name]
             } else {
                 quote![#name.into()]
             }
@@ -1002,11 +1009,11 @@ fn init_fields<'a>(
         } else {
             it.to_tokens(context)
         };
-        let into_mut = frontend_type("IntoMut");
+        let snapshot = snapshot_value(quote![_init.clone()]);
         quote! {
             #pat: {
                 let _init = #it;
-                #into_mut::expand_reference_value(_init.clone(), scope)
+                #snapshot
             }
         }
     })
@@ -1109,7 +1116,8 @@ pub(crate) fn bind_runtime_value(pat: &Pat, value: TokenStream) -> TokenStream {
                 } else if writable {
                     quote![let mut #name = #into_mut::into_mut(#value, scope);]
                 } else {
-                    quote![let #name = #into_mut::expand_reference_value(#value, scope);]
+                    let snapshot = snapshot_value(value);
+                    quote![let #name = #snapshot;]
                 }
             }
             Pat::Tuple(pat) => {

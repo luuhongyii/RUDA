@@ -4,7 +4,7 @@ use syn::{Token, spanned::Spanned};
 
 use crate::ir::{
     expression::Expression,
-    generate::expression::bind_runtime_value,
+    generate::expression::{bind_runtime_value, snapshot_value},
     paths::{frontend_type, prelude_type},
     scope::Context,
     statement::{DefineKind, Statement},
@@ -72,10 +72,10 @@ impl Statement {
                         })
                     }
                     (_, Some(init)) if !is_const => {
-                        let into_mut = frontend_type("IntoMut");
+                        let snapshot = snapshot_value(quote![_init.clone()]);
                         Some(quote! {{
                             let _init = #init;
-                            #into_mut::expand_reference_value(_init.clone(), scope)
+                            #snapshot
                         }})
                     }
                     (_, init) => init,

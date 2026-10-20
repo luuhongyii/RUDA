@@ -181,7 +181,7 @@ impl RudaTypeEnum {
                 type ExpandType = #name_expand #generic_names;
                 fn __expand_inactive_value(scope: &mut #scope) -> Self::ExpandType {
                     #name_expand #turbofish {
-                        discriminant: #first.into(),
+                        discriminant: (#first).into(),
                         value: <#value_ty as #ruda_type>::__expand_inactive_value(scope),
                     }
                 }
@@ -523,7 +523,7 @@ impl RudaTypeVariant {
 
                     pub fn #expand_function(scope: &mut #scope, value: <#ty as #ruda_type>::ExpandType) -> #ident_ty_expand #generics {
                         #ident_ty_expand #turbofish {
-                            discriminant: #index.into(),
+                            discriminant: (#index).into(),
                             value: #into_mut::expand_reference_value(value, scope),
                         }
                     }
@@ -545,7 +545,7 @@ impl RudaTypeVariant {
 
                     pub fn #expand_function(scope: &mut #scope) -> #ident_ty_expand #generics #bound {
                         #ident_ty_expand #turbofish {
-                            discriminant: #index.into(),
+                            discriminant: (#index).into(),
                             value: #empty,
                         }
                     }

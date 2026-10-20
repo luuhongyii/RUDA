@@ -3,7 +3,7 @@ use crate::module::{ModuleMapper, ModuleVisitor};
 use alloc::boxed::Box;
 use alloc::string::String;
 use core::{any::Any, marker::PhantomData};
-use ruda_tensor::{Backend, Bool, Int, Tensor};
+use ruda_tensor::{Backend, api::{Bool, Int, Tensor}};
 use ruda_tensor::primitive::ErasedTensorPrimitive;
 
 macro_rules! dispatch_rank {
@@ -68,7 +68,7 @@ impl<B: Backend> ModuleVisitor<B> for VisitorToDyn<'_> {
 
 pub(crate) struct MapperToDyn<'a>(pub &'a mut dyn DynMapper);
 impl<B: Backend> ModuleMapper<B> for MapperToDyn<'_> {
-    fn map_tensor<const D: usize, K: ruda_tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
+    fn map_tensor<const D: usize, K: ruda_tensor::tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
         let tensor = K::erase_primitive(tensor.into_primitive());
         let tensor = *self.0.tensor(D, Box::new(tensor)).downcast::<ErasedTensorPrimitive<B>>()
             .expect("Reparameterization tensor backend mismatch");

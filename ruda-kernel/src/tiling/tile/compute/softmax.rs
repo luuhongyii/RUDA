@@ -92,6 +92,7 @@ impl<Acc: Float> Tile<Acc, Plane, ReadWrite> {
         state: &mut (RowWise<Acc>, RowWise<Acc>),
         head_dim_factor: Acc,
     ) -> RowWise<Acc> {
+        #[comptime]
         match self {
             Tile::Bounce(s) => {
                 bounce_softmax::<Acc, Lhs, M>(s, softmaxed_tile, mask, state, head_dim_factor)

@@ -1,5 +1,5 @@
 use super::{Module, ModuleMapper, Param, Parameter};
-use ruda_tensor::{AutodiffContext, Backend, Bool, GradientCheckpointingStrategy, Int, Tensor};
+use ruda_tensor::{AutodiffContext, Backend, GradientCheckpointingStrategy, api::{Bool, Int, Tensor}};
 
 #[doc(hidden)]
 pub fn has_autodiff<B: Backend, M: Module<B>>(module: &M) -> bool {
@@ -11,7 +11,7 @@ pub fn has_autodiff<B: Backend, M: Module<B>>(module: &M) -> bool {
         }
     }
     impl<B: Backend> ModuleMapper<B> for Inspector {
-        fn map_tensor<const D: usize, K: ruda_tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
+        fn map_tensor<const D: usize, K: ruda_tensor::tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
             let primitive = tensor.into_primitive();
             self.0 |= K::autodiff_context(&primitive) != AutodiffContext::Disabled;
             Tensor::from_primitive(primitive)
@@ -31,7 +31,7 @@ pub(super) enum ContextMapper {
 }
 
 impl<B: Backend> ModuleMapper<B> for ContextMapper {
-    fn map_tensor<const D: usize, K: ruda_tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
+    fn map_tensor<const D: usize, K: ruda_tensor::tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
         let primitive = tensor.into_primitive();
         let context = match *self {
             Self::Association(context) => context,

@@ -204,7 +204,7 @@ pub fn parse_macros(mac: Macro, context: &mut Context) -> syn::Result<Expression
         let arg = &closure.inputs[0];
         let block = *closure.body;
         let tokens = quote! {{
-            let #arg = scope;
+            let #arg = &mut *scope;
             #block
         }};
 

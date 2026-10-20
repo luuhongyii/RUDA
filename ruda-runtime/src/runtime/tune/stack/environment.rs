@@ -68,7 +68,7 @@ impl EnvironmentCache {
         self.access(generation, |storage| {
             let accepted = match storage.insert(key.as_bytes(), Bytes::from_bytes_vec(bytes.clone()), Origin::Local) {
                 Insertion::Stored => true,
-                Insertion::Conflict(previous) => previous.as_ref() == bytes.as_slice(),
+                Insertion::Conflict(previous) => &previous[..] == bytes.as_slice(),
                 Insertion::Failed(reason) => return Err(io::Error::other(reason)),
             };
             if accepted { self.prune(storage); }
