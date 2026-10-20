@@ -696,7 +696,7 @@ pub fn match_expand<T: RudaEnum>(
 }
 
 #[allow(clippy::large_enum_variant)]
-pub enum MatchExpandExpr<T: RudaEnum, C: Assign> {
+pub enum MatchExpandExpr<T: RudaEnum, C> {
     ComptimeVariant {
         variant: i32,
         runtime_value: T::RuntimeValue,
@@ -711,7 +711,7 @@ pub enum MatchExpandExpr<T: RudaEnum, C: Assign> {
     },
 }
 
-impl<T: RudaEnum, C: Assign> MatchExpandExpr<T, C> {
+impl<T: RudaEnum, C> MatchExpandExpr<T, C> {
     pub fn case(
         mut self,
         scope: &mut Scope,
@@ -772,7 +772,26 @@ impl<T: RudaEnum, C: Assign> MatchExpandExpr<T, C> {
         }
         self
     }
+}
 
+#[doc(hidden)]
+pub trait ComptimeMatchExpr {
+    type Output;
+    fn finish(&mut self, scope: &mut Scope) -> Self::Output;
+}
+
+impl<T: super::ComptimeRudaEnum, C> ComptimeMatchExpr for MatchExpandExpr<T, C> {
+    type Output = C;
+
+    fn finish(&mut self, _scope: &mut Scope) -> C {
+        match self {
+            Self::ComptimeVariant { out, .. } => out.take().expect("At least one variant should be matched"),
+            Self::RuntimeVariant { .. } => unreachable!("Compile-time enums have constant discriminants"),
+        }
+    }
+}
+
+impl<T: RudaEnum, C: Assign> MatchExpandExpr<T, C> {
     pub fn finish(self, scope: &mut Scope) -> C {
         match self {
             MatchExpandExpr::ComptimeVariant { out, .. } => {
@@ -811,7 +830,7 @@ impl<T: RudaEnum, C: Assign> MatchExpandExpr<T, C> {
     }
 }
 
-pub fn match_expand_expr<T: RudaEnum, C: Assign>(
+pub fn match_expand_expr<T: RudaEnum, C>(
     scope: &mut Scope,
     value: T,
     discriminant0: i32,

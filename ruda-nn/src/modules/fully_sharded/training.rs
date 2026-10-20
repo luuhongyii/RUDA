@@ -2,7 +2,7 @@ use super::*;
 use crate::loss::{CausalCrossEntropyConfig,LossTerms};
 use crate::attention::{PackedSequenceLayout,DenseAttentionMask,DenseAttentionOptions,PackedAttentionOptions};
 use ruda_autodiff::collective::{CollectiveScope,ScopedTensorCollective,ScopedCollectiveError};
-use ruda_model::tensor::{IntDType,TensorData,ElementConversion};
+use ruda_model::tensor::{IntDType,TensorData};
 
 mod paired;
 mod weighted;
@@ -56,7 +56,7 @@ where B:Backend,S:CheckpointStrategy,C:BroadcastTensorCollective<B> {
     let mask=Tensor::<B,1,Int>::from_data(TensorData::new(alloc::vec![65535_i64],[1]),(&device,DType::I64));
     let mut parts=Vec::with_capacity(4);
     for word in 0..4 {
-        let part=local_count.clone().bitwise_right_shift_scalar(((word*16) as i32).elem()).bitwise_and(mask.clone());
+        let part=local_count.clone().bitwise_right_shift_scalar((word*16) as i32).bitwise_and(mask.clone());
         parts.push(part.cast(FloatDType::F32));
     }
     let words=Tensor::<B,1>::cat(parts,0);

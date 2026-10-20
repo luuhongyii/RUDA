@@ -525,12 +525,17 @@ impl<B: Backend> BiLstmRef<'_, B> {
             .forward(batched_input.clone(), init_state_forward);
 
         // reverse direction
+        let mut context = batched_input.autodiff_context();
+        if let Some(state) = &init_state_reverse {
+            context = context.merge(state.cell.autodiff_context()).merge(state.hidden.autodiff_context());
+        }
         let (batched_hidden_state_reverse, final_state_reverse) = self.reverse.forward_iter(
             batched_input.iter_dim(1).rev().zip((0..seq_length).rev()),
             init_state_reverse,
             batch_size,
             seq_length,
             &device,
+            context,
         );
 
         let output = Tensor::cat(

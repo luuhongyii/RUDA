@@ -189,7 +189,8 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             }
             let setup = self.id();
             self.setup_block = self.setup(setup, debug_setup);
-            self.select_block(Some(self.setup_block)).unwrap();
+            let setup_block = self.setup_block;
+            self.select_block(Some(setup_block)).unwrap();
             for (formal, value) in mutable {
                 let local = self.compile_variable(formal);
                 let ptr = local.id(self);
@@ -205,7 +206,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
                 let label = self.label(ret);
                 self.branch(label).unwrap();
             }
-            self.select_block(Some(self.setup_block)).unwrap();
+            self.select_block(Some(setup_block)).unwrap();
             self.branch(body).unwrap();
             self.end_function().unwrap();
 

@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use ruda_model::tensor::{Tensor,TensorPrimitive,TensorData,Int,Bool,DType,FloatDType,IntDType,ElementConversion,backend::Backend};
+use ruda_model::tensor::{Tensor,TensorPrimitive,TensorData,Int,Bool,DType,FloatDType,IntDType,backend::Backend};
 use super::{BroadcastTensorCollective,VocabParallelLossLayout,loss::floating};
 
 /// One replicated native greedy result per actual row, without full-vocabulary logits gathering.
@@ -28,7 +28,7 @@ pub(super) fn gather_index_matrix<B:Backend,C:BroadcastTensorCollective<B>>(indi
     let mask = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![65535_i64],[1,1]),(&indices.device(),DType::I64)).with_autodiff_context(context).expand([rows,width]);
     let mut words = Vec::with_capacity(4);
     for word in 0usize..4 {
-        let part = indices.clone().bitwise_right_shift_scalar(((word*16) as i32).elem()).bitwise_and(mask.clone());
+        let part = indices.clone().bitwise_right_shift_scalar((word*16) as i32).bitwise_and(mask.clone());
         // Each exact 16-bit word is representable in FP32 independently of device-default dtype.
         words.push(Tensor::<B,2>::from_primitive(TensorPrimitive::Float(B::int_into_float(part.into_primitive(),FloatDType::F32))));
     }
@@ -39,7 +39,7 @@ pub(super) fn gather_index_matrix<B:Backend,C:BroadcastTensorCollective<B>>(indi
     let mut result:Option<Tensor<B,2,Int>> = None;
     for word in 0usize..4 {
         let part = gathered.clone().slice_dim(1,word*width..(word+1)*width).into_primitive().tensor();
-        let part = Tensor::<B,2,Int>::from_primitive(B::float_into_int(part,IntDType::I64)).bitwise_left_shift_scalar(((word*16) as i32).elem());
+        let part = Tensor::<B,2,Int>::from_primitive(B::float_into_int(part,IntDType::I64)).bitwise_left_shift_scalar((word*16) as i32);
         result = Some(match result {Some(value)=>value.bitwise_or(part),None=>part});
     }
     Ok(result.expect("four actual candidate words").reshape([communicator.world_size() as usize,rows,width]))

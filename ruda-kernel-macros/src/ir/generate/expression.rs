@@ -617,6 +617,7 @@ impl Expression {
                     true => quote![match_expand_expr],
                     false => quote![match_expand],
                 };
+                let comptime_finish = has_value.then(|| quote![use #branch::ComptimeMatchExpr as _;]);
 
                 let expr = expr
                     .as_const(context)
@@ -663,6 +664,7 @@ impl Expression {
                         {
                             let __ruda_match_value = (#expr).clone();
                             #(#discriminants)*
+                            #comptime_finish
                             #branch::#match_(scope, __ruda_match_value.clone(), #disc0, |scope, _value| #block0)
                                 #(#cases)*
                                 #default

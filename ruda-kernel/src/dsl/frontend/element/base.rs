@@ -97,6 +97,9 @@ pub trait RudaEnum: Sized {
     fn discriminant_of(variant_name: &'static str) -> i32;
 }
 
+#[doc(hidden)]
+pub trait ComptimeRudaEnum: RudaEnum {}
+
 pub trait Assign {
     /// Assign `value` to `self` in `scope`.
     fn expand_assign(&mut self, scope: &mut Scope, value: Self);

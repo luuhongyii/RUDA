@@ -3,7 +3,7 @@ pub use crate::tensor::BasicAutodiffOps;
 use crate::api::{Tensor, TensorPrimitive, backend::AutodiffBackend};
 
 macro_rules! value_autodiff_context {
-    ($kind:ty, $get:ident, $set:ident) => {
+    ($kind:ty, $get:ident) => {
         impl<const D: usize, B: crate::Backend> Tensor<B, D, $kind> {
             /// Return the runtime autodiff association of this non-differentiable tensor.
             pub fn autodiff_context(&self) -> crate::AutodiffContext { B::$get(&self.primitive) }
@@ -25,11 +25,6 @@ macro_rules! value_autodiff_context {
                 Tensor::<A, D, $kind>::from_inner(self)
             }
 
-            /// Set the runtime association without changing tensor storage.
-            pub fn with_autodiff_context(self, context: crate::AutodiffContext) -> Self {
-                Self::new(B::$set(self.primitive, context))
-            }
-
             /// Return the checkpointing policy used by mixed-kind operations.
             pub fn gradient_checkpointing_strategy(&self) -> Option<crate::GradientCheckpointingStrategy> {
                 match self.autodiff_context() {
@@ -47,8 +42,8 @@ macro_rules! value_autodiff_context {
     };
 }
 
-value_autodiff_context!(crate::api::Int, int_autodiff_context, int_with_autodiff_context);
-value_autodiff_context!(crate::api::Bool, bool_autodiff_context, bool_with_autodiff_context);
+value_autodiff_context!(crate::api::Int, int_autodiff_context);
+value_autodiff_context!(crate::api::Bool, bool_autodiff_context);
 
 impl<const D: usize, B: AutodiffBackend> Tensor<B, D> {
     /// Backward pass of the tensor.

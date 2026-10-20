@@ -184,6 +184,11 @@ where
         Self::new(K::inherit_context(K::empty(self.shape(), &self.device(), dtype), &self.primitive))
     }
 
+    /// Set runtime association without changing the tensor's dtype or storage representation.
+    pub fn with_autodiff_context(self, context: crate::AutodiffContext) -> Self {
+        Self::new(K::with_autodiff_context(self.primitive, context))
+    }
+
     pub(crate) fn with_context_of<const D2: usize, K2: BasicOps<B>>(self, reference: &Tensor<B, D2, K2>) -> Self {
         Self::new(K::with_autodiff_context(self.primitive, K2::autodiff_context(&reference.primitive)))
     }

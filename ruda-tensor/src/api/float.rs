@@ -387,14 +387,6 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
         Tensor::<A, D>::from_inner(self)
     }
 
-    /// Set runtime association without changing the tensor's dtype or storage representation.
-    pub fn with_autodiff_context(self, context: crate::AutodiffContext) -> Self {
-        Self::new(match self.primitive {
-            TensorPrimitive::Float(tensor) => TensorPrimitive::Float(B::float_with_autodiff_context(tensor, context)),
-            TensorPrimitive::QFloat(tensor) => TensorPrimitive::QFloat(B::q_with_autodiff_context(tensor, context)),
-        })
-    }
-
     /// Return the checkpointing policy carried by an autodiff tensor.
     pub fn gradient_checkpointing_strategy(&self) -> Option<crate::GradientCheckpointingStrategy> {
         match &self.primitive {

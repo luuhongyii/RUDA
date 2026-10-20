@@ -219,7 +219,7 @@ fn exchange_error<C:fmt::Debug,P:fmt::Debug,M:fmt::Debug>(error:ScopedCollective
     match error {ScopedCollectiveError::Collective(error)=>ExpertParallelMoeError::Collective(error),ScopedCollectiveError::Protocol(message)=>ExpertParallelMoeError::Protocol(message)}
 }
 macro_rules! execute_expert_parallel {
-    ($backend:ty,[$($generics:tt)*],$exchange:path,$forward:ident,$detailed:ident) => {
+    ($backend:ty,[$($generics:tt)*],$exchange:path,$forward:ident,$detailed:ident,$into_inner:path,$from_inner:path) => {
         impl<$($generics)*,P:TransformerProjection<$backend>,E:ExpertParallelReceived<$backend>> ExpertParallelMoeLayer<$backend,P,E> {
             /// Complete native source dispatch -> actual variable exchanges -> owned experts -> original ordered combine.
             /// Every expert-world rank enters even when it owns no experts or has no source token rows.
@@ -242,10 +242,13 @@ macro_rules! execute_expert_parallel {
                 let sent_rows=<$backend as MoeDispatchOps>::moe_dispatch_counts(&dispatch.state,self.experts.ownership().prefix())
                     .map_err(|error|ExpertParallelMoeError::Native(E::routing_error(error)))?;
                 let incoming=$exchange(dispatch.values,communicator.clone(),&sent_rows).map_err(exchange_error)?;
-                let original_ids=Tensor::<B,1,Int>::from_primitive(dispatch.row_experts.into_primitive());
+                let ids_context=dispatch.row_experts.autodiff_context();
+                let original_ids:Tensor<B,1,Int>=$into_inner(dispatch.row_experts);
                 let ids=original_ids.all_to_all_v_int(communicator.clone(),&sent_rows).map_err(ExpertParallelMoeError::Collective)?;
                 if incoming.receive_counts!=ids.receive_counts {return Err(ExpertParallelMoeError::Protocol("transported assignment rows and original U32 IDs differ"));}
-                let received_rows=incoming.receive_counts;let original_ids=Tensor::<$backend,1,Int>::from_primitive(ids.value.into_primitive());
+                let received_rows=incoming.receive_counts;
+                let original_ids:Tensor<$backend,1,Int>=$from_inner(ids.value);
+                let original_ids=original_ids.with_autodiff_context(ids_context);
                 let output=self.experts.forward_received(incoming.value,original_ids,self.options).map_err(ExpertParallelMoeError::Native)?;
                 let returned=$exchange(output,communicator,&received_rows).map_err(exchange_error)?;
                 if returned.receive_counts!=sent_rows {return Err(ExpertParallelMoeError::Protocol("returned expert rows differ from the original source assignments"));}
@@ -256,5 +259,7 @@ macro_rules! execute_expert_parallel {
         }
     };
 }
-execute_expert_parallel!(B,[B:MoeDispatchOps+MoeReceivedOps],native_exchange,forward_inference,forward_detailed_inference);
-execute_expert_parallel!(Autodiff<B,S>,[B:MoeDispatchOps+MoeReceivedOps,S:CheckpointStrategy],all_to_all_v_coordinated,forward,forward_detailed);
+execute_expert_parallel!(B,[B:MoeDispatchOps+MoeReceivedOps],native_exchange,forward_inference,forward_detailed_inference,
+    core::convert::identity,core::convert::identity);
+execute_expert_parallel!(Autodiff<B,S>,[B:MoeDispatchOps+MoeReceivedOps,S:CheckpointStrategy],all_to_all_v_coordinated,forward,forward_detailed,
+    Tensor::<Autodiff<B,S>,1,Int>::inner,Tensor::<Autodiff<B,S>,1,Int>::from_inner);

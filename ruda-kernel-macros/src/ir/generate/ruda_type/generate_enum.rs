@@ -66,6 +66,7 @@ impl RudaTypeEnum {
     fn ruda_type_impl(&self) -> proc_macro2::TokenStream {
         let ruda_type = prelude_type("RudaType");
         let ruda_enum = prelude_type("RudaEnum");
+        let comptime_enum = prelude_type("ComptimeRudaEnum");
         let into_mut = prelude_type("IntoMut");
         let scope = prelude_type("Scope");
         let expand_elem = frontend_type("NativeExpand");
@@ -111,6 +112,7 @@ impl RudaTypeEnum {
             impl #generics #ruda_type for #name #generic_names #where_clause {
                 type ExpandType = #name_expand #generic_names;
             }
+            impl #generics #comptime_enum for #name_expand #generic_names #where_clause {}
             #[allow(clippy::all)]
             impl #generics #ruda_enum for #name_expand #generic_names #where_clause {
                 type RuntimeValue = ();

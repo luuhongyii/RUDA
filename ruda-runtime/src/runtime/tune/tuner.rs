@@ -22,7 +22,7 @@ use super::{AutotuneKey, AutotuneOutput, TunableSet, TuneCacheResult, TuneInputs
 /// it blocks inline. Either way the benchmarking itself is synchronous; only the
 /// per-sample profile resolution is awaited.
 pub struct Tuner<K: AutotuneKey> {
-    cache: Arc<spin::RwLock<TuneCache<K>>>,
+    cache: Arc<spin::Mutex<TuneCache<K>>>,
     logger: Arc<spin::Mutex<Logger>>,
 }
 
@@ -128,19 +128,19 @@ impl<K: AutotuneKey> Tuner<K> {
     /// `std_io` is enabled.
     pub fn new(name: &str, device_id: &str) -> Self {
         Self {
-            cache: Arc::new(spin::RwLock::new(TuneCache::new(name, device_id))),
+            cache: Arc::new(spin::Mutex::new(TuneCache::new(name, device_id))),
             logger: Arc::new(spin::Mutex::new(Logger::new())),
         }
     }
 
     /// Fetch the fastest autotune operation index for an autotune key.
     pub fn fastest(&self, key: &K) -> TuneCacheResult {
-        self.cache.read().fastest(key)
+        self.cache.lock().fastest(key)
     }
 
     /// Only a validated, completed decision; no cache loading or benchmark work.
     pub fn settled(&self, key: &K) -> Option<usize> {
-        match self.cache.read().fastest(key) {
+        match self.cache.lock().fastest(key) {
             TuneCacheResult::Hit { fastest_index } => Some(fastest_index),
             _ => None,
         }
@@ -183,7 +183,7 @@ impl<K: AutotuneKey> Tuner<K> {
         // Submit outside the cache lock to preserve the device/cache lock order.
         client.flush().expect("Cannot autotune with pre-existing stream errors");
         {
-            let mut cache = self.cache.write();
+            let mut cache = self.cache.lock();
             cache.sync_environment();
             let cur = cache.fastest(key);
 
@@ -217,7 +217,7 @@ impl<K: AutotuneKey> Tuner<K> {
         // Fast path: single tunable, no benchmarking needed.
         if tunables.len() == 1 {
             require_no_unreported_mismatches(&unreported_mismatches);
-            self.cache.write().cache_insert(key.clone(), 0);
+            self.cache.lock().cache_insert(key.clone(), 0);
             return TuneCacheResult::Hit { fastest_index: 0 };
         }
 
@@ -233,7 +233,7 @@ impl<K: AutotuneKey> Tuner<K> {
         #[cfg(serializable)]
         let checksum = tunables.compute_checksum();
         #[cfg(persistence)]
-        let mut recording = super::record::TuneRecording::new(&self.cache.read(), key, &checksum);
+        let mut recording = super::record::TuneRecording::new(&self.cache.lock(), key, &checksum);
         #[cfg(persistence)]
         if recording.is_open() {
             log_context.get_or_insert_with(AutotuneLogContext::default);
@@ -431,7 +431,7 @@ async fn resolve_bench(bench: PendingBench) -> AutotuneResult {
 /// Await every profile sample, pick the fastest tunable, commit to the cache.
 async fn process_request<K: AutotuneKey>(
     request: TuneRequest<K>,
-    cache: &spin::RwLock<TuneCache<K>>,
+    cache: &spin::Mutex<TuneCache<K>>,
     logger: &spin::Mutex<Logger>,
 ) -> TuneCacheResult {
     let TuneRequest {
@@ -492,7 +492,7 @@ async fn process_request<K: AutotuneKey>(
                 &mut logger.lock(), &key, &results, log_context.as_ref(), Some(fastest_index),
             );
         }
-        let mut cache = cache.write();
+        let mut cache = cache.lock();
         cache.cache_insert(key.clone(), fastest_index);
         #[cfg(serializable)]
         let stored = !unmeasured && cache.persistent_cache_insert(

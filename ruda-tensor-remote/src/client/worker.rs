@@ -222,7 +222,7 @@ mod tests {
     use super::*;
     use crate::shared::ComputeTask;
     use ruda_communication::{
-        ProtocolServer,
+        Address, ProtocolServer,
         websocket::{WsClient, WsServer},
     };
     use ruda_core::id::StreamId;
@@ -249,12 +249,15 @@ mod tests {
         }
 
         // An invalid scheme makes the real WebSocket client fail before reading the queue.
-        ClientWorker::<WsClient>::run(
-            "http://127.0.0.1".parse().unwrap(),
+        let result = ClientWorker::<WsClient>::run(
+            RemoteDevice::new("http://127.0.0.1"),
             SessionId::new(),
             PendingRequests(receiver),
+            Arc::new(Connection::new()),
+            TelemetryProbe::disabled(),
         )
         .await;
+        assert!(result.is_err());
         assert!(sender.is_closed());
         for callback in callbacks {
             assert!(
@@ -309,30 +312,49 @@ mod tests {
         let address: Address = format!("ws://127.0.0.1:{port}").parse().unwrap();
         let shutdown = CancellationToken::new();
         let disconnect = Arc::new(tokio::sync::Notify::new());
+        let handshake_reply = rmp_serde::to_vec(&SessionReply::Accepted {
+            version: PROTOCOL_VERSION,
+            device: crate::RemoteDeviceInfo {
+                device_index: 0, device_count: 1, name: "disconnect-test".into(),
+                float_dtype: ruda_tensor::FloatDType::F32,
+                int_dtype: ruda_tensor::IntDType::I32,
+                bool_dtype: ruda_tensor::BoolDType::Native,
+                native_collectives: false,
+            },
+        }).unwrap();
         let server = WsServer::new(port)
             .route("/ready", |_| async {})
             .route("/request", {
                 let disconnect = disconnect.clone();
+                let handshake_reply = handshake_reply.clone();
                 move |mut socket| async move {
+                    let message = socket.recv().await.unwrap().unwrap();
+                    assert!(matches!(rmp_serde::from_slice::<Task>(&message.data).unwrap(), Task::InitSession(_)));
+                    socket.send(Message::new(handshake_reply.clone().into())).await.unwrap();
                     while let Some(message) = socket.recv().await.unwrap() {
-                        if matches!(
-                            rmp_serde::from_slice::<Task>(&message.data).unwrap(),
-                            Task::Compute(ComputeTask::SyncBackend, _)
-                        ) {
+                        let task = rmp_serde::from_slice::<Task>(&message.data).unwrap();
+                        let tasks = match task { Task::Batch(tasks) => tasks, task => vec![task] };
+                        if tasks.iter().any(|task| matches!(task, Task::Compute(ComputeTask::SyncBackend, _))) {
                             disconnect.notify_one();
-                            break;
+                            while socket.recv().await.unwrap().is_some() {}
+                            return;
                         }
                     }
                 }
             })
-            .route("/response", move |mut socket| async move {
-                let message = socket.recv().await.unwrap().unwrap();
-                assert!(matches!(
-                    rmp_serde::from_slice::<Task>(&message.data).unwrap(),
-                    Task::Init(_)
-                ));
-                disconnect.notified().await;
-                socket.close().await.unwrap();
+            .route("/response", move |mut socket| {
+                let disconnect = disconnect.clone();
+                let handshake_reply = handshake_reply.clone();
+                async move {
+                    let message = socket.recv().await.unwrap().unwrap();
+                    assert!(matches!(
+                        rmp_serde::from_slice::<Task>(&message.data).unwrap(),
+                        Task::InitSession(_)
+                    ));
+                    socket.send(Message::new(handshake_reply.into())).await.unwrap();
+                    disconnect.notified().await;
+                    socket.close().await.unwrap();
+                }
             });
         let stop = shutdown.clone();
         let server = rt.spawn(server.serve(async move { stop.cancelled().await }));

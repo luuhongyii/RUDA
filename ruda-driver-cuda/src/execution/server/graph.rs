@@ -1,5 +1,6 @@
 use super::*;
-use crate::execution::graph::{KernelGraph, error};
+use crate::execution::graph::KernelGraph;
+pub(super) use crate::execution::graph::error;
 use crate::graph::{GraphCommand, GraphDispatch};
 use crate::execution::graph_update::NodeSignature;
 use crate::execution::graph_batch::plan_batch;
