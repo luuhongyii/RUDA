@@ -526,6 +526,7 @@ impl Expression {
                 quote![#init_ty::new(#len, #init)]
             }
             Expression::VerbatimTerminated { tokens } => tokens.clone(),
+            Expression::Reference { .. } if self.is_const() => self.as_const(context).unwrap(),
             Expression::Reference { inner, writable } => {
                 if let Expression::Index { expr, index, .. } = &**inner {
                     let expr = expr.to_tokens(context);
@@ -770,7 +771,7 @@ impl Expression {
                 let frontend_path = frontend_path();
                 quote![#frontend_path::branch::return_expand(scope);]
             }
-            Expression::AssertConstant { inner } => inner.to_tokens(context),
+            Expression::AssertConstant { .. } => self.as_const(context).unwrap(),
             Expression::ExpressionMacro { ident, args } => {
                 let frontend_path = frontend_path();
                 let expand = format_ident!("{}_expand", ident);

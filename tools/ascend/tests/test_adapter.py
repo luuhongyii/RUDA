@@ -9,7 +9,7 @@ spec=importlib.util.spec_from_file_location('ascend_build',ROOT/'tools/ascend/bu
 b=importlib.util.module_from_spec(spec);sys.modules[spec.name]=b;spec.loader.exec_module(b)
 
 def test_production_no_longer_contains_original_cpp_device_headers():
-    assert not (ROOT/'ruda-driver-cann/vendor/deepgemm-ascend').exists()
+    assert not (ROOT/'crates/ruda-driver-cann/vendor/deepgemm-ascend').exists()
     assert not list((ROOT/'crates/ruda-ascend-kernels').rglob('*.hpp'))
     for p in (ROOT/'crates/ruda-ascend-kernels/src').glob('*.rs'):
         if p.name=='tests.rs':continue

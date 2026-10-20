@@ -200,11 +200,21 @@ impl Expression {
             Expression::VerbatimTerminated { .. } => true,
             Expression::Variable(var) => var.is_const,
             Expression::FieldAccess { base, .. } => base.is_const(),
+            Expression::Reference { inner, .. } => inner.is_explicit_comptime(),
             Expression::Array { elements, .. } => elements.iter().all(|it| it.is_const()),
             Expression::Tuple { elements, .. } => elements.iter().all(|it| it.is_const()),
             Expression::CompilerIntrinsic { .. } => true,
             Expression::Match { arms, .. } => arms.iter().all(|it| it.expr.is_const()),
             Expression::AssertConstant { .. } => true,
+            _ => false,
+        }
+    }
+
+    fn is_explicit_comptime(&self) -> bool {
+        match self {
+            Expression::AssertConstant { .. } => true,
+            Expression::FieldAccess { base, .. } => base.is_explicit_comptime(),
+            Expression::Reference { inner, .. } => inner.is_explicit_comptime(),
             _ => false,
         }
     }
@@ -247,9 +257,16 @@ impl Expression {
             Expression::FieldAccess { base, field, .. } => {
                 base.as_const(context).map(|base| quote![#base.#field])
             }
+            Expression::Reference { inner, writable } if self.is_const() => {
+                inner.as_const(context).map(|base| {
+                    if *writable { quote![&mut #base] } else { quote![&#base] }
+                })
+            }
             Expression::MethodCall { .. } if self.is_const() => Some(self.to_tokens(context)),
             Expression::Match { .. } if self.is_const() => Some(self.to_tokens(context)),
-            Expression::AssertConstant { inner } => Some(inner.to_tokens(context)),
+            Expression::AssertConstant { inner } => Some(
+                inner.as_const(context).unwrap_or_else(|| inner.to_tokens(context)),
+            ),
             _ => None,
         }
     }

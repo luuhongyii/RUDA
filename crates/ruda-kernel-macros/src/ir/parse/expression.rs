@@ -136,17 +136,17 @@ impl Expression {
                     .collect::<Result<Vec<_>, _>>()?;
                 let receiver = Expression::from_expr(*method.receiver.clone(), context)?;
 
-                if receiver.is_const()
+                if method.method == "comptime" {
+                    Expression::AssertConstant {
+                        inner: Box::new(receiver),
+                    }
+                } else if receiver.is_const()
                     && args.iter().all(|arg| arg.is_const()
                         || matches!(arg, Expression::Reference { inner, .. } if inner.is_const()))
                     && method.method != "runtime"
                 {
                     Expression::Verbatim {
                         tokens: quote![#method],
-                    }
-                } else if method.method == "comptime" {
-                    Expression::AssertConstant {
-                        inner: Box::new(receiver),
                     }
                 } else {
                     Expression::MethodCall {
