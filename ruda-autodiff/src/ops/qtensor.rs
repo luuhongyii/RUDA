@@ -374,7 +374,7 @@ mod tests {
     fn duplicate_indices_accumulate_and_detach_severs_original_history() {
         let x = input::<NoCheckpointing>(vec![1.0,2.0,3.0]);
         let q = quantize::<NoCheckpointing>(x.clone());
-        let indices = Host::int_from_data(TensorData::new(vec![2i64,0,2],[3]), &Default::default());
+        let indices = A::int_from_data(TensorData::new(vec![2i64,0,2],[3]), &Default::default());
         let selected = A::q_select(q.clone(),0,indices);
         let gradients = A::backward(A::float_sum(A::dequantize(selected,FloatDType::F32)));
         assert_eq!(values(A::grad(&x,&gradients).unwrap()), vec![1.0,0.0,2.0]);

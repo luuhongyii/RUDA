@@ -47,7 +47,7 @@ impl Default for BStructCompilationArg {
     }
 }
 
-impl<R: Runtime> Default for BStructLaunch<R> {
+impl<R: LaunchMarker> Default for BStructLaunch<R> {
     fn default() -> Self {
         Self {
             _phantom_runtime: PhantomData,

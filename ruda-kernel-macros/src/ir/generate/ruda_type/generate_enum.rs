@@ -11,7 +11,7 @@ use syn::{Ident, PathArguments, Type, WhereClause};
 
 impl RudaTypeEnum {
     pub fn generate(&self, with_launch: bool) -> TokenStream {
-        if self.runtime_variants {
+        let generated = if self.runtime_variants {
             self.generate_runtime(with_launch)
         } else if with_launch {
             if self
@@ -46,6 +46,32 @@ impl RudaTypeEnum {
                 #ruda_type_impl
                 #expand_type_impl
             }
+        };
+        let aliases = (!with_launch && self.with_constructors).then(|| self.constructor_aliases());
+        quote! { #generated #aliases }
+    }
+
+    fn constructor_aliases(&self) -> TokenStream {
+        let name = &self.ident;
+        let scope = prelude_type("Scope");
+        let ruda_type = prelude_type("RudaType");
+        let (generics, names, where_clause) = self.generics.split_for_impl();
+        let aliases = self.variants.iter()
+            .filter(|variant| matches!(variant.kind, VariantKind::Unnamed))
+            .map(|variant| {
+                let alias = format_ident!("__expand_{}", variant.ident);
+                let expanded = format_ident!("__expand_new_{}", variant.ident);
+                let args = &variant.field_names;
+                let types = variant.fields.iter().map(|field| &field.ty);
+                quote! {
+                    pub fn #alias(scope: &mut #scope, #(#args: <#types as #ruda_type>::ExpandType),*) -> <Self as #ruda_type>::ExpandType {
+                        Self::#expanded(scope, #(#args),*)
+                    }
+                }
+            });
+        quote! {
+            #[allow(non_snake_case, unused)]
+            impl #generics #name #names #where_clause { #(#aliases)* }
         }
     }
 
