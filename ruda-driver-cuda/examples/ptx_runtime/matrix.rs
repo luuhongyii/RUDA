@@ -11,7 +11,7 @@ fn wmma<F: Float + RudaElement>(a: &Array<F>, b: &Array<F>, output: &mut Array<f
         cmma::MatrixLayout::ColMajor, &b.to_slice(), 16);
     let c = cmma::Matrix::<f32>::from_value(cmma::MatrixIdent::Accumulator, m, n, 16usize,
         cmma::MatrixLayout::Undefined, 0.25f32);
-    cmma::execute::<F,F,f32,f32>(&a, &b, &c, &c);
+    cmma::execute::<F,F,f32,f32, _>(&a, &b, &c, &c);
     cmma::store(&mut output.to_slice_mut(), &c, n as u32, cmma::MatrixLayout::RowMajor);
 }
 

@@ -68,6 +68,16 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
         let out = self.compile_variable(out.unwrap());
 
         let inst = match cmma {
+            gpu::CoopMma::Elementwise { .. } => {
+                panic!("Cooperative matrix callbacks are not supported by this C++ backend")
+            }
+            gpu::CoopMma::CreateTensorLayout { .. }
+            | gpu::CoopMma::CreateTensorView
+            | gpu::CoopMma::SliceTensorLayout { .. }
+            | gpu::CoopMma::LoadTensor { .. }
+            | gpu::CoopMma::StoreTensor { .. } => {
+                panic!("Cooperative matrix tensor addressing is not supported by this C++ backend")
+            }
             gpu::CoopMma::Fill { value } => WmmaInstruction::Fill {
                 frag: out,
                 value: self.compile_variable(value),
@@ -172,10 +182,17 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
                 factor: factor as u32,
                 transpose,
             },
-            gpu::CoopMma::Cast { input } => WmmaInstruction::Cast {
-                input: self.compile_variable(input),
-                output: out,
-            },
+            gpu::CoopMma::Cast { input } => {
+                let input = self.compile_variable(input);
+                if let (
+                    Variable::WmmaFragment { frag: source, .. },
+                    Variable::WmmaFragment { frag: target, .. },
+                ) = (&input, &out) {
+                    assert_eq!(source.ident, target.ident,
+                        "Changing matrix roles is not supported by this C++ backend");
+                }
+                WmmaInstruction::Cast { input, output: out }
+            }
             gpu::CoopMma::RowIndex { .. } | gpu::CoopMma::ColIndex { .. } => {
                 panic!("Row/Col index should be handled by processors")
             }
@@ -281,6 +298,7 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
                     .collect(),
             }),
             gpu::Branch::Return => instructions.push(Instruction::Return),
+            gpu::Branch::ReturnValue(_) => panic!("Device function returns require a function backend"),
             gpu::Branch::Break => instructions.push(Instruction::Break),
             gpu::Branch::Unreachable => instructions.push(Instruction::Unreachable),
             gpu::Branch::RangeLoop(mut range_loop) => instructions.push(Instruction::RangeLoop {

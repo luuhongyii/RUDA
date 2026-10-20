@@ -1,5 +1,7 @@
 mod interop;
 mod graph;
+mod capture;
+mod collective;
 use interop::InteropState;
 use super::storage::gpu::{GpuResource, GpuStorage};
 use crate::{
@@ -52,6 +54,7 @@ pub(crate) const MB: usize = 1024 * 1024;
 
 #[derive(Debug)]
 pub struct CudaServer {
+    captures: crate::execution::capture::Captures,
     // Graphs must release executables/buffer pins BEFORE the context unloads modules.
     graphs: graph::GraphRegistry,
     ctx: CudaContext,
@@ -67,6 +70,24 @@ pub struct CudaServer {
 // which serializes all server access. The CUDA context, streams, and NCCL communicators
 // it manages are never shared across threads without synchronization.
 unsafe impl Send for CudaServer {}
+
+impl CudaServer {
+    pub(crate) fn finish_for_shutdown(&mut self) {
+        let captures: Vec<_> = self.captures.active.iter().chain(&self.captures.preparing).copied().collect();
+        for stream in captures {
+            let _ = self.capture_stop(stream, true);
+        }
+        // The service queue and every upstream producer have already drained.
+        // This is process teardown, not an operator or Backend::flush fence.
+        unsafe {
+            use cudarc::driver::sys::*;
+            assert_eq!(cuCtxSetCurrent(self.ctx.context), CUresult::CUDA_SUCCESS,
+                "CUDA shutdown context selection failed");
+            assert_eq!(cuCtxSynchronize(), CUresult::CUDA_SUCCESS,
+                "CUDA shutdown synchronization failed");
+        }
+    }
+}
 
 impl ComputeServer for CudaServer {
     type Kernel = Box<dyn RudaTask<CudaCompiler>>;
@@ -102,6 +123,9 @@ impl ComputeServer for CudaServer {
         descriptors: Vec<CopyDescriptor>,
         stream_id: StreamId,
     ) -> DynFut<Result<Vec<Bytes>, ServerError>> {
+        if let Err(error) = Binding::check_all(descriptors.iter().map(|descriptor| &descriptor.handle)) {
+            return Box::pin(async move { Err(error) });
+        }
         match self.command(
             stream_id,
             descriptors.iter().map(|d| &d.handle),
@@ -124,30 +148,41 @@ impl ComputeServer for CudaServer {
             },
         ) {
             Ok(val) => val,
-            Err(err) => unreachable!("{err:?}"),
+            Err(err) => {
+                memory.binding().set_failure(0, size, err);
+                return;
+            }
         };
 
-        let reserved = command.reserve(size).unwrap();
+        let reserved = match command.reserve(size) {
+            Ok(reserved) => reserved,
+            Err(error) => {
+                let error: ServerError = error.into();
+                memory.binding().set_failure(0, size, error.clone());
+                command.error(error);
+                return;
+            }
+        };
         command.bind(reserved, memory);
     }
 
     fn write(&mut self, descriptors: Vec<(CopyDescriptor, Bytes)>, stream_id: StreamId) {
-        let mut command = match self.command(
-            stream_id,
-            descriptors.iter().map(|desc| &desc.0.handle),
-            StreamErrorMode {
-                ignore: true,
-                flush: false,
-            },
-        ) {
-            Ok(val) => val,
-            Err(err) => unreachable!("{err:?}"),
-        };
-
         for (descriptor, data) in descriptors {
-            if let Err(err) = command.write_to_gpu(descriptor, data) {
-                command.error(err.into());
-                return;
+            if data.is_empty() || descriptor.shape.contains(&0) { continue; }
+            match self.command(
+                stream_id,
+                core::iter::once(&descriptor.handle),
+                StreamErrorMode { ignore: true, flush: false },
+            ) {
+                Ok(mut command) => {
+                    if let Err(error) = command.write_to_gpu(descriptor, data) {
+                        command.error(error.into());
+                    }
+                }
+                Err(error) => {
+                    self.ctx.timestamps.error(ProfileError::Server(Box::new(error.clone())));
+                    ruda::runtime::server::WriteScope::new(vec![descriptor.handle]).fail(error);
+                }
             }
         }
     }
@@ -161,11 +196,46 @@ impl ComputeServer for CudaServer {
         stream_id: StreamId,
     ) {
         if let Err(err) = self.launch_checked(kernel, count, bindings, mode, stream_id, None) {
+            self.ctx.timestamps.error(ProfileError::Server(Box::new(err.clone())));
+            if self.capture_owner(stream_id).is_some_and(|owner| owner != stream_id) { return; }
             let mut stream = match self.streams.resolve(stream_id, [].into_iter(), false) {
                 Ok(stream) => stream,
-                Err(err) => unreachable!("{err:?}"),
+                Err(error) => { log::error!("CUDA launch reporting: {error}"); return; }
             };
-            stream.current().errors.push(err);
+            let stream = stream.current();
+            if stream.capture.recording && stream.capture.owner == Some(stream_id) && stream.capture.failed.is_none() {
+                stream.capture.failed = Some(err.clone());
+            }
+        }
+    }
+
+    unsafe fn launch_with_mode(
+        &mut self,
+        kernel: Self::Kernel,
+        count: RudaCount,
+        bindings: KernelArguments,
+        mode: ExecutionMode,
+        stream_id: StreamId,
+        launch_mode: ruda::runtime::dry_run::LaunchMode,
+    ) {
+        if !launch_mode.is_skipped() {
+            unsafe { self.launch(kernel, count, bindings, mode, stream_id) };
+            return;
+        }
+        let compiled = (|| -> Result<(), ServerError> {
+            self.set_current_checked()?;
+            let mut kernel_id = kernel.id();
+            kernel_id.mode(mode);
+            self.ctx.refresh_compilation_environment();
+            if !self.ctx.module_names.contains_key(&kernel_id) {
+                self.ctx.compile_kernel(&kernel_id, kernel, mode, self.streams.logger.clone())
+                    .map_err(ServerError::Launch)?;
+            }
+            Ok(())
+        })();
+        if let Err(err) = compiled {
+            self.ctx.timestamps.error(ProfileError::Server(Box::new(err.clone())));
+            log::error!("CUDA compile-only launch: {err}");
         }
     }
 
@@ -179,11 +249,19 @@ impl ComputeServer for CudaServer {
         )?;
 
         let current = command.streams.current();
+        if current.capture.recording { return Ok(()); }
         current.drop_queue.flush(|| Fence::new(current.sys));
         current.memory_management_gpu.storage().flush();
 
         Ok(())
     }
+
+    fn graph_prepare(&mut self, stream: StreamId) -> Result<(), ServerError> { self.capture_prepare(stream) }
+    fn graph_start_capture(&mut self, stream: StreamId) -> Result<(), ServerError> { self.capture_start(stream) }
+    fn graph_stop_capture(&mut self, stream: StreamId) -> Result<u64, ServerError> { self.capture_stop(stream, false) }
+    fn graph_abort_capture(&mut self, stream: StreamId) { let _ = self.capture_stop(stream, true); }
+    unsafe fn graph_replay(&mut self, stream: StreamId, graph: u64) -> Result<(), ServerError> { self.capture_replay(stream, graph) }
+    fn graph_release(&mut self, _stream: StreamId, graph: u64) { self.capture_release(graph); }
 
     fn sync(&mut self, stream_id: StreamId) -> DynFut<Result<(), ServerError>> {
         let command = self.command_no_inputs(
@@ -201,8 +279,8 @@ impl ComputeServer for CudaServer {
     }
 
     fn start_profile(&mut self, stream_id: StreamId) -> Result<ProfilingToken, ServerError> {
-        ruda_core::future::block_on(self.sync(stream_id))?;
-        Ok(self.ctx.timestamps.start())
+        let stream = self.profiled_stream(stream_id)?;
+        self.ctx.timestamps.start(stream)
     }
 
     fn end_profile(
@@ -210,12 +288,18 @@ impl ComputeServer for CudaServer {
         stream_id: StreamId,
         token: ProfilingToken,
     ) -> Result<ProfileDuration, ProfileError> {
-        if let Err(err) = ruda_core::future::block_on(self.sync(stream_id)) {
-            self.ctx
-                .timestamps
-                .error(ProfileError::Server(Box::new(err)));
-        }
-        self.ctx.timestamps.stop(token)
+        let stream = match self.profiled_stream(stream_id) {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.ctx.timestamps.abandon(token);
+                return Err(ProfileError::Server(Box::new(error)));
+            }
+        };
+        self.ctx.timestamps.stop(stream, token)
+    }
+
+    fn abandon_profile(&mut self, _stream_id: StreamId, token: ProfilingToken) {
+        self.ctx.timestamps.abandon(token);
     }
 
     fn get_resource(
@@ -334,6 +418,9 @@ impl ServerCommunication for CudaServer {
         op: ReduceOperation,
         device_ids: Vec<DeviceId>,
     ) -> Result<(), ServerError> {
+        let writes = [dst.clone()];
+        let result = (|| {
+        if let Some(error) = src.failure().or_else(|| dst.failure()) { return Err(error); }
         // We create a command on the server to retrieve the correct resource of the source and the destination
         // from the memory pools.
         if src.stream != dst.stream {
@@ -360,6 +447,7 @@ impl ServerCommunication for CudaServer {
                 flush: false,
             },
         )?;
+        command_src.streams.current().capture.record_write(&dst);
         let resource_src = command_src.resource(src)?;
         let resource_dst = command_src.resource(dst)?;
 
@@ -369,19 +457,19 @@ impl ServerCommunication for CudaServer {
         core::mem::drop(command_src);
 
         // Wait for data to be ready on compute stream.
-        Fence::new(stream).wait_async(self.comm_stream);
+        let communication = self.collective_stream(stream_id, stream)?;
 
         // Get the communicator.
         let comm = self
             .communicators
             .get(&CommunicationId::from(device_ids))
-            .expect("Communicator for this ID should be initialized");
+            .ok_or_else(|| graph::error("Collective communicator is not initialized"))?;
 
         // Perform the `cudarc::nccl::result::all_reduce` operation.
         let (nccl_dtype, count) = get_nccl_dtype_count(dtype, resource_src.size);
         // SAFETY: `resource_src.ptr` and `resource_dst.ptr` are valid device pointers.
         // `comm` is a valid NCCL communicator initialized via `comm_init_rank`.
-        // `self.comm_stream` is a valid CUDA stream dedicated to collective operations.
+        // `communication` is the ordinary or capture-owned collective stream.
 
         unsafe {
             cudarc::nccl::result::all_reduce(
@@ -391,7 +479,7 @@ impl ServerCommunication for CudaServer {
                 nccl_dtype,
                 to_nccl_op(op),
                 *comm,
-                self.comm_stream as _,
+                communication as _,
             )
             .map_err(|e| ServerError::Generic {
                 reason: format!("NCCL all_reduce failed: {e:?}"),
@@ -400,9 +488,12 @@ impl ServerCommunication for CudaServer {
         }
 
         Ok(())
+        })();
+        self.collective_result(stream_id, &writes, result)
     }
 
     fn sync_collective(&mut self, stream_id: StreamId) -> Result<(), ServerError> {
+        let result = (|| {
         let mut command = self.command_no_inputs(
             stream_id,
             StreamErrorMode {
@@ -414,9 +505,9 @@ impl ServerCommunication for CudaServer {
 
         drop(command);
 
-        Fence::new(self.comm_stream).wait_async(stream);
-
-        Ok(())
+        self.collective_sync_stream(stream_id, stream)
+        })();
+        self.collective_result(stream_id, &[], result)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip(desc)))]
@@ -427,6 +518,8 @@ impl ServerCommunication for CudaServer {
         stream_id: StreamId,
         device_id_dst: DeviceId,
     ) -> Result<(), ServerError> {
+        let result = (|| {
+        if let Some(error) = desc.handle.failure() { return Err(error); }
         let binding = desc.handle.clone();
 
         // We create a command on the source server to retrieve the correct resource from the
@@ -447,7 +540,7 @@ impl ServerCommunication for CudaServer {
         core::mem::drop(command);
 
         // Wait for data to be ready on compute stream.
-        Fence::new(stream).wait_async(self.comm_stream);
+        let communication = self.collective_stream(stream_id, stream)?;
 
         // Get the communicator.
         let mut device_ids = vec![device_id_dst, self.device_id];
@@ -456,7 +549,7 @@ impl ServerCommunication for CudaServer {
         let comm = self
             .communicators
             .get(&comm_id)
-            .expect("Communicator for this ID should exist");
+            .ok_or_else(|| graph::error("Send communicator is not initialized"))?;
 
         let rank_dst = device_ids
             .iter()
@@ -467,7 +560,7 @@ impl ServerCommunication for CudaServer {
         let (nccl_dtype, count) = get_nccl_dtype_count(dtype, resource.size);
         // SAFETY: `resource.ptr` is a valid device pointer.
         // `comm` is a valid NCCL communicator initialized via `comm_init_rank`.
-        // `self.comm_stream` is a valid CUDA stream dedicated to collective operations.
+        // `communication` is the ordinary or capture-owned collective stream.
         unsafe {
             cudarc::nccl::result::send(
                 resource.ptr as *const _,
@@ -475,7 +568,7 @@ impl ServerCommunication for CudaServer {
                 nccl_dtype,
                 rank_dst,
                 *comm,
-                self.comm_stream as _,
+                communication as _,
             )
             .map_err(|e| ServerError::Generic {
                 reason: format!("NCCL send failed: {e:?}"),
@@ -484,6 +577,8 @@ impl ServerCommunication for CudaServer {
         }
 
         Ok(())
+        })();
+        self.collective_result(stream_id, &[], result)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace"))]
@@ -494,6 +589,8 @@ impl ServerCommunication for CudaServer {
         stream_id: StreamId,
         device_id_src: DeviceId,
     ) -> Result<(), ServerError> {
+        let writes = [handle.clone().binding()];
+        let result = (|| {
         // We create a new command on the destination server to reserve the necessary GPU memory.
         let mut command_dst = self.command_no_inputs(
             stream_id,
@@ -503,12 +600,15 @@ impl ServerCommunication for CudaServer {
             },
         )?;
 
-        let memory = command_dst.reserve(handle.size()).unwrap();
+        command_dst.streams.current().capture.record_write(&writes[0]);
+        let memory = command_dst.reserve(handle.size())?;
         command_dst.bind(memory, handle.memory.clone());
 
         let resource_dst = command_dst.resource(handle.binding())?;
+        let stream = command_dst.streams.current().sys;
 
         core::mem::drop(command_dst);
+        let communication = self.collective_stream(stream_id, stream)?;
 
         // Get the communicator.
         let mut device_ids = vec![device_id_src, self.device_id];
@@ -517,7 +617,7 @@ impl ServerCommunication for CudaServer {
         let comm = self
             .communicators
             .get(&comm_id)
-            .expect("Communicator for this ID should exist");
+            .ok_or_else(|| graph::error("Receive communicator is not initialized"))?;
 
         let rank_src = device_ids
             .iter()
@@ -528,7 +628,7 @@ impl ServerCommunication for CudaServer {
         let (nccl_dtype, count) = get_nccl_dtype_count(dtype, resource_dst.size);
         // SAFETY: `resource.ptr` is a valid device pointer.
         // `comm` is a valid NCCL communicator initialized via `comm_init_rank`.
-        // `self.comm_stream` is a valid CUDA stream dedicated to collective operations.
+        // `communication` is the ordinary or capture-owned collective stream.
         unsafe {
             cudarc::nccl::result::recv(
                 resource_dst.ptr as *mut _,
@@ -536,7 +636,7 @@ impl ServerCommunication for CudaServer {
                 nccl_dtype,
                 rank_src,
                 *comm,
-                self.comm_stream as _,
+                communication as _,
             )
             .map_err(|e| ServerError::Generic {
                 reason: format!("NCCL recv failed: {e:?}"),
@@ -545,6 +645,8 @@ impl ServerCommunication for CudaServer {
         }
 
         Ok(())
+        })();
+        self.collective_result(stream_id, &writes, result)
     }
 }
 
@@ -571,6 +673,7 @@ impl CudaServer {
         let interop = InteropState::new(ctx.context as usize,max_streams);
         Self {
             graphs: graph::GraphRegistry::default(),
+            captures: Default::default(),
             ctx,
             interop,
             device_id,
@@ -598,14 +701,20 @@ impl CudaServer {
         self.command(stream_id, [].into_iter(), mode)
     }
 
+    fn profiled_stream(&mut self, stream_id: StreamId) -> Result<cudarc::driver::sys::CUstream, ServerError> {
+        if !self.captures.active.is_empty() {
+            return Err(graph::error("Profiling cannot record events while the device is recording a graph"));
+        }
+        let mut command = self.command_no_inputs(stream_id, StreamErrorMode { ignore: false, flush: true })?;
+        Ok(command.streams.current().sys)
+    }
+
     fn set_current_checked(&self) -> Result<(), ServerError> {
         // Set once per service command, rather than assuming a cached current
         // context survives external calls or device-service thread migration.
         // Report a driver failure to the caller instead of unwinding the service.
-        self.ctx.unsafe_set_current().map_err(|e| ServerError::Generic {
-            reason: format!("CUDA command context: {e:?}"),
-            backtrace: BackTrace::capture(),
-        })
+        self.ctx.unsafe_set_current()
+            .map_err(|error| super::status::server("cuCtxSetCurrent", error))
     }
 
     fn command<'a>(
@@ -616,39 +725,68 @@ impl CudaServer {
     ) -> Result<Command<'_>, ServerError> {
         self.set_current_checked()?;
 
-        if mode.flush {
-            let errors = self.flush_errors(stream_id);
-
-            if !mode.ignore && !errors.is_empty() {
-                return Err(ServerError::ServerUnhealthy {
-                    errors,
-                    backtrace: BackTrace::capture(),
-                });
+        if let Some(owner) = self.capture_owner(stream_id) {
+            if owner != stream_id {
+                return Err(graph::error("The physical stream belongs to another logical stream's capture"));
             }
         }
 
-        let streams = self.streams.resolve(stream_id, handles, !mode.ignore)?;
-        Ok(Command::new(&mut self.ctx, streams))
-    }
-
-    fn flush_errors(&mut self, stream_id: StreamId) -> Vec<ServerError> {
-        let mut stream = match self.streams.resolve(stream_id, [].into_iter(), false) {
-            Ok(stream) => stream,
-            Err(_) => return Vec::new(),
+        let mut handles = handles;
+        let captured_bindings: Vec<_> = if self.captures.active.is_empty() {
+            Vec::new()
+        } else {
+            handles.by_ref().collect()
         };
-        let errors = core::mem::take(&mut stream.current().errors);
-
-        // It is very important to tag current profiles as being wrong.
-        if !errors.is_empty() {
-            self.ctx.timestamps.error(ProfileError::Unknown {
-                reason: alloc::format!("{errors:?}"),
-                backtrace: BackTrace::capture(),
+        let mut dependency_failure = None;
+        let mut captured_dependencies = Vec::new();
+        let capture_group = self.capture_group(stream_id);
+        if !captured_bindings.is_empty() {
+            let origins: Vec<_> = captured_bindings.iter().map(|binding| self.capture_owner(binding.stream)).collect();
+            self.streams.for_each_initialized(|stream| {
+                if !stream.capture.recording || stream.capture.owner == Some(stream_id) { return; }
+                for (binding, origin) in captured_bindings.iter().zip(&origins) {
+                    let pending_allocation = *origin == stream.capture.owner
+                        && stream.memory_management_gpu.get_cursor(binding.memory.clone())
+                        .is_ok_and(|cursor| cursor > stream.capture.entry_cursor);
+                    let start = binding.offset_start.unwrap_or(0);
+                    let end = binding.size - binding.offset_end.unwrap_or(0);
+                    let pending_write = stream.capture.written.keys().any(|(id, written_start, written_end)| {
+                        *id == binding.memory.id() && start < *written_end && *written_start < end
+                    });
+                    if pending_allocation || pending_write {
+                        if capture_group.is_some() && stream.capture.root == capture_group {
+                            captured_dependencies.push(stream.sys);
+                        } else {
+                            dependency_failure.get_or_insert_with(|| graph::error(
+                                "A different capture graph has not executed this buffer's writes"));
+                        }
+                        break;
+                    }
+                }
             });
-            stream.current().memory_management_gpu.cleanup(false);
         }
-
-        core::mem::drop(stream);
-        errors
+        if let Some(failure) = dependency_failure {
+            self.capture_failure(stream_id, &failure);
+            return Err(failure);
+        }
+        if !captured_dependencies.is_empty() {
+            let destination = self.streams.resolve(stream_id, [].into_iter(), false)?.current().sys;
+            for source in captured_dependencies {
+                if let Err(failure) = super::capture::dependency(source, destination) {
+                    self.capture_failure(stream_id, &failure);
+                    return Err(failure);
+                }
+            }
+        }
+        let mut streams = self.streams.resolve(stream_id, captured_bindings.into_iter().chain(handles), !mode.ignore)?;
+        for &owner in &self.captures.active {
+            streams.for_each_initialized(|stream| {
+                let forbid = stream.capture.root == Some(owner) && stream.capture.recording;
+                stream.memory_management_gpu.begin_capture(owner, forbid);
+                stream.memory_management_cpu.begin_capture(owner, forbid);
+            });
+        }
+        Ok(Command::new(self.utilities.service, &mut self.ctx, streams))
     }
 
     fn launch_checked(
@@ -666,6 +804,8 @@ impl CudaServer {
         let mut kernel_id = kernel.id();
         let logger = self.streams.logger.clone();
         kernel_id.mode(mode);
+        let mut execution = ruda::runtime::server::KernelExecution::new(kernel_id.clone(), &bindings, &count);
+        let result = (|| -> Result<(), ServerError> {
         let grid_constants = self
             .ctx
             .compilation_options
@@ -673,12 +813,17 @@ impl CudaServer {
             .grid_constants;
         let mut command = self.command(
             stream_id,
-            bindings.buffers.iter(),
+            bindings.buffers.iter().chain(bindings.tensor_maps.iter().map(|map| &map.binding))
+                .chain(match &count { RudaCount::Dynamic(binding) => Some(binding), _ => None }),
             StreamErrorMode {
                 ignore: true,
                 flush: false,
             },
         )?;
+        let io = command.prepare_kernel(&kernel_id, kernel, mode, logger)?;
+        execution.set_io(io.as_ref());
+        for binding in execution.writes() { command.streams.current().capture.record_write(binding); }
+        execution.check()?;
 
         let count = match count {
             RudaCount::Static(x, y, z) => (x, y, z),
@@ -700,6 +845,14 @@ impl CudaServer {
                 (data[0], data[1], data[2])
             }
         };
+
+        if graph.is_none() && (count.0 == 0 || count.1 == 0 || count.2 == 0) {
+            execution.skip();
+            return Ok(());
+        }
+        if graph.is_none() {
+            execution.enter();
+        }
 
         let (info_const, info_binding) = if grid_constants {
             let info = &bindings.info;
@@ -724,15 +877,14 @@ impl CudaServer {
             .iter()
             .map(|it| it.binding.clone())
             .chain(bindings.buffers)
-            .map(|binding| command.resource(binding).expect("Resource to exist."))
-            .collect::<Vec<_>>();
+            .map(|binding| command.resource(binding))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut tensor_maps = Vec::with_capacity(bindings.tensor_maps.len());
 
         for TensorMapBinding { map, binding } in bindings.tensor_maps.into_iter() {
             let resource = command
-                .resource(binding)
-                .expect("Tensor map resource exists.");
+                .resource(binding)?;
             let device_ptr = resource.ptr as *mut c_void;
 
             let mut map_ptr = MaybeUninit::zeroed();
@@ -907,19 +1059,20 @@ impl CudaServer {
                 graph.retain(binding, resource.ptr)?;
             }
         }
+        let non_producing = graph.is_some();
         command.kernel(
             kernel_id,
-            kernel,
-            mode,
             count,
             &tensor_maps,
             &resources,
             info_const,
-            logger,
             graph,
         )?;
+        if non_producing { execution.skip(); }
 
         Ok(())
+        })();
+        execution.finish(result)
     }
 
     pub(crate) fn utilities(&self) -> Arc<ServerUtilities<Self>> {

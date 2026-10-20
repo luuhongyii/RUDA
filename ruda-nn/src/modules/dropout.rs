@@ -1,6 +1,6 @@
 
 use ruda_model::config::Config;
-use ruda_model::module::{Content, DisplaySettings, Module, ModuleDisplay};
+use ruda_model::module::{Content, DisplaySettings, Flag, Module, ModuleDisplay, Param};
 use ruda_model::tensor::backend::Backend;
 use ruda_model::tensor::{Bool, Distribution, Tensor};
 
@@ -24,6 +24,8 @@ pub struct DropoutConfig {
 pub struct Dropout {
     /// The probability of randomly zeroes some elements of the input tensor during training.
     pub prob: f64,
+    /// Permit stochastic behavior on an autodiff device.
+    pub training: Param<Flag>,
 }
 
 impl DropoutConfig {
@@ -35,7 +37,7 @@ impl DropoutConfig {
                 self.prob
             );
         }
-        Dropout { prob: self.prob }
+        Dropout { prob: self.prob, training: Param::from_bool(true) }
     }
 }
 
@@ -49,12 +51,13 @@ impl Dropout {
     /// - input: `[..., any]`
     /// - output: `[..., any]`
     pub fn forward<B: Backend, const D: usize>(&self, input: Tensor<B, D>) -> Tensor<B, D> {
-        if !B::ad_enabled(&input.device()) || self.prob == 0.0 {
+        if !self.training.is_enabled() || !input.is_autodiff() || self.prob == 0.0 {
             return input;
         }
 
         if self.prob == 1.0 {
-            let excluded = Tensor::<B,D,Bool>::zeros(input.dims(),&input.device()).bool_not();
+            let excluded = Tensor::<B,D,Bool>::zeros(input.dims(),&input.device())
+                .with_autodiff_context(input.autodiff_context()).bool_not();
             return input.mask_fill(excluded,0);
         }
 
@@ -74,7 +77,9 @@ impl ModuleDisplay for Dropout {
     }
 
     fn custom_content(&self, content: Content) -> Option<Content> {
-        content.add("prob", &self.prob).optional()
+        let content = content.add("prob", &self.prob);
+        if self.training.is_enabled() { content.optional() }
+        else { content.add("training", &self.training).optional() }
     }
 }
 

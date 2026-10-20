@@ -2,8 +2,8 @@ use alloc::{string::String, vec, vec::Vec};
 use core::{fmt, marker::PhantomData};
 
 use super::tensor::{BoolTensorSerde, FloatTensorSerde, IntTensorSerde};
-use super::{PrecisionSettings, Record};
-use crate::module::{Param, ParamId};
+use super::{PrecisionSettings, Record, ParamSerde};
+use crate::module::{ModuleMapper, Param, ParamId};
 
 use ruda_tensor::api::{Bool, Int, Tensor, backend::Backend};
 
@@ -32,6 +32,16 @@ where
 {
     type Item<S: PrecisionSettings> = Vec<T::Item<S>>;
 
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.into_iter().enumerate().map(|(index, value)| {
+            let name = alloc::format!("{index}");
+            mapper.enter_module(&name, "Vec");
+            let value = value.map_parameters(mapper);
+            mapper.exit_module(&name, "Vec");
+            value
+        }).collect()
+    }
+
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         self.into_iter().map(Record::into_item).collect()
     }
@@ -49,6 +59,10 @@ where
     B: Backend,
 {
     type Item<S: PrecisionSettings> = Option<T::Item<S>>;
+
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.map(|value| value.map_parameters(mapper))
+    }
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         self.map(Record::into_item)
@@ -70,6 +84,18 @@ where
     /// see [serde/issues/1937](https://github.com/serde-rs/serde/issues/1937).
     /// for backward compatibility reasons. Serde APIs were created before const generics.
     type Item<S: PrecisionSettings> = Array<N, T::Item<S>>;
+
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        let mut index = 0;
+        self.map(|value| {
+            let name = alloc::format!("{index}");
+            index += 1;
+            mapper.enter_module(&name, "Array");
+            let value = value.map_parameters(mapper);
+            mapper.exit_module(&name, "Array");
+            value
+        })
+    }
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         Array(self.map(Record::into_item))
@@ -95,6 +121,16 @@ macro_rules! impl_record_tuple {
             $($r: Record<B>),*
         {
             type Item<S: PrecisionSettings> = ($($r::Item<S>,)*);
+
+            fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+                ($({
+                    let name = stringify!($i);
+                    mapper.enter_module(name, "Tuple");
+                    let value = self.$i.map_parameters(mapper);
+                    mapper.exit_module(name, "Tuple");
+                    value
+                },)*)
+            }
 
             fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
                 ($(self.$i.into_item(),)*)
@@ -125,6 +161,10 @@ where
 {
     type Item<S: PrecisionSettings> = HashMap<String, T::Item<S>>;
 
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.into_iter().map(|(key, value)| (key, value.map_parameters(mapper))).collect()
+    }
+
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         let mut items = HashMap::with_capacity(self.len());
         self.into_iter().for_each(|(id, record)| {
@@ -142,32 +182,33 @@ where
     }
 }
 
-/// (De)serialize parameters into a clean format.
-#[derive(new, Debug, Clone, Serialize, Deserialize)]
-pub struct ParamSerde<T> {
-    id: String,
-    param: T,
-}
-
 impl<B, const D: usize> Record<B> for Param<Tensor<B, D>>
 where
     B: Backend,
 {
     type Item<S: PrecisionSettings> = ParamSerde<FloatTensorSerde<S>>;
 
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        crate::module::Module::map(self, mapper)
+    }
+
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
+        let transform = self.encode_transform(super::RuntimePrecision::new::<S>());
         let (id, tensor, mapper) = self.consume();
         let tensor = mapper.on_save(tensor);
-        ParamSerde::new(id.serialize(), tensor.into_item())
+        ParamSerde::new(id.serialize(), tensor.into_item()).with_transform(transform)
     }
 
     fn from_item<S: PrecisionSettings>(item: Self::Item<S>, device: &B::Device) -> Self {
         B::memory_persistent_allocations(device, item, |item| {
-            Param::initialized(
+            let mut param = Param::initialized(
                 ParamId::deserialize(&item.id),
-                Tensor::from_item(item.param, device).require_grad(), // Same behavior as when we create a new
-                                                                      // Param from a tensor.
-            )
+                crate::module::Parameter::set_require_grad(Tensor::from_item(item.param, device), true),
+            );
+            param.require_grad = true;
+            param.transform_record = item.reparameterization
+                .map(|record| record.with_precision(super::RuntimePrecision::new::<S>()));
+            param
         })
     }
 }
@@ -178,6 +219,10 @@ where
 {
     type Item<S: PrecisionSettings> = ParamSerde<IntTensorSerde<S>>;
 
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        mapper.map_int(self)
+    }
+
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         let (id, tensor, mapper) = self.consume();
         let tensor = mapper.on_save(tensor);
@@ -185,6 +230,7 @@ where
     }
 
     fn from_item<S: PrecisionSettings>(item: Self::Item<S>, device: &B::Device) -> Self {
+        assert!(item.reparameterization.is_none(), "Integer parameter cannot contain a floating reparameterization");
         B::memory_persistent_allocations(device, item, |item| {
             Param::initialized(
                 ParamId::deserialize(&item.id),
@@ -200,6 +246,10 @@ where
 {
     type Item<S: PrecisionSettings> = ParamSerde<BoolTensorSerde>;
 
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        mapper.map_bool(self)
+    }
+
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         let (id, tensor, mapper) = self.consume();
         let tensor = mapper.on_save(tensor);
@@ -207,6 +257,7 @@ where
     }
 
     fn from_item<S: PrecisionSettings>(item: Self::Item<S>, device: &B::Device) -> Self {
+        assert!(item.reparameterization.is_none(), "Boolean parameter cannot contain a floating reparameterization");
         B::memory_persistent_allocations(device, item, |item| {
             Param::initialized(
                 ParamId::deserialize(&item.id),

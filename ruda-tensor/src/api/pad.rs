@@ -194,7 +194,7 @@ where
         .try_into()
         .unwrap();
 
-    let padded_tensor = Tensor::full(padded_dims, value, (&tensor.device(), tensor.dtype()));
+    let padded_tensor = Tensor::full(padded_dims, value, (&tensor.device(), tensor.dtype())).with_context_of(&tensor);
 
     padded_tensor.slice_assign(ranges, tensor)
 }
@@ -258,7 +258,7 @@ where
     output_dims[dim] += pad_before + pad_after;
 
     // Create output tensor and place original in the center
-    let output = Tensor::zeros(output_dims, (&tensor.device(), tensor.dtype()));
+    let output = Tensor::zeros(output_dims, (&tensor.device(), tensor.dtype())).with_context_of(&tensor);
     let original_range = build_slice_ranges(output_dims, dim, pad_before, dim_size);
     let mut output = output.slice_assign(original_range, tensor.clone());
 
@@ -339,7 +339,7 @@ where
     output_dims[dim] += pad_before + pad_after;
 
     // Create output tensor and place original in the center
-    let output = Tensor::zeros(output_dims, (&tensor.device(), tensor.dtype()));
+    let output = Tensor::zeros(output_dims, (&tensor.device(), tensor.dtype())).with_context_of(&tensor);
     let original_range = build_slice_ranges(output_dims, dim, pad_before, dim_size);
     let mut output = output.slice_assign(original_range, tensor.clone());
 

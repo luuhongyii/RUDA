@@ -37,8 +37,8 @@ impl Device for DummyDevice {
 pub type DummyClient = ComputeClient<DummyRuntime>;
 
 impl DeviceService for DummyServer {
-    fn init(_device_id: ruda_core::device::DeviceId) -> Self {
-        init_server()
+    fn init(device_id: ruda_core::device::DeviceId) -> Self {
+        init_server(device_id)
     }
 
     fn utilities(&self) -> Arc<dyn std::any::Any + Send + Sync> {
@@ -46,12 +46,9 @@ impl DeviceService for DummyServer {
     }
 }
 
-fn init_server() -> DummyServer {
+fn init_server(device_id: ruda_core::device::DeviceId) -> DummyServer {
     let storage = BytesStorage::default();
-    let mem_properties = MemoryDeviceProperties {
-        max_page_size: 1024 * 1024 * 512,
-        alignment: 32,
-    };
+    let mem_properties = MemoryDeviceProperties::new(1024 * 1024 * 512, 32);
 
     let memory_management = MemoryManagement::from_configuration(
         storage,
@@ -60,7 +57,7 @@ fn init_server() -> DummyServer {
         Arc::new(ServerLogger::default()),
         MemoryManagementOptions::new("Main CPU Memory"),
     );
-    DummyServer::new(memory_management, mem_properties)
+    DummyServer::new(device_id, memory_management, mem_properties)
 }
 
 pub fn test_client(device: &DummyDevice) -> DummyClient {

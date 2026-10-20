@@ -1,4 +1,6 @@
 use super::*;
+mod parity_operators;
+mod atomic_vectors;
 use ruda_core::{
     ir::*,
     kernel::{KernelArg, KernelOptions, ScalarKernelArg, Visibility},

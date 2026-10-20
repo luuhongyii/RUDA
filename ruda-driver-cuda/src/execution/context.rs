@@ -18,7 +18,7 @@ use ruda_kernel::dsl::{
     server::ResourceLimitError,
     {ir::DeviceProperties, prelude::*},
 };
-use ruda::runtime::timestamp_profiler::TimestampProfiler;
+use super::profile::EventProfiler;
 use ruda::runtime::{compiler::RudaTask, logging::ServerLogger};
 use cudarc::driver::DriverError;
 use cudarc::driver::sys::CUfunc_st;
@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::{ffi::CStr, os::raw::c_void};
 
 use ruda_core::cache::CacheOption;
+use ruda::runtime::compiler::{CompilationArtifacts, CompilationRecording};
 
 #[derive(Debug)]
 pub(crate) struct CudaContext {
@@ -38,7 +39,10 @@ pub(crate) struct CudaContext {
     pub context: *mut CUctx_st,
     pub module_names: HashMap<KernelId, CompiledKernel>,
     ptx_cache: Option<CompilationCache<StableHash, PtxCacheEntry>>,
-    pub timestamps: TimestampProfiler,
+    artifacts: CompilationArtifacts<PtxCacheEntry>,
+    cache_generation: Option<u32>,
+    retired_modules: Vec<CompiledKernel>,
+    pub timestamps: EventProfiler,
     pub arch: CudaArchitecture,
     pub compilation_options: CompilationOptions,
     pub properties: DeviceProperties,
@@ -46,6 +50,7 @@ pub(crate) struct CudaContext {
 
 #[derive(Debug)]
 pub struct CompiledKernel {
+    pub(crate) io: Option<ruda_core::kernel::KernelIo>,
     ruda_dim: RudaDim,
     shared_mem_bytes: usize,
     func: *mut CUfunc_st,
@@ -56,6 +61,8 @@ pub struct CompiledKernel {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
 pub struct PtxCacheEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    io: Option<ruda_core::kernel::KernelIo>,
     entrypoint_name: String,
     shared_mem_bytes: usize,
     ptx: Vec<std::ffi::c_char>,
@@ -69,9 +76,9 @@ impl CudaContext {
         properties: DeviceProperties,
         context: *mut CUctx_st,
         arch: CudaArchitecture,
+        backend: crate::compiler_backend::CompilerBackend,
     ) -> Self {
-        let backend = crate::compiler_backend::CompilerBackend::from_environment()
-            .expect("invalid Ruda CUDA compiler configuration");
+        jit_init::initialize(backend, arch.version);
         #[cfg(feature = "direct-ptx")]
         let compilation_options = {
             let mut options = compilation_options;
@@ -80,6 +87,8 @@ impl CudaContext {
             }
             options
         };
+        let artifacts = CompilationArtifacts::new("cuda-ptx", &properties.identity.fingerprint);
+        let cache_generation = artifacts.enabled().then(ruda_core::environment::generation);
         Self {
             backend,
             launch_arguments: launch::LaunchArguments::default(),
@@ -88,20 +97,34 @@ impl CudaContext {
             ptx_cache: {
                 use ruda::runtime::config::RuntimeConfig;
                 let config = ruda::runtime::config::RudaRuntimeConfig::get();
-                if let Some(cache) = &config.compilation.cache {
+                if let Some(cache) = &config.compilation.cache
+                    && !artifacts.enabled()
+                {
                     let root = cache.root();
                     Some(CompilationCache::new(
                         "ptx",
-                        CacheOption::default().name(backend.cache_namespace(arch.version)).root(root),
+                        CacheOption::default().name(properties.identity.fingerprint.clone()).root(root),
                     ))
                 } else {
                     None
                 }
             },
             arch,
-            timestamps: TimestampProfiler::default(),
+            timestamps: EventProfiler::default(),
             compilation_options,
             properties,
+            artifacts,
+            cache_generation,
+            retired_modules: Vec::new(),
+        }
+    }
+
+    pub(super) fn refresh_compilation_environment(&mut self) {
+        let Some(generation) = self.cache_generation else { return; };
+        let current = ruda_core::environment::generation();
+        if generation != current {
+            self.retired_modules.extend(self.module_names.drain().map(|(_, kernel)| kernel));
+            self.cache_generation = Some(current);
         }
     }
 
@@ -114,6 +137,7 @@ impl CudaContext {
 }
 
 mod compilation;
+mod jit_init;
 #[cfg(feature = "direct-ptx")]
 mod direct_ptx;
 mod launch;
@@ -122,7 +146,7 @@ mod module_config;
 
 impl Drop for CudaContext {
     fn drop(&mut self) {
-        if self.module_names.is_empty() { return; }
+        if self.module_names.is_empty() && self.retired_modules.is_empty() { return; }
         // This wait is ONLY at runtime destruction, never per operator.
         // Do not unload executable code while queued kernels may still use it.
         unsafe {
@@ -136,7 +160,9 @@ impl Drop for CudaContext {
             }
             let synchronized = cuCtxSynchronize();
             if synchronized == CUresult::CUDA_SUCCESS {
-                for (_, kernel) in self.module_names.drain() {
+                for kernel in self.module_names.drain().map(|(_, kernel)| kernel)
+                    .chain(self.retired_modules.drain(..))
+                {
                     let status = cuModuleUnload(kernel.module);
                     if status != CUresult::CUDA_SUCCESS {
                         log::warn!("RUDA module unload failed: {status:?}");

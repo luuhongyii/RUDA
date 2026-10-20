@@ -37,11 +37,27 @@ impl Statement {
                     })
                 };
                 let ty = variable.ty.as_ref().map(|ty| {
+                    let mut ty = ty;
+                    while let syn::Type::Reference(reference) = ty {
+                        ty = &reference.elem;
+                    }
                     quote_spanned! {
                         ty.span()=> :<#ty as #ruda_type>::ExpandType
                     }
                 });
 
+                let init = if let Some(syn::Type::Reference(reference)) = &variable.ty {
+                    if !is_const {
+                        init.map(|init| {
+                            let into_mut = frontend_type("IntoMut");
+                            let writable = reference.mutability.is_some();
+                            quote! {{
+                                let _init = #init;
+                                #into_mut::expand_reborrow(_init.clone(), scope, #writable)
+                            }}
+                        })
+                    } else { init }
+                } else { init };
                 let init = match (is_mut, init) {
                     (true, Some(init)) => {
                         let into_mut = frontend_type("IntoMut");
@@ -53,6 +69,13 @@ impl Statement {
                                 #init_ty
                             }
                         })
+                    }
+                    (_, Some(init)) if !is_const => {
+                        let into_mut = frontend_type("IntoMut");
+                        Some(quote! {{
+                            let _init = #init;
+                            #into_mut::expand_reference_value(_init.clone(), scope)
+                        }})
                     }
                     (_, init) => init,
                 };

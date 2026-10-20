@@ -22,7 +22,9 @@ pub(super) enum Scalar {
 
 impl Scalar {
     pub fn is_packed_fp4(ty: Type) -> bool {
-        matches!(ty.with_vector_size(1), Type::Scalar(StorageType::Packed(ElemType::Float(FloatKind::E2M1), 2)))
+        matches!(ty,
+            Type::Scalar(StorageType::Packed(ElemType::Float(FloatKind::E2M1), 2))
+            | Type::Vector(StorageType::Packed(ElemType::Float(FloatKind::E2M1), 2), _))
     }
 
     pub fn is_tf32(ty: Type) -> bool {
@@ -31,7 +33,7 @@ impl Scalar {
 
     pub fn memory_element(ty: Type) -> Result<Self> {
         match ty {
-            Type::Scalar(StorageType::Atomic(elem)) => Self::of(Type::scalar(elem)),
+            Type::Scalar(StorageType::Atomic(elem)) | Type::Vector(StorageType::Atomic(elem), _) => Self::of(Type::scalar(elem)),
             Type::Scalar(_) | Type::Vector(_, _) => Self::of(ty.with_vector_size(1)),
             Type::Semantic(_) => Err(unsupported("semantic type has no memory element")),
             Type::Pointer(_) => Err(unsupported("pointer values must be lowered before PTX memory emission")),

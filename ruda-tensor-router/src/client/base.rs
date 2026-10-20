@@ -17,10 +17,18 @@ pub(crate) static CLIENTS: RunnerClientLocator = RunnerClientLocator::new();
 
 type Key = (core::any::TypeId, DeviceId);
 
+/// Registration in the ordered submission API, distinct from acknowledged graph registrations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueuedGraphId(pub GraphId);
+
 /// Define how to interact with the runner.
 pub trait RunnerClient: Clone + Send + Sync + Sized {
     /// Device type.
     type Device: DeviceOps;
+
+    /// Identity of the live tensor/graph namespace, stable across client clones.
+    /// `None` disables reuse of registrations across separate client lookups.
+    fn context_id(&self) -> Option<usize> { None }
 
     /// Query actual native volume geometry without launching an operation or reading a tensor.
     fn avg_pool3d_native_output_size(&self, _input: [usize; 3], _kernel: [usize; 3],
@@ -30,6 +38,10 @@ pub trait RunnerClient: Clone + Send + Sync + Sized {
 
     /// Register a new tensor operation to be executed by the (runner) server.
     fn register_op(&self, op: OperationIr);
+    /// Register another independently consumable ID for an existing tensor buffer.
+    fn register_alias(&self, _destination: TensorId, _source: TensorId) -> Result<(), ExecutionError> {
+        Err(crate::graph::graph_error("this runner does not support tensor aliases"))
+    }
     /// Register an explicit relative graph without executing it; existing clients may opt out.
     fn register_graph(&self, _graph: GraphIr) -> Result<GraphId, ExecutionError> {
         Err(crate::graph::graph_error("this runner does not support registered graph replay"))
@@ -41,6 +53,27 @@ pub trait RunnerClient: Clone + Send + Sync + Sized {
     /// Release the registration; an already-started replay retains its own graph snapshot.
     fn remove_graph(&self, _id: GraphId) -> Result<(), ExecutionError> {
         Err(crate::graph::graph_error("this runner does not support registered graph replay"))
+    }
+    /// Queue an alias in operation order; success acknowledges submission, not remote execution.
+    fn queue_alias(&self, destination: TensorId, source: TensorId) -> Result<(), ExecutionError> {
+        self.register_alias(destination, source)
+    }
+    /// Queue a graph's registration and first replay together, without a device completion fence.
+    fn queue_graph(&self, graph: GraphIr, bindings: GraphBindings) -> Result<QueuedGraphId, ExecutionError> {
+        let id = self.register_graph(graph)?;
+        if let Err(error) = self.execute_graph(id, bindings) {
+            let _ = self.remove_graph(id);
+            return Err(error);
+        }
+        Ok(QueuedGraphId(id))
+    }
+    /// Replay a graph returned by [`Self::queue_graph`] in operation order.
+    fn queue_graph_replay(&self, id: QueuedGraphId, bindings: GraphBindings) -> Result<(), ExecutionError> {
+        self.execute_graph(id.0, bindings)
+    }
+    /// Release a queued registration; already submitted replays retain their graph snapshot.
+    fn queue_graph_release(&self, id: QueuedGraphId) -> Result<(), ExecutionError> {
+        self.remove_graph(id.0)
     }
     /// Register a new tensor operation to be executed by the (runner) server.
     ///
@@ -60,6 +93,44 @@ pub trait RunnerClient: Clone + Send + Sync + Sized {
     fn read_tensor_async(&self, tensor: TensorIr) -> DynFut<Result<TensorData, ExecutionError>>;
     /// Sync the runner, ensure that all computations are finished.
     fn sync(&self) -> Result<(), ExecutionError>;
+    /// Open a profiling window on the backend executing these operations.
+    fn profile_start(&self) -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> { Ok(None) }
+    /// Close the original window, forwarding its queue-flush policy.
+    fn profile_end(&self, _token: ruda_tensor::ProfileToken, _options: ruda_tensor::ProfileOptions)
+        -> Result<ruda_tensor::ProfileDuration, ExecutionError> {
+        Err(crate::graph::graph_error("this runner does not support profiling windows"))
+    }
+    /// Abandon a profiling window without running queued work.
+    fn profile_abandon(&self, token: ruda_tensor::ProfileToken) {
+        let _ = self.profile_end(token, ruda_tensor::ProfileOptions::default());
+    }
+    /// Dispatch buffered operations without a device-completion fence.
+    fn flush(&self) -> Result<(), ExecutionError> {
+        Err(ExecutionError::WithContext {
+            reason: "This runner does not implement nonblocking stream submission".into(),
+        })
+    }
+    /// Prepare the local backend for closure capture.
+    fn graph_prepare(&self) -> Result<(), ExecutionError> {
+        Err(crate::graph::graph_error("this runner does not support hardware graph capture"))
+    }
+    /// Begin recording warmed operations.
+    fn graph_start_capture(&self) -> Result<(), ExecutionError> {
+        Err(crate::graph::graph_error("this runner does not support hardware graph capture"))
+    }
+    /// Close the recording and return its executable.
+    fn graph_stop_capture(&self) -> Result<ruda_tensor::BackendGraph, ExecutionError> {
+        Err(crate::graph::graph_error("this runner does not support hardware graph capture"))
+    }
+    /// Abandon a prepared or active capture.
+    fn graph_abort_capture(&self) {}
+    /// Replay a hardware graph on its originating backend.
+    ///
+    /// # Safety
+    /// The captured buffers must remain stable and have no concurrent accesses.
+    unsafe fn graph_replay(&self, _graph: &ruda_tensor::BackendGraph) -> Result<(), ExecutionError> {
+        Err(crate::graph::graph_error("this runner does not support hardware graph replay"))
+    }
     /// Create a new (uninitialized) empty tensor and returns its corresponding [tensor id](TensorId).
     fn create_empty_handle(&self) -> TensorId;
     /// Create a new [RouterTensor] from the tensor data.
@@ -79,6 +150,36 @@ pub(crate) struct RunnerClientLocator {
 /// Get the client for the given device
 pub fn get_client<R: RunnerChannel>(device: &R::Device) -> Client<R> {
     CLIENTS.client::<R>(device)
+}
+
+/// Remove only this live client from future lookup. Existing tensor owners are not rebound.
+pub fn unregister_client<R: RunnerChannel>(device: &R::Device, client: &Client<R>) -> bool {
+    let Some(identity) = client.context_id() else { return false; };
+    CLIENTS.remove_if::<R>((core::any::TypeId::of::<R>(), device.id()), identity)
+}
+
+/// Owns a locator entry; tensors keep their independent client clones when it is dropped.
+#[must_use = "dropping the registration immediately unregisters its runner client"]
+pub struct RunnerClientRegistration<R: RunnerChannel> {
+    key: Key,
+    client: Client<R>,
+}
+
+impl<R: RunnerChannel> Drop for RunnerClientRegistration<R> {
+    fn drop(&mut self) {
+        match self.client.context_id() {
+            Some(identity) => { CLIENTS.remove_if::<R>(self.key, identity); }
+            None => CLIENTS.remove(self.key),
+        }
+    }
+}
+
+/// Install a caller-created client until the returned guard is dropped.
+/// Returns `None` if this channel and device already have a registered client.
+pub fn register_scoped_client<R: RunnerChannel>(device: &R::Device, client: Client<R>)
+    -> Option<RunnerClientRegistration<R>> {
+    CLIENTS.register_scoped::<R>(device, client.clone())
+        .map(|key| RunnerClientRegistration { key, client })
 }
 
 /// Initialize a new client for the given device.
@@ -131,6 +232,34 @@ impl RunnerClientLocator {
             },
             _ => unreachable!(),
         }
+    }
+
+    fn register_scoped<R: RunnerChannel>(&self, device: &R::Device, client: Client<R>) -> Option<Key> {
+        let key = (core::any::TypeId::of::<R>(), device.id());
+        let mut clients = self.clients.write();
+        let clients = clients.get_or_insert_with(HashMap::new);
+        if clients.contains_key(&key) { return None; }
+        clients.insert(key, Box::new(client));
+        Some(key)
+    }
+
+    fn remove(&self, key: Key) {
+        let removed = self.clients.write().as_mut().and_then(|clients| clients.remove(&key));
+        drop(removed);
+    }
+
+    fn remove_if<R: RunnerChannel>(&self, key: Key, identity: usize) -> bool {
+        let removed = {
+            let mut clients = self.clients.write();
+            let Some(clients) = clients.as_mut() else { return false; };
+            let matches = clients.get(&key).and_then(|client| client.downcast_ref::<Client<R>>())
+                .is_some_and(|client| client.context_id() == Some(identity));
+            if !matches { return false; }
+            clients.remove(&key)
+        };
+        let found = removed.is_some();
+        drop(removed);
+        found
     }
 
     fn register_inner<R: RunnerChannel + 'static>(

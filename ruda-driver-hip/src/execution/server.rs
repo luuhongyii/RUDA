@@ -78,10 +78,21 @@ impl ComputeServer for HipServer {
             },
         ) {
             Ok(val) => val,
-            Err(err) => unreachable!("{err:?}"),
+            Err(err) => {
+                memory.binding().set_failure(0, size, err);
+                return;
+            }
         };
 
-        let reserved = command.reserve(size).unwrap();
+        let reserved = match command.reserve(size) {
+            Ok(reserved) => reserved,
+            Err(error) => {
+                let error: ServerError = error.into();
+                memory.binding().set_failure(0, size, error.clone());
+                command.error(error);
+                return;
+            }
+        };
         command.bind(reserved, memory);
     }
 
@@ -90,6 +101,9 @@ impl ComputeServer for HipServer {
         descriptors: Vec<CopyDescriptor>,
         stream_id: StreamId,
     ) -> DynFut<Result<Vec<Bytes>, ServerError>> {
+        if let Err(error) = Binding::check_all(descriptors.iter().map(|descriptor| &descriptor.handle)) {
+            return Box::pin(async move { Err(error) });
+        }
         match self.command(
             stream_id,
             descriptors.iter().map(|d| &d.handle),
@@ -104,22 +118,22 @@ impl ComputeServer for HipServer {
     }
 
     fn write(&mut self, descriptors: Vec<(CopyDescriptor, Bytes)>, stream_id: StreamId) {
-        let mut command = match self.command(
-            stream_id,
-            descriptors.iter().map(|desc| &desc.0.handle),
-            StreamErrorMode {
-                ignore: true,
-                flush: false,
-            },
-        ) {
-            Ok(val) => val,
-            Err(err) => unreachable!("{err:?}"),
-        };
-
         for (descriptor, data) in descriptors {
-            if let Err(err) = command.write_to_gpu(descriptor, data) {
-                command.error(err.into());
-                return;
+            if data.is_empty() || descriptor.shape.contains(&0) { continue; }
+            match self.command(
+                stream_id,
+                core::iter::once(&descriptor.handle),
+                StreamErrorMode { ignore: true, flush: false },
+            ) {
+                Ok(mut command) => {
+                    if let Err(error) = command.write_to_gpu(descriptor, data) {
+                        command.error(error.into());
+                    }
+                }
+                Err(error) => {
+                    self.ctx.timestamps.error(ProfileError::Server(Box::new(error.clone())));
+                    ruda::runtime::server::WriteScope::new(vec![descriptor.handle]).fail(error);
+                }
             }
         }
     }
@@ -133,11 +147,36 @@ impl ComputeServer for HipServer {
         stream_id: StreamId,
     ) {
         if let Err(err) = self.launch_checked(kernel, count, bindings, mode, stream_id) {
-            let mut stream = match self.streams.resolve(stream_id, [].into_iter(), false) {
-                Ok(stream) => stream,
-                Err(err) => unreachable!("{err:?}"),
-            };
-            stream.current().errors.push(err);
+            self.ctx.timestamps.error(ProfileError::Server(Box::new(err.clone())));
+        }
+    }
+
+    unsafe fn launch_with_mode(
+        &mut self,
+        kernel: Self::Kernel,
+        count: RudaCount,
+        bindings: KernelArguments,
+        mode: ExecutionMode,
+        stream_id: StreamId,
+        launch_mode: ruda::runtime::dry_run::LaunchMode,
+    ) {
+        if !launch_mode.is_skipped() {
+            unsafe { self.launch(kernel, count, bindings, mode, stream_id) };
+            return;
+        }
+        let compiled = (|| -> Result<(), ServerError> {
+            let mut kernel_id = kernel.id();
+            kernel_id.mode(mode);
+            self.ctx.refresh_compilation_environment();
+            if !self.ctx.module_names.contains_key(&kernel_id) {
+                self.ctx.compile_kernel(&kernel_id, kernel, mode, self.streams.logger.clone())
+                    .map_err(ServerError::Launch)?;
+            }
+            Ok(())
+        })();
+        if let Err(err) = compiled {
+            self.ctx.timestamps.error(ProfileError::Server(Box::new(err.clone())));
+            log::error!("HIP compile-only launch: {err}");
         }
     }
 
@@ -173,8 +212,8 @@ impl ComputeServer for HipServer {
     }
 
     fn start_profile(&mut self, stream_id: StreamId) -> Result<ProfilingToken, ServerError> {
-        ruda_core::future::block_on(self.sync(stream_id))?;
-        Ok(self.ctx.timestamps.start())
+        let stream = self.profiled_stream(stream_id)?;
+        self.ctx.timestamps.start(stream)
     }
 
     fn end_profile(
@@ -182,12 +221,18 @@ impl ComputeServer for HipServer {
         stream_id: StreamId,
         token: ProfilingToken,
     ) -> Result<ProfileDuration, ProfileError> {
-        if let Err(err) = ruda_core::future::block_on(self.sync(stream_id)) {
-            self.ctx
-                .timestamps
-                .error(ProfileError::Server(Box::new(err)));
-        }
-        self.ctx.timestamps.stop(token)
+        let stream = match self.profiled_stream(stream_id) {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.ctx.timestamps.abandon(token);
+                return Err(ProfileError::Server(Box::new(error)));
+            }
+        };
+        self.ctx.timestamps.stop(stream, token)
+    }
+
+    fn abandon_profile(&mut self, _stream_id: StreamId, token: ProfilingToken) {
+        self.ctx.timestamps.abandon(token);
     }
 
     fn get_resource(
@@ -293,6 +338,11 @@ impl HipServer {
         }
     }
 
+    fn profiled_stream(&mut self, stream_id: StreamId) -> Result<ruda_hip_sys::hipStream_t, ServerError> {
+        let mut command = self.command_no_inputs(stream_id, StreamErrorMode { ignore: false, flush: true })?;
+        Ok(command.streams.current().sys)
+    }
+
     fn command_no_inputs(
         &mut self,
         stream_id: StreamId,
@@ -307,39 +357,9 @@ impl HipServer {
         handles: impl Iterator<Item = &'a Binding>,
         mode: StreamErrorMode,
     ) -> Result<Command<'_>, ServerError> {
-        if mode.flush {
-            let errors = self.flush_errors(stream_id);
-
-            if !mode.ignore && !errors.is_empty() {
-                return Err(ServerError::ServerUnhealthy {
-                    errors,
-                    backtrace: BackTrace::capture(),
-                });
-            }
-        }
         let streams = self.streams.resolve(stream_id, handles, !mode.ignore)?;
 
-        Ok(Command::new(&mut self.ctx, streams))
-    }
-
-    fn flush_errors(&mut self, stream_id: StreamId) -> Vec<ServerError> {
-        let mut stream = match self.streams.resolve(stream_id, [].into_iter(), false) {
-            Ok(stream) => stream,
-            Err(_) => return Vec::new(),
-        };
-        let errors = core::mem::take(&mut stream.current().errors);
-
-        // It is very important to tag current profiles as being wrong.
-        if !errors.is_empty() {
-            self.ctx.timestamps.error(ProfileError::Unknown {
-                reason: alloc::format!("{errors:?}"),
-                backtrace: BackTrace::capture(),
-            });
-            stream.current().memory_management_gpu.cleanup(false);
-        }
-
-        core::mem::drop(stream);
-        errors
+        Ok(Command::new(self.utilities.service, &mut self.ctx, streams))
     }
 
     fn launch_checked(
@@ -353,14 +373,20 @@ impl HipServer {
         let mut kernel_id = kernel.id();
         let logger = self.streams.logger.clone();
         kernel_id.mode(mode);
+        let mut execution = ruda::runtime::server::KernelExecution::new(kernel_id.clone(), &bindings, &count);
+        let result = (|| -> Result<(), ServerError> {
         let mut command = self.command(
             stream_id,
-            bindings.buffers.iter(),
+            bindings.buffers.iter().chain(bindings.tensor_maps.iter().map(|map| &map.binding))
+                .chain(match &count { RudaCount::Dynamic(binding) => Some(binding), _ => None }),
             StreamErrorMode {
                 ignore: true,
                 flush: false,
             },
         )?;
+        let io = command.prepare_kernel(&kernel_id, kernel, mode, logger)?;
+        execution.set_io(io.as_ref());
+        execution.check()?;
 
         let count = match count {
             RudaCount::Static(x, y, z) => (x, y, z),
@@ -373,8 +399,7 @@ impl HipServer {
                     [3].into(),
                     [1].into(),
                     4,
-                )]))
-                .unwrap();
+                )]))?;
                 let data = bytemuck::cast_slice(&data[0]);
                 assert!(
                     data.len() == 3,
@@ -383,33 +408,39 @@ impl HipServer {
                 (data[0], data[1], data[2])
             }
         };
+        if count.0 == 0 || count.1 == 0 || count.2 == 0 {
+            execution.skip();
+            return Ok(());
+        }
+        execution.enter();
 
         let KernelArguments {
             buffers,
             info,
             tensor_maps,
+            ..
         } = bindings;
 
         debug_assert!(tensor_maps.is_empty(), "Can't use tensor maps on HIP");
 
         let info = command
-            .create_with_data(bytemuck::cast_slice(&info.data))
-            .unwrap();
+            .create_with_data(bytemuck::cast_slice(&info.data))?;
 
         let mut resources: Vec<_> = buffers
             .into_iter()
-            .map(|b| command.resource(b).expect("Resource to exist."))
-            .collect();
+            .map(|b| command.resource(b))
+            .collect::<Result<_, _>>()?;
 
         resources.push(
             command
-                .resource(info.binding())
-                .expect("Resource to exist."),
+                .resource(info.binding())?,
         );
 
-        command.kernel(kernel_id, kernel, mode, count, &resources, logger)?;
+        command.kernel(kernel_id, count, &resources)?;
 
         Ok(())
+        })();
+        execution.finish(result)
     }
 
     pub(crate) fn utilities(&self) -> Arc<ServerUtilities<Self>> {

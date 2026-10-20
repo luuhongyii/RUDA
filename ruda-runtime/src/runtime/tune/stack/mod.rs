@@ -5,6 +5,10 @@
 //! declaring an exact workload signature and reference participate in the new path.
 #![forbid(unsafe_code)]
 mod cache;
+#[cfg(persistence)]
+mod environment;
+#[cfg(persistence)]
+mod record;
 mod engine;
 mod policy;
 mod runtime_adapter;
@@ -13,6 +17,8 @@ pub use cache::digest as workload_digest;
 pub use engine::*;
 pub use policy::*;
 pub use runtime_adapter::*;
+#[cfg(persistence)]
+pub use record::StackTuneRecord;
 
 #[cfg(test)]
 mod tests;

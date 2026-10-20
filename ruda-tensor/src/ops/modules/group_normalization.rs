@@ -42,8 +42,11 @@ pub fn group_norm_with_stats<B: Backend>(input: FloatTensor<B>, gamma: Option<Fl
     let compute = if input.dtype() == DType::F64 { FloatDType::F64 } else { FloatDType::F32 };
     if info.rows == 0 {
         let device = B::float_device(&input);
-        return LayerNormOutput { output: input, mean: B::float_zeros(Shape::new([0, groups]), &device, compute),
-            rstd: B::float_zeros(Shape::new([0, groups]), &device, compute) };
+        let context = gamma.iter().chain(beta.iter()).fold(B::float_autodiff_context(&input),
+            |context, value| context.merge(B::float_autodiff_context(value)));
+        return LayerNormOutput { output: B::float_with_autodiff_context(input, context),
+            mean: B::float_with_autodiff_context(B::float_zeros(Shape::new([0, groups]), &device, compute), context),
+            rstd: B::float_with_autodiff_context(B::float_zeros(Shape::new([0, groups]), &device, compute), context) };
     }
     let input = B::float_reshape(B::float_cast(input, compute), Shape::new([info.rows, info.width]));
     let mean = B::float_div_scalar(B::float_sum_dim(input.clone(), 1), (info.width as f64).into());
@@ -79,9 +82,12 @@ pub fn group_norm_backward_select<B: Backend>(input: FloatTensor<B>, gamma: Opti
     } else { FloatDType::F32 };
     if info.rows == 0 {
         let device = B::float_device(&input);
-        return [mask[0].then_some(input), mask[1].then(|| B::float_zeros(Shape::new([info.channels]), &device,
-            gamma.as_ref().expect("requested GroupNorm weight").dtype().into())),
-            mask[2].then(|| B::float_zeros(Shape::new([info.channels]), &device, compute))];
+        let context = [&input, &grad, &mean, &rstd].into_iter().chain(gamma.iter()).fold(crate::AutodiffContext::Disabled,
+            |context, value| context.merge(B::float_autodiff_context(value)));
+        return [mask[0].then(|| B::float_with_autodiff_context(input, context)),
+            mask[1].then(|| B::float_with_autodiff_context(B::float_zeros(Shape::new([info.channels]), &device,
+                gamma.as_ref().expect("requested GroupNorm weight").dtype().into()), context)),
+            mask[2].then(|| B::float_with_autodiff_context(B::float_zeros(Shape::new([info.channels]), &device, compute), context))];
     }
     let grad = B::float_reshape(B::float_cast(grad, compute), Shape::new([info.batch, info.channels, info.spatial]));
     let bias_grad = mask[2].then(|| B::float_reshape(B::float_sum_dim(B::float_sum_dim(grad.clone(), 0), 2), Shape::new([info.channels])));

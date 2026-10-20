@@ -14,6 +14,7 @@ pub struct Module<'a> {
     name: String,
     location: Location<'a>,
     context: &'a Context,
+    needs_parallelism: bool,
 }
 
 impl<'a> Module<'a> {
@@ -25,6 +26,7 @@ impl<'a> Module<'a> {
             context,
             name,
             location,
+            needs_parallelism: false,
         }
     }
 
@@ -35,7 +37,7 @@ impl<'a> Module<'a> {
         shared_memories: &SharedMemories,
         addr_type: StorageType,
     ) {
-        Visitor::visit_kernel(
+        self.needs_parallelism = Visitor::visit_kernel(
             self.context,
             self.location,
             kernel,
@@ -43,7 +45,11 @@ impl<'a> Module<'a> {
             opt,
             shared_memories,
             addr_type,
-        )
+        );
+    }
+
+    pub fn needs_parallelism(&self) -> bool {
+        self.needs_parallelism
     }
 
     pub fn run_pass(&mut self) {

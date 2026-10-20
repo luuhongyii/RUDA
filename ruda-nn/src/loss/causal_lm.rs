@@ -165,7 +165,7 @@ impl CausalCrossEntropyConfig {
         assert_eq!(labels.dims(), [tokens], "packed hidden and label lengths differ");
         assert_eq!(hidden.device(), labels.device(), "packed hidden and labels must share a device");
         let labels = if self.shift {
-            labels.clone().mask_fill(layout.document_starts::<B>(&labels.device()), self.ignore_index)
+            labels.clone().mask_fill(layout.document_starts::<B>(&labels.device()).with_autodiff_context(labels.autodiff_context()), self.ignore_index)
         } else { labels };
         self.try_forward_hidden_impl(hidden.reshape([1, tokens, width]), labels.reshape([1, tokens]), project, label_smoothing, native)
     }
@@ -329,11 +329,12 @@ impl CausalCrossEntropyConfig {
             sequence
         };
         let count = batch.checked_mul(length).expect("token count overflow");
+        let context = hidden.autodiff_context().merge(labels.autodiff_context());
         if count == 0 {
-            let mask = Tensor::<B, 3, Bool>::zeros(hidden.dims(), &hidden.device()).bool_not();
+            let mask = Tensor::<B, 3, Bool>::zeros(hidden.dims(), &hidden.device()).with_autodiff_context(context).bool_not();
             return Ok(CausalLoss {
                 loss_sum: hidden.cast(DType::F32).mask_fill(mask, 0).sum(),
-                valid_tokens: Tensor::zeros([1], (&labels.device(),DType::I64)),
+                valid_tokens: Tensor::zeros([1], (&labels.device(),DType::I64)).with_autodiff_context(context),
             });
         }
         let (hidden, labels) = if self.shift && sequence > 0 {
@@ -349,7 +350,7 @@ impl CausalCrossEntropyConfig {
         let ignored = labels.clone().equal_elem(self.ignore_index);
         let valid_tokens = ignored.clone().bool_not().int().cast(IntDType::I64).sum();
         let targets = labels.mask_fill(ignored.clone(), 0);
-        let mut loss_sum = Tensor::zeros([1], (&hidden.device(), DType::F32));
+        let mut loss_sum = Tensor::zeros([1], (&hidden.device(), DType::F32)).with_autodiff_context(context);
         for start in (0..count).step_by(self.token_chunk_size) {
             let end = start.saturating_add(self.token_chunk_size).min(count);
             let logits = project(hidden.clone().slice([start..end, 0..width]))?;

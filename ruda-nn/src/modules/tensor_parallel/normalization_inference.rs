@@ -8,25 +8,27 @@ fn prepare<B:Backend,C:BroadcastTensorCollective<B>>(layout:&VocabParallelLossLa
     floating(logits.dtype());assert_eq!(communicator.world_size() as usize,layout.world_size(),"native normalization topology/layout differ");
     let interval = layout.interval(communicator.rank() as usize);let [rows,width] = logits.dims();
     assert_eq!(width,interval.len(),"native normalization logits differ from actual rank class storage");
+    let mut context=logits.autodiff_context();
+    if let Some(visible)=&visible {context=context.merge(visible.autodiff_context());}
     let valid = if let Some(visible) = visible {
         assert_eq!(visible.dims(),[rows],"native normalization visibility differs from actual rows");
-        assert_eq!(visible.device(),logits.device(),"native normalization visibility must share the device");visible
-    } else {Tensor::<B,1,Bool>::zeros([rows],&logits.device()).bool_not()};
+        assert_eq!(visible.device(),logits.device(),"native normalization visibility must share the device");visible.with_autodiff_context(context)
+    } else {Tensor::<B,1,Bool>::zeros([rows],&logits.device()).with_autodiff_context(context).bool_not()};
     let dtype = work_dtype::<B,C>(logits.dtype() == DType::F64,&logits.device(),communicator)?;
     let logits = logits.cast(dtype);
-    let ids = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&logits.device(),DType::I64)).reshape([1,width]).expand([rows,width]);
-    let bound = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![layout.vocabulary_size() as i64],[1,1]),(&logits.device(),DType::I64)).expand([rows,width]);
+    let ids = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&logits.device(),DType::I64)).with_autodiff_context(context).reshape([1,width]).expand([rows,width]);
+    let bound = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![layout.vocabulary_size() as i64],[1,1]),(&logits.device(),DType::I64)).with_autodiff_context(context).expand([rows,width]);
     let real = ids.lower(bound);let selected = real.clone().bool_and(valid.clone().reshape([rows,1]).expand([rows,width]));
-    if rows == 0 {return Ok(Normalized {shifted:logits,denominator:Tensor::zeros([0,1],(&valid.device(),dtype)),selected,valid});}
+    if rows == 0 {return Ok(Normalized {shifted:logits.with_autodiff_context(context),denominator:Tensor::zeros([0,1],(&valid.device(),dtype)).with_autodiff_context(context),selected,valid});}
     let logits = logits.mask_fill(valid.clone().bool_not().reshape([rows,1]).expand([rows,width]),0).mask_fill(real.bool_not(),f64::NEG_INFINITY);
     let local = logits.clone().max_dim(1);
     let maximum = if communicator.world_size() == 1 {local} else {
         let gathered = communicator.all_gather_float(local.into_primitive().tensor())?;
-        Tensor::<B,2>::from_primitive(TensorPrimitive::Float(gathered)).reshape([layout.world_size(),rows]).max_dim(0).reshape([rows,1])
+        Tensor::<B,2>::from_primitive(TensorPrimitive::Float(gathered)).with_autodiff_context(context).reshape([layout.world_size(),rows]).max_dim(0).reshape([rows,1])
     };
     let shifted = logits-maximum;let denominator = shifted.clone().exp().sum_dim(1);
     let denominator = if communicator.world_size() == 1 {denominator} else {
-        Tensor::from_primitive(TensorPrimitive::Float(communicator.all_reduce_sum(denominator.into_primitive().tensor())?))
+        Tensor::from_primitive(TensorPrimitive::Float(communicator.all_reduce_sum(denominator.into_primitive().tensor())?)).with_autodiff_context(context)
     };
     Ok(Normalized {shifted,denominator,selected,valid})
 }

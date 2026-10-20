@@ -1,11 +1,10 @@
 use crate::memory::allocation::CpuAllocController;
 use crate::execution::{
-    queue::CpuExecutionQueue, schedule::ScheduleTask,
+    progress::CpuSequence, queue::CpuExecutionQueue, schedule::ScheduleTask,
 };
 use ruda_core::{bytes::Bytes, profile::ProfileDuration};
 use ruda_kernel::dsl::{
     MemoryConfiguration,
-    backtrace::BackTrace,
     ir::MemoryDeviceProperties,
     server::{
         Binding, CopyDescriptor, IoError, ProfileError, ProfilingToken, ServerError,
@@ -24,9 +23,9 @@ use std::sync::Arc;
 
 pub struct CpuStream {
     queue: CpuExecutionQueue,
+    sequence: CpuSequence,
     pub(crate) memory_management: MemoryManagement<BytesStorage>,
     pub(crate) timestamps: TimestampProfiler,
-    errors: Vec<ServerError>,
 }
 
 impl core::fmt::Debug for CpuStream {
@@ -60,63 +59,28 @@ impl CpuStream {
             memory_management,
             timestamps: TimestampProfiler::default(),
             queue,
-            errors: Vec::new(),
+            sequence: CpuSequence::default(),
         }
     }
 
     pub fn enqueue_task(&mut self, task: ScheduleTask) {
-        self.queue.add(task);
+        if let Err(error) = self.queue.add_to_stream(task, &mut self.sequence) { self.error(error); }
     }
 
-    pub fn flush(&mut self, mode: StreamErrorMode) -> Result<(), ServerError> {
-        self.queue.flush();
-
-        self.flush_errors(mode)
-    }
-
-    fn flush_errors(&mut self, mode: StreamErrorMode) -> Result<(), ServerError> {
-        if mode.flush {
-            let errors = self.flush_errors_queue();
-
-            if !mode.ignore && !errors.is_empty() {
-                let error = ServerError::ServerUnhealthy {
-                    errors,
-                    backtrace: BackTrace::capture(),
-                };
-                return Err(error);
-            }
-        } else if !mode.ignore && !self.errors.is_empty() {
-            let error = ServerError::ServerUnhealthy {
-                errors: self.errors.clone(),
-                backtrace: BackTrace::capture(),
-            };
-            return Err(error);
-        }
-
+    pub fn flush(&mut self, _mode: StreamErrorMode) -> Result<(), ServerError> {
+        self.sequence.wait();
+        self.queue.reclaim_completed();
         Ok(())
-    }
-
-    pub(crate) fn flush_errors_queue(&mut self) -> Vec<ServerError> {
-        let errors = core::mem::take(&mut self.errors);
-
-        if !errors.is_empty() {
-            self.timestamps.error(ProfileError::Unknown {
-                reason: alloc::format!("{:?}", errors),
-                backtrace: BackTrace::capture(),
-            });
-        }
-
-        errors
     }
 
     /// Returns whether the stream can accept new tasks.
     pub fn is_healthy(&self) -> bool {
-        self.errors.is_empty()
+        true
     }
 
-    /// Registers a new error into the error sink.
+    /// Invalidate active measurements without poisoning unrelated stream work.
     pub fn error(&mut self, error: ServerError) {
-        self.errors.push(error);
+        self.timestamps.error(ProfileError::Server(Box::new(error.clone())));
     }
 
     /// Allocates a new empty buffer using the main memory pool.

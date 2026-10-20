@@ -2,43 +2,9 @@ use ruda_kernel::dsl::server::ExecutionMode;
 
 use crate::memory::arguments::MlirData;
 use crate::execution::jit::MlirEngine;
-use std::sync::{
-    atomic::{AtomicI32, Ordering},
-    mpsc,
-};
+use std::sync::mpsc;
 
-pub static BARRIER_COUNTER: AtomicI32 = AtomicI32::new(0);
-pub static STOPPED_COUNTER: AtomicI32 = AtomicI32::new(0);
-pub static BARRIER_TARGET: AtomicI32 = AtomicI32::new(0);
-pub static CURRENT_RUDA_DIM: AtomicI32 = AtomicI32::new(-1);
-
-pub fn sync_ruda() {
-    let barrier_target = BARRIER_TARGET.load(Ordering::Acquire);
-    if barrier_target <= 1 {
-        return;
-    }
-
-    while STOPPED_COUNTER.load(Ordering::Acquire) != 0 {
-        std::hint::spin_loop();
-    }
-
-    std::sync::atomic::fence(Ordering::Release);
-    let arrived = BARRIER_COUNTER.fetch_add(1, Ordering::AcqRel) + 1;
-
-    if arrived < barrier_target {
-        while BARRIER_COUNTER.load(Ordering::Acquire) < barrier_target {
-            std::hint::spin_loop();
-        }
-    }
-
-    std::sync::atomic::fence(Ordering::Acquire);
-
-    let stopped = STOPPED_COUNTER.fetch_add(1, Ordering::AcqRel) + 1;
-    if stopped == barrier_target {
-        BARRIER_COUNTER.store(0, Ordering::Release);
-        STOPPED_COUNTER.store(0, Ordering::Release);
-    }
-}
+pub use super::barrier::sync_ruda;
 
 pub enum Message {
     ComputeTask(ComputeTask),
@@ -59,6 +25,5 @@ impl ComputeTask {
         unsafe {
             self.mlir_engine.run_kernel(&mut self.mlir_data);
         }
-        CURRENT_RUDA_DIM.fetch_sub(1, Ordering::AcqRel);
     }
 }

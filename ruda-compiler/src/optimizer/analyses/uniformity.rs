@@ -25,6 +25,15 @@ impl Analysis for Uniformity {
 
 impl Uniformity {
     fn run(&mut self, opt: &Optimizer) {
+        for parameter in &opt.root_scope.parameters {
+            self.variable_uniformity.insert(*parameter, false);
+            if let VariableKind::LocalMut { id } | VariableKind::LocalConst { id } = parameter.kind {
+                self.variable_uniformity.insert(
+                    Variable::new(VariableKind::Versioned { id, version: 0 }, parameter.ty),
+                    false,
+                );
+            }
+        }
         let root = opt.entry();
         self.block_uniformity.insert(root, true);
         while self.analyze_block(opt, root).is_none() {}
@@ -49,6 +58,9 @@ impl Uniformity {
             }
             let out = inst.out.unwrap();
             match &inst.operation {
+                Operation::Operator(ruda_core::ir::Operator::WorkgroupUniformLoad(_)) => {
+                    self.mark_uniformity(out, block_uniform)?;
+                }
                 Operation::Plane(plane) => match plane {
                     // Elect returns true on only one unit, so it's always non-uniform
                     // Inclusive/exclusive scans are non-uniform by definition
@@ -159,7 +171,7 @@ impl Uniformity {
                 self.block_uniformity
                     .insert(*merge, is_uniform && block_uniform);
             }
-            ControlFlow::Return | ControlFlow::Unreachable => {}
+            ControlFlow::Return | ControlFlow::ReturnValue(_) | ControlFlow::Unreachable => {}
             ControlFlow::None => {
                 let successor = opt.successors(block_id)[0];
                 self.block_uniformity

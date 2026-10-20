@@ -28,7 +28,7 @@ mod layout {
         fn strides(&self) -> &[usize];
     }
 
-    impl<R: Runtime> BufferArg for TensorArg<R> {
+    impl<R: LaunchMarker> BufferArg for TensorArg<R> {
         fn len(&self) -> usize {
             self.size()
         }
@@ -41,7 +41,7 @@ mod layout {
             self.strides()
         }
     }
-    impl<R: Runtime> BufferArg for ArrayArg<R> {
+    impl<R: LaunchMarker> BufferArg for ArrayArg<R> {
         fn len(&self) -> usize {
             self.size()
         }
@@ -54,7 +54,7 @@ mod layout {
             &[1]
         }
     }
-    impl<R: Runtime, K: TensorMapKind> BufferArg for TensorMapArg<R, K> {
+    impl<R: LaunchMarker, K: TensorMapKind> BufferArg for TensorMapArg<R, K> {
         fn len(&self) -> usize {
             self.tensor.size()
         }
@@ -87,11 +87,11 @@ mod layout {
     /// this trait.
     pub trait ViewLayoutLaunchArg: RudaType + Send + Sync + 'static {
         /// The runtime argument for the kernel.
-        type RuntimeArg<R: Runtime>: Send + Sync;
+        type RuntimeArg<R: LaunchMarker>: Send + Sync;
         /// Compilation argument.
         type CompilationArg: CompilationArg;
 
-        fn register<R: Runtime, B: BufferArg>(
+        fn register<R: LaunchMarker, B: BufferArg>(
             arg: Self::RuntimeArg<R>,
             buffer: &B,
             ty: Type,
@@ -116,10 +116,10 @@ mod layout {
     }
 
     impl<T: LaunchArg> ViewLayoutLaunchArg for T {
-        type RuntimeArg<R: Runtime> = <T as LaunchArg>::RuntimeArg<R>;
+        type RuntimeArg<R: LaunchMarker> = <T as LaunchArg>::RuntimeArg<R>;
         type CompilationArg = <T as LaunchArg>::CompilationArg;
 
-        fn register<R: Runtime, B: BufferArg>(
+        fn register<R: LaunchMarker, B: BufferArg>(
             arg: Self::RuntimeArg<R>,
             _buffer: &B,
             _ty: Type,
@@ -145,7 +145,7 @@ mod layout {
         }
     }
 
-    pub struct VirtualViewLayoutLaunch<C: Coordinates, S: Coordinates, B: BufferArg, R: Runtime> {
+    pub struct VirtualViewLayoutLaunch<C: Coordinates, S: Coordinates, B: BufferArg, R: LaunchMarker> {
         _ty: core::marker::PhantomData<R>,
         #[allow(clippy::type_complexity)]
         register: Box<
@@ -155,7 +155,7 @@ mod layout {
         >,
     }
 
-    impl<C: Coordinates, S: Coordinates, B: BufferArg, R: Runtime> VirtualViewLayoutLaunch<C, S, B, R> {
+    impl<C: Coordinates, S: Coordinates, B: BufferArg, R: LaunchMarker> VirtualViewLayoutLaunch<C, S, B, R> {
         pub fn new<L: Layout<Coordinates = C, SourceCoordinates = S> + ViewLayoutLaunchArg>(
             layout: L::RuntimeArg<R>,
         ) -> Self {
@@ -294,13 +294,13 @@ mod layout {
         }
     }
 
-    pub struct ConcreteLayoutLaunch<L: Layout + ViewLayoutLaunchArg, R: Runtime> {
+    pub struct ConcreteLayoutLaunch<L: Layout + ViewLayoutLaunchArg, R: LaunchMarker> {
         meta: Metadata,
         ty: Type,
         value: L::RuntimeArg<R>,
     }
 
-    impl<L: Layout + ViewLayoutLaunchArg, R: Runtime> ConcreteLayoutLaunch<L, R> {
+    impl<L: Layout + ViewLayoutLaunchArg, R: LaunchMarker> ConcreteLayoutLaunch<L, R> {
         pub fn new(meta: Metadata, ty: Type, value: L::RuntimeArg<R>) -> Self {
             Self { meta, ty, value }
         }
@@ -368,10 +368,10 @@ mod layout {
     }
 
     impl<L: Layout + ViewLayoutLaunchArg> LaunchArg for ConcreteLayout<L> {
-        type RuntimeArg<R: Runtime> = ConcreteLayoutLaunch<L, R>;
+        type RuntimeArg<R: LaunchMarker> = ConcreteLayoutLaunch<L, R>;
         type CompilationArg = ConcreteLayoutCompilationArg<L>;
 
-        fn register<R: Runtime>(
+        fn register<R: LaunchMarker>(
             arg: Self::RuntimeArg<R>,
             launcher: &mut KernelLauncher<R>,
         ) -> Self::CompilationArg {
@@ -421,7 +421,7 @@ mod dynamic {
     use super::*;
 
     #[allow(clippy::type_complexity)]
-    pub enum ViewArg<C: Coordinates, R: Runtime> {
+    pub enum ViewArg<C: Coordinates, R: LaunchMarker> {
         Array(
             ArrayArg<R>,
             VirtualViewLayoutLaunch<C, Coords1d, ArrayArg<R>, R>,
@@ -445,7 +445,7 @@ mod dynamic {
         },
     }
 
-    impl<C: Coordinates, R: Runtime> ViewArg<C, R> {
+    impl<C: Coordinates, R: LaunchMarker> ViewArg<C, R> {
         pub fn new_array<
             L: Layout<Coordinates = C, SourceCoordinates = Coords1d> + ViewLayoutLaunchArg,
         >(
@@ -620,10 +620,10 @@ mod dynamic {
     }
 
     impl<E: RudaPrimitive, C: Coordinates + 'static, IO: SliceVisibility> LaunchArg for View<E, C, IO> {
-        type RuntimeArg<R: Runtime> = ViewArg<C, R>;
+        type RuntimeArg<R: LaunchMarker> = ViewArg<C, R>;
         type CompilationArg = ViewCompilationArg<C>;
 
-        fn register<R: Runtime>(
+        fn register<R: LaunchMarker>(
             arg: Self::RuntimeArg<R>,
             launcher: &mut KernelLauncher<R>,
         ) -> Self::CompilationArg {

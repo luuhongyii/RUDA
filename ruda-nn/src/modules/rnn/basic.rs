@@ -145,6 +145,8 @@ impl<B: Backend> Rnn<B> {
         };
 
         let device = batched_input.device();
+        let mut context = batched_input.autodiff_context();
+        if let Some(state) = &state { context = context.merge(state.hidden.autodiff_context()); }
         let [batch_size, seq_length, _] = batched_input.dims();
 
         // Process sequence in forward or reverse order based on config
@@ -155,6 +157,7 @@ impl<B: Backend> Rnn<B> {
                 batch_size,
                 seq_length,
                 &device,
+                context,
             )
         } else {
             self.forward_iter(
@@ -163,6 +166,7 @@ impl<B: Backend> Rnn<B> {
                 batch_size,
                 seq_length,
                 &device,
+                context,
             )
         };
 
@@ -183,13 +187,14 @@ impl<B: Backend> Rnn<B> {
         batch_size: usize,
         seq_length: usize,
         device: &B::Device,
+        context: ruda_model::tensor::AutodiffContext,
     ) -> (Tensor<B, 3>, RnnState<B, 2>) {
         let mut batched_hidden_state =
-            Tensor::empty([batch_size, seq_length, self.d_hidden], device);
+            Tensor::empty([batch_size, seq_length, self.d_hidden], device).with_autodiff_context(context);
 
         let mut hidden_state = match state {
             Some(state) => state.hidden,
-            None => Tensor::zeros([batch_size, self.d_hidden], device),
+            None => Tensor::zeros([batch_size, self.d_hidden], device).with_autodiff_context(context),
         };
 
         for (input_t, t) in input_timestep_iter {
@@ -331,6 +336,8 @@ impl<B: Backend> BiRnn<B> {
         };
 
         let device = batched_input.clone().device();
+        let mut context = batched_input.autodiff_context();
+        if let Some(state) = &state { context = context.merge(state.hidden.autodiff_context()); }
         let [batch_size, seq_length, _] = batched_input.shape().dims();
 
         let [init_state_forward, init_state_reverse] = match state {
@@ -365,6 +372,7 @@ impl<B: Backend> BiRnn<B> {
             batch_size,
             seq_length,
             &device,
+            context,
         );
 
         let output = Tensor::cat(

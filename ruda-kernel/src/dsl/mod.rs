@@ -58,7 +58,7 @@ pub use id::*;
 // Private utils for macros
 #[doc(hidden)]
 pub mod __private {
-    pub use alloc::{format, vec};
+    pub use alloc::{format, sync::Arc, vec};
     pub use paste::paste;
 }
 
@@ -222,7 +222,7 @@ pub fn try_tensor_vector_sizes_perpendicular(
 }
 
 /// Runtime arguments to launch a kernel.
-pub type RuntimeArg<T, R> = <T as LaunchArg>::RuntimeArg<R>;
+pub type RuntimeArg<T, R = ()> = <T as LaunchArg>::RuntimeArg<R>;
 pub type ExpandType<T> = <T as crate::dsl::prelude::RudaType>::ExpandType;
 
 #[cfg(feature = "frontend-tests")]

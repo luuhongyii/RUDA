@@ -7,11 +7,12 @@ use super::codegen::RecordItemCodegen;
 
 pub(crate) struct FullEnumRecordItemCodegen {
     name: Ident,
+    container: String,
     variants: Vec<syn::Variant>,
     vis: Visibility,
 }
 
-pub(super) fn contains_self(ty: &Type, name: &Ident) -> bool {
+pub(crate) fn contains_self(ty: &Type, name: &Ident) -> bool {
     match ty {
         Type::Array(ty) => contains_self(&ty.elem, name),
         Type::Slice(ty) => contains_self(&ty.elem, name),
@@ -51,6 +52,39 @@ pub(crate) fn derive_full_enum(ast: &syn::DeriveInput, paths: &DerivePaths) -> T
 }
 
 impl RecordItemCodegen for FullEnumRecordItemCodegen {
+    fn gen_map_parameters(&self, paths: &DerivePaths) -> TokenStream {
+        let model = &paths.model;
+        let arms = self.variants.iter().map(|variant| {
+            let name = &variant.ident;
+            let variant_name = name.to_string();
+            let container = &self.container;
+            let (pattern, output) = map_enum_variant(variant, |binding| {
+                let mapped = quote!(#model::record::Record::<B>::map_parameters(#binding, mapper));
+                match &variant.fields {
+                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => mapped,
+                    fields => {
+                        let name = binding.to_string();
+                        let name = if matches!(fields, Fields::Unnamed(_)) {
+                            name.strip_prefix("arg_").unwrap()
+                        } else { &name };
+                        super::map_field(quote!(#binding), name, container, paths)
+                    }
+                }
+            });
+            quote!(Self::#name #pattern => {
+                mapper.enter_module(#variant_name, #container);
+                let value = Self::#name #output;
+                mapper.exit_module(#variant_name, #container);
+                value
+            },)
+        });
+        quote! {
+            fn map_parameters<__RudaRecordMapper: #model::module::ModuleMapper<B>>(self, mapper: &mut __RudaRecordMapper) -> Self {
+                match self { #(#arms)* }
+            }
+        }
+    }
+
     fn item_has_payload(&self) -> bool {
         self.variants.iter().any(|variant| !variant.fields.is_empty())
     }
@@ -64,7 +98,8 @@ impl RecordItemCodegen for FullEnumRecordItemCodegen {
                 return Err(syn::Error::new_spanned(variant, "Module attributes are not supported for enum variants."));
             }
         }
-        Ok(Self { name: ast.ident.clone(), variants: data.variants.iter().cloned().collect(), vis: ast.vis.clone() })
+        Ok(Self { name: ast.ident.clone(), container: super::container_type(ast, "Enum")?,
+            variants: data.variants.iter().cloned().collect(), vis: ast.vis.clone() })
     }
 
     fn gen_item_type(&self, item_name: &Ident, generics: &Generics, has_backend: bool,

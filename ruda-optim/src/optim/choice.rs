@@ -26,6 +26,22 @@ pub enum OptimizerChoiceState<L,R> {
 }
 
 impl<B:Backend,L:Record<B>,R:Record<B>> Record<B> for OptimizerChoiceState<L,R> {
+    fn map_parameters<M: ruda_model::module::ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        match self {
+            Self::Left(state) => {
+                mapper.enter_module("Left", "Enum:OptimizerChoiceState");
+                let state = state.map_parameters(mapper);
+                mapper.exit_module("Left", "Enum:OptimizerChoiceState");
+                Self::Left(state)
+            }
+            Self::Right(state) => {
+                mapper.enter_module("Right", "Enum:OptimizerChoiceState");
+                let state = state.map_parameters(mapper);
+                mapper.exit_module("Right", "Enum:OptimizerChoiceState");
+                Self::Right(state)
+            }
+        }
+    }
     type Item<P:PrecisionSettings>=OptimizerChoiceState<L::Item<P>,R::Item<P>>;
     fn into_item<P:PrecisionSettings>(self) -> Self::Item<P> {
         match self {Self::Left(state)=>OptimizerChoiceState::Left(state.into_item::<P>()),

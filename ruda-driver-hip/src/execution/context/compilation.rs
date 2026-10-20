@@ -9,6 +9,17 @@ impl HipContext {
         mode: ExecutionMode,
         logger: Arc<ServerLogger>,
     ) -> Result<(), LaunchError> {
+        self.refresh_compilation_environment();
+        let mut recording = CompilationRecording::new(kernel_id);
+        if let Some(entry) = self.artifacts.get(kernel_id) {
+            self.load_compiled_binary(
+                entry.binary, kernel_id.clone(), entry.entrypoint_name,
+                kernel_id.ruda_dim, entry.shared_mem_bytes,
+                entry.io,
+            )?;
+            recording.loaded();
+            return Ok(());
+        }
         let hash = if let Some(cache) = self.compilation_cache.as_ref() {
             let hash = kernel_id.stable_hash();
             if let Some(entry) = cache.get(&hash) {
@@ -19,6 +30,7 @@ impl HipContext {
                     entry.entrypoint_name.clone(),
                     kernel_id.ruda_dim,
                     entry.shared_mem_bytes,
+                    entry.io.clone(),
                 )?;
                 return Ok(());
             }
@@ -32,11 +44,12 @@ impl HipContext {
 
         // Ruda compilation
         // jitc = just-in-time compiled
-        let mut jitc_kernel = ruda_kernel.compile(
+        let mut jitc_kernel = ruda_kernel.compile_recorded(
             &mut Default::default(),
             &self.compilation_options,
             mode,
             ruda_kernel.address_type(),
+            &mut recording,
         )?;
 
         self.validate_shared(&jitc_kernel.repr)?;
@@ -49,6 +62,16 @@ impl HipContext {
             }
         }
         logger.log_compilation(&jitc_kernel);
+        recording.source(&jitc_kernel.source);
+        if let Some((entry, stored)) = self.artifacts.rekey(kernel_id, &jitc_kernel.source) {
+            self.load_compiled_binary(
+                entry.binary, kernel_id.clone(), entry.entrypoint_name,
+                jitc_kernel.ruda_dim, entry.shared_mem_bytes,
+                jitc_kernel.io.clone(),
+            )?;
+            recording.rekeyed(stored);
+            return Ok(());
+        }
 
         // Create HIP Program
         // SAFETY: Calling HIP RTC FFI to create a program from source. The `CString` ensures
@@ -171,15 +194,24 @@ impl HipContext {
             }
         }
 
-        let repr = jitc_kernel.repr.unwrap();
+        let shared_mem_bytes = jitc_kernel.repr.as_ref().map_or(0, |repr| repr.shared_memory_size());
+        let stored = self.artifacts.enabled() && self.artifacts.insert(
+            kernel_id, &jitc_kernel.source, CompilationCacheEntry {
+                io: jitc_kernel.io.clone(),
+                entrypoint_name: jitc_kernel.entrypoint_name.clone(),
+                shared_mem_bytes,
+                binary: code.clone(),
+            },
+        );
 
         if let Some(cache) = self.compilation_cache.as_mut() {
             cache
                 .insert(
                     hash.unwrap(),
                     CompilationCacheEntry {
+                        io: jitc_kernel.io.clone(),
                         entrypoint_name: jitc_kernel.entrypoint_name.clone(),
-                        shared_mem_bytes: repr.shared_memory_size(),
+                        shared_mem_bytes,
                         binary: code.clone(),
                     },
                 )
@@ -191,8 +223,10 @@ impl HipContext {
             kernel_id.clone(),
             jitc_kernel.entrypoint_name,
             jitc_kernel.ruda_dim,
-            repr.shared_memory_size(),
+            shared_mem_bytes,
+            jitc_kernel.io,
         )?;
+        recording.compiled(stored);
         Ok(())
     }
 
@@ -203,6 +237,7 @@ impl HipContext {
         entrypoint_name: String,
         ruda_dim: RudaDim,
         shared_mem_bytes: usize,
+        io: Option<ruda_core::kernel::KernelIo>,
     ) -> Result<(), CompilationError> {
         let func_name = CString::new(entrypoint_name.clone()).unwrap();
 
@@ -214,10 +249,7 @@ impl HipContext {
             let codeptr = code.as_ptr();
             let status = ruda_hip_sys::hipModuleLoadData(&mut module, codeptr as *const _);
             if status != hiprtcResult_HIPRTC_SUCCESS {
-                return Err(CompilationError::Generic {
-                    reason: format!("Unable to load the compiled module. STATUS: {status}"),
-                    backtrace: BackTrace::capture(),
-                });
+                return Err(crate::execution::status::compilation("hipModuleLoadData", status));
             }
         }
         // Retrieve the HIP module function
@@ -228,12 +260,9 @@ impl HipContext {
             let status =
                 ruda_hip_sys::hipModuleGetFunction(&mut func, module, func_name.as_ptr());
             if status != hiprtcResult_HIPRTC_SUCCESS {
-                return Err(CompilationError::Generic {
-                    reason: format!(
-                        "Unable to load the function in the compiled module. STATUS: {status}"
-                    ),
-                    backtrace: BackTrace::capture(),
-                });
+                let error = crate::execution::status::compilation("hipModuleGetFunction", status);
+                let _ = ruda_hip_sys::hipModuleUnload(module);
+                return Err(error);
             }
         }
 
@@ -241,6 +270,7 @@ impl HipContext {
         self.module_names.insert(
             kernel_id.clone(),
             HipCompiledKernel {
+                io,
                 _module: module,
                 func,
                 ruda_dim,

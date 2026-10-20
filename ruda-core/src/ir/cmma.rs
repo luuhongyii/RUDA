@@ -1,5 +1,4 @@
-use alloc::{format, string::String, vec, vec::Vec};
-use derive_new::new;
+use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
 
 use super::Variable;
 use crate::ir::{OperationCode, OperationReflect};
@@ -24,8 +23,47 @@ pub enum MatrixLayout {
     Undefined,
 }
 
+/// Invocations that collectively own and operate on a matrix.
 #[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(new, Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Default, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MatrixScope {
+    /// One subgroup.
+    #[default]
+    Plane,
+    /// All invocations in the workgroup.
+    Ruda,
+}
+
+/// Addressing behavior outside the dimensions of a tensor layout.
+#[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TensorClampMode {
+    Undefined,
+    Constant(u32),
+    ClampToEdge,
+    Repeat,
+    RepeatMirrored,
+}
+
+/// Compile-time tensor layout type. Dimensions and strides are runtime values.
+#[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TensorLayoutType {
+    pub rank: u32,
+    pub clamp_mode: TensorClampMode,
+}
+
+/// A permutation view over a tensor layout, without independent dimensions.
+#[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TensorViewType {
+    pub rank: u32,
+    /// Only the first `rank` entries are used.
+    pub permutation: [u32; 5],
+}
+
+#[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[allow(missing_docs)]
 pub struct Matrix {
     pub ident: MatrixIdent,
@@ -34,9 +72,29 @@ pub struct Matrix {
     pub k: usize,
     pub storage: StorageType,
     pub layout: MatrixLayout,
+    #[cfg_attr(feature = "ir-serde", serde(default))]
+    pub scope: MatrixScope,
 }
 
 impl Matrix {
+    /// Create a subgroup matrix descriptor.
+    pub fn new(
+        ident: MatrixIdent,
+        m: usize,
+        n: usize,
+        k: usize,
+        storage: StorageType,
+        layout: MatrixLayout,
+    ) -> Self {
+        Self { ident, m, n, k, storage, layout, scope: MatrixScope::Plane }
+    }
+
+    /// Set the collective scope without changing the matrix shape or element type.
+    pub fn with_scope(mut self, scope: MatrixScope) -> Self {
+        self.scope = scope;
+        self
+    }
+
     /// Number of elements in terms of the physical storage type, accounting for packed elements
     pub fn num_elems(&self) -> usize {
         let elems = match self.ident {
@@ -80,6 +138,40 @@ pub enum CoopMma {
     },
     /// Cast a fragment to another type.
     Cast { input: Variable },
+    /// Invoke a scalar closure for every (row, column, component) of a fragment.
+    Elementwise {
+        input: Variable,
+        function: Box<super::ScalarFunction>,
+        captures: Vec<Variable>,
+    },
+
+    /// Create a tensor layout with contiguous or explicit element strides.
+    CreateTensorLayout {
+        shape: Vec<Variable>,
+        strides: Option<Vec<Variable>>,
+    },
+    /// Create the permutation view specified by the output type.
+    CreateTensorView,
+    /// Add offsets to a layout and replace its spans, leaving its strides intact.
+    SliceTensorLayout {
+        layout: Variable,
+        offsets: Vec<Variable>,
+        shape: Vec<Variable>,
+    },
+    /// Load a matrix using tensor addressing.
+    LoadTensor {
+        buffer: Variable,
+        offset: Variable,
+        layout: Variable,
+        view: Option<Variable>,
+    },
+    /// Store a matrix using tensor addressing into the output buffer.
+    StoreTensor {
+        mat: Variable,
+        offset: Variable,
+        layout: Variable,
+        view: Option<Variable>,
+    },
 
     /// Row index of nth element in the lane
     RowIndex {
@@ -146,7 +238,13 @@ impl OperationReflect for CoopMma {
             | CoopMma::RowIndex { .. }
             | CoopMma::ColIndex { .. }
             | CoopMma::LoadMatrix { .. }
-            | CoopMma::StoreMatrix { .. } => None,
+            | CoopMma::StoreMatrix { .. }
+            | CoopMma::CreateTensorLayout { .. }
+            | CoopMma::CreateTensorView
+            | CoopMma::SliceTensorLayout { .. }
+            | CoopMma::LoadTensor { .. }
+            | CoopMma::StoreTensor { .. } => None,
+            CoopMma::Elementwise { .. } => None,
             CoopMma::Cast { input } => Some(vec![*input]),
         }
     }
@@ -162,7 +260,13 @@ impl OperationReflect for CoopMma {
             | CmmaOpCode::RowIndex
             | CmmaOpCode::ColIndex
             | CmmaOpCode::LoadMatrix
-            | CmmaOpCode::StoreMatrix => None,
+            | CmmaOpCode::StoreMatrix
+            | CmmaOpCode::CreateTensorLayout
+            | CmmaOpCode::CreateTensorView
+            | CmmaOpCode::SliceTensorLayout
+            | CmmaOpCode::LoadTensor
+            | CmmaOpCode::StoreTensor => None,
+            CmmaOpCode::Elementwise => None,
             CmmaOpCode::Cast => Some(CoopMma::Cast { input: args[0] }),
         }
     }
@@ -239,6 +343,22 @@ impl Display for CoopMma {
             ),
             CoopMma::Cast { input } => {
                 write!(f, "matrix_cast(input: {input})")
+            }
+            CoopMma::Elementwise { input, captures, .. } => {
+                write!(f, "matrix_elementwise({input}, captures: {captures:?})")
+            }
+            CoopMma::CreateTensorLayout { shape, strides } => {
+                write!(f, "tensor_layout(shape: {shape:?}, strides: {strides:?})")
+            }
+            CoopMma::CreateTensorView => f.write_str("tensor_view()"),
+            CoopMma::SliceTensorLayout { layout, offsets, shape } => {
+                write!(f, "tensor_slice({layout}, offsets: {offsets:?}, shape: {shape:?})")
+            }
+            CoopMma::LoadTensor { buffer, offset, layout, view } => {
+                write!(f, "matrix_load_tensor({buffer}, offset: {offset}, layout: {layout}, view: {view:?})")
+            }
+            CoopMma::StoreTensor { mat, offset, layout, view } => {
+                write!(f, "matrix_store_tensor({mat}, offset: {offset}, layout: {layout}, view: {view:?})")
             }
             CoopMma::RowIndex { lane_id, i, matrix } => {
                 write!(f, "row_idx(lane_id: {lane_id}, i: {i}, matrix: {matrix:?})",)

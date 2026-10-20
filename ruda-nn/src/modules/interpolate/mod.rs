@@ -44,12 +44,16 @@ pub enum InterpolateMode {
     /// the output value. It generally provides high-quality results,
     /// especially for downsampling.
     Lanczos,
+
+    /// Nearest-neighbor interpolation using half-pixel centers.
+    NearestExact,
 }
 
 impl From<InterpolateMode> for OpsInterpolateMode {
     fn from(mode: InterpolateMode) -> Self {
         match mode {
             InterpolateMode::Nearest => OpsInterpolateMode::Nearest,
+            InterpolateMode::NearestExact => OpsInterpolateMode::NearestExact,
             InterpolateMode::Linear => OpsInterpolateMode::Bilinear,
             InterpolateMode::Cubic => OpsInterpolateMode::Bicubic,
             InterpolateMode::Lanczos => OpsInterpolateMode::Lanczos3,

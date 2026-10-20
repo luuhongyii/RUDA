@@ -117,6 +117,7 @@ macro_rules! execute_sharded_hybrid {
                 assert_eq!(tokens.device(), self.embedding.weight.local.val().device(), "sharded hybrid token device differs");
                 let hidden = self.embedding.$lookup(tokens, communicator.clone())?;
                 let valid = mhc_visible(&hidden, valid);
+                let context = hidden.autodiff_context().merge(valid.autodiff_context());
                 let storage = hidden.dtype();
                 let device = hidden.device();
                 let compute = if storage == DType::F64 { DType::F64 } else { DType::F32 };
@@ -130,7 +131,7 @@ macro_rules! execute_sharded_hybrid {
                 }
                 let norm = Param::initialized(self.final_norm.local.id, self.final_norm.$gather::<C, 1>(communicator)?);
                 Ok(CompressedAttentionOutput { output: normalize_mhc(self.layers.last().unwrap().ffn_connection.reduce(state), &norm, self.epsilon),
-                    indexer_loss: if auxiliary { Tensor::cat(losses, 0).sum() } else { Tensor::zeros([1], (&device, compute)) } })
+                    indexer_loss: if auxiliary { Tensor::cat(losses, 0).sum() } else { Tensor::zeros([1], (&device, compute)).with_autodiff_context(context) } })
             }
             pub fn $packed<C: IntegerTensorCollective<B>>(&self, tokens: Tensor<$backend, 1, Int>, layout: &PackedSequenceLayout,
                 valid: Option<Tensor<$backend, 1, Bool>>, communicator: C) -> Result<Tensor<$backend, 2>, C::Error> {
@@ -148,8 +149,10 @@ macro_rules! execute_sharded_hybrid {
                 assert_eq!(tokens.device(), self.embedding.weight.local.val().device(), "sharded hybrid packed token device differs");
                 let weight = self.embedding.weight.$gather::<C, 2>(communicator.clone())?;
                 let width = weight.dims()[1]; let device = weight.device(); let storage = weight.dtype();
-                let hidden = if count == 0 { Tensor::zeros([1, 0, width], (&device, storage)) } else { embedding(weight, tokens.reshape([1, count])) };
+                let context = weight.autodiff_context().merge(tokens.autodiff_context());
+                let hidden = if count == 0 { Tensor::zeros([1, 0, width], (&device, storage)).with_autodiff_context(context) } else { embedding(weight, tokens.reshape([1, count])) };
                 let valid = mhc_visible(&hidden, valid.map(|value| value.reshape([1, count])));
+                let context = context.merge(valid.autodiff_context());
                 let hidden = hidden * valid.clone().cast::<FloatDType>(storage.into()).reshape([1, count, 1]);
                 let compute = if storage == DType::F64 { DType::F64 } else { DType::F32 };
                 let streams = self.layers[0].attention_connection.streams;
@@ -172,9 +175,9 @@ macro_rules! execute_sharded_hybrid {
                 assert_eq!(state.dims(), [1, count, streams, width], "sharded hybrid packed residual geometry differs");
                 let norm = Param::initialized(self.final_norm.local.id, self.final_norm.$gather::<C, 1>(communicator)?);
                 let output = if count == 0 { state.sum_dim(2).squeeze_dim(2) } else { self.layers.last().unwrap().ffn_connection.reduce(state) };
-                let losses = document_losses.into_iter().map(|losses| if losses.is_empty() { Tensor::zeros([1], (&device, compute)) } else { Tensor::cat(losses, 0).sum() }).collect::<Vec<_>>();
+                let losses = document_losses.into_iter().map(|losses| if losses.is_empty() { Tensor::zeros([1], (&device, compute)).with_autodiff_context(context) } else { Tensor::cat(losses, 0).sum() }).collect::<Vec<_>>();
                 Ok(PackedCompressedAttentionOutput { output: normalize_mhc(output, &norm, self.epsilon).reshape([count, width]),
-                    document_indexer_losses: if losses.is_empty() { Tensor::zeros([0], (&device, compute)) } else { Tensor::cat(losses, 0) } })
+                    document_indexer_losses: if losses.is_empty() { Tensor::zeros([0], (&device, compute)).with_autodiff_context(context) } else { Tensor::cat(losses, 0) } })
             }
         }
         impl<$($generics)*, P: GatherTransformerProjection<$backend, B>> FullyShardedHybridLanguageModel<$backend, P>

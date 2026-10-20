@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::{SocketAddr, TcpListener}, sync::Arc};
 
 use crate::{
     base::{CommunicationChannel, CommunicationError, Message, ProtocolServer},
@@ -7,7 +7,7 @@ use crate::{
 use axum::{
     Router,
     extract::{
-        State, WebSocketUpgrade,
+        ConnectInfo, State, WebSocketUpgrade,
         ws::{self, WebSocket},
     },
     routing::get,
@@ -18,10 +18,12 @@ use futures::StreamExt;
 pub struct WsServer {
     address: SocketAddr,
     router: Router<()>,
+    listener: Option<Arc<TcpListener>>,
 }
 
 pub struct WsServerChannel {
     inner: WebSocket,
+    peer: SocketAddr,
 }
 
 impl WsServer {
@@ -37,7 +39,25 @@ impl WsServer {
         Self {
             address,
             router: Router::new(),
+            listener: None,
         }
+    }
+
+    /// Serve an already-bound socket without releasing and rebinding its port.
+    pub fn from_listener(listener: TcpListener) -> std::io::Result<Self> {
+        let address = listener.local_addr()?;
+        listener.set_nonblocking(true)?;
+        Ok(Self { address, router: Router::new(), listener: Some(Arc::new(listener)) })
+    }
+
+    /// Bind before installing routes or shutdown handlers.
+    pub async fn bind(mut self) -> Result<Self, WsServerError> {
+        if self.listener.is_none() {
+            let listener = tokio::net::TcpListener::bind(self.address).await?;
+            self.address = listener.local_addr()?;
+            self.listener = Some(Arc::new(listener.into_std()?));
+        }
+        Ok(self)
     }
 
     /// Listen on every interface.
@@ -56,14 +76,19 @@ impl ProtocolServer for WsServer {
     {
         init_logging();
 
-        let address = self.address;
+        let server = self.bind().await?;
+        let address = server.address;
         log::info!("Starting server {address}");
 
-        let listener = tokio::net::TcpListener::bind(address).await?;
+        let listener = match Arc::try_unwrap(server.listener.expect("bound WebSocket listener")) {
+            Ok(listener) => listener,
+            Err(listener) => listener.try_clone()?,
+        };
+        let listener = tokio::net::TcpListener::from_std(listener)?;
 
         axum::serve(
             listener,
-            self.router
+            server.router
                 .into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(shutdown)
@@ -84,9 +109,9 @@ impl ProtocolServer for WsServer {
             format!("/{path}")
         };
 
-        let method = get(|ws: WebSocketUpgrade, _: State<()>| async {
+        let method = get(|ws: WebSocketUpgrade, ConnectInfo(peer): ConnectInfo<SocketAddr>, _: State<()>| async {
             ws.on_upgrade(async move |socket| {
-                callback(WsServerChannel { inner: socket }).await;
+                callback(WsServerChannel { inner: socket, peer }).await;
             })
         });
 
@@ -98,6 +123,7 @@ impl ProtocolServer for WsServer {
 
 impl CommunicationChannel for WsServerChannel {
     type Error = WsServerError;
+    fn peer_addr(&self) -> Option<SocketAddr> { Some(self.peer) }
 
     async fn send(&mut self, message: Message) -> Result<(), WsServerError> {
         self.inner.send(ws::Message::Binary(message.data)).await?;

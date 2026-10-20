@@ -1,10 +1,10 @@
 use crate::runtime::{
     memory_management::{
         BytesFormat, ManagedMemoryBinding, ManagedMemoryHandle, ManagedMemoryId, MemoryLocation, MemoryUsage,
-        memory_pool::{Slice, calculate_padding},
+        memory_pool::{PageMapping, Slice, calculate_padding},
     },
     server::IoError,
-    storage::{StorageHandle, StorageId, StorageUtilization},
+    storage::{ComputeStorage, StorageHandle, StorageId, StorageUtilization},
 };
 use alloc::format;
 use alloc::string::String;
@@ -14,6 +14,8 @@ use ruda_core::backtrace::BackTrace;
 
 /// A memory page is responsible to reserve [slices](Slice) of data based on a fixed [storage buffer](StorageHandle).
 pub struct MemoryPage {
+    mapped: bool,
+    page: super::super::page_guard::PageRef,
     storage: StorageHandle,
     slices: Vec<Slice>,
     /// This is a vector to be used temporary to store the updated slices.
@@ -26,6 +28,7 @@ pub struct MemoryPage {
 }
 
 pub(crate) struct RelocationPage {
+    pub mapped: bool,
     pub allocations: Vec<(ManagedMemoryHandle, StorageHandle, u64)>,
     pub live_bytes: u64,
 }
@@ -42,7 +45,15 @@ pub(crate) enum RelocationInput {
 impl MemoryPage {
     /// Creates a new memory page with the given storage and memory alignment.
     pub fn new(storage: StorageHandle, alignment: u64, location_base: MemoryLocation) -> Self {
+        Self::new_with_mapping(storage, alignment, location_base, PageMapping::Eager)
+    }
+
+    pub(crate) fn new_with_mapping(
+        storage: StorageHandle, alignment: u64, location_base: MemoryLocation, mapping: PageMapping,
+    ) -> Self {
         let mut this = MemoryPage {
+            mapped: mapping.is_mapped(),
+            page: Default::default(),
             storage: storage.clone(),
             slices: Vec::new(),
             slices_tmp: Vec::new(),
@@ -50,7 +61,9 @@ impl MemoryPage {
             location_base,
         };
 
-        let slice = Slice::new(storage, 0);
+        let mut slice = Slice::new(storage, 0);
+        slice.mapped = this.mapped;
+        slice.page = this.page.clone();
         let slice_pos = this.slices.len() as u32;
         let mut location = this.location_base;
         location.slice = slice_pos;
@@ -58,6 +71,23 @@ impl MemoryPage {
         this.slices.push(slice);
 
         this
+    }
+
+    pub(crate) fn is_mapped(&self) -> bool { self.mapped }
+
+    pub(crate) fn materialize<Storage: ComputeStorage>(
+        &mut self, storage: &mut Storage,
+    ) -> Result<StorageId, IoError> {
+        if !self.mapped {
+            let real = storage.alloc(self.storage.size())?;
+            for slice in &mut self.slices {
+                slice.storage.id = real.id;
+                slice.mapped = true;
+            }
+            self.storage = real;
+            self.mapped = true;
+        }
+        Ok(self.storage.id)
     }
 
     /// Binds a user defined [`ManagedMemoryHandle`] to a slice in this memory pool.
@@ -88,7 +118,7 @@ impl MemoryPage {
         for slice in self.slices.iter() {
             usage.bytes_reserved += slice.effective_size();
 
-            if !slice.handle.is_free() {
+            if !slice.is_free() {
                 usage.number_allocs += 1;
                 usage.bytes_in_use += slice.storage.size();
                 usage.bytes_padding += slice.padding;
@@ -107,7 +137,7 @@ impl MemoryPage {
         let mut summary = MemoryPageSummary::default();
 
         for slice in self.slices.iter() {
-            let is_free = slice.handle.is_free();
+            let is_free = slice.is_free();
             if is_free {
                 summary.amount_free += slice.effective_size();
                 summary.num_free += 1;
@@ -136,6 +166,7 @@ impl MemoryPage {
     /// you can call the [`Self::coalesce()`] function to merge those.
     #[cfg_attr(feature = "runtime-tracing", tracing::instrument(level = "trace", skip(self)))]
     pub fn try_reserve(&mut self, size: u64) -> Option<ManagedMemoryHandle> {
+        if self.page.guarded() { return None; }
         let padding = calculate_padding(size, self.alignment);
         let effective_size = size + padding;
 
@@ -158,7 +189,9 @@ impl MemoryPage {
             slice.padding = padding;
 
             if can_be_split {
-                let new_slice = Slice::new(storage_old.offset_start(effective_size), 0);
+                let mut new_slice = Slice::new(storage_old.offset_start(effective_size), 0);
+                new_slice.mapped = self.mapped;
+                new_slice.page = self.page.clone();
                 self.add_new_slice(index, size, new_slice);
             }
 
@@ -169,6 +202,7 @@ impl MemoryPage {
     }
 
     pub(crate) fn can_reserve(&self, size: u64) -> bool {
+        if self.page.guarded() { return false; }
         let Some(needed) = size.checked_add(calculate_padding(size, self.alignment)) else { return false; };
         let mut free = 0u64;
         for slice in &self.slices {
@@ -206,7 +240,7 @@ impl MemoryPage {
     }
 
     pub(crate) fn relocation_inputs(&self, source: bool) -> impl Iterator<Item = RelocationInput> + '_ {
-        let pinned = source && self.slices.iter().any(|slice| !slice.is_free() && slice.handle.is_pinned());
+        let pinned = self.page.guarded() || (source && self.slices.iter().any(|slice| !slice.is_free() && slice.handle.is_pinned()));
         let mut excluded = pinned.then_some(RelocationInput::PinnedPage);
         let mut slices = self.slices.iter().peekable();
         core::iter::once(RelocationInput::Page(self.storage.id)).chain(core::iter::from_fn(move || {
@@ -232,6 +266,7 @@ impl MemoryPage {
     }
 
     pub(crate) fn relocation_page(&self) -> Option<RelocationPage> {
+        if self.page.guarded() { return None; }
         if self.slices.iter().any(|slice| !slice.is_free() && slice.handle.is_pinned()) {
             return None;
         }
@@ -243,7 +278,7 @@ impl MemoryPage {
                 allocations.push((slice.handle.clone(), slice.storage.clone(), slice.cursor));
             }
         }
-        (!allocations.is_empty()).then_some(RelocationPage { allocations, live_bytes })
+        (!allocations.is_empty()).then_some(RelocationPage { mapped: self.mapped, allocations, live_bytes })
     }
 
     pub(crate) fn release_relocated(&mut self, allocation: &ManagedMemoryHandle) -> Result<(), IoError> {
@@ -284,7 +319,10 @@ impl MemoryPage {
                     offset: first.storage.utilization.offset,
                     size,
                 };
-                Slice::new(storage, 0)
+                let mut merged = Slice::new(storage, 0);
+                merged.mapped = first.mapped;
+                merged.page = first.page.clone();
+                merged
             } else {
                 first
             };

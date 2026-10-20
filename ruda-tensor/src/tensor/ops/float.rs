@@ -35,7 +35,30 @@ impl<B: Backend> TransactionOp<B> for Float {
     }
 }
 impl<B: Backend> BasicOps<B> for Float {
+    fn erase_primitive(tensor: Self::Primitive) -> crate::primitive::ErasedTensorPrimitive<B> {
+        crate::primitive::ErasedTensorPrimitive::Float(tensor)
+    }
+    fn restore_primitive(tensor: crate::primitive::ErasedTensorPrimitive<B>) -> Self::Primitive {
+        match tensor {
+            crate::primitive::ErasedTensorPrimitive::Float(tensor) => tensor,
+            _ => panic!("Module mapping changed the floating tensor kind"),
+        }
+    }
     type Elem = B::FloatElem;
+
+    fn autodiff_context(tensor: &Self::Primitive) -> crate::AutodiffContext {
+        match tensor {
+            TensorPrimitive::Float(reference) => B::float_autodiff_context(reference),
+            TensorPrimitive::QFloat(reference) => B::q_autodiff_context(reference),
+        }
+    }
+
+    fn with_autodiff_context(tensor: Self::Primitive, context: crate::AutodiffContext) -> Self::Primitive {
+        match tensor {
+            TensorPrimitive::Float(tensor) => TensorPrimitive::Float(B::float_with_autodiff_context(tensor, context)),
+            TensorPrimitive::QFloat(tensor) => TensorPrimitive::QFloat(B::q_with_autodiff_context(tensor, context)),
+        }
+    }
 
     fn empty(shape: Shape, device: &Device<B>, dtype: DType) -> Self::Primitive {
         TensorPrimitive::Float(B::float_empty(shape, device, dtype.into()))
@@ -119,15 +142,7 @@ impl<B: Backend> BasicOps<B> for Float {
         update: IndexingUpdateOp,
     ) -> Self::Primitive {
         // Select assign is ambiguous for QFloat
-        match update {
-            IndexingUpdateOp::Add => TensorPrimitive::Float(B::float_select_add(
-                tensor.tensor(),
-                dim,
-                indices,
-                values.tensor(),
-            )),
-            _ => unimplemented!(),
-        }
+        TensorPrimitive::Float(B::float_select_assign(tensor.tensor(), dim, indices, values.tensor(), update))
     }
 
     fn mask_where(
@@ -164,15 +179,11 @@ impl<B: Backend> BasicOps<B> for Float {
         values: Self::Primitive,
         update: IndexingUpdateOp,
     ) -> Self::Primitive {
-        match update {
-            IndexingUpdateOp::Add => TensorPrimitive::Float(B::float_scatter_add(
-                dim,
-                tensor.tensor(),
-                indices,
-                values.tensor(),
-            )),
-            _ => unimplemented!(),
+        let count = indices.shape().num_elements();
+        if count == 0 {
+            return tensor;
         }
+        TensorPrimitive::Float(B::float_scatter(dim, tensor.tensor(), indices, values.tensor(), update))
     }
 
     fn scatter_nd(
@@ -336,6 +347,10 @@ impl<B: Backend> BasicOps<B> for Float {
 }
 
 impl<B: Backend> Numeric<B> for Float {
+    fn numeric_square(tensor: Self::Primitive) -> Self::Primitive {
+        <Self as FloatMathOps<B>>::square(tensor)
+    }
+
     fn add(lhs: Self::Primitive, rhs: Self::Primitive) -> Self::Primitive {
         q_bin_ops!(lhs, rhs, float_add, q_add)
     }

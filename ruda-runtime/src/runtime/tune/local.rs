@@ -1,4 +1,6 @@
 use super::{AutotuneKey, AutotuneOutput, TunableSet, TuneInputs, Tuner};
+#[cfg(feature = "runtime-autotune-checks")]
+use super::AutotuneLoggerExt;
 use crate::runtime::{client::ComputeClient, backend::Runtime, tune::TuneCacheResult};
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -19,6 +21,8 @@ pub struct LocalTuner<AK: AutotuneKey, ID> {
     name: &'static str,
     sets: Sets,
     device_sets: RwLock<Option<HashMap<ID, Arc<Sets>>>>,
+    #[cfg(std_io)]
+    stack_results: RwLock<Option<HashMap<(ID, AK), usize>>>,
 }
 
 /// Create a local tuner with the provided name.
@@ -46,6 +50,8 @@ where
             name,
             sets: RwLock::new(None),
             device_sets: RwLock::new(None),
+            #[cfg(std_io)]
+            stack_results: RwLock::new(None),
         }
     }
 
@@ -53,21 +59,23 @@ where
     ///
     /// Returns a cached `Arc<TunableSet>` keyed by the `TypeId` of `init_set`. The
     /// initializer runs at most once per process.
-    pub fn init<I, Out, F>(&self, init_set: F) -> Arc<TunableSet<AK, I, Out>>
+    pub fn init<I, Out, Id, F>(&self, init_set: F) -> Arc<TunableSet<AK, I, Out, Id>>
     where
-        F: Fn() -> TunableSet<AK, I, Out> + 'static + Send + Sync,
+        F: Fn() -> TunableSet<AK, I, Out, Id> + 'static + Send + Sync,
         I: TuneInputs,
         Out: AutotuneOutput,
+        Id: Send + Sync + 'static,
     {
         Self::init_set(&self.sets, init_set)
     }
 
     /// Cache a candidate set per device and initializer, including device-dependent choices.
-    pub fn init_for_device<I, Out, F>(&self, id: &ID, init_set: F) -> Arc<TunableSet<AK, I, Out>>
+    pub fn init_for_device<I, Out, Id, F>(&self, id: &ID, init_set: F) -> Arc<TunableSet<AK, I, Out, Id>>
     where
-        F: Fn() -> TunableSet<AK, I, Out> + 'static + Send + Sync,
+        F: Fn() -> TunableSet<AK, I, Out, Id> + 'static + Send + Sync,
         I: TuneInputs,
         Out: AutotuneOutput,
+        Id: Send + Sync + 'static,
     {
         let existing = self.device_sets.read().as_ref().and_then(|devices| devices.get(id)).cloned();
         let sets = existing.unwrap_or_else(|| {
@@ -83,14 +91,15 @@ where
         Self::init_set(&sets, init_set)
     }
 
-    fn init_set<I, Out, F>(
+    fn init_set<I, Out, Id, F>(
         sets: &Sets,
         init_set: F,
-    ) -> Arc<TunableSet<AK, I, Out>>
+    ) -> Arc<TunableSet<AK, I, Out, Id>>
     where
-        F: Fn() -> TunableSet<AK, I, Out> + 'static + Send + Sync,
+        F: Fn() -> TunableSet<AK, I, Out, Id> + 'static + Send + Sync,
         I: TuneInputs,
         Out: AutotuneOutput,
+        Id: Send + Sync + 'static,
     {
         let key = TypeId::of::<F>();
         let read = sets.read();
@@ -126,39 +135,64 @@ where
         content
     }
 
+    /// Read a settled candidate identity without starting or waiting for a tune.
+    ///
+    /// The set must be the one executed under `id`. Unvalidated disk entries and pending
+    /// tunes return `None`. Stack tuning reports its last successfully executed decision.
+    pub fn fastest_identity<I: TuneInputs, Out, Id: Clone>(
+        &self,
+        id: &ID,
+        operations: &TunableSet<AK, I, Out, Id>,
+        key: &AK,
+    ) -> Option<Id> {
+        #[cfg(std_io)]
+        if super::stack::stack_autotuner().is_some() && operations.stack_reference().is_some() {
+            let results = self.stack_results.read();
+            let index = *results.as_ref()?.get(&(id.clone(), key.clone()))?;
+            return Some(operations.identity(index).clone());
+        }
+        let tuner = self.state.read().as_ref()?.get(id)?.clone();
+        let index = tuner.settled(key)?;
+        Some(operations.identity(index).clone())
+    }
+
     /// Clear the autotune state.
     pub fn clear(&self) {
+        #[cfg(std_io)]
+        if let Some(results) = self.stack_results.write().as_mut() { results.clear(); }
         if let Some(s) = self.state.write().as_mut() {
             s.clear()
         }
     }
 
     #[cfg(feature = "runtime-autotune-checks")]
-    fn checks<'a, I: TuneInputs, Out: AutotuneOutput>(
+    fn checks<'a, I: TuneInputs, Out: AutotuneOutput, Id>(
         &self,
-        operations: &TunableSet<AK, I, Out>,
+        operations: &TunableSet<AK, I, Out, Id>,
         inputs: &<I as TuneInputs>::At<'a>,
-    ) where
+    ) -> (alloc::vec::Vec<super::CheckResult>, alloc::vec::Vec<alloc::string::String>)
+    where
         <I as TuneInputs>::At<'a>: Clone + Send,
     {
         use alloc::vec::Vec;
 
+        let _real_run = crate::runtime::dry_run::RealRun::new();
         let mut checks_outputs = Vec::new();
         for i in 0..operations.len() {
             let op = operations.fastest(i);
             let result = op.execute(inputs.clone());
-            checks_outputs.push(result);
+            checks_outputs.push((op.name.to_string(), result));
         }
-        super::check_autotune_outputs(checks_outputs);
+        super::check_autotune_outputs(checks_outputs)
     }
 
     /// Execute the fastest operation in a [`TunableSet`], triggering a tuning pass on
     /// the first call for a given key.
-    pub fn execute<'a, R: Runtime, I: TuneInputs, Out>(
+    pub fn execute<'a, R: Runtime, I: TuneInputs, Out, Id: Send + Sync>(
         &self,
         id: &ID,
         client: &ComputeClient<R>,
-        operations: Arc<TunableSet<AK, I, Out>>,
+        operations: Arc<TunableSet<AK, I, Out, Id>>,
         inputs: <I as TuneInputs>::At<'a>,
     ) -> Out
     where
@@ -167,9 +201,16 @@ where
     {
         #[cfg(std_io)]
         if super::stack::stack_autotuner().is_some() && operations.stack_reference().is_some() {
-            return super::stack::try_execute_stack(
+            let key = operations.generate_key(&inputs);
+            let cache_key = (id.clone(), key);
+            if let Some(results) = self.stack_results.write().as_mut() {
+                results.remove(&cache_key);
+            }
+            let (output, index) = super::stack::try_execute_stack_with_index(
                 self.name, &id.to_string(), client, operations, inputs,
             ).expect("Full-stack autotune failed; request was not replayed");
+            self.stack_results.write().get_or_insert_with(HashMap::new).insert(cache_key, index);
+            return output;
         }
         let key = operations.generate_key(&inputs);
 
@@ -188,30 +229,39 @@ where
             }
         });
 
+        #[allow(unused_mut)]
+        let mut log_context = tuner.log_context();
+        #[cfg(feature = "runtime-autotune-checks")]
+        let unreported_mismatches = {
+            let (checks, mismatches) = self.checks::<I, Out, Id>(&operations, &inputs);
+            log_context.set_checks(|| checks);
+            mismatches
+        };
+        #[cfg(not(feature = "runtime-autotune-checks"))]
+        let unreported_mismatches = alloc::vec::Vec::new();
+
         // First, check for a cache hit under a read lock.
         if let TuneCacheResult::Hit { fastest_index } = tuner.fastest(&key) {
-            #[cfg(feature = "runtime-autotune-checks")]
-            self.checks::<I, Out>(&operations, &inputs);
+            super::require_no_unreported_mismatches(&unreported_mismatches);
             return operations
                 .fastest(fastest_index)
                 .execute(inputs)
                 .expect("Should run when selected by autotune.");
         }
 
-        let fastest = tuner.check_tune::<R, I, Out>(
+        let fastest = tuner.check_tune_logged::<R, I, Out, Id>(
             &key,
             &inputs,
             &operations,
             || operations.compute_checksum(),
             client,
+            log_context,
+            unreported_mismatches,
         );
 
         // Run the execution depending on the cache state.
         match fastest {
             TuneCacheResult::Hit { fastest_index } => {
-                #[cfg(feature = "runtime-autotune-checks")]
-                self.checks::<I, Out>(&operations, &inputs);
-
                 operations
                     .fastest(fastest_index)
                     .execute(inputs)

@@ -8,7 +8,7 @@ use ruda_core::{
     stub::Arc,
 };
 
-use super::{autodiff::AutodiffLogLevel, base::RudaTensorConfig, fusion::FusionLogLevel};
+use super::{autodiff::AutodiffLogLevel, base::RudaTensorConfig, fusion::FusionLogLevel, remote::RemoteLogLevel};
 
 static RUDA_LOGGER: spin::Mutex<Option<Logger>> = spin::Mutex::new(None);
 
@@ -44,6 +44,7 @@ pub struct Logger {
     sinks: LoggerSinks,
     fusion_index: Vec<usize>,
     autodiff_index: Vec<usize>,
+    remote_index: Vec<usize>,
     /// The configuration snapshot the logger was initialized with.
     pub config: Arc<RudaTensorConfig>,
 }
@@ -74,10 +75,14 @@ impl Logger {
             config.autodiff.logger.level != AutodiffLogLevel::Disabled,
         );
 
+        let remote_index = register_enabled(&mut sinks, &config.remote.logger,
+            config.remote.logger.level != RemoteLogLevel::Disabled);
+
         Self {
             sinks,
             fusion_index,
             autodiff_index,
+            remote_index,
             config,
         }
     }
@@ -101,6 +106,12 @@ impl Logger {
     pub fn log_level_autodiff(&self) -> AutodiffLogLevel {
         self.config.autodiff.logger.level
     }
+
+    /// Write to the configured remote sinks.
+    pub fn log_remote<S: Display>(&mut self, msg: &S) { self.sinks.log(&self.remote_index, msg); }
+
+    /// Remote logging verbosity.
+    pub fn log_level_remote(&self) -> RemoteLogLevel { self.config.remote.logger.level }
 }
 
 fn register_enabled<L: LogLevel>(
@@ -147,4 +158,11 @@ where
     let mut guard = RUDA_LOGGER.lock();
     let logger = guard.get_or_insert_with(Logger::new);
     logger.log_autodiff(&msg);
+}
+
+/// Build and emit a remote log message only when its level is enabled.
+pub fn log_remote<F: FnOnce() -> String>(level: RemoteLogLevel, message: F) {
+    if config().remote.logger.level < level { return; }
+    let msg = message();
+    RUDA_LOGGER.lock().get_or_insert_with(Logger::new).log_remote(&msg);
 }

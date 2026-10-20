@@ -8,6 +8,11 @@ use std::fmt::Display;
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Some variants might not be used with different flags
 pub enum Instruction {
+    WorkgroupUniformLoad {
+        list: Variable,
+        index: Variable,
+        out: Variable,
+    },
     DeclareVariable {
         var: Variable,
     },
@@ -446,9 +451,11 @@ pub enum Instruction {
     CopyBulk {
         input: Variable,
         in_index: Variable,
+        offset_input: Variable,
         out: Variable,
         out_index: Variable,
-        len: u32,
+        offset_out: Variable,
+        len: usize,
     },
     Comment {
         content: String,
@@ -458,6 +465,27 @@ pub enum Instruction {
 impl Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Instruction::WorkgroupUniformLoad { list, index, out } => {
+                let width = out.item().vectorization_factor();
+                let stored_width = list.item().vectorization_factor();
+                let shared_value = matches!(list, Variable::SharedValue(..));
+                let output = out.fmt_left();
+                if width == stored_width {
+                    let address = if shared_value { format!("{list}") } else { format!("{list}[{index}]") };
+                    return writeln!(f, "{output} = workgroupUniformLoad(&{address});");
+                }
+                assert!(!shared_value && stored_width == 1, "WGSL component pointers require scalar shared-array storage");
+                let loads = (0..width).map(|lane| {
+                    let scalar_index = format!("({index} * {width}u + {lane}u)");
+                    let address = format!("{list}[{scalar_index}]");
+                    format!("workgroupUniformLoad(&{address})")
+                }).collect::<Vec<_>>();
+                if width == 1 {
+                    writeln!(f, "{output} = {};", loads[0])
+                } else {
+                    writeln!(f, "{output} = {}({});", out.item(), loads.join(", "))
+                }
+            }
             Instruction::DeclareVariable { var } => {
                 let item = var.item();
                 writeln!(f, "var {var}: {item};")
@@ -586,13 +614,15 @@ impl Display for Instruction {
             Instruction::CopyBulk {
                 input,
                 in_index,
+                offset_input,
                 out,
                 out_index,
+                offset_out,
                 len,
             } => {
                 for i in 0..*len {
-                    let rhs = format!("{input}[{in_index} + {i}]");
-                    let lhs = format!("{out}[{out_index} + {i}]");
+                    let rhs = format!("{input}[{offset_input} + {in_index} + {i}]");
+                    let lhs = format!("{out}[{offset_out} + {out_index} + {i}]");
                     writeln!(f, "{lhs} = {rhs};")?;
                 }
                 Ok(())

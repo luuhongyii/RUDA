@@ -8,7 +8,7 @@ use ruda_tensor::{FloatDType,TensorMetadata,ops::FloatTensorOps,
 #[derive(Clone,Debug)]
 pub struct MoeAutodiffState<B:MoeOps> {
     native:B::MoeState,
-    tracked_primals:bool,
+    tracked_primals:bool,context:ruda_tensor::AutodiffContext,
 }
 
 #[derive(Debug)]
@@ -40,6 +40,9 @@ impl<B:MoeOps,S:CheckpointStrategy> MoeOps for Autodiff<B,S> {
     type MoeError=MoeAutodiffError<B::MoeError>;
     type MoeState=MoeAutodiffState<B>;
     fn moe_selected_weights(logits:FloatTensor<Self>,indices:IntTensor<Self>,options:MoeRouterWeightOptions) -> Result<FloatTensor<Self>,Self::MoeError> {
+        let context = logits.context::<S>().merge(indices.context);
+        let logits = logits.with_context::<S>(context);
+        let indices = indices.primitive;
         let saved=logits.primitive.clone();
         let output=B::moe_selected_weights(logits.primitive,indices.clone(),options).map_err(MoeAutodiffError::Native)?;
         Ok(match SelectedWeights::<B>(PhantomData).prepare::<S>([logits.node]).compute_bound().stateful() {
@@ -48,11 +51,21 @@ impl<B:MoeOps,S:CheckpointStrategy> MoeOps for Autodiff<B,S> {
     }
     fn moe_selected_weights_backward(logits:FloatTensor<Self>,indices:IntTensor<Self>,gradient:FloatTensor<Self>,options:MoeRouterWeightOptions)
         -> Result<FloatTensor<Self>,Self::MoeError> {
+        let context = logits.context::<S>().merge(gradient.context::<S>()).merge(indices.context);
+        let logits = logits.with_context::<S>(context);
+        let gradient = gradient.with_context::<S>(context);
+        let indices = indices.primitive;
         if logits.is_tracked() || gradient.is_tracked() {return Err(MoeAutodiffError::HigherDerivativeUnsupported);}
-        B::moe_selected_weights_backward(logits.primitive,indices,gradient.primitive,options).map(AutodiffTensor::new).map_err(MoeAutodiffError::Native)
+        B::moe_selected_weights_backward(logits.primitive,indices,gradient.primitive,options).map(|value| AutodiffTensor::new(value).with_context::<S>(context)).map_err(MoeAutodiffError::Native)
     }
     fn moe_forward(input:FloatTensor<Self>,logits:FloatTensor<Self>,correction_bias:Option<FloatTensor<Self>>,
         gate:FloatTensor<Self>,up:FloatTensor<Self>,down:FloatTensor<Self>,options:MoeOptions) -> Result<(FloatTensor<Self>,Self::MoeState),Self::MoeError> {
+        let context = input.context::<S>().merge(logits.context::<S>()).merge(gate.context::<S>()).merge(up.context::<S>()).merge(down.context::<S>()).merge(correction_bias.as_ref().map_or(ruda_tensor::AutodiffContext::Disabled, |value| value.context::<S>()));
+        let input = input.with_context::<S>(context);
+        let logits = logits.with_context::<S>(context);
+        let gate = gate.with_context::<S>(context);
+        let up = up.with_context::<S>(context);
+        let down = down.with_context::<S>(context);
         let tracked_primals=input.is_tracked() || logits.is_tracked() || gate.is_tracked() || up.is_tracked() || down.is_tracked();
         let selection=MoeGradientSelection {input:input.is_tracked(),logits:logits.is_tracked(),gate:gate.is_tracked(),up:up.is_tracked(),down:down.is_tracked()};
         let dtypes=[input.primitive.dtype().into(),logits.primitive.dtype().into(),gate.primitive.dtype().into(),up.primitive.dtype().into(),down.primitive.dtype().into()];
@@ -62,28 +75,38 @@ impl<B:MoeOps,S:CheckpointStrategy> MoeOps for Autodiff<B,S> {
         } else {B::moe_forward(input.primitive,logits.primitive,correction_bias,gate.primitive,up.primitive,down.primitive,options)}.map_err(MoeAutodiffError::Native)?;
         let output=match RoutedExperts::<B>(PhantomData).prepare::<S>([input.node,logits.node,gate.node,up.node,down.node]).compute_bound().stateful() {
             OpsKind::Tracked(prep)=>prep.finish((state.clone(),dtypes),output),OpsKind::UnTracked(prep)=>prep.finish(output),
-        };Ok((output,MoeAutodiffState {native:state,tracked_primals}))
+        };Ok((output,MoeAutodiffState {native:state,tracked_primals,context}))
     }
     fn moe_inference(input:FloatTensor<Self>,logits:FloatTensor<Self>,correction_bias:Option<FloatTensor<Self>>,
         gate:FloatTensor<Self>,up:FloatTensor<Self>,down:FloatTensor<Self>,options:MoeOptions) -> Result<FloatTensor<Self>,Self::MoeError> {
+        let context = input.context::<S>().merge(logits.context::<S>()).merge(gate.context::<S>()).merge(up.context::<S>()).merge(down.context::<S>()).merge(correction_bias.as_ref().map_or(ruda_tensor::AutodiffContext::Disabled, |value| value.context::<S>()));
+        let input = input.with_context::<S>(context);
+        let logits = logits.with_context::<S>(context);
+        let gate = gate.with_context::<S>(context);
+        let up = up.with_context::<S>(context);
+        let down = down.with_context::<S>(context);
         if input.is_tracked() || logits.is_tracked() || gate.is_tracked() || up.is_tracked() || down.is_tracked() {
             return Self::moe_forward(input,logits,correction_bias,gate,up,down,options).map(|(output,_)|output);
         }
         B::moe_inference(input.primitive,logits.primitive,correction_bias.map(|bias|bias.primitive),gate.primitive,up.primitive,down.primitive,options)
-            .map(AutodiffTensor::new).map_err(MoeAutodiffError::Native)
+            .map(|value| AutodiffTensor::new(value).with_context::<S>(context)).map_err(MoeAutodiffError::Native)
     }
-    fn moe_route_indices(state:&Self::MoeState) -> IntTensor<Self> {B::moe_route_indices(&state.native)}
+    fn moe_route_indices(state:&Self::MoeState) -> IntTensor<Self> {crate::AutodiffValue::with_context(B::moe_route_indices(&state.native),state.context)}
     fn moe_backward(state:Self::MoeState,gradient:FloatTensor<Self>) -> Result<MoeBackward<Self>,Self::MoeError> {
+        let context = gradient.context::<S>().merge(state.context);
+        let gradient = gradient.with_context::<S>(context);
         if state.tracked_primals || gradient.is_tracked() {return Err(MoeAutodiffError::HigherDerivativeUnsupported);}
         let result=B::moe_backward(state.native,gradient.primitive).map_err(MoeAutodiffError::Native)?;
-        Ok(MoeBackward {input:AutodiffTensor::new(result.input),logits:AutodiffTensor::new(result.logits),
-            gate:AutodiffTensor::new(result.gate),up:AutodiffTensor::new(result.up),down:AutodiffTensor::new(result.down)})
+        Ok(MoeBackward {input:AutodiffTensor::new(result.input).with_context::<S>(context),logits:AutodiffTensor::new(result.logits).with_context::<S>(context),
+            gate:AutodiffTensor::new(result.gate).with_context::<S>(context),up:AutodiffTensor::new(result.up).with_context::<S>(context),down:AutodiffTensor::new(result.down).with_context::<S>(context)})
     }
     fn moe_backward_selected(state:Self::MoeState,gradient:FloatTensor<Self>,selection:MoeGradientSelection)
         -> Result<MoeBackwardSelected<Self>,Self::MoeError> {
+        let context = gradient.context::<S>().merge(state.context);
+        let gradient = gradient.with_context::<S>(context);
         if state.tracked_primals || gradient.is_tracked() {return Err(MoeAutodiffError::HigherDerivativeUnsupported);}
         let result=B::moe_backward_selected(state.native,gradient.primitive,selection).map_err(MoeAutodiffError::Native)?;
-        Ok(MoeBackwardSelected {input:result.input.map(AutodiffTensor::new),logits:result.logits.map(AutodiffTensor::new),
-            gate:result.gate.map(AutodiffTensor::new),up:result.up.map(AutodiffTensor::new),down:result.down.map(AutodiffTensor::new)})
+        Ok(MoeBackwardSelected {input:result.input.map(|value| AutodiffTensor::new(value).with_context::<S>(context)),logits:result.logits.map(|value| AutodiffTensor::new(value).with_context::<S>(context)),
+            gate:result.gate.map(|value| AutodiffTensor::new(value).with_context::<S>(context)),up:result.up.map(|value| AutodiffTensor::new(value).with_context::<S>(context)),down:result.down.map(|value| AutodiffTensor::new(value).with_context::<S>(context))})
     }
 }

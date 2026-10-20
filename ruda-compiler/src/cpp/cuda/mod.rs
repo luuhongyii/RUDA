@@ -1,4 +1,5 @@
 pub mod arch;
+mod atomic;
 pub mod convert;
 pub mod dialect;
 mod extension;

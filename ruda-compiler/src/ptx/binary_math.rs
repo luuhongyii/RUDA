@@ -73,6 +73,55 @@ impl Emitter {
         Ok(())
     }
 
+    pub fn reciprocal_hypot(&mut self, out: Variable, op: BinaryOperator) -> Result<()> {
+        let ty = Scalar::of(out.ty)?;
+        if !ty.float() || ty.fp8() || out.ty != op.lhs.ty || out.ty != op.rhs.ty {
+            return Err(invalid("rhypot requires matching floating operands"));
+        }
+        let a = self.binary_math_input(ty, op.lhs)?;
+        let b = self.binary_math_input(ty, op.rhs)?;
+        let result = self.reg(Scalar::F64);
+        let x = self.reg(Scalar::F64);
+        let y = self.reg(Scalar::F64);
+        let hi = self.reg(Scalar::F64);
+        let lo = self.reg(Scalar::F64);
+        let ratio = self.reg(Scalar::F64);
+        let p = self.reg(Scalar::Pred);
+        let end = self.label();
+        self.line(format!("abs.f64 {x}, {a};"));
+        self.line(format!("abs.f64 {y}, {b};"));
+        self.line(format!("mov.f64 {result}, 0d0000000000000000;"));
+        for v in [&x, &y] {
+            self.line(format!("setp.eq.f64 {p}, {v}, 0d7ff0000000000000;"));
+            self.line(format!("@{p} bra {end};"));
+        }
+        self.line(format!("add.rn.f64 {result}, {x}, {y};"));
+        self.line(format!("setp.nan.f64 {p}, {x}, {y};"));
+        self.line(format!("@{p} bra {end};"));
+        self.line(format!("max.f64 {hi}, {x}, {y};"));
+        self.line(format!("min.f64 {lo}, {x}, {y};"));
+        self.line(format!("mov.f64 {result}, 0d7ff0000000000000;"));
+        self.line(format!("setp.eq.f64 {p}, {hi}, 0d0000000000000000;"));
+        self.line(format!("@{p} bra {end};"));
+        self.line(format!("div.rn.f64 {ratio}, {lo}, {hi};"));
+        self.line(format!("fma.rn.f64 {ratio}, {ratio}, {ratio}, 0d3ff0000000000000;"));
+        self.line(format!("sqrt.rn.f64 {ratio}, {ratio};"));
+        self.line(format!("div.rn.f64 {result}, 0d3ff0000000000000, {ratio};"));
+        self.line(format!("div.rn.f64 {result}, {result}, {hi};"));
+        self.line(format!("{end}:"));
+        let destination = self.destination(out)?;
+        if ty == Scalar::F64 {
+            self.line(format!("mov.b64 {destination}, {result};"));
+        } else if ty.half() {
+            let narrowed = self.reg(Scalar::F32);
+            self.line(format!("cvt.rn.f32.f64 {narrowed}, {result};"));
+            self.line(format!("cvt.rn.{}.f32 {destination}, {narrowed};", ty.suffix()));
+        } else {
+            self.line(format!("cvt.rn.f32.f64 {destination}, {result};"));
+        }
+        Ok(())
+    }
+
     fn hypot_f64(&mut self, result: &str, a: &str, b: &str) {
         let x = self.reg(Scalar::F64);
         let y = self.reg(Scalar::F64);

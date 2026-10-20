@@ -46,7 +46,7 @@ pub fn kernel_simple_f16_m16n16k16_gmem(lhs: &Array<f16>, rhs: &Array<f16>, out:
         0.0,
     );
 
-    cmma::execute::<f16, f16, f32, f32>(&a, &b, &c, &c);
+    cmma::execute::<f16, f16, f32, f32, _>(&a, &b, &c, &c);
 
     cmma::store(
         &mut out.to_slice_mut(),
@@ -181,7 +181,7 @@ pub fn kernel_simple_2(lhs: &Array<f16>, rhs: &Array<f16>, out: &mut Array<f16>)
         half::f16::from_int(0),
     );
 
-    cmma::execute::<f16, f16, f16, f16>(&a, &b, &c, &c);
+    cmma::execute::<f16, f16, f16, f16, _>(&a, &b, &c, &c);
 
     cmma::store(&mut out.to_slice_mut(), &c, 8, cmma::MatrixLayout::RowMajor);
 }
@@ -216,7 +216,7 @@ pub fn kernel_simple_3(lhs: &Array<f16>, rhs: &Array<f16>, out: &mut Array<f32>)
         0.0,
     );
 
-    cmma::execute::<f16, f16, f32, f32>(&a, &b, &c, &c);
+    cmma::execute::<f16, f16, f32, f32, _>(&a, &b, &c, &c);
 
     cmma::store(&mut out.to_slice_mut(), &c, 8, cmma::MatrixLayout::RowMajor);
 }
@@ -251,7 +251,7 @@ pub fn kernel_simple_tf32(lhs: &Array<tf32>, rhs: &Array<tf32>, out: &mut Array<
         0.0,
     );
 
-    cmma::execute::<tf32, tf32, f32, f32>(&a, &b, &c, &c);
+    cmma::execute::<tf32, tf32, f32, f32, _>(&a, &b, &c, &c);
 
     cmma::store(
         &mut out.to_slice_mut(),
@@ -274,7 +274,7 @@ pub fn cast_matrix_f16(input: &Array<f32>, out: &mut Array<f16>) {
     };
     cmma::load_with_layout(&acc, &input.to_slice(), 16, cmma::MatrixLayout::RowMajor);
 
-    let output = cmma::cast::<f32, f16>(&acc);
+    let output = cmma::cast::<f32, f16, _>(&acc);
 
     cmma::store(
         &mut out.to_slice_mut(),
@@ -297,7 +297,7 @@ pub fn cast_matrix_bf16(input: &Array<f32>, out: &mut Array<bf16>) {
     };
     cmma::load_with_layout(&acc, &input.to_slice(), 16, cmma::MatrixLayout::RowMajor);
 
-    let output = cmma::cast::<f32, bf16>(&acc);
+    let output = cmma::cast::<f32, bf16, _>(&acc);
 
     cmma::store(
         &mut out.to_slice_mut(),
@@ -670,7 +670,7 @@ pub fn kernel_strided(
         0.0,
     );
 
-    cmma::execute::<f16, f16, f32, f32>(&a, &b, &c, &c);
+    cmma::execute::<f16, f16, f32, f32, _>(&a, &b, &c, &c);
 
     cmma::store(
         &mut out.to_slice_mut(),

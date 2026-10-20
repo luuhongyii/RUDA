@@ -32,7 +32,7 @@ use std::{
 pub const MAX_VECTORIZATION: usize = 4;
 
 pub struct SpirvCompiler<Target: SpirvTarget = GLCompute> {
-    lowering: SpirvLowering,
+    pub(super) lowering: SpirvLowering,
     pub target: Target,
     pub(crate) builder: Builder,
 
@@ -55,6 +55,7 @@ pub struct SpirvCompiler<Target: SpirvTarget = GLCompute> {
     pub info: Info,
     pub debug_info: Option<DebugInfo>,
     pub compilation_options: WgpuCompilationOptions,
+    pub(super) pending_functions: Vec<super::function::PendingFunction>,
 }
 
 
@@ -82,6 +83,7 @@ impl<T: SpirvTarget> Clone for SpirvCompiler<T> {
             debug_info: self.debug_info.clone(),
             ext_meta_pos: self.ext_meta_pos.clone(),
             compilation_options: self.compilation_options,
+            pending_functions: self.pending_functions.clone(),
         }
     }
 }
@@ -110,6 +112,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             debug_info: Default::default(),
             ext_meta_pos: Default::default(),
             compilation_options: Default::default(),
+            pending_functions: Vec::new(),
         }
     }
 }
@@ -160,6 +163,7 @@ impl<T: SpirvTarget> Compiler for SpirvCompiler<T> {
         }
 
         let bindings = value.buffers.clone();
+        let tensor_maps = value.tensor_maps.clone();
         let mut ext_meta_pos = Vec::new();
         let mut num_ext = 0;
 
@@ -193,6 +197,7 @@ impl<T: SpirvTarget> Compiler for SpirvCompiler<T> {
         let uniform_info = matches!(T::info_storage_class(self), StorageClass::Uniform);
 
         Ok(SpirvKernel {
+            io: Some(optimizer.buffer_io(&bindings, &tensor_maps)),
             assembled_module: module.assemble(),
             module: Some(Arc::new(module)),
             optimizer: Some(Arc::new(SpirvOptimizerSnapshot::new(&optimizer))),
@@ -208,6 +213,10 @@ impl<T: SpirvTarget> Compiler for SpirvCompiler<T> {
 
     fn extension(&self) -> &'static str {
         "spv"
+    }
+
+    fn buffer_io(&self, repr: &Self::Representation) -> Option<ruda_core::kernel::KernelIo> {
+        repr.io.clone()
     }
 }
 
@@ -265,6 +274,8 @@ impl<Target: SpirvTarget> SpirvCompiler<Target> {
 
         self.end_function().unwrap();
 
+        self.compile_functions(&kernel);
+
         let shared_size = self.declare_shared_memories();
 
         let builtins = self
@@ -286,7 +297,7 @@ impl<Target: SpirvTarget> SpirvCompiler<Target> {
         (module, self.opt.as_ref().clone(), shared_size)
     }
 
-    fn setup(&mut self, label: Word, debug_setup: impl Fn(&mut Self)) -> usize {
+    pub(super) fn setup(&mut self, label: Word, debug_setup: impl Fn(&mut Self)) -> usize {
         self.begin_block(Some(label)).unwrap();
 
         let opt = self.opt.clone();

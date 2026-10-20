@@ -1,6 +1,21 @@
 use crate::DeviceBackend;
 pub use ruda_driver_cuda::CudaDevice;
-use ruda_driver_cuda::CudaRuntime;
+pub use ruda_driver_cuda::CudaRuntime;
+
+/// CUDA without the Fusion decorator, independent of enabled Cargo features.
+pub type CudaNative<F = f32, I = i32> = DeviceBackend<CudaRuntime, F, I, u8>;
+
+#[cfg(test)]
+mod hypot_tests;
+
+#[cfg(test)]
+mod broadcast_tests;
+
+#[cfg(test)]
+mod readback_tests;
+
+#[cfg(test)]
+mod ownership_tests;
 
 #[cfg(not(feature = "cuda-fusion"))]
 pub type Cuda<F = f32, I = i32> = DeviceBackend<CudaRuntime, F, I, u8>;
@@ -37,7 +52,6 @@ mod tests {
             DType::QFloat(RudaTensor::<CudaRuntime>::default_scheme())
         ));
 
-        // Currently not registered in supported types
-        assert!(!B::supports_dtype(&device, DType::F64));
+        assert!(B::supports_dtype(&device, DType::F64));
     }
 }

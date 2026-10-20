@@ -24,9 +24,11 @@ pub fn affine_grid_2d<B: Backend>(transform: Tensor<B, 3>, dims: [usize; 4]) -> 
     let device = &transform.device();
 
     let x = Tensor::<B, 1, Int>::arange(0..width as i64, device)
+        .with_context_of(&transform)
         .reshape([1, width])
         .expand([height, width]);
     let y = Tensor::<B, 1, Int>::arange(0..height as i64, device)
+        .with_context_of(&transform)
         .reshape([height, 1])
         .expand([height, width]);
 

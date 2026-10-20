@@ -44,7 +44,8 @@ fn schema<B:Backend,M:FullyShardedModule<B>>(module:&M) -> Result<BTreeMap<Param
             if previous.logical_shape!=parameter.logical_shape || previous.rank!=parameter.rank || previous.world_size!=parameter.world_size {
                 error=Some(FullyShardedParameterError::Record);
             } else if first.dtype()!=current.dtype() {error=Some(FullyShardedParameterError::DType);
-            } else if first.is_require_grad()!=current.is_require_grad() {error=Some(FullyShardedParameterError::Trainability);
+            } else if first.is_require_grad()!=current.is_require_grad()
+                || previous.local.planned_is_require_grad()!=parameter.local.planned_is_require_grad() {error=Some(FullyShardedParameterError::Trainability);
             } else if first.device()!=current.device() {error=Some(FullyShardedParameterError::Device);}
         } else {shards.insert(parameter.local.id,parameter.clone());}
     });
@@ -57,7 +58,8 @@ fn schema<B:Backend,M:FullyShardedModule<B>>(module:&M) -> Result<BTreeMap<Param
                 self.error=Some(FullyShardedParameterError::Geometry("module contains non-local parameter storage"));
             }
             if parameter.val().dtype()!=shard.local.val().dtype() {self.error=Some(FullyShardedParameterError::DType);}
-            if parameter.val().is_require_grad()!=shard.local.val().is_require_grad() {self.error=Some(FullyShardedParameterError::Trainability);}
+            if parameter.val().is_require_grad()!=shard.local.val().is_require_grad()
+                || parameter.planned_is_require_grad()!=shard.local.planned_is_require_grad() {self.error=Some(FullyShardedParameterError::Trainability);}
             if parameter.val().device()!=shard.local.val().device() {self.error=Some(FullyShardedParameterError::Device);}
             self.seen.insert(parameter.id);
         }
@@ -119,7 +121,7 @@ impl<B:Backend> FullyShardedModuleParameterRecord<B> {
                 return Err(FullyShardedParameterError::Record);
             }
             if target.local.val().dtype()!=saved.local().val().dtype() {return Err(FullyShardedParameterError::DType);}
-            if B::ad_enabled(&target.local.val().device()) && target.local.val().is_require_grad()!=saved.is_trainable() {
+            if target.local.val().is_autodiff() && target.local.val().is_require_grad()!=saved.is_trainable() {
                 return Err(FullyShardedParameterError::Trainability);
             }
         }
@@ -132,7 +134,8 @@ impl<B:Backend> FullyShardedModuleParameterRecord<B> {
         let mut values=BTreeMap::new();
         for saved in self.parameters {
             let original=targets.get(&saved.id()).ok_or(FullyShardedParameterError::Record)?.local.val();
-            let value=saved.local().val().to_device(&original.device()).detach().set_require_grad(original.is_require_grad());
+            let value=saved.local().val().to_device(&original.device()).detach()
+                .with_autodiff_context(original.autodiff_context()).set_require_grad(original.is_require_grad());
             values.insert(saved.id(),value);
         }
         restore_values(module,values)

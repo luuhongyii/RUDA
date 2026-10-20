@@ -160,6 +160,12 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
                 self.ret().unwrap();
                 self.current_block = None;
             }
+            ControlFlow::ReturnValue(value) => {
+                let value = self.compile_variable(value);
+                let value = self.read(&value);
+                self.ret_value(value).unwrap();
+                self.current_block = None;
+            }
             ControlFlow::Unreachable => {
                 self.unreachable().unwrap();
                 self.current_block = None;

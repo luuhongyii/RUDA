@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 
-use ruda_tensor::Backend;
+use ruda_tensor::{Backend, GradientCheckpointingStrategy};
 
 use crate::{graph::ComputingProperty, tensor::AutodiffTensor};
 use alloc::sync::Arc;
@@ -12,6 +12,10 @@ use super::{
 
 /// Strategy for the amount of checkpointing to do during autodiff
 pub trait CheckpointStrategy: Clone + Copy + Debug + Default + Send + Sync + 'static {
+    /// Identity of the backend's default policy when tensors have no override.
+    fn policy() -> GradientCheckpointingStrategy {
+        GradientCheckpointingStrategy::Custom(core::any::type_name::<Self>())
+    }
     /// May modify the compute property depending on the strategy
     fn compute_property<R: RetroForward>(retro_forward: R) -> ComputingProperty;
 
@@ -38,6 +42,7 @@ pub enum CheckpointingError {
 pub struct NoCheckpointing {}
 
 impl CheckpointStrategy for NoCheckpointing {
+    fn policy() -> GradientCheckpointingStrategy { GradientCheckpointingStrategy::Disabled }
     /// An operation marked as memory bound is actually compute bound.
     fn compute_property<R: RetroForward>(_retro_forward: R) -> ComputingProperty {
         ComputingProperty::ComputeBound
@@ -63,6 +68,7 @@ impl CheckpointStrategy for NoCheckpointing {
 pub struct BalancedCheckpointing {}
 
 impl CheckpointStrategy for BalancedCheckpointing {
+    fn policy() -> GradientCheckpointingStrategy { GradientCheckpointingStrategy::Balanced }
     /// An operation marked as memory bound is memory bound.
     /// When memory bound, an operation needs to save its RetroForward
     fn compute_property<R: RetroForward>(retro_forward: R) -> ComputingProperty {
@@ -98,5 +104,40 @@ impl CheckpointStrategy for BalancedCheckpointing {
         }
 
         Ok(())
+    }
+}
+
+pub(crate) fn merged_policy<C: CheckpointStrategy>(nodes: &[crate::graph::NodeRef]) -> GradientCheckpointingStrategy {
+    if nodes.is_empty() { return C::policy(); }
+    let mut policies = nodes.iter().filter(|node| node.autodiff_enabled).map(|node| node.checkpointing.unwrap_or_else(C::policy));
+    let policy = policies.next().unwrap_or(GradientCheckpointingStrategy::Disabled);
+    assert!(policies.all(|other| other == policy), "Cannot combine different gradient-checkpointing strategies");
+    policy
+}
+
+pub(crate) fn compute_property<C: CheckpointStrategy, R: RetroForward>(
+    policy: GradientCheckpointingStrategy, retro_forward: R,
+) -> ComputingProperty {
+    match policy {
+        GradientCheckpointingStrategy::Disabled => NoCheckpointing::compute_property(retro_forward),
+        GradientCheckpointingStrategy::Balanced => BalancedCheckpointing::compute_property(retro_forward),
+        GradientCheckpointingStrategy::Custom(_) => {
+            assert_eq!(policy, C::policy(), "Checkpointing strategy is not provided by this backend");
+            C::compute_property(retro_forward)
+        }
+    }
+}
+
+pub(crate) fn checkpoint_parents<'a, C: CheckpointStrategy, B: Backend, A>(
+    policy: GradientCheckpointingStrategy, parents: A, builder: &mut CheckpointerBuilder,
+) -> Result<(), CheckpointingError>
+where A: IntoIterator<Item = &'a AutodiffTensor<B>> {
+    match policy {
+        GradientCheckpointingStrategy::Disabled => NoCheckpointing::checkpoint_parents(parents, builder),
+        GradientCheckpointingStrategy::Balanced => BalancedCheckpointing::checkpoint_parents(parents, builder),
+        GradientCheckpointingStrategy::Custom(_) => {
+            assert_eq!(policy, C::policy(), "Checkpointing strategy is not provided by this backend");
+            C::checkpoint_parents(parents, builder)
+        }
     }
 }

@@ -15,3 +15,16 @@ impl Device for CpuDevice {
         }
     }
 }
+
+impl CpuDevice {
+    pub fn enumerate() -> Vec<Self> {
+        <crate::CpuRuntime as ruda_kernel::dsl::Runtime>::enumerate_all_devices(&())
+            .into_iter().map(Self::from_id).collect()
+    }
+
+    pub fn find(&self) -> Result<(), usize> { Ok(()) }
+
+    pub fn identity(&self) -> ruda_core::ir::DeviceIdentity {
+        <crate::CpuRuntime as ruda_kernel::dsl::Runtime>::client(self).properties().identity.clone()
+    }
+}

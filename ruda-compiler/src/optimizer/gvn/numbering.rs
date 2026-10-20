@@ -197,7 +197,8 @@ impl ValueTable {
         out: Variable,
     ) -> Result<(Expression, Option<Value>), Option<Value>> {
         let (expr, val) = match operator {
-            Operator::Index(_) | Operator::UncheckedIndex(_) | Operator::NativeLoad(_) => Err(value_of_var(&out))?,
+            Operator::Index(_) | Operator::UncheckedIndex(_) | Operator::NativeLoad(_)
+            | Operator::WorkgroupUniformLoad(_) => Err(value_of_var(&out))?,
 
             Operator::IndexAssign(_)
             | Operator::NativeStore(_)

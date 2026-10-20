@@ -70,11 +70,23 @@ struct Array {
 fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
     let mut track_consts = HashMap::new();
     let mut arrays = HashMap::new();
+    for parameter in &opt.root_scope.parameters {
+        if let VariableKind::LocalArray { id, .. } = parameter.kind {
+            track_consts.insert(id, false);
+        }
+    }
 
     for block in opt.node_ids() {
         let ops = opt.program[block].ops.clone();
         for op in ops.borrow().values() {
             match &op.operation {
+                Operation::CoopMma(ruda_core::ir::CoopMma::Elementwise { captures, .. }) => {
+                    for capture in captures {
+                        if let VariableKind::LocalArray { id, .. } = capture.kind {
+                            track_consts.insert(id, false);
+                        }
+                    }
+                }
                 Operation::Pointer(ruda_core::ir::PointerOp::Address(pointer)) => {
                     if let VariableKind::LocalArray { id, .. } = pointer.base.kind {
                         track_consts.insert(id, false);

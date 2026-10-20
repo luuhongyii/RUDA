@@ -11,13 +11,13 @@ impl<B: Backend> AttentionFallbackOps for FrameworkAttention<B> {
     type FloatTensor = FloatTensor<B>;
     type BoolTensor = BoolTensor<B>;
     type IntTensor = IntTensor<B>;
-    type Device = B::Device;
+    type Device = (B::Device, crate::AutodiffContext);
 
     fn device_settings(device: &Self::Device) -> DeviceSettings {
-        crate::get_device_settings::<B>(device)
+        crate::get_device_settings::<B>(&device.0)
     }
     fn float_device(tensor: &Self::FloatTensor) -> Self::Device {
-        B::float_device(tensor)
+        (B::float_device(tensor), B::float_autodiff_context(tensor))
     }
     fn float_transpose(tensor: Self::FloatTensor) -> Self::FloatTensor {
         B::float_transpose(tensor)
@@ -62,7 +62,7 @@ impl<B: Backend> AttentionFallbackOps for FrameworkAttention<B> {
         B::int_reshape(tensor, shape)
     }
     fn int_arange(range: core::ops::Range<i64>, device: &Self::Device, dtype: IntDType) -> Self::IntTensor {
-        B::int_arange(range, device, dtype)
+        B::int_with_autodiff_context(B::int_arange(range, &device.0, dtype), device.1)
     }
     fn int_add_scalar(lhs: Self::IntTensor, rhs: Scalar) -> Self::IntTensor {
         B::int_add_scalar(lhs, rhs)

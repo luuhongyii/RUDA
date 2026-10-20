@@ -115,6 +115,10 @@ impl BackendTypes for Host {
 }
 
 impl Backend for Host {
+    fn flush(_device: &Self::Device) -> Result<(), ruda_tensor::ExecutionError> {
+        Ok(())
+    }
+
     fn name(_device: &Self::Device) -> String {
         "flex".into()
     }

@@ -14,25 +14,27 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TensorTransferId(u64);
+pub use crate::transfer::{TensorTransferId, TransferCapability};
 
-impl From<u64> for TensorTransferId {
-    fn from(value: u64) -> Self {
-        Self(value)
-    }
-}
+const TRANSFER_LIFETIME: std::time::Duration = std::time::Duration::from_secs(300);
 
-impl TensorTransferId {
-    pub fn next(&mut self) {
-        self.0 += 1;
-    }
+struct CapabilityState {
+    bytes: bytes::Bytes,
+    target: crate::PeerId,
+    remaining: u32,
+    expires: tokio::time::Instant,
+    owner: CancellationToken,
+    retired: CancellationToken,
+    generation: Arc<()>,
 }
+impl Drop for CapabilityState { fn drop(&mut self) { self.retired.cancel(); } }
 
 #[derive(Debug, Serialize, Deserialize)]
 enum DataServiceMessage {
     TensorRequest(TensorTransferId),
     Tensor(TensorData),
+    CapabilityRequest(TransferCapability),
+    Denied(String),
 }
 
 type ClientChannelRef<C> = Arc<Mutex<<C as ProtocolClient>::Channel>>;
@@ -46,6 +48,8 @@ pub struct TensorDataService<B: Backend, P: Protocol<Client: ProtocolClient>> {
     pub new_tensor_notify: Arc<Notify>,
 
     cancel_token: CancellationToken,
+    connector: crate::ClientConnector<P::Client>,
+    capabilities: Arc<Mutex<HashMap<TransferCapability, CapabilityState>>>,
 
     _phantom_data: PhantomData<B>,
 }
@@ -82,8 +86,15 @@ impl<B: Backend, P: Protocol> TensorDataService<B, P> {
             channels: Mutex::new(HashMap::new()),
             new_tensor_notify: Arc::new(Notify::new()),
             cancel_token,
+            connector: Arc::new(|address, route| P::Client::connect(address, &route)),
+            capabilities: Arc::new(Mutex::new(HashMap::new())),
             _phantom_data: PhantomData::<B>,
         }
+    }
+
+    pub fn with_connector(mut self, connector: crate::ClientConnector<P::Client>) -> Self {
+        self.connector = connector;
+        self
     }
 
     /// Exposes a tensor to the data server, allowing it to be downloaded by other nodes.
@@ -121,82 +132,73 @@ impl<B: Backend, P: Protocol> TensorDataService<B, P> {
     }
 
     pub async fn close(&self) {
-        // Send a closing message to every open WebSocket stream
-
-        let mut streams = self.channels.lock().await;
-        for (_, stream) in streams.drain() {
-            let mut stream = stream.lock().await;
-
-            // Closing an already failed peer is best-effort cleanup, not a
-            // reason to panic while releasing a failed communicator.
-            if let Err(error) = stream.close().await {
-                log::warn!("Failed to close data WebSocket stream: {error:?}");
+        let streams: Vec<_> = self.channels.lock().await.drain().map(|(_, stream)| stream).collect();
+        for stream in streams {
+            if let Err(error) = stream.lock().await.close().await {
+                log::warn!("Failed to close data channel: {error:?}");
             }
         }
     }
 
-    /// Downloads a tensor that is exposed on another server. Requires a Tokio 1.x runtime
-    ///
-    /// Returns None if the peer closes the connection
-    pub async fn download_tensor(
-        &self,
-        remote: Address,
-        transfer_id: TensorTransferId,
-    ) -> Option<TensorData> {
-        log::info!("Downloading tensor from {remote:?}");
-
-        let stream = self.get_data_stream(remote).await;
-        let mut stream = stream.lock().await;
-
-        // Send the download request with the download id
-        let bytes: bytes::Bytes =
-            rmp_serde::to_vec(&DataServiceMessage::TensorRequest(transfer_id))
-                .unwrap()
-                .into();
-        stream
-            .send(Message::new(bytes))
-            .await
-            .expect("Failed to send download id");
-
-        if let Ok(msg) = stream.recv().await {
-            let Some(msg) = msg else {
-                log::warn!("Received None message from the websocket, closing connection.");
-                return None;
-            };
-
-            let DataServiceMessage::Tensor(data) = rmp_serde::from_slice(&msg.data)
-                .expect("Can deserialize messages from the websocket.")
-            else {
-                panic!("Message should have been TensorData")
-            };
-            return Some(data);
-        }
-        log::warn!("Closed connection");
-        None
+    /// Stop the data service, releasing unused data and interrupting its waiters.
+    pub async fn shutdown(&self) {
+        self.cancel_token.cancel();
+        self.exposed_tensors.lock().await.clear();
+        self.capabilities.lock().await.clear();
+        self.close().await;
     }
 
-    /// Get the WebSocket stream for the given address, or create a new one if it doesn't exist.
-    async fn get_data_stream(
-        &self,
-        address: Address,
-    ) -> Arc<Mutex<<P::Client as ProtocolClient>::Channel>> {
-        let mut streams = self.channels.lock().await;
-        match streams.get(&address) {
-            Some(stream) => stream.clone(),
-            None => {
-                // Open a new WebSocket connection to the address
-                let stream = P::Client::connect(address.clone(), "data").await;
+    pub async fn download_tensor(&self, remote: Address, transfer_id: TensorTransferId) -> Option<TensorData> {
+        self.download_tensor_cancelable(remote, transfer_id, &self.cancel_token).await
+    }
 
-                let Some(stream) = stream else {
-                    panic!("Failed to connect to data server at {address:?}");
-                };
-
-                let stream = Arc::new(Mutex::new(stream));
-                streams.insert(address.clone(), stream.clone());
-
-                stream
+    /// Cancel one download without allowing its outstanding reply to become another request's data.
+    pub async fn download_tensor_cancelable(&self, remote: Address, transfer_id: TensorTransferId,
+        cancelled: &CancellationToken) -> Option<TensorData> {
+        loop {
+            let stream = tokio::select! {
+                _ = self.cancel_token.cancelled() => return None,
+                _ = cancelled.cancelled() => return None,
+                stream = self.get_data_stream(remote.clone()) => stream?,
+            };
+            let mut channel = tokio::select! {
+                _ = self.cancel_token.cancelled() => return None,
+                _ = cancelled.cancelled() => return None,
+                channel = stream.lock() => channel,
+            };
+            let current = self.channels.lock().await.get(&remote)
+                .is_some_and(|current| Arc::ptr_eq(current, &stream));
+            // Another request may have invalidated this connection while this one waited.
+            if !current { continue; }
+            let download = async {
+                let bytes = rmp_serde::to_vec(&DataServiceMessage::TensorRequest(transfer_id)).ok()?;
+                channel.send(Message::new(bytes.into())).await.ok()?;
+                let message = channel.recv().await.ok()??;
+                match rmp_serde::from_slice::<DataServiceMessage>(&message.data).ok()? {
+                    DataServiceMessage::Tensor(data) => Some(data),
+                    _ => None,
+                }
+            };
+            let result = tokio::select! {
+                _ = self.cancel_token.cancelled() => None,
+                _ = cancelled.cancelled() => None,
+                result = download => result,
+            };
+            if result.is_none() {
+                let mut channels = self.channels.lock().await;
+                if channels.get(&remote).is_some_and(|current| Arc::ptr_eq(current, &stream)) {
+                    channels.remove(&remote);
+                }
             }
+            return result;
         }
+    }
+
+    async fn get_data_stream(&self, address: Address) -> Option<ClientChannelRef<P::Client>> {
+        if let Some(stream) = self.channels.lock().await.get(&address).cloned() { return Some(stream); }
+        let stream = Arc::new(Mutex::new((self.connector)(address.clone(), "data".into()).await?));
+        let mut streams = self.channels.lock().await;
+        Some(streams.entry(address).or_insert(stream).clone())
     }
 
     /// Get the requested exposed tensor data, and update download counter
@@ -232,33 +234,137 @@ impl<B: Backend, P: Protocol> TensorDataService<B, P> {
     }
 
     /// Handle incoming connections for downloading tensors.
-    pub(crate) async fn handle_data_channel(
-        &self,
-        mut channel: <P::Server as ProtocolServer>::Channel,
-    ) {
-        log::info!("[Data Handler] New connection for download.");
+    pub(crate) async fn handle_data_channel(&self, mut channel: <P::Server as ProtocolServer>::Channel) {
+        loop {
+            let message = tokio::select! {
+                _ = self.cancel_token.cancelled() => return,
+                message = channel.recv() => match message { Ok(Some(message)) => message, _ => return },
+            };
+            let transfer_id = match rmp_serde::from_slice::<DataServiceMessage>(&message.data) {
+                Ok(DataServiceMessage::CapabilityRequest(capability)) => {
+                    self.handle_capability_channel(channel, capability).await;
+                    return;
+                }
+                Ok(DataServiceMessage::TensorRequest(id)) if channel.authenticated_peer().is_none() => id,
+                _ => { log::warn!("Invalid data-service request"); return; }
+            };
+            let bytes = tokio::select! {
+                _ = self.cancel_token.cancelled() => return,
+                _ = channel.recv() => return,
+                bytes = self.get_exposed_tensor_bytes(transfer_id) => match bytes { Some(bytes) => bytes, None => return },
+            };
+            tokio::select! {
+                _ = self.cancel_token.cancelled() => return,
+                result = channel.send(Message::new(bytes)) => if result.is_err() { return; },
+            }
+        }
+    }
+}
 
-        while !self.cancel_token.is_cancelled() {
-            match channel.recv().await {
-                Ok(message) => {
-                    if let Some(msg) = message {
-                        let bytes = msg.data;
-                        let msg: DataServiceMessage = rmp_serde::from_slice(&bytes)
-                            .expect("Can deserialize messages from the websocket.");
-                        let DataServiceMessage::TensorRequest(transfer_id) = msg else {
-                            panic!("Received a message that wasn't a tensor request! {msg:?}");
-                        };
+impl<B: Backend, P: Protocol> TensorDataService<B, P> {
+    pub async fn expose_capability(&self, data: TensorData, count: u32, capability: TransferCapability,
+        target: crate::PeerId, owner: CancellationToken) -> Result<(), String> {
+        if !matches!(target, crate::PeerId::Iroh(_)) { return Err("An authenticated tensor transfer needs an Iroh target".into()); }
+        if count == 0 { return Err("A tensor capability needs at least one download".into()); }
+        if owner.is_cancelled() || self.cancel_token.is_cancelled() { return Err("Tensor exposure session is closed".into()); }
+        let bytes = rmp_serde::to_vec(&DataServiceMessage::Tensor(data)).map_err(|error| error.to_string())?.into();
+        let generation = Arc::new(());
+        let retired = CancellationToken::new();
+        let expires = tokio::time::Instant::now() + TRANSFER_LIFETIME;
+        {
+            let mut capabilities = self.capabilities.lock().await;
+            if capabilities.contains_key(&capability) { return Err("Tensor capability is already exposed".into()); }
+            capabilities.insert(capability, CapabilityState {
+                bytes, target, remaining: count, expires, owner: owner.clone(), retired: retired.clone(), generation: generation.clone(),
+            });
+        }
+        self.new_tensor_notify.notify_waiters();
+        let capabilities = self.capabilities.clone();
+        let notify = self.new_tensor_notify.clone();
+        let shutdown = self.cancel_token.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = tokio::time::sleep_until(expires) => {},
+                _ = owner.cancelled() => {},
+                _ = retired.cancelled() => {},
+                _ = shutdown.cancelled() => {},
+            }
+            let mut capabilities = capabilities.lock().await;
+            if capabilities.get(&capability).is_some_and(|entry| Arc::ptr_eq(&entry.generation, &generation)) {
+                capabilities.remove(&capability);
+            }
+            drop(capabilities);
+            notify.notify_waiters();
+        });
+        Ok(())
+    }
 
-                        let Some(bytes) = self.get_exposed_tensor_bytes(transfer_id).await else { return; };
-                        if channel.send(Message::new(bytes)).await.is_err() { return; }
-                    } else {
-                        log::info!("Closed connection");
-                        return;
+    async fn take_capability(&self, capability: TransferCapability, peer: &crate::PeerId) -> Result<bytes::Bytes, String> {
+        tokio::time::timeout(TRANSFER_LIFETIME, async {
+            loop {
+                let notified = self.new_tensor_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                {
+                    let mut capabilities = self.capabilities.lock().await;
+                    if let Some(entry) = capabilities.get_mut(&capability) {
+                        if &entry.target != peer { return Err("Tensor capability belongs to another peer".into()); }
+                        if entry.owner.is_cancelled() || entry.expires <= tokio::time::Instant::now() {
+                            capabilities.remove(&capability);
+                            return Err("Tensor capability expired or its session closed".into());
+                        }
+                        let bytes = entry.bytes.clone();
+                        entry.remaining -= 1;
+                        if entry.remaining == 0 { capabilities.remove(&capability); }
+                        return Ok(bytes);
                     }
                 }
-                Err(err) => panic!("Failed to receive message from websocket: {err:?}"),
-            };
+                tokio::select! {
+                    _ = self.cancel_token.cancelled() => return Err("Tensor data service closed".into()),
+                    _ = notified => {},
+                }
+            }
+        }).await.map_err(|_| "Timed out waiting for a tensor capability".to_string())?
+    }
+
+    async fn handle_capability_channel(&self, mut channel: <P::Server as ProtocolServer>::Channel, capability: TransferCapability) {
+        let result = match channel.authenticated_peer() {
+            Some(peer) => tokio::select! {
+                _ = self.cancel_token.cancelled() => return,
+                _ = channel.recv() => return,
+                result = self.take_capability(capability, &peer) => result,
+            },
+            None => Err("Tensor capability requests require an authenticated transport".into()),
+        };
+        let bytes = match result {
+            Ok(bytes) => bytes,
+            Err(reason) => match rmp_serde::to_vec(&DataServiceMessage::Denied(reason)) { Ok(bytes) => bytes.into(), Err(_) => return },
+        };
+        tokio::select! {
+            _ = self.cancel_token.cancelled() => {},
+            _ = async { let _ = channel.send(Message::new(bytes)).await; let _ = channel.close().await; } => {},
         }
-        log::info!("[Data Service] Closing connection for download.");
+    }
+
+    pub async fn download_capability(&self, remote: Address, capability: TransferCapability,
+        cancelled: &CancellationToken) -> Option<TensorData> {
+        let download = async {
+            let peer = remote.peer_id();
+            let mut channel = (self.connector)(remote, "data".into()).await?;
+            if channel.authenticated_peer().as_ref() != Some(&peer) { return None; }
+            let bytes = rmp_serde::to_vec(&DataServiceMessage::CapabilityRequest(capability)).ok()?;
+            channel.send(Message::new(bytes.into())).await.ok()?;
+            let message = channel.recv().await.ok()??;
+            match rmp_serde::from_slice::<DataServiceMessage>(&message.data).ok()? {
+                DataServiceMessage::Tensor(data) => Some(data),
+                DataServiceMessage::Denied(reason) => { log::warn!("Tensor transfer refused: {reason}"); None }
+                _ => None,
+            }
+        };
+        tokio::select! {
+            _ = self.cancel_token.cancelled() => None,
+            _ = cancelled.cancelled() => None,
+            result = download => result,
+        }
     }
 }

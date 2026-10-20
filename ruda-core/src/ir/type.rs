@@ -78,6 +78,8 @@ pub enum SemanticType {
     BarrierToken,
     Pipeline,
     TensorMap,
+    TensorLayout(super::TensorLayoutType),
+    TensorView(super::TensorViewType),
 }
 
 /// Physical type containing one or more elements
@@ -638,6 +640,8 @@ impl Display for SemanticType {
             SemanticType::BarrierToken => f.write_str("barrier_token"),
             SemanticType::Pipeline => f.write_str("pipeline"),
             SemanticType::TensorMap => f.write_str("tensor_map"),
+            SemanticType::TensorLayout(layout) => write!(f, "tensor_layout<{layout:?}>"),
+            SemanticType::TensorView(view) => write!(f, "tensor_view<{view:?}>"),
         }
     }
 }

@@ -1,18 +1,19 @@
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::marker::PhantomData;
 
 use crate::dsl::Runtime;
-use crate::dsl::prelude::{ArrayArg, TensorArg, TensorMapArg, TensorMapKind};
+use crate::dsl::prelude::{ArrayArg, LaunchMarker, TensorArg, TensorMapArg, TensorMapKind};
 use crate::dsl::{InfoBuilder, KernelSettings, ScalarArgType};
 #[cfg(any(feature = "frontend-std", feature = "std"))]
 use core::cell::RefCell;
-use ruda_core::ir::{AddressType, Scope, StorageType, Type};
+use ruda_core::ir::{AddressType, DeviceProperties, Scope, StorageType, TargetProperties, Type};
+use ruda_core::kernel::{BufferIOAttr, KernelIo};
 use ruda::runtime::server::{Binding, RudaCount, TensorMapBinding};
 use ruda::runtime::{
-    client::ComputeClient,
+    client::{Client, ComputeClient},
     compiler::RudaTask,
     kernel::{RudaKernel, KernelTask},
-    server::KernelArguments,
+    server::{KernelArguments, ServerError},
 };
 
 #[cfg(any(feature = "frontend-std", feature = "std"))]
@@ -20,6 +21,51 @@ std::thread_local! {
     static INFO: RefCell<InfoBuilder> = RefCell::new(InfoBuilder::default());
     // Only used for resolving types
     static SCOPE: RefCell<Scope> = RefCell::new(Scope::root(false));
+}
+
+/// Compilation properties from a live client or an offline target description.
+#[derive(Clone)]
+pub enum KernelContext {
+    /// Read properties from the actual selected device service.
+    Client(Client),
+    /// Expand a kernel without initializing or submitting to a device.
+    Properties {
+        /// Capabilities of the target device.
+        device: Arc<DeviceProperties>,
+        /// Instruction-level properties of its compiler target.
+        target: Arc<TargetProperties>,
+    },
+}
+
+impl KernelContext {
+    /// Create an offline expansion context from explicit target properties.
+    pub fn from_properties(device: Arc<DeviceProperties>, target: Arc<TargetProperties>) -> Self {
+        Self::Properties { device, target }
+    }
+
+    /// Capabilities used when registering and expanding arguments.
+    pub fn properties(&self) -> &DeviceProperties {
+        match self {
+            Self::Client(client) => client.properties(),
+            Self::Properties { device, .. } => device,
+        }
+    }
+
+    /// Instruction properties used when expanding the kernel body.
+    pub fn target_properties(&self) -> TargetProperties {
+        match self {
+            Self::Client(client) => client.target_properties(),
+            Self::Properties { target, .. } => target.as_ref().clone(),
+        }
+    }
+}
+
+impl From<Client> for KernelContext {
+    fn from(client: Client) -> Self { Self::Client(client) }
+}
+
+impl<R: Runtime> From<ComputeClient<R>> for KernelContext {
+    fn from(client: ComputeClient<R>) -> Self { Self::Client(client.erase()) }
 }
 
 /// A fully registered kernel invocation, not compiled or submitted yet.
@@ -49,10 +95,56 @@ impl<R: Runtime> PreparedKernel<R> {
     }
 }
 
+/// A prepared DSL invocation with no selected Rust runtime or compiler type.
+pub struct ErasedPreparedKernel {
+    task: Box<dyn RudaKernel>,
+    count: RudaCount,
+    arguments: KernelArguments,
+    client: Client,
+    scalar_words: usize,
+}
+
+impl ErasedPreparedKernel {
+    /// Length of the packed scalar prefix, excluding shape/stride metadata.
+    pub fn scalar_words(&self) -> usize { self.scalar_words }
+
+    /// Consume the invocation while retaining its actual service and fixed queue.
+    pub fn into_parts(self) -> (Box<dyn RudaKernel>, RudaCount, KernelArguments, Client) {
+        (self.task, self.count, self.arguments, self.client)
+    }
+
+    /// Adapt a prepared invocation to a native graph API after checking its service type.
+    pub fn into_typed<R: Runtime>(self) -> Result<PreparedKernel<R>, ServerError> {
+        let client = self.client.typed_service::<R>()?;
+        Ok(PreparedKernel {
+            task: Box::new(KernelTask::<R::Compiler, _>::new(self.task)),
+            count: self.count,
+            arguments: self.arguments,
+            client,
+            scalar_words: self.scalar_words,
+        })
+    }
+
+    /// Submit the invocation with bounds checking on its captured queue.
+    #[track_caller]
+    pub fn launch(self) { self.client.launch(self.task, self.count, self.arguments); }
+
+    /// Submit without bounds checking on its captured queue.
+    ///
+    /// # Safety
+    /// The kernel must have valid memory accesses and terminate.
+    #[track_caller]
+    pub unsafe fn launch_unchecked(self) {
+        unsafe { self.client.launch_unchecked(self.task, self.count, self.arguments); }
+    }
+}
+
 /// Prepare a kernel for [launch](KernelLauncher::launch).
-pub struct KernelLauncher<R: Runtime> {
+pub struct KernelLauncher<R: LaunchMarker = ()> {
     buffers: Vec<Binding>,
     tensor_maps: Vec<TensorMapBinding>,
+    declared_io: KernelIo,
+    declaring: BufferIOAttr,
     address_type: AddressType,
     pub settings: KernelSettings,
     #[cfg(not(any(feature = "frontend-std", feature = "std")))]
@@ -62,7 +154,7 @@ pub struct KernelLauncher<R: Runtime> {
     _runtime: PhantomData<R>,
 }
 
-impl<R: Runtime> KernelLauncher<R> {
+impl<R: LaunchMarker> KernelLauncher<R> {
     #[cfg(any(feature = "frontend-std", feature = "std"))]
     pub fn with_scope<T>(&mut self, fun: impl FnMut(&mut Scope) -> T) -> T {
         SCOPE.with_borrow_mut(fun)
@@ -98,7 +190,7 @@ impl<R: Runtime> KernelLauncher<R> {
     /// scalar/metadata registration uses the existing thread-local builder.
     pub fn prepare<K: RudaKernel>(
         mut self, count: RudaCount, kernel: K, client: &ComputeClient<R>,
-    ) -> PreparedKernel<R> {
+    ) -> PreparedKernel<R> where R: Runtime {
         let scalar_words = self.with_info(|info| info.scalars.len_aligned());
         PreparedKernel {
             scalar_words,
@@ -116,11 +208,16 @@ impl<R: Runtime> KernelLauncher<R> {
         ruda_count: RudaCount,
         kernel: K,
         client: &ComputeClient<R>,
-    ) {
+    ) where R: Runtime {
         let bindings = self.into_bindings();
         let kernel = Box::new(KernelTask::<R::Compiler, K>::new(kernel));
 
         client.launch(kernel, ruda_count, bindings)
+    }
+
+    /// Drain scalar/metadata registration for an invocation that will not be launched.
+    pub fn discard(self) {
+        let _ = self.into_bindings();
     }
 
     /// Launch the kernel without check bounds.
@@ -137,13 +234,44 @@ impl<R: Runtime> KernelLauncher<R> {
         ruda_count: RudaCount,
         kernel: K,
         client: &ComputeClient<R>,
-    ) {
+    ) where R: Runtime {
         unsafe {
             let bindings = self.into_bindings();
             let kernel = Box::new(KernelTask::<R::Compiler, K>::new(kernel));
 
             client.launch_unchecked(kernel, ruda_count, bindings)
         }
+    }
+
+    /// Register an owned invocation for the selected client without compiling it.
+    pub fn prepare_erased<K: RudaKernel>(
+        mut self, count: RudaCount, kernel: K, client: &Client,
+    ) -> ErasedPreparedKernel {
+        let scalar_words = self.with_info(|info| info.scalars.len_aligned());
+        ErasedPreparedKernel {
+            scalar_words,
+            arguments: self.into_bindings(),
+            task: Box::new(kernel),
+            count,
+            client: client.fixed_execution_queue(),
+        }
+    }
+
+    /// Launch directly through the selected device, without a Rust runtime type.
+    #[track_caller]
+    pub fn launch_erased<K: RudaKernel>(self, count: RudaCount, kernel: K, client: &Client) {
+        client.launch(Box::new(kernel), count, self.into_bindings());
+    }
+
+    /// Launch directly through the selected device without bounds checking.
+    ///
+    /// # Safety
+    /// The kernel must have valid memory accesses and terminate.
+    #[track_caller]
+    pub unsafe fn launch_unchecked_erased<K: RudaKernel>(
+        self, count: RudaCount, kernel: K, client: &Client,
+    ) {
+        unsafe { client.launch_unchecked(Box::new(kernel), count, self.into_bindings()); }
     }
 
     /// We need to create the bindings in the same order they are defined in the compilation step.
@@ -162,6 +290,7 @@ impl<R: Runtime> KernelLauncher<R> {
 
         bindings.buffers = self.buffers;
         bindings.tensor_maps = self.tensor_maps;
+        bindings.declared_io = self.declared_io;
         bindings.info = info;
 
         bindings
@@ -169,10 +298,25 @@ impl<R: Runtime> KernelLauncher<R> {
 }
 
 // Tensors/arrays
-impl<R: Runtime> KernelLauncher<R> {
+impl<R: LaunchMarker> KernelLauncher<R> {
+    /// Declare accesses for resources registered until the next declaration.
+    /// Generated launches set this per argument; manual launchers default to read-write.
+    pub fn declare_io(&mut self, io: BufferIOAttr) {
+        self.declaring = io;
+    }
+
+    fn alias_io(&mut self, input_pos: usize) {
+        if self.declaring.writes()
+            && let Some(io) = self.declared_io.buffers.get_mut(input_pos)
+        {
+            *io = BufferIOAttr::ReadWrite;
+        }
+    }
+
     /// Push a new input tensor to the state.
     pub fn register_tensor(&mut self, tensor: TensorArg<R>, ty: Type) {
         if let Some(tensor) = self.process_tensor(tensor, ty) {
+            self.declared_io.buffers.push(self.declaring);
             self.buffers.push(tensor);
         }
     }
@@ -180,7 +324,10 @@ impl<R: Runtime> KernelLauncher<R> {
     fn process_tensor(&mut self, tensor: TensorArg<R>, ty: Type) -> Option<Binding> {
         let tensor = match tensor {
             TensorArg::Handle { handle, .. } => handle,
-            TensorArg::Alias { .. } => return None,
+            TensorArg::Alias { input_pos, .. } => {
+                self.alias_io(input_pos);
+                return None;
+            }
         };
 
         let elem_size = ty.size();
@@ -205,6 +352,7 @@ impl<R: Runtime> KernelLauncher<R> {
     /// Push a new input array to the state.
     pub fn register_array(&mut self, array: ArrayArg<R>, ty: Type) {
         if let Some(tensor) = self.process_array(array, ty) {
+            self.declared_io.buffers.push(self.declaring);
             self.buffers.push(tensor);
         }
     }
@@ -212,7 +360,10 @@ impl<R: Runtime> KernelLauncher<R> {
     fn process_array(&mut self, array: ArrayArg<R>, ty: Type) -> Option<Binding> {
         let array = match array {
             ArrayArg::Handle { handle, .. } => handle,
-            ArrayArg::Alias { .. } => return None,
+            ArrayArg::Alias { input_pos, .. } => {
+                self.alias_io(input_pos);
+                return None;
+            }
         };
 
         let elem_size = ty.size();
@@ -237,17 +388,21 @@ impl<R: Runtime> KernelLauncher<R> {
             .expect("Can't use alias for TensorMap");
 
         let map = map.metadata.clone();
+        // TMA may store through an immutable map reference; the signature cannot prove read-only.
+        self.declared_io.tensor_maps.push(BufferIOAttr::ReadWrite);
         self.tensor_maps.push(TensorMapBinding { binding, map });
     }
 }
 
-impl<R: Runtime> KernelLauncher<R> {
+impl<R: LaunchMarker> KernelLauncher<R> {
     pub fn new(settings: KernelSettings) -> Self {
         Self {
             address_type: settings.address_type,
             settings,
             buffers: Vec::new(),
             tensor_maps: Vec::new(),
+            declared_io: KernelIo::default(),
+            declaring: BufferIOAttr::ReadWrite,
             _runtime: PhantomData,
             #[cfg(not(any(feature = "frontend-std", feature = "std")))]
             info: InfoBuilder::default(),

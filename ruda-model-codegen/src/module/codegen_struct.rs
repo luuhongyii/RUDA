@@ -14,6 +14,7 @@ pub(crate) struct StructModuleCodegen {
     pub fields: Vec<ModuleField>,
     pub vis: Visibility,
     pub generics: ModuleGenerics,
+    pub has_backend: bool,
 }
 
 impl ModuleCodegen for StructModuleCodegen {
@@ -45,12 +46,21 @@ impl ModuleCodegen for StructModuleCodegen {
         let struct_name = self.name.to_string();
         let container_type = format!("Struct:{}", struct_name);
         let body = self.gen_fields_fn(|name, field_type| {
-            if field_type.is_parameter_module() || field_type.maybe_generic_module() {
+            if self.has_backend && (field_type.is_parameter_module() || field_type.maybe_generic_module()) {
                 let name_str = name.to_string();
                 quote! {
                     visitor.enter_module(#name_str, #container_type);
                     #model::module::Module::visit(&self.#name, visitor);
                     visitor.exit_module(#name_str, #container_type);
+                }
+            } else if field_type.attr.is_none() {
+                let name_str = name.to_string();
+                quote! {
+                    {
+                        use #model::module::field::VisitField as _;
+                        let field = #model::module::field::FieldRef::<_, B>(&self.#name, core::marker::PhantomData);
+                        (&field).visit_field(visitor, #name_str, #container_type);
+                    }
                 }
             } else {
                 quote! {}
@@ -132,12 +142,21 @@ impl ModuleCodegen for StructModuleCodegen {
         let struct_name = self.name.to_string();
         let container_type = format!("Struct:{}", struct_name);
         let (names, body) = self.gen_fields_fn_names(|name, field_type| {
-            if field_type.is_parameter_module() || field_type.maybe_generic_module() {
+            if self.has_backend && (field_type.is_parameter_module() || field_type.maybe_generic_module()) {
                 let name_str = name.to_string();
                 quote! {
                     mapper.enter_module(#name_str, #container_type);
                     let #name = #model::module::Module::<B>::map(self.#name, mapper);
                     mapper.exit_module(#name_str, #container_type);
+                }
+            } else if field_type.attr.is_none() {
+                let name_str = name.to_string();
+                quote! {
+                    let #name = {
+                        use #model::module::field::MapField as _;
+                        let field = #model::module::field::Field::<_, B>::new(self.#name);
+                        (&field).map_field(mapper, #name_str, #container_type)
+                    };
                 }
             } else {
                 quote! { let #name = self.#name; }
@@ -155,9 +174,17 @@ impl ModuleCodegen for StructModuleCodegen {
     fn gen_valid(&self, paths: &crate::DerivePaths) -> TokenStream {
         let model = &paths.model;
         let (names, body) = self.gen_fields_fn_names(|name, field_type| {
-            if field_type.is_module || field_type.maybe_generic_module() {
+            if self.has_backend && (field_type.is_module || field_type.maybe_generic_module()) {
                 quote! {
                     let #name = #model::module::AutodiffModule::<B>::valid(&self.#name);
+                }
+            } else if field_type.attr.is_none() {
+                quote! {
+                    let #name = {
+                        use #model::module::field::ValidField as _;
+                        let field = #model::module::field::FieldRef::<_, B>(&self.#name, core::marker::PhantomData);
+                        (&field).valid_field()
+                    };
                 }
             } else {
                 quote! { let #name = self.#name.clone(); }
@@ -175,9 +202,17 @@ impl ModuleCodegen for StructModuleCodegen {
     fn gen_from_inner(&self, paths: &crate::DerivePaths) -> TokenStream {
         let model = &paths.model;
         let (names, body) = self.gen_fields_fn_names(|name, field_type| {
-            if field_type.is_module || field_type.maybe_generic_module() {
+            if self.has_backend && (field_type.is_module || field_type.maybe_generic_module()) {
                 quote! {
                     let #name = #model::module::AutodiffModule::<B>::from_inner(#name);
+                }
+            } else if field_type.attr.is_none() {
+                quote! {
+                    let #name = {
+                        use #model::module::field::TrainField as _;
+                        let field = #model::module::field::Field::<_, B>::new(#name);
+                        (&field).train_field()
+                    };
                 }
             } else {
                 quote! { let #name = #name; }
@@ -200,6 +235,7 @@ impl ModuleCodegen for StructModuleCodegen {
     fn gen_into_record(&self, paths: &crate::DerivePaths) -> TokenStream {
         let model = &paths.model;
         let body = self.gen_fields_fn(|name, field_type| {
+            if field_type.is_flag { return quote! {}; }
             if field_type.is_persistent_module() || field_type.maybe_generic_module() {
                 quote! { #name: #model::module::Module::<B>::into_record(self.#name), }
             } else {
@@ -222,6 +258,7 @@ impl ModuleCodegen for StructModuleCodegen {
     fn gen_load_record(&self, paths: &crate::DerivePaths) -> TokenStream {
         let model = &paths.model;
         let body = self.gen_fields_fn(|name, field_type| {
+            if field_type.is_flag { return quote! { #name: self.#name, }; }
             if field_type.is_persistent_module() || field_type.maybe_generic_module() {
                 quote! { #name: #model::module::Module::<B>::load_record(self.#name, record.#name), }
             } else {
@@ -298,6 +335,7 @@ impl StructModuleCodegen {
             fields: parse_module_fields(ast, &mut generics)?,
             vis: ast.vis.clone(),
             generics,
+            has_backend: ast.generics.type_params().any(|param| param.ident == "B"),
         })
     }
 
@@ -352,6 +390,7 @@ pub enum ModuleFieldAttribute {
 #[derive(Default, Debug)]
 pub struct ModuleFieldType {
     pub is_module: bool,
+    pub is_flag: bool,
     pub attr: Option<ModuleFieldAttribute>,
     pub generic_idents: HashSet<Ident>,
 }
@@ -449,6 +488,17 @@ pub(crate) fn parse_module_field_type(
     }
 
     field_type.is_module = is_module;
+    field_type.is_flag = is_param && match &field.ty {
+        syn::Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
+            match &segment.arguments {
+                syn::PathArguments::AngleBracketed(args) => args.args.iter().any(|arg| {
+                    matches!(arg, syn::GenericArgument::Type(ty) if type_matches_ident(ty, &["Flag"]))
+                }),
+                _ => false,
+            }
+        }),
+        _ => false,
+    };
     field_type.generic_idents = field_generics;
 
     Ok(field_type)

@@ -130,7 +130,7 @@ impl ComputeStorage for GpuStorage {
     fn relocation_barrier(&mut self) -> Result<(), IoError> {
         let status = unsafe { ruda_hip_sys::hipDeviceSynchronize() };
         if status == HIP_SUCCESS { Ok(()) }
-        else { Err(IoError::Unknown { description: format!("HIP relocation wait: {status}"), backtrace: BackTrace::capture() }) }
+        else { Err(crate::execution::status::io("hipDeviceSynchronize relocation", status)) }
     }
 
     fn relocation_copy(&mut self, source: &StorageHandle, target: &StorageHandle) -> Result<(), IoError> {
@@ -141,13 +141,13 @@ impl ComputeStorage for GpuStorage {
             ruda_hip_sys::hipMemcpyKind_hipMemcpyDeviceToDevice, self.stream,
         ) };
         if status == HIP_SUCCESS { Ok(()) }
-        else { Err(IoError::Unknown { description: format!("HIP relocation copy: {status}"), backtrace: BackTrace::capture() }) }
+        else { Err(crate::execution::status::io("hipMemcpyAsync relocation", status)) }
     }
 
     fn relocation_complete(&mut self) -> Result<(), IoError> {
         let status = unsafe { ruda_hip_sys::hipStreamSynchronize(self.stream) };
         if status == HIP_SUCCESS { Ok(()) }
-        else { Err(IoError::Unknown { description: format!("HIP relocation completion: {status}"), backtrace: BackTrace::capture() }) }
+        else { Err(crate::execution::status::io("hipStreamSynchronize relocation", status)) }
     }
 
     fn get(&mut self, handle: &StorageHandle) -> Self::Resource {
@@ -180,15 +180,16 @@ impl ComputeStorage for GpuStorage {
             match status {
                 HIP_SUCCESS => {}
                 other => {
-                    return Err(IoError::Unknown {
-                        description: format!("HIP allocation error: {other}"),
-                        backtrace: BackTrace::capture(),
-                    });
+                    return Err(crate::execution::status::io("hipMallocAsync", other));
                 }
             }
 
             // For safety, reducing the odds of missing mapped memory page.
-            ruda_hip_sys::hipStreamSynchronize(self.stream);
+            let status = ruda_hip_sys::hipStreamSynchronize(self.stream);
+            if status != HIP_SUCCESS {
+                let _ = ruda_hip_sys::hipFreeAsync(ptr, self.stream);
+                return Err(crate::execution::status::io("hipStreamSynchronize allocation", status));
+            }
 
             self.memory.insert(id, ptr);
         };

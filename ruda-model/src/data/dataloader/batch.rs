@@ -16,6 +16,7 @@ pub struct BatchDataLoader<B: Backend, I, O> {
     device: B::Device,
     rng: Option<Arc<spin::Mutex<rand::rngs::StdRng>>>,
     batch_reading: bool,
+    autodiff_context: Option<ruda_tensor::AutodiffContext>,
 }
 
 impl<B: Backend, I, O> Clone for BatchDataLoader<B, I, O> {
@@ -27,6 +28,7 @@ impl<B: Backend, I, O> Clone for BatchDataLoader<B, I, O> {
             device: self.device.clone(),
             rng: self.rng.clone(),
             batch_reading: self.batch_reading,
+            autodiff_context: self.autodiff_context,
         }
     }
 }
@@ -60,6 +62,7 @@ impl<B: Backend, I, O> BatchDataLoader<B, I, O> {
             device,
             rng: rng.map(|rng| Arc::new(spin::Mutex::new(rng))),
             batch_reading: false,
+            autodiff_context: None,
         }
     }
 
@@ -76,6 +79,11 @@ impl<B: Backend, I, O> BatchDataLoader<B, I, O> {
     pub(super) fn set_batch_reading(&mut self, enabled: bool) {
         self.batch_reading = enabled;
     }
+
+    pub(super) fn creation_context(mut self, context: Option<ruda_tensor::AutodiffContext>) -> Self {
+        self.autodiff_context = context;
+        self
+    }
 }
 
 /// A data loader iterator that can be used to iterate over a data loader.
@@ -86,6 +94,7 @@ struct BatchDataloaderIterator<B: Backend, I, O> {
     batcher: Arc<dyn Batcher<B, I, O>>,
     device: B::Device,
     batch_reading: bool,
+    autodiff_context: Option<ruda_tensor::AutodiffContext>,
     pending: std::vec::IntoIter<I>,
     read_indices: Vec<usize>,
     read_failed: bool,
@@ -114,6 +123,7 @@ where
             self.batcher.clone(),
             self.device.clone(),
             self.batch_reading,
+            self.autodiff_context,
         ))
     }
 
@@ -134,8 +144,13 @@ where
                 device.clone(),
                 rng,
             )
-            .batch_reading(self.batch_reading),
+            .batch_reading(self.batch_reading)
+            .creation_context(self.autodiff_context),
         )
+    }
+
+    fn with_autodiff_context(&self, context: ruda_tensor::AutodiffContext) -> Arc<dyn DataLoader<B, O>> {
+        Arc::new(self.clone().creation_context(Some(context)))
     }
 
     fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<B, O>> {
@@ -150,7 +165,8 @@ where
             self.device.clone(),
             rng,
         )
-        .batch_reading(self.batch_reading);
+        .batch_reading(self.batch_reading)
+        .creation_context(self.autodiff_context);
         Arc::new(dataloader)
     }
 }
@@ -174,6 +190,7 @@ impl<B: Backend, I, O> BatchDataloaderIterator<B, I, O> {
         batcher: Arc<dyn Batcher<B, I, O>>,
         device: B::Device,
         batch_reading: bool,
+        autodiff_context: Option<ruda_tensor::AutodiffContext>,
     ) -> Self {
         BatchDataloaderIterator {
             current_index: 0,
@@ -182,6 +199,7 @@ impl<B: Backend, I, O> BatchDataloaderIterator<B, I, O> {
             batcher,
             device,
             batch_reading,
+            autodiff_context,
             pending: Vec::new().into_iter(),
             read_indices: Vec::new(),
             read_failed: false,
@@ -227,12 +245,7 @@ impl<B: Backend, I, O> BatchDataloaderIterator<B, I, O> {
         self.read_failed = false;
         self.pending.next()
     }
-}
-
-impl<B: Backend, I, O> Iterator for BatchDataloaderIterator<B, I, O> {
-    type Item = O;
-
-    fn next(&mut self) -> Option<O> {
+    fn next_batch(&mut self) -> Option<O> {
         while let Some(item) = self.next_item() {
             self.current_index += 1;
             self.strategy.add(item);
@@ -247,6 +260,20 @@ impl<B: Backend, I, O> Iterator for BatchDataloaderIterator<B, I, O> {
         }
 
         None
+    }
+}
+
+impl<B: Backend, I, O> Iterator for BatchDataloaderIterator<B, I, O> {
+    type Item = O;
+
+    fn next(&mut self) -> Option<O> {
+        match self.autodiff_context {
+            Some(context) => {
+                let device = self.device.clone();
+                B::with_autodiff_creation_context(&device, context, || self.next_batch())
+            }
+            None => self.next_batch(),
+        }
     }
 }
 

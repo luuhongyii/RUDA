@@ -37,6 +37,7 @@ pub struct WgslCompiler<P: WgslLowering> {
     workgroup_size_no_axis: bool,
     num_workgroup_no_axis: bool,
     shared_arrays: Vec<SharedArray>,
+    scalar_shared_arrays: std::collections::HashSet<ruda::Id>,
     shared_values: Vec<SharedValue>,
     const_arrays: Vec<ConstantArray>,
     local_arrays: Vec<LocalArray>,
@@ -70,6 +71,7 @@ impl<P: WgslLowering> ruda_core::compiler::Compiler for WgslCompiler<P> {
         crate::optimizer::lower_optimized_pointer_values(&mut shader.body, shader.ruda_dim).map_err(|reason| CompilationError::Validation {
             reason, backtrace: BackTrace::capture(),
         })?;
+        self.scalar_shared_arrays = shared_memory::scalar_addressed_arrays(&shader.body);
         self.compilation_options = *compilation_options;
         self.compile_shader(shader, mode, address_type)
     }
@@ -81,6 +83,10 @@ impl<P: WgslLowering> ruda_core::compiler::Compiler for WgslCompiler<P> {
     fn extension(&self) -> &'static str {
         "wgsl"
     }
+
+    fn buffer_io(&self, repr: &Self::Representation) -> Option<ruda_core::kernel::KernelIo> {
+        Some(repr.io.clone())
+    }
 }
 
 mod launch;
@@ -88,6 +94,7 @@ mod types;
 mod scope;
 mod arithmetic;
 mod operators;
+mod shared_memory;
 
 fn register_extensions(instructions: &[wgsl::Instruction]) -> Vec<wgsl::Extension> {
     let mut extensions = Vec::new();

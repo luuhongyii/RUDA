@@ -109,7 +109,8 @@ impl<B:Backend,S:CheckpointStrategy> CollectiveScope<B,S> {
         let value=if dims.contains(&0) {value} else {value.slice(ranges)};
         // True-mask replacement gives a safe zero and zero derivative even if the original
         // weight coordinate is Inf/NaN; multiplying an arbitrary value by zero would not.
-        let mask=Tensor::<Autodiff<B,S>,D,Bool>::zeros(value.dims(),&value.device()).bool_not();
+        let mask=Tensor::<Autodiff<B,S>,D,Bool>::zeros(value.dims(),&value.device())
+            .with_autodiff_context(value.autodiff_context()).bool_not();
         let anchor=value.cast(DType::F32).mask_fill(mask,0).sum();
         self.entries.lock().push(Entry {node,anchor});
     }

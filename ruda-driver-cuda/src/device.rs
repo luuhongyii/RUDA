@@ -36,3 +36,19 @@ impl Device for CudaDevice {
         }
     }
 }
+
+impl CudaDevice {
+    pub fn enumerate() -> Vec<Self> {
+        <crate::CudaRuntime as ruda_kernel::dsl::Runtime>::enumerate_all_devices(&())
+            .into_iter().map(Self::from_id).collect()
+    }
+
+    pub fn find(&self) -> Result<(), usize> {
+        let devices = Self::enumerate();
+        if devices.iter().any(|device| device == self) { Ok(()) } else { Err(devices.len()) }
+    }
+
+    pub fn identity(&self) -> ruda_core::ir::DeviceIdentity {
+        <crate::CudaRuntime as ruda_kernel::dsl::Runtime>::client(self).properties().identity.clone()
+    }
+}

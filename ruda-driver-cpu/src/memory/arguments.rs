@@ -2,10 +2,12 @@ use ruda_compiler::mlir::shared_memories::SharedMemories;
 use ruda_core::arguments::cpu::{BuiltinArray, LineMemRef};
 use ruda_compiler::mlir::shared_memories::SharedMemory;
 use crate::execution::schedule::BindingsResource;
+use crate::execution::barrier::RudaBarrier;
 use ruda::runtime::{memory_management::{ManagedMemoryHandle, MemoryManagement}, storage::{BytesResource, BytesStorage}};
 use std::sync::Arc;
 
 pub struct SharedMlirData {
+    pub(crate) barrier: Arc<RudaBarrier>,
     pub args_zero_indirection: Vec<LineMemRef>,
     pub info: Vec<u64>,
     pub args_first_indirection: Vec<*mut ()>,
@@ -41,7 +43,7 @@ impl MlirData {
         shared_memories: &SharedMemories,
         memory_management_shared_memory: &mut MemoryManagement<BytesStorage>,
     ) -> Self {
-        let BindingsResource { resources, info } = bindings;
+        let BindingsResource { resources, info, .. } = bindings;
 
         let builtin = BuiltinArray::default();
         let max_buffer_size = resources.len() + shared_memories.0.len() + 1;
@@ -52,6 +54,7 @@ impl MlirData {
         let info = info.data;
 
         let mut shared_mlir_data = SharedMlirData {
+            barrier: Arc::new(RudaBarrier::default()),
             args_zero_indirection,
             args_first_indirection,
             info,

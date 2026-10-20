@@ -112,10 +112,10 @@ impl InputScalar {
 }
 
 impl LaunchArg for InputScalar {
-    type RuntimeArg<R: Runtime> = InputScalar;
+    type RuntimeArg<R: LaunchMarker> = InputScalar;
     type CompilationArg = InputScalarCompilationArg;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {

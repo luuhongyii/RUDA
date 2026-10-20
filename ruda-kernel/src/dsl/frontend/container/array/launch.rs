@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use ruda::runtime::backend::Runtime;
+use crate::dsl::frontend::LaunchMarker;
 use serde::{Deserialize, Serialize};
 
 use crate::dsl::{
@@ -17,13 +17,13 @@ pub struct ArrayCompilationArg {
 }
 
 /// Tensor representation with a reference to the [server handle](ruda::runtime::server::Handle).
-pub struct ArrayBinding<R: Runtime> {
+pub struct ArrayBinding<R: LaunchMarker = ()> {
     pub handle: ruda::runtime::server::Binding,
     pub(crate) length: [usize; 1],
     runtime: PhantomData<R>,
 }
 
-pub enum ArrayArg<R: Runtime> {
+pub enum ArrayArg<R: LaunchMarker = ()> {
     /// The array is passed with an array handle.
     Handle {
         /// The array handle.
@@ -38,7 +38,7 @@ pub enum ArrayArg<R: Runtime> {
     },
 }
 
-impl<R: Runtime> ArrayArg<R> {
+impl<R: LaunchMarker> ArrayArg<R> {
     /// Create a new array argument.
     ///
     /// # Safety
@@ -82,7 +82,7 @@ impl<R: Runtime> ArrayArg<R> {
     }
 }
 
-impl<R: Runtime> ArrayBinding<R> {
+impl<R: LaunchMarker> ArrayBinding<R> {
     /// Create a new array handle reference.
     ///
     /// # Safety
@@ -122,10 +122,10 @@ impl<R: Runtime> ArrayBinding<R> {
 }
 
 impl<C: RudaPrimitive> LaunchArg for Array<C> {
-    type RuntimeArg<R: Runtime> = ArrayArg<R>;
+    type RuntimeArg<R: LaunchMarker> = ArrayArg<R>;
     type CompilationArg = ArrayCompilationArg;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {

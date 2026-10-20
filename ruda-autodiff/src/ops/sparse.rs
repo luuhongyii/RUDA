@@ -136,7 +136,7 @@ impl<B: SparseOps, C: CheckpointStrategy> SparseOps for Autodiff<B, C> {
     }
 
     fn csr_values(matrix: &Self::CsrHandle) -> FloatTensor<Self> {
-        AutodiffTensor::new(B::csr_values(matrix))
+        AutodiffTensor::new_leaf::<C>(B::csr_values(matrix))
     }
 
     fn csr_validate_values(matrix: &Self::CsrHandle, values: &FloatTensor<Self>) -> Result<(), Self::SparseError> {

@@ -72,6 +72,13 @@ enum DropAction {
 }
 
 impl<R: FusionRuntime> MultiStream<R> {
+    pub(crate) fn drain_all(&mut self, handles: &mut HandleContainer<R::FusionHandle>) {
+        let streams: Vec<_> = self.streams.keys().copied().collect();
+        for stream in streams {
+            self.drain(handles, stream);
+        }
+    }
+
     pub(crate) fn new(device: R::FusionDevice) -> Self {
         Self {
             streams: HashMap::new(),
@@ -265,6 +272,22 @@ impl<R: FusionRuntime> MultiStream<R> {
         self.memory_checks.check(&self.streams, handles);
         #[cfg(feature = "test-util")]
         crate::inspect::emit_handle_snapshot(id, handles.handle_ids().copied());
+    }
+
+    pub(crate) fn discard(&mut self, handles: &mut HandleContainer<R::FusionHandle>, id: StreamId) {
+        id.executes(|| {
+            if let Some(stream) = self.streams.remove(&id) {
+                for operation in &stream.queue.global {
+                    for input in operation.inputs() { R::free_handle(handles, input, crate::OperationRan::No); }
+                    for output in operation.outputs() { handles.remove_handle(output.id); }
+                }
+            }
+            let cleared = self.shared_tensors.discard_stream(id);
+            self.clear_shared_tensors(&cleared, id);
+            for tensor in self.shared_tensors.clear_tensors(cleared) {
+                handles.remove_handle(tensor.id);
+            }
+        });
     }
 
     /// Drain a stream
@@ -489,6 +512,10 @@ impl<R: FusionRuntime> StreamSegment<R::Optimization> for Segment<'_, R> {
 
     fn execute(&mut self, id: ExecutionPlanId, store: &mut ExecutionPlanStore<R::Optimization>) {
         self.queue.execute(id, self.handles, store, self.id)
+    }
+
+    fn execute_unfused(&mut self, mut optimization: crate::search::BlockOptimization<R::Optimization>) {
+        self.queue.execute_block_optimization(&mut optimization, self.handles, self.id);
     }
 }
 

@@ -84,6 +84,13 @@ fn cast_adam<B:Backend>(mut state:AdamWState<B,1>,dtype:DType) -> AdamWState<B,1
     state.momentum.max_moment_2=state.momentum.max_moment_2.map(|value|value.cast(dtype));state
 }
 impl<B:Backend> Record<B> for FullyShardedMuonAdamWState<B> {
+    fn map_parameters<M: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut M) -> Self {
+        self.muon = self.muon.map_parameters(mapper);
+        self.adamw = self.adamw.map_parameters(mapper);
+        self.master_muon = self.master_muon.map_parameters(mapper);
+        self.master_adamw = self.master_adamw.map_parameters(mapper);
+        self
+    }
     type Item<P:PrecisionSettings>=(DType,<Option<MuonFlatShardedState<B>> as Record<B>>::Item<P>,<Option<AdamWState<B,1>> as Record<B>>::Item<P>,
         <Option<Fp32MasterState<B,1,MuonFlatShardedState<B>>> as Record<B>>::Item<P>,<Option<Fp32MasterState<B,1,AdamWState<B,1>>> as Record<B>>::Item<P>);
     fn into_item<P:PrecisionSettings>(self) -> Self::Item<P> {

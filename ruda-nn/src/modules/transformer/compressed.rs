@@ -18,8 +18,9 @@ pub(crate) fn visible<B: Backend>(input: &Tensor<B, 3>, valid: Option<Tensor<B, 
     if let Some(valid) = valid {
         assert_eq!(valid.dims(), [batch, tokens], "hybrid visibility must describe the actual token slots");
         assert_eq!(valid.device(), input.device(), "hybrid visibility device differs");
-        valid
-    } else { Tensor::<B, 2, Bool>::zeros([batch, tokens], &input.device()).bool_not() }
+        let context = input.autodiff_context().merge(valid.autodiff_context());
+        valid.with_autodiff_context(context)
+    } else { Tensor::<B, 2, Bool>::zeros([batch, tokens], &input.device()).with_autodiff_context(input.autodiff_context()).bool_not() }
 }
 
 /// Explicit compressed-attention block with two independent mHC residual connections.

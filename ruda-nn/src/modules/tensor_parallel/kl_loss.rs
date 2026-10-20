@@ -26,6 +26,7 @@ impl KLDivLoss {
         let predictions = predictions.cast(dtype);let targets = targets.cast(dtype);
         if rows == 0 {return Ok(self.forward_terms(predictions,targets,visible));}
         let padding = Tensor::<Autodiff<B,S>,1,Int>::arange(interval.start as i64..interval.end as i64,(&predictions.device(),DType::I64))
+            .with_autodiff_context(predictions.autodiff_context().merge(targets.autodiff_context()))
             .greater_equal_elem(layout.vocabulary_size() as i64).reshape([1,width]).expand([rows,width]);
         let predictions = predictions.mask_fill(padding.clone(),0);
         let targets = targets.mask_fill(padding,if self.log_target {f64::NEG_INFINITY} else {0.});

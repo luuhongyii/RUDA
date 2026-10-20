@@ -17,6 +17,11 @@ impl<B:FrozenNf4Ops,S:CheckpointStrategy> FrozenNf4Ops for Autodiff<B,S> {
     type Nf4Error=FrozenNf4Error<B::Nf4Error>;
     fn frozen_nf4_forward(input:FloatTensor<Self>,packed:IntTensor<Self>,scales:FloatTensor<Self>,codebook:FloatTensor<Self>,
         bias:Option<FloatTensor<Self>>,options:Nf4ProjectionOptions) -> Result<FloatTensor<Self>,Self::Nf4Error> {
+        let context = input.context::<S>().merge(scales.context::<S>()).merge(codebook.context::<S>()).merge(packed.context).merge(bias.as_ref().map_or(ruda_tensor::AutodiffContext::Disabled, |value| value.context::<S>()));
+        let input = input.with_context::<S>(context);
+        let scales = scales.with_context::<S>(context);
+        let codebook = codebook.with_context::<S>(context);
+        let packed = packed.primitive;
         if scales.is_tracked() || codebook.is_tracked() || bias.as_ref().is_some_and(|value|value.is_tracked()) {return Err(FrozenNf4Error::TrainableBase);}
         let dtype=input.primitive.dtype();
         let state=(packed.clone(),scales.primitive.clone(),codebook.primitive.clone(),options);
@@ -28,9 +33,14 @@ impl<B:FrozenNf4Ops,S:CheckpointStrategy> FrozenNf4Ops for Autodiff<B,S> {
     }
     fn frozen_nf4_input_backward(gradient:FloatTensor<Self>,packed:IntTensor<Self>,scales:FloatTensor<Self>,codebook:FloatTensor<Self>,
         options:Nf4ProjectionOptions,activation_dtype:FloatDType) -> Result<FloatTensor<Self>,Self::Nf4Error> {
+        let context = gradient.context::<S>().merge(scales.context::<S>()).merge(codebook.context::<S>()).merge(packed.context);
+        let gradient = gradient.with_context::<S>(context);
+        let scales = scales.with_context::<S>(context);
+        let codebook = codebook.with_context::<S>(context);
+        let packed = packed.primitive;
         if scales.is_tracked() || codebook.is_tracked() {return Err(FrozenNf4Error::TrainableBase);}
         if gradient.is_tracked() {return Err(FrozenNf4Error::InputGradientNotDifferentiable);}
         B::frozen_nf4_input_backward(gradient.primitive,packed,scales.primitive,codebook.primitive,options,activation_dtype)
-            .map(AutodiffTensor::new).map_err(FrozenNf4Error::Native)
+            .map(|value| AutodiffTensor::new(value).with_context::<S>(context)).map_err(FrozenNf4Error::Native)
     }
 }

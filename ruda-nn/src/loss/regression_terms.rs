@@ -12,11 +12,13 @@ fn prepare<B: Backend,const D: usize>(predictions: Tensor<B,D>,targets: Tensor<B
     assert_eq!(predictions.device(),targets.device(),"regression operands must share the device");
     check_float(predictions.dtype()); check_float(targets.dtype());
     let dtype = if predictions.dtype() == DType::F64 || targets.dtype() == DType::F64 {DType::F64} else {DType::F32};
+    let mut context = predictions.autodiff_context().merge(targets.autodiff_context());
+    if let Some(visible) = &visible { context = context.merge(visible.autodiff_context()); }
     let valid = if let Some(visible) = visible {
         assert_eq!(visible.dims(),predictions.dims(),"regression selection differs from actual element geometry");
         assert_eq!(visible.device(),predictions.device(),"regression selection must share the operand device");
-        visible
-    } else {Tensor::<B,D,Bool>::zeros(predictions.dims(),&predictions.device()).bool_not()};
+        visible.with_autodiff_context(context)
+    } else {Tensor::<B,D,Bool>::zeros(predictions.dims(),&predictions.device()).with_autodiff_context(context).bool_not()};
     let excluded = valid.clone().bool_not();
     (predictions.cast(dtype).mask_fill(excluded.clone(),0),targets.cast(dtype).mask_fill(excluded,0),valid)
 }

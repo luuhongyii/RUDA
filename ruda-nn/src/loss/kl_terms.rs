@@ -13,15 +13,17 @@ impl KLDivLoss {
         let [rows,classes] = predictions.dims();
         assert!(classes > 0,"KL class dimension must be nonempty");
         let dtype = if predictions.dtype() == DType::F64 || targets.dtype() == DType::F64 {DType::F64} else {DType::F32};
+        let mut context = predictions.autodiff_context().merge(targets.autodiff_context());
+        if let Some(visible) = &visible { context = context.merge(visible.autodiff_context()); }
         let excluded = if let Some(visible) = visible {
             assert_eq!(visible.dims(),[rows],"KL row selection geometry differs");
             assert_eq!(visible.device(),predictions.device(),"KL row selection device differs");
-            visible.bool_not()
-        } else {Tensor::<B,1,Bool>::zeros([rows],&predictions.device())};
+            visible.with_autodiff_context(context).bool_not()
+        } else {Tensor::<B,1,Bool>::zeros([rows],&predictions.device()).with_autodiff_context(context)};
         let valid = excluded.clone().bool_not();
         if rows == 0 {
-            return CategoricalLossTerms {values:predictions.cast(dtype).reshape([0])+targets.cast(dtype).reshape([0]),
-                normalizers:Tensor::zeros([0],(&valid.device(),dtype)),valid};
+            return CategoricalLossTerms {values:(predictions.cast(dtype).reshape([0])+targets.cast(dtype).reshape([0])).with_autodiff_context(context),
+                normalizers:Tensor::zeros([0],(&valid.device(),dtype)).with_autodiff_context(context),valid};
         }
         let excluded_classes = excluded.clone().reshape([rows,1]).expand([rows,classes]);
         let predictions = predictions.cast(dtype).mask_fill(excluded_classes.clone(),0);

@@ -9,7 +9,11 @@ mod backend;
 mod bridge;
 mod channel;
 mod client;
+mod custom_op;
 mod graph;
+/// Client-side cached graph execution for router backends.
+#[cfg(feature = "fusion")]
+pub mod fusion;
 mod ops;
 mod runner;
 mod tensor;
@@ -27,6 +31,8 @@ pub use backend::*;
 pub use bridge::*;
 pub use channel::*;
 pub use client::*;
+pub use custom_op::*;
+pub use graph::CachedGraph;
 pub use runner::*;
 pub use tensor::*;
 pub use types::*;
@@ -46,6 +52,9 @@ pub type DirectByteChannel<Backends> = DirectChannel<Backends, ByteBridge<Backen
 pub type Router<Backends> = BackendRouter<DirectByteChannel<Backends>>;
 
 extern crate alloc;
+
+#[cfg(test)]
+mod ownership_tests;
 
 #[cfg(test)]
 #[allow(unused)]

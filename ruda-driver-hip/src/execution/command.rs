@@ -34,6 +34,7 @@ use std::{ffi::c_void, sync::Arc};
 /// interface for executing GPU-related operations such as memory allocation, data transfers, kernel
 /// registration, and task execution.
 pub struct Command<'a> {
+    service: ruda_core::device::ServiceId,
     ctx: &'a mut HipContext,
     pub(crate) streams: ResolvedStreams<'a, HipStreamBackend>,
 }
@@ -107,7 +108,7 @@ impl<'a> Command<'a> {
 
     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip(self)))]
     pub fn empty(&mut self, size: u64) -> Result<Handle, IoError> {
-        let handle = Handle::new(self.streams.current, size);
+        let handle = Handle::new(self.service, self.streams.current, size);
         let reserved = self.reserve(size)?;
         self.bind(reserved, handle.memory.clone());
 
@@ -248,6 +249,9 @@ impl<'a> Command<'a> {
         bytes: &mut Bytes,
         stream_id: Option<StreamId>,
     ) -> Result<(), IoError> {
+        if let Err(error) = Binding::check_all(core::iter::once(&descriptor.handle)) {
+            return Err(IoError::Execution(Box::new(error)));
+        }
         let CopyDescriptor {
             handle: binding,
             shape,
@@ -285,12 +289,18 @@ impl<'a> Command<'a> {
     /// * `Ok(())` - If the write operation succeeds.
     /// * `Err(IoError)` - If the strides are invalid or the resource cannot be accessed.
     pub fn write_to_gpu(&mut self, descriptor: CopyDescriptor, data: Bytes) -> Result<(), IoError> {
+        if data.is_empty() || descriptor.shape.contains(&0) { return Ok(()); }
+        let scope = ruda::runtime::server::WriteScope::new(vec![descriptor.handle.clone()]);
+        let result = (|| -> Result<(), IoError> {
         let CopyDescriptor {
             handle: binding,
             shape,
             strides,
             elem_size,
         } = descriptor;
+        let (shape, strides) = if shape.is_empty() && strides.is_empty() {
+            (Shape::from([1]), Strides::from([1]))
+        } else { (shape, strides) };
         if !has_pitched_row_major_strides(&shape, &strides) {
             return Err(IoError::UnsupportedStrides {
                 backtrace: BackTrace::capture(),
@@ -301,7 +311,8 @@ impl<'a> Command<'a> {
         let size = data.len();
         let data = match data.property() {
             AllocationProperty::File => {
-                let mut buffer = self.reserve_pinned(size, None).unwrap();
+                let mut buffer = self.reserve_pinned(size, None)
+                    .unwrap_or_else(|| Bytes::from_bytes_vec(vec![0; size]));
                 data.copy_into(&mut buffer);
                 buffer
             }
@@ -319,6 +330,15 @@ impl<'a> Command<'a> {
         current.drop_queue.push(data);
 
         Ok(())
+        })();
+        match result {
+            Ok(()) => { scope.complete(); Ok(()) }
+            Err(error) => {
+                self.ctx.timestamps.error(ProfileError::Server(Box::new(ServerError::Io(error.clone()))));
+                scope.fail(ServerError::Io(error.clone()));
+                Err(error)
+            }
+        }
     }
 
     /// Allocates a new GPU memory buffer and immediately copies contiguous host data into it.
@@ -381,19 +401,26 @@ impl<'a> Command<'a> {
     /// # Panics
     ///
     /// * If the execution fails, with an error message or profiling error.
+    pub fn prepare_kernel(
+        &mut self,
+        kernel_id: &KernelId,
+        kernel: Box<dyn RudaTask<HipCompiler>>,
+        mode: ExecutionMode,
+        logger: Arc<ServerLogger>,
+    ) -> Result<Option<ruda_core::kernel::KernelIo>, LaunchError> {
+        self.ctx.refresh_compilation_environment();
+        if !self.ctx.module_names.contains_key(kernel_id) {
+            self.ctx.compile_kernel(kernel_id, kernel, mode, logger)?;
+        }
+        Ok(self.ctx.module_names[kernel_id].io.clone())
+    }
+
     pub fn kernel(
         &mut self,
         kernel_id: KernelId,
-        kernel: Box<dyn RudaTask<HipCompiler>>,
-        mode: ExecutionMode,
         dispatch_count: (u32, u32, u32),
         resources: &[GpuResource],
-        logger: Arc<ServerLogger>,
     ) -> Result<(), LaunchError> {
-        if !self.ctx.module_names.contains_key(&kernel_id) {
-            self.ctx.compile_kernel(&kernel_id, kernel, mode, logger)?;
-        }
-
         let stream = self.streams.current();
 
         let result = self
@@ -405,18 +432,17 @@ impl<'a> Command<'a> {
         }
 
         if let Err(err) = result {
-            match self.ctx.timestamps.is_empty() {
-                true => Err(err)?,
-                false => self.ctx.timestamps.error(ProfileError::Launch(err)),
+            if !self.ctx.timestamps.is_empty() {
+                self.ctx.timestamps.error(ProfileError::Launch(err.clone()));
             }
+            return Err(err);
         };
 
         Ok(())
     }
 
     pub fn error(&mut self, error: ServerError) {
-        let stream = self.streams.current();
-        stream.errors.push(error);
+        self.ctx.timestamps.error(ProfileError::Server(Box::new(error.clone())));
     }
 }
 
@@ -451,10 +477,7 @@ pub(crate) unsafe fn write_to_cpu(
         };
 
         if status != HIP_SUCCESS {
-            return Err(IoError::Unknown {
-                description: format!("HIP memcpy failed: {status}"),
-                backtrace: BackTrace::capture(),
-            });
+            return Err(super::status::io("hipMemcpyDtoHAsync", status));
         }
         return Ok(());
     }
@@ -481,13 +504,18 @@ pub(crate) unsafe fn write_to_cpu(
 
         // Fallback, sometimes the copy doesn't work.
         if status != HIP_SUCCESS {
+            if super::status::poisons_device(status) {
+                return Err(super::status::io("hipMemcpy2DAsync", status));
+            }
             let status = ruda_hip_sys::hipMemcpyDtoHAsync(
                 bytes.as_mut_ptr() as *mut _,
                 resource_ptr,
                 bytes.len(),
                 stream,
             );
-            assert_eq!(status, HIP_SUCCESS, "Should send data to device");
+            if status != HIP_SUCCESS {
+                return Err(super::status::io("hipMemcpyDtoHAsync", status));
+            }
         }
     }
 
@@ -540,15 +568,24 @@ unsafe fn write_to_gpu(
                 hipMemcpyKind_hipMemcpyHostToDevice,
                 stream,
             );
-            assert_eq!(status, HIP_SUCCESS, "Should send data to device");
+            if status != HIP_SUCCESS {
+                return Err(super::status::io("hipMemcpy2DAsync", status));
+            }
         }
     } else {
         // SAFETY: For rank <= 1 data is contiguous. The assertion ensures the device
         // allocation is large enough. `ptr` points to valid host data of `data.len()` bytes.
         unsafe {
-            assert!(resource.size >= data.len() as u64);
+            if resource.size < data.len() as u64 {
+                return Err(IoError::Unknown {
+                    description: "Host copy exceeds the destination view".into(),
+                    backtrace: BackTrace::capture(),
+                });
+            }
             let status = ruda_hip_sys::hipMemcpyHtoDAsync(resource.ptr, ptr, data.len(), stream);
-            assert_eq!(status, HIP_SUCCESS, "Should send data to device");
+            if status != HIP_SUCCESS {
+                return Err(super::status::io("hipMemcpyHtoDAsync", status));
+            }
         }
     };
 

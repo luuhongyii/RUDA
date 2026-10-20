@@ -78,7 +78,7 @@ impl<N: Numeric, Sc: TileScope> Tile<N, Sc, ReadWrite> {
             // --- Cmma loads ---
             (Tile::SharedMemory(shared), Tile::Cmma(t)) => {
                 let shared = shared.view::<SS>();
-                cmma_load_from_shared::<SE, SS, N, SIO>(
+                cmma_load_from_shared::<SE, SS, N, SIO, _>(
                     &shared,
                     &mut t.matrix,
                     ident,
@@ -86,13 +86,13 @@ impl<N: Numeric, Sc: TileScope> Tile<N, Sc, ReadWrite> {
                 );
             }
             (Tile::None, Tile::Cmma(t)) => {
-                cmma_load_zeros::<N>(&mut t.matrix);
+                cmma_load_zeros::<N, _>(&mut t.matrix);
             }
 
             // --- Bounce loads (delegate to inner cmma) ---
             (Tile::SharedMemory(shared), Tile::Bounce(b)) => {
                 let shared = shared.view::<SS>();
-                cmma_load_from_shared::<SE, SS, N, SIO>(
+                cmma_load_from_shared::<SE, SS, N, SIO, _>(
                     &shared,
                     &mut b.cmma.matrix,
                     ident,
@@ -100,7 +100,7 @@ impl<N: Numeric, Sc: TileScope> Tile<N, Sc, ReadWrite> {
                 );
             }
             (Tile::None, Tile::Bounce(b)) => {
-                cmma_load_zeros::<N>(&mut b.cmma.matrix);
+                cmma_load_zeros::<N, _>(&mut b.cmma.matrix);
             }
 
             // --- Mma loads ---
@@ -177,11 +177,11 @@ impl<N: Numeric, Sc: TileScope> Tile<N, Sc, ReadWrite> {
             // --- Writes: shared memory copies from a compute container ---
             (Tile::Cmma(t), Tile::SharedMemory(shared)) => {
                 let mut shared = shared.view::<SS>();
-                cmma_write_to_shared::<N, SS, SE>(&mut shared, &t.matrix);
+                cmma_write_to_shared::<N, SS, SE, _>(&mut shared, &t.matrix);
             }
             (Tile::Bounce(b), Tile::SharedMemory(shared)) => {
                 let mut shared = shared.view::<SS>();
-                cmma_write_to_shared::<N, SS, SE>(&mut shared, &b.cmma.matrix);
+                cmma_write_to_shared::<N, SS, SE, _>(&mut shared, &b.cmma.matrix);
             }
             (Tile::Mma(t), Tile::SharedMemory(shared)) => {
                 let mut shared = shared.view::<SS>();

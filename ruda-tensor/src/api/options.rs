@@ -15,6 +15,8 @@ pub struct TensorCreationOptions<B: Backend> {
     /// Optional data type.
     /// If `None`, the dtype will be inferred on creation from the [device policy](crate::api::set_default_dtypes).
     pub dtype: Option<DType>,
+    /// Optional runtime association, independent of dtype and storage device.
+    pub autodiff_context: Option<crate::AutodiffContext>,
 }
 
 impl<B: Backend> Default for TensorCreationOptions<B> {
@@ -32,6 +34,7 @@ impl<B: Backend> TensorCreationOptions<B> {
         Self {
             device,
             dtype: None,
+            autodiff_context: None,
         }
     }
 
@@ -40,6 +43,19 @@ impl<B: Backend> TensorCreationOptions<B> {
         self.dtype = Some(dtype);
 
         self
+    }
+
+    /// Set the runtime association of the created tensor.
+    pub fn with_autodiff_context(mut self, context: crate::AutodiffContext) -> Self {
+        self.autodiff_context = Some(context);
+        self
+    }
+
+    pub(crate) fn apply_context<K: BasicOps<B>>(&self, tensor: K::Primitive) -> K::Primitive {
+        match self.autodiff_context {
+            Some(context) => K::with_autodiff_context(tensor, context),
+            None => tensor,
+        }
     }
 
     /// Set the tensor creation device.
@@ -75,6 +91,9 @@ impl<B: Backend> TensorCreationOptions<B> {
     pub(crate) fn resolve_dtype<K: BasicOps<B>>(&self) -> DType {
         let dtype = K::Elem::dtype();
         let kind_name = K::name();
+        if kind_name == "Bool" {
+            return get_device_settings::<B>(&self.device).bool_dtype.into();
+        }
         // TODO: tensor kind enum?
         self.dtype.unwrap_or_else(|| {
             let settings = get_device_settings::<B>(&self.device);

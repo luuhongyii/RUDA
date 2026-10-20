@@ -21,10 +21,10 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Stream {
+    pub(crate) capture: super::capture::CaptureState,
     pub sys: cudarc::driver::sys::CUstream,
     pub memory_management_gpu: MemoryManagement<GpuStorage>,
     pub memory_management_cpu: MemoryManagement<PinnedMemoryStorage>,
-    pub errors: Vec<ServerError>,
     pub drop_queue: drop_queue::PendingDropQueue<Fence>,
 }
 
@@ -32,6 +32,7 @@ impl drop_queue::Fence for Fence {
     fn sync(self) {
         let _ = self.wait_sync().ok();
     }
+    fn wait(self) -> Result<(), ServerError> { self.wait_sync() }
 }
 
 #[derive(new, Debug)]
@@ -47,20 +48,53 @@ impl EventStreamBackend for CudaStreamBackend {
     type Event = Fence;
 
     fn create_stream(&self) -> Self::Stream {
+        self.try_create_stream().unwrap_or_else(|error| panic!("CUDA stream creation failed: {error}"))
+    }
+
+    fn try_create_stream(&self) -> Result<Self::Stream, ServerError> {
         let stream = cudarc::driver::result::stream::create(
             cudarc::driver::result::stream::StreamKind::NonBlocking,
         )
-        .expect("Can create a new stream.");
+        .map_err(|error| super::status::server("cuStreamCreate", error))?;
 
-        self.wrap_stream(stream)
+        Ok(self.wrap_stream(stream))
     }
 
     fn flush(stream: &mut Self::Stream) -> Self::Event {
         Fence::new(stream.sys)
     }
 
+    fn dependency_event(stream: &mut Self::Stream) -> Option<Self::Event> {
+        if stream.capture.recording { None } else { Some(Fence::new(stream.sys)) }
+    }
+
+    fn dependency_event_for(stream: &mut Self::Stream, recording: bool) -> Result<Option<Self::Event>, ServerError> {
+        if recording && !stream.capture.recording {
+            super::capture::checked("cuStreamSynchronize capture input", unsafe {
+                cudarc::driver::sys::cuStreamSynchronize(stream.sys)
+            })?;
+            Ok(None)
+        } else {
+            Ok(Self::dependency_event(stream))
+        }
+    }
+
+    fn dependency_failed(stream: &mut Self::Stream, error: &ServerError) {
+        if stream.capture.recording { stream.capture.failed.get_or_insert_with(|| error.clone()); }
+    }
+
+    fn dependency_cursor(stream: &Self::Stream, cursor: u64) -> u64 {
+        if stream.capture.recording { stream.capture.entry_cursor } else { cursor }
+    }
+
     fn wait_event(stream: &mut Self::Stream, event: Self::Event) {
-        event.wait_async(stream.sys);
+        if let Err(error) = event.wait_async(stream.sys) {
+            log::error!("CUDA event dependency failed: {error}");
+        }
+    }
+
+    fn wait_event_checked(stream: &mut Self::Stream, event: Self::Event) -> Result<(), ServerError> {
+        event.wait_async(stream.sys)
     }
 
     fn wait_event_sync(event: Self::Event) -> Result<(), ServerError> {
@@ -71,12 +105,14 @@ impl EventStreamBackend for CudaStreamBackend {
         stream
             .memory_management_gpu
             .get_cursor(binding.memory.clone())
-            .unwrap()
+            .unwrap_or(0)
     }
 
-    fn is_healthy(stream: &Self::Stream) -> bool {
-        stream.errors.is_empty()
+    fn is_healthy(_stream: &Self::Stream) -> bool {
+        true
     }
+
+    fn is_recording(stream: &Self::Stream) -> bool { stream.capture.recording }
 }
 
 impl CudaStreamBackend {
@@ -87,8 +123,7 @@ impl CudaStreamBackend {
         let status = unsafe { cudarc::driver::sys::cuStreamCreateWithPriority(
             &mut stream, cudarc::driver::sys::CUstream_flags::CU_STREAM_NON_BLOCKING as u32, priority) };
         if status != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
-            return Err(ServerError::Generic { reason: format!("CUDA priority stream creation failed: {status:?}"),
-                backtrace: ruda_core::backtrace::BackTrace::capture() });
+            return Err(super::status::server("cuStreamCreateWithPriority", cudarc::driver::DriverError(status)));
         }
         Ok(self.wrap_stream(stream))
     }
@@ -110,20 +145,17 @@ impl CudaStreamBackend {
         };
         let memory_management_cpu = MemoryManagement::from_configuration(
             PinnedMemoryStorage::new(),
-            &MemoryDeviceProperties {
-                max_page_size: self.mem_props.max_page_size,
-                alignment: PINNED_MEMORY_ALIGNMENT as u64,
-            },
+            &MemoryDeviceProperties::new(self.mem_props.max_page_size, PINNED_MEMORY_ALIGNMENT as u64),
             host_memory_config,
             self.logger.clone(),
             MemoryManagementOptions::new("Pinned CPU Memory").mode(MemoryAllocationMode::Auto),
         );
 
         Stream {
+            capture: Default::default(),
             sys: stream,
             memory_management_gpu,
             memory_management_cpu,
-            errors: Vec::new(),
             drop_queue: Default::default(),
         }
     }

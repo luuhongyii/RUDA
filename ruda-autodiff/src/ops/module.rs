@@ -66,6 +66,70 @@ fn causal_attention_probabilities<B: Backend>(
 }
 
 impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B, C> {
+    fn batch_norm_train(
+        x: AutodiffTensor<B>, gamma: AutodiffTensor<B>, beta: AutodiffTensor<B>, epsilon: f64,
+    ) -> BatchNormTrain<Self> {
+        #[derive(Debug)]
+        struct BatchNormTrainOps;
+
+        impl<B: Backend> Backward<B, 3> for BatchNormTrainOps {
+            type State = (NodeId, NodeId, B::FloatTensorPrimitive, B::FloatTensorPrimitive, f64);
+
+            fn backward(
+                self, ops: Ops<Self::State, 3>, grads: &mut Gradients, checkpointer: &mut Checkpointer,
+            ) {
+                let [node_x, node_gamma, node_beta] = ops.parents;
+                let grad = grads.consume::<B>(&ops.node);
+                let (x_state, gamma_state, mean, variance, epsilon) = ops.state;
+                let x = checkpointer.retrieve_node_output::<B::FloatTensorPrimitive>(x_state);
+                let gamma = checkpointer.retrieve_node_output::<B::FloatTensorPrimitive>(gamma_state);
+                let backward = B::batch_norm_train_backward(x, gamma, mean, variance, epsilon, grad);
+                if let Some(node) = node_x {
+                    grads.register::<B>(node.id, backward.x_grad);
+                }
+                if let Some(node) = node_gamma {
+                    grads.register::<B>(node.id, backward.gamma_grad);
+                }
+                if let Some(node) = node_beta {
+                    grads.register::<B>(node.id, backward.beta_grad);
+                }
+            }
+        }
+
+        let context = x.context::<C>().merge(gamma.context::<C>()).merge(beta.context::<C>());
+        match BatchNormTrainOps.prepare::<C>([x.node.clone(), gamma.node.clone(), beta.node.clone()])
+            .compute_bound().stateful()
+        {
+            OpsKind::Tracked(mut prep) => {
+                let x_state = prep.checkpoint(&x);
+                let gamma_state = prep.checkpoint(&gamma);
+                let result = B::batch_norm_train(x.primitive, gamma.primitive, beta.primitive, epsilon);
+                let output = prep.finish(
+                    (x_state, gamma_state, result.mean.clone(), result.variance.clone(), epsilon),
+                    result.output,
+                );
+                BatchNormTrain::new(
+                    output, AutodiffTensor::new(result.mean).with_context::<C>(context),
+                    AutodiffTensor::new(result.variance).with_context::<C>(context),
+                )
+            }
+            OpsKind::UnTracked(prep) => {
+                let result = B::batch_norm_train(x.primitive, gamma.primitive, beta.primitive, epsilon);
+                BatchNormTrain::new(
+                    prep.finish(result.output), AutodiffTensor::new(result.mean).with_context::<C>(context),
+                    AutodiffTensor::new(result.variance).with_context::<C>(context),
+                )
+            }
+        }
+    }
+
+    fn batch_norm_train_backward(
+        _x: AutodiffTensor<B>, _gamma: AutodiffTensor<B>, _mean: AutodiffTensor<B>,
+        _variance: AutodiffTensor<B>, _epsilon: f64, _output_grad: AutodiffTensor<B>,
+    ) -> BatchNormTrainBackward<Self> {
+        panic!("Can't differentiate batch norm train backward.");
+    }
+
     fn exponential_relu_native(tensor: AutodiffTensor<B>, alpha: f64, continuous: bool) -> AutodiffTensor<B> {
         #[derive(Debug)]
         struct ExponentialRelu;
@@ -337,7 +401,10 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
         }
     }
 
-    fn embedding(weights: AutodiffTensor<B>, indices: IntTensor<B>) -> AutodiffTensor<B> {
+    fn embedding(weights: AutodiffTensor<B>, indices: IntTensor<Self>) -> AutodiffTensor<B> {
+        let context = weights.context::<C>().merge(indices.context);
+        let weights = weights.with_context::<C>(context);
+        let indices = indices.primitive;
         #[derive(Debug)]
         struct Embedding;
 
@@ -1848,6 +1915,7 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
         dilation: usize,
         ceil_mode: bool,
     ) -> MaxPool1dWithIndices<Self> {
+        let context = x.context::<C>();
         match MaxPool1D
             .prepare::<C>([x.node.clone()])
             .compute_bound()
@@ -1877,7 +1945,7 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
                     output.output,
                 );
 
-                MaxPool1dWithIndices::new(output_tensor, output.indices)
+                MaxPool1dWithIndices::new(output_tensor, crate::AutodiffValue::with_context(output.indices, context))
             }
             OpsKind::UnTracked(prep) => {
                 let output = B::max_pool1d_with_indices(
@@ -1890,7 +1958,7 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
                 );
                 let output_tensor = prep.finish(output.output);
 
-                MaxPool1dWithIndices::new(output_tensor, output.indices)
+                MaxPool1dWithIndices::new(output_tensor, crate::AutodiffValue::with_context(output.indices, context))
             }
         }
     }
@@ -1950,6 +2018,7 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
         dilation: [usize; 2],
         ceil_mode: bool,
     ) -> MaxPool2dWithIndices<Self> {
+        let context = x.context::<C>();
         match MaxPool2D
             .prepare::<C>([x.node.clone()])
             .compute_bound()
@@ -1980,7 +2049,7 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
                     output.output,
                 );
 
-                MaxPool2dWithIndices::new(output_tensor, output.indices)
+                MaxPool2dWithIndices::new(output_tensor, crate::AutodiffValue::with_context(output.indices, context))
             }
             OpsKind::UnTracked(prep) => {
                 let output = B::max_pool2d_with_indices(
@@ -1993,7 +2062,7 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
                 );
                 let output_tensor = prep.finish(output.output);
 
-                MaxPool2dWithIndices::new(output_tensor, output.indices)
+                MaxPool2dWithIndices::new(output_tensor, crate::AutodiffValue::with_context(output.indices, context))
             }
         }
     }
@@ -2023,6 +2092,7 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
         x: AutodiffTensor<B>, kernel_size: [usize; 3], stride: [usize; 3],
         padding: [usize; 3], dilation: [usize; 3], ceil_mode: bool,
     ) -> MaxPool3dWithIndices<Self> {
+        let context = x.context::<C>();
         match MaxPool3D.prepare::<C>([x.node.clone()]).compute_bound().stateful() {
             OpsKind::Tracked(mut prep) => {
                 let x_state = prep.checkpoint(&x);
@@ -2033,20 +2103,24 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
                     (x_state, output.indices.clone(), kernel_size, stride, padding, dilation, ceil_mode),
                     output.output,
                 );
-                MaxPool3dWithIndices::new(tensor, output.indices)
+                MaxPool3dWithIndices::new(tensor, crate::AutodiffValue::with_context(output.indices, context))
             }
             OpsKind::UnTracked(prep) => {
                 let output = B::max_pool3d_with_indices(
                     x.primitive, kernel_size, stride, padding, dilation, ceil_mode,
                 );
-                MaxPool3dWithIndices::new(prep.finish(output.output), output.indices)
+                MaxPool3dWithIndices::new(prep.finish(output.output), crate::AutodiffValue::with_context(output.indices, context))
             }
         }
     }
 
     fn max_pool3d_with_indices_backward(x: AutodiffTensor<B>, grad: AutodiffTensor<B>,
-        indices: IntTensor<B>, kernel: [usize; 3], stride: [usize; 3], padding: [usize; 3],
+        indices: IntTensor<Self>, kernel: [usize; 3], stride: [usize; 3], padding: [usize; 3],
         dilation: [usize; 3], ceil: bool) -> MaxPool3dBackward<Self> {
+        let context = x.context::<C>().merge(grad.context::<C>()).merge(indices.context);
+        let x = x.with_context::<C>(context);
+        let grad = grad.with_context::<C>(context);
+        let indices = indices.primitive;
         MaxPool3dBackward::new(super::pool_backward::maximum_volume::<B, C>(
             x, grad, indices, kernel, stride, padding, dilation, ceil))
     }
@@ -2059,8 +2133,12 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
         dilation: [usize; 2],
         ceil_mode: bool,
         output_grad: AutodiffTensor<B>,
-        indices: IntTensor<B>,
+        indices: IntTensor<Self>,
     ) -> MaxPool2dBackward<Self> {
+        let context = x.context::<C>().merge(output_grad.context::<C>()).merge(indices.context);
+        let x = x.with_context::<C>(context);
+        let output_grad = output_grad.with_context::<C>(context);
+        let indices = indices.primitive;
         MaxPool2dBackward::new(super::pool_backward::maximum::<B, C>(
             x, output_grad, indices, kernel_size, stride, padding, dilation, ceil_mode,
         ))
@@ -2480,6 +2558,12 @@ impl<B: Backend, C: CheckpointStrategy> ModuleOps<Autodiff<B, C>> for Autodiff<B
                 blank,
             );
         }
+
+        let context = log_probs.context::<C>().merge(targets.context).merge(input_lengths.context).merge(target_lengths.context);
+        let log_probs = log_probs.with_context::<C>(context);
+        let targets = targets.primitive;
+        let input_lengths = input_lengths.primitive;
+        let target_lengths = target_lengths.primitive;
 
         #[derive(Debug)]
         struct CtcLoss;

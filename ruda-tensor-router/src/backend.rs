@@ -72,6 +72,41 @@ impl<R: RunnerChannel> Backend for BackendRouter<R> {
         client.sync()
     }
 
+    fn flush(device: &Self::Device) -> Result<(), ExecutionError> {
+        get_client::<R>(device).flush()
+    }
+
+    fn profile<O: Send + 'static>(device: &Self::Device, options: ruda_tensor::ProfileOptions,
+        func: impl FnOnce() -> O + Send) -> Result<(O, ruda_tensor::ProfileDuration), ExecutionError> {
+        ruda_tensor::profile_with_tokens::<Self, O>(device, options, func)
+    }
+    fn profile_start(device: &Self::Device) -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> {
+        get_client::<R>(device).profile_start()
+    }
+    fn profile_end(device: &Self::Device, token: ruda_tensor::ProfileToken, options: ruda_tensor::ProfileOptions)
+        -> Result<ruda_tensor::ProfileDuration, ExecutionError> { get_client::<R>(device).profile_end(token, options) }
+    fn profile_abandon(device: &Self::Device, token: ruda_tensor::ProfileToken) { get_client::<R>(device).profile_abandon(token); }
+
+    fn graph_prepare(device: &Self::Device) -> Result<(), ExecutionError> {
+        get_client::<R>(device).graph_prepare()
+    }
+
+    fn graph_start_capture(device: &Self::Device) -> Result<(), ExecutionError> {
+        get_client::<R>(device).graph_start_capture()
+    }
+
+    fn graph_stop_capture(device: &Self::Device) -> Result<ruda_tensor::BackendGraph, ExecutionError> {
+        get_client::<R>(device).graph_stop_capture()
+    }
+
+    fn graph_abort_capture(device: &Self::Device) {
+        get_client::<R>(device).graph_abort_capture()
+    }
+
+    unsafe fn graph_replay(device: &Self::Device, graph: &ruda_tensor::BackendGraph) -> Result<(), ExecutionError> {
+        unsafe { get_client::<R>(device).graph_replay(graph) }
+    }
+
     fn dtype_usage(device: &Self::Device, dtype: DType) -> ruda_tensor::DTypeUsageSet {
         let client = get_client::<R>(device);
         client.dtype_usage(dtype)

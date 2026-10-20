@@ -8,6 +8,37 @@ use crate::{
     tensor::{IndexingUpdateOp, IntTensor, TensorKind},
 };
 
+pub(crate) fn select_indices<B: Backend>(dim: usize, indices: IntTensor<B>, shape: Shape) -> IntTensor<B> {
+    let mut index_shape = alloc::vec![1; shape.rank()];
+    index_shape[dim] = indices.shape()[0];
+    B::int_expand(B::int_reshape(indices, Shape::from(index_shape)), shape)
+}
+
+pub(crate) fn scatter_coordinates<B: Backend>(dim: usize, indices: IntTensor<B>) -> IntTensor<B> {
+    let shape = indices.shape();
+    let count = shape.num_elements();
+    let rank = shape.rank();
+    let device = B::int_device(&indices);
+    let indices = B::int_cast(indices, crate::IntDType::I64);
+    let flat = B::int_with_autodiff_context(
+        B::int_arange(0..count as i64, &device, crate::IntDType::I64), B::int_autodiff_context(&indices));
+    let mut stride = count;
+    let mut columns = Vec::with_capacity(rank);
+    for (axis, size) in shape.iter().copied().enumerate() {
+        stride /= size;
+        let column = if axis == dim {
+            indices.clone()
+        } else {
+            B::int_remainder_scalar(
+                B::int_div_scalar(flat.clone(), Scalar::new(stride as i64, &DType::I64)),
+                Scalar::new(size as i64, &DType::I64),
+            )
+        };
+        columns.push(B::int_reshape(column, Shape::from([count, 1])));
+    }
+    B::int_cat(columns, 1)
+}
+
 /// Trait for the one basic op that still requires Backend
 ///
 /// # Warnings
@@ -34,6 +65,32 @@ pub trait TransactionOp<B: Backend>: TensorKind<B> {
 #[cfg_attr(not(doc), doc = "`Tensor`")]
 /// struct.
 pub trait BasicOps<B: BackendTypes>: TensorKind<B> {
+    #[doc(hidden)]
+    fn erase_primitive(_tensor: Self::Primitive) -> crate::primitive::ErasedTensorPrimitive<B>
+    where B: Backend {
+        panic!("Tensor kind does not implement erased module traversal")
+    }
+
+    #[doc(hidden)]
+    fn restore_primitive(_tensor: crate::primitive::ErasedTensorPrimitive<B>) -> Self::Primitive
+    where B: Backend {
+        panic!("Tensor kind does not implement erased module traversal")
+    }
+
+    /// Runtime association independent of the tensor's element kind.
+    fn autodiff_context(_tensor: &Self::Primitive) -> crate::AutodiffContext { crate::AutodiffContext::Disabled }
+
+    /// Attach runtime association to a value of this element kind.
+    fn with_autodiff_context(tensor: Self::Primitive, context: crate::AutodiffContext) -> Self::Primitive {
+        assert_eq!(Self::autodiff_context(&tensor), context, "Tensor kind does not support this autodiff context");
+        tensor
+    }
+
+    /// Copy runtime association to newly created storage without copying graph history.
+    fn inherit_context(tensor: Self::Primitive, reference: &Self::Primitive) -> Self::Primitive {
+        Self::with_autodiff_context(tensor, Self::autodiff_context(reference))
+    }
+
     /// The type of the tensor elements.
     type Elem: Element;
 

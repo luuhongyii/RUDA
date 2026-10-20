@@ -103,7 +103,8 @@ impl<B:Backend> ShardingContext<B> {
                 | Activation::Sigmoid(_) | Activation::Tanh(_) | Activation::HardSigmoid(_) | Activation::HardSwish(_)
                 | Activation::Softplus(_) | Activation::Softsign(_) | Activation::Elu(_) | Activation::Celu(_)
                 | Activation::ThresholdedRelu(_) | Activation::HardShrink(_) | Activation::SoftShrink(_) | Activation::Shrink(_)
-                | Activation::Silu(_))=>FullyShardedActivation::Stateless(other),
+                | Activation::Silu(_) | Activation::Relu6(_) | Activation::Hardtanh(_) | Activation::LogSigmoid(_)
+                | Activation::Mish(_) | Activation::Tanhshrink(_) | Activation::Threshold(_))=>FullyShardedActivation::Stateless(other),
         }
     }
 

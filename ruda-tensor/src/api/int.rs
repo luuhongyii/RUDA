@@ -1,7 +1,7 @@
 use crate::{Scalar, get_device_settings};
 
 use crate::api::{
-    Cast, Float, Int, Shape, Tensor, TensorCreationOptions, TensorData, TensorPrimitive,
+    Cast, ElementConversion, Float, Int, Shape, Tensor, TensorCreationOptions, TensorData, TensorPrimitive,
     backend::Backend, cartesian_grid,
 };
 
@@ -20,7 +20,7 @@ where
     pub fn arange(range: Range<i64>, options: impl Into<TensorCreationOptions<B>>) -> Self {
         let opt = options.into();
         let dtype = opt.resolve_dtype::<Int>();
-        Tensor::new(B::int_arange(range, &opt.device, dtype.into()))
+        Tensor::new(opt.apply_context::<Int>(B::int_arange(range, &opt.device, dtype.into())))
     }
 
     /// Returns a new integer tensor on the specified device.
@@ -36,7 +36,7 @@ where
     ) -> Self {
         let opt = options.into();
         let dtype = opt.resolve_dtype::<Int>();
-        Tensor::new(B::int_arange_step(range, step, &opt.device, dtype.into()))
+        Tensor::new(opt.apply_context::<Int>(B::int_arange_step(range, step, &opt.device, dtype.into())))
     }
 }
 
@@ -136,19 +136,19 @@ where
     }
 
     /// Applies the bitwise logical and operation with each bit in the scalar and the integers in the tensor.
-    pub fn bitwise_and_scalar(self, other: B::IntElem) -> Self {
+    pub fn bitwise_and_scalar(self, other: impl ElementConversion) -> Self {
         let other = Scalar::new(other, &self.dtype());
         Self::new(B::bitwise_and_scalar(self.primitive, other))
     }
 
     /// Applies the bitwise logical or operation with each bit in the scalar and the integers in the tensor.
-    pub fn bitwise_or_scalar(self, other: B::IntElem) -> Self {
+    pub fn bitwise_or_scalar(self, other: impl ElementConversion) -> Self {
         let other = Scalar::new(other, &self.dtype());
         Self::new(B::bitwise_or_scalar(self.primitive, other))
     }
 
     /// Applies bitwise logical xor operation with each bit in the scalar and the integers in the tensor.
-    pub fn bitwise_xor_scalar(self, other: B::IntElem) -> Self {
+    pub fn bitwise_xor_scalar(self, other: impl ElementConversion) -> Self {
         let other = Scalar::new(other, &self.dtype());
         Self::new(B::bitwise_xor_scalar(self.primitive, other))
     }
@@ -164,13 +164,13 @@ where
     }
 
     /// Applies the bitwise left shift operation with the scalar.
-    pub fn bitwise_left_shift_scalar(self, other: B::IntElem) -> Self {
+    pub fn bitwise_left_shift_scalar(self, other: impl ElementConversion) -> Self {
         let other = Scalar::new(other, &self.dtype());
         Self::new(B::bitwise_left_shift_scalar(self.primitive, other))
     }
 
     /// Applies the bitwise right shift operation with the scalar.
-    pub fn bitwise_right_shift_scalar(self, other: B::IntElem) -> Self {
+    pub fn bitwise_right_shift_scalar(self, other: impl ElementConversion) -> Self {
         let other = Scalar::new(other, &self.dtype());
         Self::new(B::bitwise_right_shift_scalar(self.primitive, other))
     }

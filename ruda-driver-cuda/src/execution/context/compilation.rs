@@ -9,6 +9,17 @@ impl CudaContext {
         mode: ExecutionMode,
         logger: Arc<ServerLogger>,
     ) -> Result<(), LaunchError> {
+        self.refresh_compilation_environment();
+        let mut recording = CompilationRecording::new(kernel_id);
+        if let Some(entry) = self.artifacts.get(kernel_id) {
+            self.load_ptx(
+                entry.ptx, kernel_id.clone(), entry.entrypoint_name, kernel_id.ruda_dim,
+                entry.shared_mem_bytes, entry.dynamic_metadata_index,
+                entry.io,
+            )?;
+            recording.loaded();
+            return Ok(());
+        }
         let hash = if let Some(cache) = &self.ptx_cache {
             let hash = kernel_id.stable_hash();
 
@@ -22,6 +33,7 @@ impl CudaContext {
                     kernel_id.ruda_dim,
                     entry.shared_mem_bytes,
                     entry.dynamic_metadata_index,
+                    entry.io.clone(),
                 )?;
                 return Ok(());
             }
@@ -37,14 +49,15 @@ impl CudaContext {
 
         #[cfg(feature = "direct-ptx")]
         if let crate::compiler_backend::CompilerBackend::DirectPtx { version } = self.backend {
-            return self.compile_direct_ptx(kernel_id, kernel.as_ref(), mode, logger, hash, version);
+            return self.compile_direct_ptx(kernel_id, kernel.as_ref(), mode, logger, hash, version, recording);
         }
 
-        let mut kernel_compiled = kernel.compile(
+        let mut kernel_compiled = kernel.compile_recorded(
             &mut Default::default(),
             &self.compilation_options,
             mode,
             kernel.address_type(),
+            &mut recording,
         )?;
 
         self.validate_shared(&kernel_compiled.repr)?;
@@ -74,6 +87,16 @@ impl CudaContext {
         }
 
         logger.log_compilation(&kernel_compiled);
+        recording.source(&kernel_compiled.source);
+        if let Some((entry, stored)) = self.artifacts.rekey(kernel_id, &kernel_compiled.source) {
+            self.load_ptx(
+                entry.ptx, kernel_id.clone(), entry.entrypoint_name, kernel_id.ruda_dim,
+                entry.shared_mem_bytes, entry.dynamic_metadata_index,
+                kernel_compiled.io.clone(),
+            )?;
+            recording.rekeyed(stored);
+            return Ok(());
+        }
 
         // SAFETY: Calling NVRTC FFI to create, compile, and extract PTX from a program.
         // The `CString` source is null-terminated and outlives the program. On compilation
@@ -125,16 +148,28 @@ impl CudaContext {
             })?
         };
 
-        let repr = kernel_compiled.repr.unwrap();
+        let shared_mem_bytes = kernel_compiled.repr.as_ref().map_or(0, |repr| repr.shared_memory_size());
+        let dynamic_metadata_index = kernel_compiled.repr.as_ref().and_then(|repr| {
+            (repr.flags.use_grid_constants && repr.flags.has_dynamic_meta)
+                .then_some(repr.tensor_maps.len() + repr.buffers.len())
+        });
+        let stored = self.artifacts.enabled() && self.artifacts.insert(kernel_id, &kernel_compiled.source, PtxCacheEntry {
+            io: kernel_compiled.io.clone(),
+            entrypoint_name: kernel_compiled.entrypoint_name.clone(),
+            shared_mem_bytes,
+            ptx: ptx.clone(),
+            dynamic_metadata_index,
+        });
 
         if let Some(cache) = &mut self.ptx_cache {
             let result = cache.insert(
                 hash.unwrap(),
                 PtxCacheEntry {
+                    io: kernel_compiled.io.clone(),
                     entrypoint_name: kernel_compiled.entrypoint_name.clone(),
-                    shared_mem_bytes: repr.shared_memory_size(),
+                    shared_mem_bytes,
                     ptx: ptx.clone(),
-                    dynamic_metadata_index: None,
+                    dynamic_metadata_index,
                 },
             );
             if let Err(err) = result {
@@ -147,9 +182,11 @@ impl CudaContext {
             kernel_id.clone(),
             kernel_compiled.entrypoint_name,
             ruda_dim,
-            repr.shared_memory_size(),
-            None,
+            shared_mem_bytes,
+            dynamic_metadata_index,
+            kernel_compiled.io,
         )?;
+        recording.compiled(stored);
         Ok(())
     }
 
@@ -161,6 +198,7 @@ impl CudaContext {
         ruda_dim: RudaDim,
         shared_mem_bytes: usize,
         dynamic_metadata_index: Option<usize>,
+        io: Option<ruda_core::kernel::KernelIo>,
     ) -> Result<(), CompilationError> {
         let (func_name, shared_attribute) = super::module_config::validate_module(
             &ptx, &entrypoint_name, shared_mem_bytes,
@@ -174,26 +212,17 @@ impl CudaContext {
         // SAFETY: validation above guarantees a nonempty NUL-terminated
         // buffer. The service thread has already selected this CUDA context.
         let module = unsafe { cudarc::driver::result::module::load_data(ptx.as_ptr() as *const _) }
-            .map_err(|err| CompilationError::Generic {
-                reason: format!("Unable to load PTX entry {entrypoint_name}: {err:?}"),
-                backtrace: BackTrace::capture(),
-            })?;
+            .map_err(|err| crate::execution::status::compilation("cuModuleLoadData", err))?;
         // No kernel from this module has been submitted yet. On any setup
         // failure it is safe to unload immediately, without a device wait.
         let configured = (|| {
             let func = unsafe { cudarc::driver::result::module::get_function(module, func_name) }
-                .map_err(|err| CompilationError::Generic {
-                    reason: format!("Unable to fetch PTX entry {entrypoint_name}: {err:?}"),
-                    backtrace: BackTrace::capture(),
-                })?;
+                .map_err(|err| crate::execution::status::compilation("cuModuleGetFunction", err))?;
             if shared_attribute != 0 {
                 unsafe { cudarc::driver::result::function::set_function_attribute(
                     func, CUfunction_attribute::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                     shared_attribute,
-                ) }.map_err(|err| CompilationError::Generic {
-                    reason: format!("Unable to configure {shared_mem_bytes} shared bytes for {entrypoint_name}: {err:?}"),
-                    backtrace: BackTrace::capture(),
-                })?;
+                ) }.map_err(|err| crate::execution::status::compilation("cuFuncSetAttribute", err))?;
             }
             Ok::<_, CompilationError>(func)
         })();
@@ -212,6 +241,7 @@ impl CudaContext {
             }
         };
         self.module_names.insert(kernel_id, CompiledKernel {
+            io,
             ruda_dim, shared_mem_bytes, func, module, dynamic_metadata_index,
         });
 

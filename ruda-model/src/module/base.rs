@@ -1,4 +1,4 @@
-use super::{Param, ParamId, Quantizer};
+use super::{Flag, Param, ParamGroup, ParamId, Quantizer};
 use crate::{
     record::Record,
     tensor::backend::{AutodiffBackend, Backend},
@@ -90,6 +90,63 @@ macro_rules! module {
 pub trait Module<B: Backend>: Clone + Send + core::fmt::Debug {
     /// Type to save and load the module.
     type Record: Record<B>;
+
+    /// Change parameter runtime association while retaining configured trainability and module flags.
+    fn with_autodiff_context(self, context: ruda_tensor::AutodiffContext) -> Self {
+        self.map(&mut super::context::ContextMapper::Association(context))
+    }
+
+    /// Change the checkpoint policy of autodiff parameters, including attached transformations.
+    fn with_gradient_checkpointing_strategy(self, strategy: ruda_tensor::GradientCheckpointingStrategy) -> Self {
+        self.map(&mut super::context::ContextMapper::Checkpointing(strategy))
+    }
+
+    /// Attach transformations while retaining their concrete module type for `valid` and `train`.
+    fn apply_reparameterization<R: super::Reparameterizer<B>>(self, reparameterizer: R)
+        -> super::Reparameterized<Self, R::Reparam, B>
+    {
+        super::reparameterization::apply(self, reparameterizer)
+    }
+
+    /// Freeze base parameters and attach trainable low-rank factors to selected matrices.
+    fn apply_lora(self, lora: super::Lora) -> super::Reparameterized<Self, super::LoraAdapter<B>, B> {
+        self.apply_reparameterization(lora)
+    }
+
+    /// Quantize frozen bases and attach trainable low-rank factors.
+    fn apply_qlora(self, qlora: super::QLora) -> super::Reparameterized<Self, super::LoraAdapter<B>, B> {
+        self.apply_reparameterization(qlora)
+    }
+
+    /// Merge attached transformations into detached weights, retaining base training settings.
+    fn materialize(self) -> Self {
+        struct Materialize;
+        impl<B: Backend> ModuleMapper<B> for Materialize {
+            fn materialize_reparameterizations(&self) -> bool { true }
+            fn map_float<const D: usize>(&mut self, param: Param<Tensor<B, D>>) -> Param<Tensor<B, D>> { param.materialize() }
+        }
+        self.map(&mut Materialize)
+    }
+
+    /// Disable gradients and module-owned training flags throughout the module.
+    fn freeze(self) -> Self {
+        self.freeze_group(ParamGroup::all())
+    }
+
+    /// Enable gradients and module-owned training flags throughout the module.
+    fn unfreeze(self) -> Self {
+        self.unfreeze_group(ParamGroup::all())
+    }
+
+    /// Freeze the parameters and flags selected by id or module path.
+    fn freeze_group(self, group: ParamGroup) -> Self {
+        self.map(&mut LifecycleMapper::new(&group, false))
+    }
+
+    /// Unfreeze the parameters and flags selected by id or module path.
+    fn unfreeze_group(self, group: ParamGroup) -> Self {
+        self.map(&mut LifecycleMapper::new(&group, true))
+    }
 
     /// Return all the devices found in the underneath module tree added to the given vector
     /// without duplicates.
@@ -245,10 +302,47 @@ pub trait Module<B: Backend>: Clone + Send + core::fmt::Debug {
     fn quantize_weights(self, quantizer: &mut Quantizer) -> Self {
         self.map(quantizer)
     }
+
+    /// Quantize only the parameters selected by ID or module path.
+    fn quantize_weights_group(self, quantizer: Quantizer, group: ParamGroup) -> Self {
+        self.map(&mut quantizer.with_param_group(group))
+    }
+}
+
+struct LifecycleMapper<'a> {
+    group: &'a ParamGroup,
+    enabled: bool,
+    path: Vec<String>,
+}
+
+impl<'a> LifecycleMapper<'a> {
+    fn new(group: &'a ParamGroup, enabled: bool) -> Self {
+        Self { group, enabled, path: Vec::new() }
+    }
+    fn matches(&self, id: &ParamId) -> bool {
+        self.group.matches(id, Some(&self.path.join(".")))
+    }
+}
+
+impl<B: Backend> ModuleMapper<B> for LifecycleMapper<'_> {
+    fn enter_module(&mut self, name: &str, _: &str) { self.path.push(name.into()); }
+    fn exit_module(&mut self, _: &str, _: &str) { self.path.pop(); }
+    fn map_float<const D: usize>(&mut self, param: Param<Tensor<B, D>>) -> Param<Tensor<B, D>> {
+        if self.matches(&param.id) { param.set_require_grad(self.enabled) } else { param }
+    }
+    fn map_int<const D: usize>(&mut self, param: Param<Tensor<B, D, Int>>) -> Param<Tensor<B, D, Int>> { param }
+    fn map_bool<const D: usize>(&mut self, param: Param<Tensor<B, D, Bool>>) -> Param<Tensor<B, D, Bool>> { param }
+    fn map_flag(&mut self, flag: Param<Flag>) -> Param<Flag> {
+        if self.matches(&flag.id) { flag.with_value(self.enabled) } else { flag }
+    }
 }
 
 /// Module visitor trait for traversing and inspecting module parameters.
 pub trait ModuleVisitor<B: Backend> {
+    #[doc(hidden)]
+    fn handles_reparameterizations(&self) -> bool { false }
+    /// Visit module-owned runtime control state.
+    fn visit_flag(&mut self, _flag: &Param<Flag>) {}
     /// Visit a float parameter in the module.
     ///
     /// # Parameters
@@ -356,6 +450,18 @@ pub trait ModuleVisitor<B: Backend> {
 
 /// Module mapper trait for transforming module parameters.
 pub trait ModuleMapper<B: Backend> {
+    #[doc(hidden)]
+    fn handles_reparameterizations(&self) -> bool { false }
+    #[doc(hidden)]
+    fn attaches_reparameterizations(&self) -> bool { false }
+    #[doc(hidden)]
+    fn map_tensor<const D: usize, K: ruda_tensor::BasicOps<B>>(&mut self, tensor: Tensor<B, D, K>) -> Tensor<B, D, K> {
+        tensor
+    }
+    #[doc(hidden)]
+    fn materialize_reparameterizations(&self) -> bool { false }
+    /// Map module-owned runtime control state.
+    fn map_flag(&mut self, flag: Param<Flag>) -> Param<Flag> { flag }
     /// Called when entering a submodule.
     ///
     /// # Parameters
@@ -397,8 +503,7 @@ pub trait ModuleMapper<B: Backend> {
     /// The transformed parameter
     #[allow(unused_variables)]
     fn map_float<const D: usize>(&mut self, param: Param<Tensor<B, D>>) -> Param<Tensor<B, D>> {
-        let (id, tensor, mapper) = param.consume();
-        Param::from_mapped_value(id, tensor, mapper)
+        param
     }
 
     /// Map an int parameter in the module.
@@ -413,8 +518,7 @@ pub trait ModuleMapper<B: Backend> {
         &mut self,
         param: Param<Tensor<B, D, Int>>,
     ) -> Param<Tensor<B, D, Int>> {
-        let (id, tensor, mapper) = param.consume();
-        Param::from_mapped_value(id, tensor, mapper)
+        param
     }
 
     /// Map a bool parameter in the module.
@@ -429,8 +533,7 @@ pub trait ModuleMapper<B: Backend> {
         &mut self,
         param: Param<Tensor<B, D, Bool>>,
     ) -> Param<Tensor<B, D, Bool>> {
-        let (id, tensor, mapper) = param.consume();
-        Param::from_mapped_value(id, tensor, mapper)
+        param
     }
 }
 

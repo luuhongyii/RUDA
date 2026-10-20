@@ -48,6 +48,8 @@ use super::lazy_data::LazyDataSource;
 use super::pickle_reader::{Object, PickleError, read_pickle, read_pickle_with_data};
 use std::sync::Arc;
 
+mod tar_metadata;
+
 /// Error type for PyTorch file operations
 #[derive(Debug)]
 pub enum PytorchError {
@@ -837,6 +839,7 @@ fn load_tar_pytorch_file_with_metadata(
     let mut sys_info_data: Option<Vec<u8>> = None;
     let mut pickle_data: Option<Vec<u8>> = None;
     let mut storages_data: Option<Vec<u8>> = None;
+    let mut tensors_data: Option<Vec<u8>> = None;
 
     for entry in archive.entries().map_err(PytorchError::Tar)? {
         let mut entry = entry.map_err(PytorchError::Tar)?;
@@ -870,6 +873,11 @@ fn load_tar_pytorch_file_with_metadata(
                 entry.read_to_end(&mut data).map_err(PytorchError::Tar)?;
                 storages_data = Some(data);
             }
+            "tensors" => {
+                let mut data = Vec::new();
+                entry.read_to_end(&mut data).map_err(PytorchError::Tar)?;
+                tensors_data = Some(data);
+            }
             _ => {}
         }
     }
@@ -895,15 +903,15 @@ fn load_tar_pytorch_file_with_metadata(
         ));
     }
 
-    // Create TarSource for lazy loading
-    let data_source = Arc::new(LazyDataSource::from_tar(&storages_data)?);
-
-    // Parse the pickle (OrderedDict of name -> storage_key)
-    let mut pickle_reader = BufReader::new(pickle_data.as_slice());
-    let obj = read_pickle_with_data(&mut pickle_reader, data_source)?;
-
-    // Extract tensors
-    let tensors = extract_tensors_with_data(obj, top_level_key)?;
+    let total_data_size = storages_data.len();
+    let tensors = if let Some(tensors_data) = tensors_data {
+        tar_metadata::read(&pickle_data, &tensors_data, storages_data, top_level_key)?
+    } else {
+        let data_source = Arc::new(LazyDataSource::from_tar(&storages_data)?);
+        let mut pickle_reader = BufReader::new(pickle_data.as_slice());
+        let obj = read_pickle_with_data(&mut pickle_reader, data_source)?;
+        extract_tensors_with_data(obj, top_level_key)?
+    };
 
     let metadata = PytorchMetadata {
         format_version: None,
@@ -912,7 +920,7 @@ fn load_tar_pytorch_file_with_metadata(
         has_storage_alignment: false,
         pytorch_version: None,
         tensor_count: tensors.len(),
-        total_data_size: Some(storages_data.len()),
+        total_data_size: Some(total_data_size),
     };
 
     Ok((tensors, metadata))

@@ -360,7 +360,7 @@ pub fn update_references(opt: &mut Optimizer, from: NodeIndex, to: NodeIndex) {
                 update(continue_target);
                 update(merge);
             }
-            ControlFlow::Return | ControlFlow::Unreachable | ControlFlow::None => {}
+            ControlFlow::Return | ControlFlow::ReturnValue(_) | ControlFlow::Unreachable | ControlFlow::None => {}
         }
     }
 }

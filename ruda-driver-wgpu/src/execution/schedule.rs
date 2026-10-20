@@ -1,4 +1,5 @@
 use crate::{WgpuResource, stream::WgpuStream};
+use super::timings::{TimestampQuerySetBudget, TimestampSampling};
 use alloc::sync::Arc;
 use ruda_core::{bytes::Bytes, profile::TimingMethod};
 use ruda_kernel::dsl::{
@@ -15,6 +16,7 @@ use ruda::runtime::{
 pub enum ScheduleTask {
     /// Represents a task to write data to a buffer.
     Write {
+        destination: ruda::runtime::server::Binding,
         /// The data to be written.
         data: Bytes,
         /// The target buffer resource.
@@ -22,6 +24,8 @@ pub enum ScheduleTask {
     },
     /// Represents a task to execute a compute pipeline.
     Execute {
+        execution: ruda::runtime::server::KernelExecution,
+        count_resource: Option<WgpuResource>,
         /// The compute pipeline to execute.
         pipeline: Arc<wgpu::ComputePipeline>,
         /// The number of workgroups to dispatch.
@@ -64,11 +68,14 @@ pub struct ScheduledWgpuBackend {
 /// Factory for creating WGPU streams with specific configurations.
 #[derive(Debug)]
 pub struct WgpuStreamFactory {
+    poison: super::device_poison::PoisonWatch,
     device: wgpu::Device,
     queue: wgpu::Queue,
     memory_properties: MemoryDeviceProperties,
     memory_config: MemoryConfiguration,
     timing_method: TimingMethod,
+    timing_budget: Arc<TimestampQuerySetBudget>,
+    timestamp_sampling: TimestampSampling,
     tasks_max: usize,
     logger: Arc<ServerLogger>,
     count: u64,
@@ -86,8 +93,11 @@ impl StreamFactory for WgpuStreamFactory {
             self.memory_properties.clone(),
             self.memory_config.clone(),
             self.timing_method,
+            self.timing_budget.clone(),
+            self.timestamp_sampling,
             self.tasks_max,
             self.logger.clone(),
+            self.poison.clone(),
         )
     }
 }
@@ -100,16 +110,23 @@ impl ScheduledWgpuBackend {
         memory_properties: MemoryDeviceProperties,
         memory_config: MemoryConfiguration,
         timing_method: TimingMethod,
+        backend: wgpu::Backend,
         tasks_max: usize,
         logger: Arc<ServerLogger>,
     ) -> Self {
         Self {
             factory: WgpuStreamFactory {
+                poison: super::device_poison::PoisonWatch::watch(&device),
                 device,
                 queue,
                 memory_properties,
                 memory_config,
                 timing_method,
+                timing_budget: Arc::new(match backend {
+                    wgpu::Backend::Metal => TimestampQuerySetBudget::metal(),
+                    _ => TimestampQuerySetBudget::unbounded(),
+                }),
+                timestamp_sampling: TimestampSampling::new(backend),
                 tasks_max,
                 logger,
                 count: 0,

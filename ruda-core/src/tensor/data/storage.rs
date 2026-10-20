@@ -69,7 +69,7 @@ impl TensorData {
             .to_vec())
     }
 
-    fn matches_target_dtype<E: Element>(&self) -> bool {
+    pub(super) fn matches_target_dtype<E: Element>(&self) -> bool {
         let target_dtype = E::dtype();
         match self.dtype {
             DType::Bool(BoolStore::U8) => {

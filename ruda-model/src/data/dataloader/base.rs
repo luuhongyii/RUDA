@@ -32,6 +32,11 @@ pub trait DataLoader<B: Backend, O>: Send + Sync {
     /// Move the data loader to the given device, ensuring the batches are assigned to the correct device.
     fn to_device(&self, device: &B::Device) -> Arc<dyn DataLoader<B, O>>;
 
+    /// Configure batch construction on every worker without changing order or shuffle state.
+    fn with_autodiff_context(&self, _context: ruda_tensor::AutodiffContext) -> Arc<dyn DataLoader<B, O>> {
+        panic!("This data loader must implement with_autodiff_context to configure gradient checkpointing")
+    }
+
     /// Returns a new data loader containing a subset of the data.
     ///
     /// The subset includes items from `start` (inclusive) to `end` (exclusive),

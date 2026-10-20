@@ -1,7 +1,7 @@
 use ruda_core::ir::{self, ConstantValue, VariableKind};
 use melior::{
     Context,
-    dialect::{arith, ods::vector},
+    dialect::{arith, llvm, ods::vector},
     ir::{
         Attribute, Type, Value,
         attribute::{FloatAttribute, IntegerAttribute},
@@ -13,6 +13,9 @@ use super::prelude::*;
 
 impl IntoType for ir::Type {
     fn to_type<'a>(self, context: &'a Context) -> Type<'a> {
+        if self.storage_type().is_atomic() {
+            return llvm::r#type::pointer(context, 0);
+        }
         let inner_type = self.storage_type().to_type(context);
         match self.vector_size() {
             size if size > 1 => Type::vector(&[size as u64], inner_type),

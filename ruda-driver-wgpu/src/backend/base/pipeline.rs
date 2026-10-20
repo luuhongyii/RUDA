@@ -14,7 +14,7 @@ impl WgpuServer {
         kernel_id: &KernelId,
         bindings: &KernelArguments,
         mode: ExecutionMode,
-    ) -> Result<Option<Result<Arc<ComputePipeline>, (u64, StableHash)>>, CompilationError> {
+    ) -> Result<Option<Result<Arc<PreparedPipeline>, (u64, StableHash)>>, CompilationError> {
         #[cfg(not(feature = "spirv"))]
         let res = Ok(None);
         #[cfg(feature = "spirv")]
@@ -24,7 +24,7 @@ impl WgpuServer {
                 log::trace!("Using SPIR-V cache");
 
                 let repr = AutoRepresentationRef::SpirV(&entry.kernel);
-                let module = self.create_module(&entry.entrypoint_name, Some(repr), "", mode)?;
+                let module = self.create_module(&entry.entrypoint_name, ModuleSource::SpirV(&entry.kernel), mode)?;
                 let pipeline =
                     self.create_pipeline(&entry.entrypoint_name, Some(repr), module, bindings);
                 Ok(Some(Ok(pipeline)))
@@ -41,13 +41,12 @@ impl WgpuServer {
     pub fn create_module(
         &self,
         entrypoint_name: &str,
-        repr: Option<AutoRepresentationRef<'_>>,
-        source: &str,
+        source: ModuleSource<'_>,
         mode: ExecutionMode,
     ) -> Result<ShaderModule, CompilationError> {
-        match repr {
+        match source {
             #[cfg(feature = "spirv")]
-            Some(AutoRepresentationRef::SpirV(repr)) => unsafe {
+            ModuleSource::SpirV(repr) => unsafe {
                 Ok(self.device.create_shader_module_passthrough(
                     wgpu::ShaderModuleDescriptorPassthrough {
                         label: Some(entrypoint_name),
@@ -57,17 +56,17 @@ impl WgpuServer {
                 ))
             },
             #[cfg(all(feature = "msl", target_os = "macos"))]
-            Some(AutoRepresentationRef::Msl(repr)) => unsafe {
+            ModuleSource::Msl(source, dim) => unsafe {
                 Ok(self.device.create_shader_module_passthrough(
                     wgpu::ShaderModuleDescriptorPassthrough {
                         label: Some(entrypoint_name),
                         msl: Some(Cow::Borrowed(source)),
-                        num_workgroups: (repr.ruda_dim.x, repr.ruda_dim.y, repr.ruda_dim.z),
+                        num_workgroups: (dim.x, dim.y, dim.z),
                         ..Default::default()
                     },
                 ))
             },
-            _ => {
+            ModuleSource::Wgsl(source) => {
                 let checks = wgpu::ShaderRuntimeChecks {
                     // Ruda does not need wgpu bounds checks - OOB behaviour is instead
                     // checked by ruda (if enabled).
@@ -140,7 +139,15 @@ impl WgpuServer {
         repr: Option<AutoRepresentationRef<'_>>,
         module: ShaderModule,
         bindings: &KernelArguments,
-    ) -> Arc<ComputePipeline> {
+    ) -> Arc<PreparedPipeline> {
+        let io = match repr {
+            Some(AutoRepresentationRef::Wgsl(repr)) => Some(repr.io.clone()),
+            #[cfg(feature = "spirv")]
+            Some(AutoRepresentationRef::SpirV(repr)) => repr.io.clone(),
+            #[cfg(feature = "msl")]
+            Some(AutoRepresentationRef::Msl(repr)) => Some(repr.io.clone()),
+            None => None,
+        };
         let bindings_info = match repr {
             Some(AutoRepresentationRef::Wgsl(repr)) => Some(wgsl::bindings(repr, bindings)),
             #[cfg(all(feature = "msl", target_os = "macos"))]
@@ -208,6 +215,6 @@ impl WgpuServer {
                 },
                 cache: None,
             });
-        Arc::new(pipeline)
+        Arc::new(PreparedPipeline { pipeline: Arc::new(pipeline), io })
     }
 }

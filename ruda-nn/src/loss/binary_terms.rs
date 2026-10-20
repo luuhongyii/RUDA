@@ -14,15 +14,18 @@ fn prepare<B: Backend,const D: usize>(input: &Tensor<B,D>,targets: &Tensor<B,D>,
     assert_eq!(input.dims(),targets.dims(),"binary loss input and actual soft-label geometry differs");
     assert_eq!(input.device(),targets.device(),"binary loss inputs and targets must share a device");
     let mut double = input.dtype() == DType::F64 || targets.dtype() == DType::F64;
+    let mut context = input.autodiff_context().merge(targets.autodiff_context());
     for weight in [weight,positive_weight].into_iter().flatten() {
         check_weight(weight,input);
         double |= weight.dtype() == DType::F64;
+        context = context.merge(weight.autodiff_context());
     }
     let excluded = if let Some(visible) = visible {
         assert_eq!(visible.dims(),input.dims(),"binary loss selection mask differs from actual element geometry");
         assert_eq!(visible.device(),input.device(),"binary loss selection must share the input device");
-        visible.bool_not()
-    } else {Tensor::<B,D,Bool>::zeros(input.dims(),&input.device())};
+        context = context.merge(visible.autodiff_context());
+        visible.with_autodiff_context(context).bool_not()
+    } else {Tensor::<B,D,Bool>::zeros(input.dims(),&input.device()).with_autodiff_context(context)};
     (if double {DType::F64} else {DType::F32},excluded)
 }
 

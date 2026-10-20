@@ -18,7 +18,10 @@ pub enum Item {
         rows: u32,
         columns: u32,
         ident: CooperativeMatrixUse,
+        scope: Scope,
     },
+    TensorLayout(core::TensorLayoutType),
+    TensorView(core::TensorViewType),
 }
 
 impl Item {
@@ -52,12 +55,15 @@ impl Item {
                 rows,
                 columns,
                 ident,
+                scope,
             } => {
                 let ty = ty.id(b);
-                let scope = b.const_u32(Scope::Subgroup as u32);
+                let scope = b.const_u32(*scope as u32);
                 let usage = b.const_u32(*ident as u32);
                 b.type_cooperative_matrix_khr(ty, scope, *rows, *columns, usage)
             }
+            Item::TensorLayout(layout) => b.tensor_layout_type(*layout),
+            Item::TensorView(view) => b.tensor_view_type(*view),
         };
         if b.debug_symbols && !b.state.debug_types.contains(&id) {
             b.debug_name(id, format!("{self}"));
@@ -79,6 +85,7 @@ impl Item {
             Item::Struct(vec) => vec.iter().map(|it| it.size()).sum(),
             Item::Pointer(_, item) => item.size(),
             Item::CoopMatrix { ty, .. } => ty.size(),
+            Item::TensorLayout(_) | Item::TensorView(_) => 0,
         }
     }
 
@@ -91,6 +98,7 @@ impl Item {
             Item::Struct(_) => Elem::Void,
             Item::Pointer(_, item) => item.elem(),
             Item::CoopMatrix { ty, .. } => *ty,
+            Item::TensorLayout(_) | Item::TensorView(_) => Elem::Void,
         }
     }
 
@@ -129,6 +137,9 @@ impl Item {
             }
             Item::Pointer(_, _) => unimplemented!("Can't create constant pointer"),
             Item::CoopMatrix { .. } => unimplemented!("Can't create constant cmma matrix"),
+            Item::TensorLayout(_) | Item::TensorView(_) => {
+                panic!("Tensor addressing objects must be created with tensor layout/view instructions")
+            }
         }
     }
 
@@ -320,6 +331,8 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             core::Type::Vector(storage, size) => {
                 Item::Vector(self.compile_storage_type(storage), size as u32)
             }
+            core::Type::Semantic(core::SemanticType::TensorLayout(layout)) => Item::TensorLayout(layout),
+            core::Type::Semantic(core::SemanticType::TensorView(view)) => Item::TensorView(view),
             core::Type::Semantic(_) => unimplemented!("Can't compile semantic type"),
             core::Type::Pointer(_) => unreachable!("pointer values are lowered before SPIR-V type emission"),
         }
@@ -474,6 +487,8 @@ impl std::fmt::Display for Item {
             }
             Item::Pointer(class, item) => write!(f, "ptr<{class:?}, {item}>"),
             Item::CoopMatrix { ty, ident, .. } => write!(f, "matrix<{ty}, {ident:?}>"),
+            Item::TensorLayout(layout) => write!(f, "tensor_layout<{layout:?}>"),
+            Item::TensorView(view) => write!(f, "tensor_view<{view:?}>"),
         }
     }
 }

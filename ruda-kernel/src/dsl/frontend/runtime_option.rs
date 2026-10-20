@@ -15,12 +15,12 @@ fn discriminant(variant_name: &'static str) -> i32 {
     OptionExpand::<u32>::discriminant_of(variant_name)
 }
 
-pub enum OptionArgs<T: LaunchArg, R: Runtime> {
+pub enum OptionArgs<T: LaunchArg, R: LaunchMarker = ()> {
     Some(<T as LaunchArg>::RuntimeArg<R>),
     None,
 }
 
-impl<T: LaunchArg, R: Runtime> From<Option<<T as LaunchArg>::RuntimeArg<R>>> for OptionArgs<T, R> {
+impl<T: LaunchArg, R: LaunchMarker> From<Option<<T as LaunchArg>::RuntimeArg<R>>> for OptionArgs<T, R> {
     fn from(value: Option<<T as LaunchArg>::RuntimeArg<R>>) -> Self {
         match value {
             Some(arg) => Self::Some(arg),
@@ -30,10 +30,10 @@ impl<T: LaunchArg, R: Runtime> From<Option<<T as LaunchArg>::RuntimeArg<R>>> for
 }
 
 impl<T: LaunchArg + Default + IntoRuntime> LaunchArg for Option<T> {
-    type RuntimeArg<R: Runtime> = OptionArgs<T, R>;
+    type RuntimeArg<R: LaunchMarker> = OptionArgs<T, R>;
     type CompilationArg = OptionCompilationArg<T>;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {

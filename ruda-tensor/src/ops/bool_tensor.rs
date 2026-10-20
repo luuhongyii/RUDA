@@ -13,6 +13,19 @@ use core::future::Future;
 #[cfg_attr(not(doc), doc = "`Tensor`")]
 /// for documentation on each function.
 pub trait BoolTensorOps<B: Backend> {
+    /// Runtime association used when combining masks and floating-point values.
+    fn bool_autodiff_context(tensor: &BoolTensor<B>) -> crate::AutodiffContext {
+        if B::ad_enabled(&B::bool_device(tensor)) {
+            crate::AutodiffContext::Enabled(crate::GradientCheckpointingStrategy::Disabled)
+        } else { crate::AutodiffContext::Disabled }
+    }
+
+    /// Change the runtime association without changing boolean storage.
+    fn bool_with_autodiff_context(tensor: BoolTensor<B>, context: crate::AutodiffContext) -> BoolTensor<B> {
+        assert_eq!(B::bool_autodiff_context(&tensor), context, "Backend does not support this runtime autodiff context; use Tensor::into_autodiff");
+        tensor
+    }
+
     /// Creates a new bool tensor.
     ///
     /// # Arguments

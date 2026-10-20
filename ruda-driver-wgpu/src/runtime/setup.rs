@@ -27,31 +27,49 @@ pub struct WgpuSetup {
 /// This function generates a new, globally unique ID for the device every time it is called,
 /// even if called on the same device multiple times.
 pub fn init_device(setup: WgpuSetup, options: RuntimeOptions) -> WgpuDevice {
+    try_init_device(setup, options).expect("Unable to initialize Wgpu device")
+}
+
+pub fn try_init_device(setup: WgpuSetup, options: RuntimeOptions) -> Result<WgpuDevice, WgpuInitError> {
+    try_init_device_with_api::<AutoGraphicsApi>(setup, options)
+}
+
+pub fn try_init_device_with_api<G: GraphicsApi>(
+    setup: WgpuSetup,
+    options: RuntimeOptions,
+) -> Result<WgpuDevice, WgpuInitError> {
     use core::sync::atomic::{AtomicU32, Ordering};
-
     static COUNTER: AtomicU32 = AtomicU32::new(0);
-
-    let device_id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    if device_id == u32::MAX {
-        core::panic!("Memory ID overflowed");
-    }
-
-    let device_id = WgpuDevice::Existing(device_id);
-    let server = create_server(setup, options);
-    let _ = ComputeClient::<WgpuRuntime>::init(&device_id, server);
-    device_id
+    let requested = G::backend_for(&WgpuDevice::default());
+    let id = COUNTER.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+        (id <= u16::MAX as u32).then_some(id + 1)
+    }).map_err(|_| WgpuInitError::Registration { message: "Existing Wgpu device IDs exhausted".into() })?;
+    let device = WgpuDevice::Existing(id);
+    let server = try_create_server(device.to_id(), setup, options, requested)?;
+    register(&device, server)?;
+    Ok(device)
 }
 
 /// Like [`init_setup_async`], but synchronous.
 /// On wasm, it is necessary to use [`init_setup_async`] instead.
 pub fn init_setup<G: GraphicsApi>(device: &WgpuDevice, options: RuntimeOptions) -> WgpuSetup {
-    cfg_if::cfg_if! {
-        if #[cfg(target_family = "wasm")] {
-            let _ = (device, options);
-            panic!("Creating a wgpu setup synchronously is unsupported on wasm. Use init_async instead");
-        } else {
-            future::block_on(init_setup_async::<G>(device, options))
-        }
+    try_init_setup::<G>(device, options).expect("Unable to initialize Wgpu setup")
+}
+
+pub fn try_init_setup<G: GraphicsApi>(
+    device: &WgpuDevice,
+    options: RuntimeOptions,
+) -> Result<WgpuSetup, WgpuInitError> {
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = (device, options);
+        Err(WgpuInitError::InvalidConfiguration {
+            message: "Synchronous Wgpu setup is unsupported on wasm; use try_init_setup_async".into(),
+        })
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        future::block_on(try_init_setup_async::<G>(device, options))
     }
 }
 
@@ -62,33 +80,84 @@ pub async fn init_setup_async<G: GraphicsApi>(
     device: &WgpuDevice,
     options: RuntimeOptions,
 ) -> WgpuSetup {
-    let setup = create_setup_for_device(device, G::backend()).await;
-    let return_setup = setup.clone();
-    let server = create_server(setup, options);
-    let _ = ComputeClient::<WgpuRuntime>::init(device, server);
-    return_setup
+    try_init_setup_async::<G>(device, options).await.expect("Unable to initialize Wgpu setup")
 }
 
-/// Select the wgpu device and queue based on the provided [device](WgpuDevice) and
-/// [backend](wgpu::Backend).
-pub(crate) async fn create_setup_for_device(
+pub async fn try_init_setup_async<G: GraphicsApi>(
     device: &WgpuDevice,
-    backend: wgpu::Backend,
-) -> WgpuSetup {
-    let (instance, adapter) = super::adapters::request_adapter(device, backend).await;
-    let (device, queue) = backend::request_device(&adapter).await;
+    options: RuntimeOptions,
+) -> Result<WgpuSetup, WgpuInitError> {
+    options.validate()?;
+    let requested = G::backend_for(device);
+    if device.backend() != WgpuBackend::Auto && device.backend() != requested {
+        return Err(WgpuInitError::InvalidConfiguration {
+            message: format!("Graphics API {requested:?} conflicts with device API {:?}", device.backend()),
+        });
+    }
+    let selected = device.clone().on(requested);
+    let setup = try_create_setup_for_device(&selected).await?;
+    let server = try_create_server(device.to_id(), setup.clone(), options, requested)?;
+    register(device, server)?;
+    Ok(setup)
+}
 
-    log::info!(
-        "Created wgpu compute server on device {:?} => {:?}",
-        device,
-        adapter.get_info()
-    );
+fn register(device: &WgpuDevice, server: WgpuServer) -> Result<(), WgpuInitError> {
+    ComputeClient::<WgpuRuntime>::try_init(device, server)
+        .map(|_| ())
+        .map_err(|err| WgpuInitError::Registration { message: format!("{err:?}") })
+}
 
-    WgpuSetup {
-        instance,
-        adapter,
-        device,
-        queue,
-        backend,
+pub(crate) async fn try_create_setup_for_device(device: &WgpuDevice) -> Result<WgpuSetup, WgpuInitError> {
+    let selected = if device.kind() == WgpuDeviceKind::DefaultDevice {
+        super::adapters::try_device_override()?
+            .map(|kind| WgpuDevice::new(kind).on(device.backend()))
+    } else {
+        None
+    };
+    let device = selected.as_ref().unwrap_or(device);
+    match device.kind() {
+        WgpuDeviceKind::DiscreteGpu(index)
+        | WgpuDeviceKind::IntegratedGpu(index)
+        | WgpuDeviceKind::VirtualGpu(index)
+        | WgpuDeviceKind::Other(index) if index > WgpuDeviceKind::MAX_INDEX => {
+            return Err(WgpuInitError::InvalidConfiguration {
+                message: format!("Adapter index {index} exceeds {}", WgpuDeviceKind::MAX_INDEX),
+            });
+        }
+        WgpuDeviceKind::Existing(_) => {
+            return Err(WgpuInitError::InvalidConfiguration { message: "an Existing ID cannot acquire an adapter".into() });
+        }
+        _ => {}
+    }
+    let backend = super::adapters::try_resolve_backend(device).await?;
+    let (instance, adapter) = super::adapters::request_adapter(device, backend).await?;
+    let (device, queue) = backend::try_request_device(&adapter).await?;
+    let backend = adapter.get_info().backend;
+    log::info!("Created wgpu compute server on adapter {:?}", adapter.get_info());
+    Ok(WgpuSetup { instance, adapter, device, queue, backend })
+}
+
+impl WgpuSetup {
+    pub(super) fn validate(&self, requested: WgpuBackend) -> Result<(), WgpuInitError> {
+        if requested != WgpuBackend::Auto && !super::adapters::backend_candidates(requested).contains(&self.backend) {
+            return Err(WgpuInitError::InvalidConfiguration {
+                message: format!("Setup backend {:?} does not match {requested:?}", self.backend),
+            });
+        }
+        if self.backend == wgpu::Backend::Noop
+            || self.backend != self.adapter.get_info().backend
+            || self.backend != self.device.adapter_info().backend
+        {
+            return Err(WgpuInitError::InvalidConfiguration {
+                message: "Setup must contain a device and adapter on the declared graphics API".into(),
+            });
+        }
+        let limits = self.device.limits();
+        if limits.max_compute_invocations_per_workgroup == 0 || limits.max_storage_buffers_per_shader_stage < 2 {
+            return Err(WgpuInitError::InvalidConfiguration {
+                message: "Wgpu compute requires workgroup support and at least two storage-buffer bindings".into(),
+            });
+        }
+        Ok(())
     }
 }

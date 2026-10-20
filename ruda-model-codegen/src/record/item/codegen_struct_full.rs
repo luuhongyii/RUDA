@@ -7,6 +7,7 @@ use super::{codegen::RecordItemCodegen, codegen_enum_full::contains_self};
 
 pub(crate) struct FullStructRecordItemCodegen {
     name: Ident,
+    container: String,
     fields: Fields,
     vis: Visibility,
 }
@@ -43,13 +44,29 @@ impl FullStructRecordItemCodegen {
 }
 
 impl RecordItemCodegen for FullStructRecordItemCodegen {
+    fn gen_map_parameters(&self, paths: &DerivePaths) -> TokenStream {
+        let model = &paths.model;
+        let body = self.construct(quote!(Self), self.members().iter()
+            .map(|member| {
+                let name = match member {
+                    syn::Member::Named(name) => name.to_string(),
+                    syn::Member::Unnamed(index) => index.index.to_string(),
+                };
+                super::map_field(quote!(self.#member), &name, &self.container, paths)
+            }).collect());
+        quote! {
+            fn map_parameters<__RudaRecordMapper: #model::module::ModuleMapper<B>>(self, mapper: &mut __RudaRecordMapper) -> Self { #body }
+        }
+    }
+
     fn item_has_payload(&self) -> bool { !self.fields.is_empty() }
 
     fn from_ast(ast: &syn::DeriveInput, _paths: &DerivePaths) -> syn::Result<Self> {
         let syn::Data::Struct(data) = &ast.data else {
             return Err(syn::Error::new_spanned(ast, "Expected a record struct"));
         };
-        Ok(Self { name: ast.ident.clone(), fields: data.fields.clone(), vis: ast.vis.clone() })
+        Ok(Self { name: ast.ident.clone(), container: super::container_type(ast, "Struct")?,
+            fields: data.fields.clone(), vis: ast.vis.clone() })
     }
 
     fn gen_item_type(&self, item_name: &Ident, generics: &Generics, has_backend: bool,

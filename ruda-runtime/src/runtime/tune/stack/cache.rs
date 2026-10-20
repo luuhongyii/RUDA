@@ -45,7 +45,7 @@ impl Record {
     pub fn is_fresh(&self, now: u64, ttl: u64) -> bool {
         self.created <= now && now - self.created < ttl
     }
-    fn encode(&self) -> io::Result<Vec<u8>> {
+    pub(super) fn encode(&self) -> io::Result<Vec<u8>> {
         if self.scope > 2 || self.key.len() > MAX_KEY || self.winner.len() > MAX_NAME || self.winner.is_empty()
             || self.reference_ns == 0 || self.winner_ns == 0 || !self.ratio.is_finite() || self.ratio <= 0.0 {
             return Err(invalid("invalid tuning record"));
@@ -64,7 +64,7 @@ impl Record {
         bytes.extend_from_slice(checksum.as_bytes());
         Ok(bytes)
     }
-    fn decode(bytes: &[u8]) -> io::Result<Self> {
+    pub(super) fn decode(bytes: &[u8]) -> io::Result<Self> {
         if bytes.len() > MAX_FILE || bytes.len() < 83 || !bytes.starts_with(MAGIC) { return Err(invalid("bad tuning cache header/length")); }
         let end = bytes.len() - 32;
         if digest(&bytes[..end]).as_bytes() != &bytes[end..] { return Err(invalid("tuning cache checksum mismatch")); }
@@ -95,6 +95,66 @@ impl Record {
     }
 }
 fn invalid(message: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, message.to_string()) }
+
+pub(super) enum CacheBackend {
+    Disk(DiskCache),
+    #[cfg(persistence)]
+    Environment(super::environment::EnvironmentCache),
+}
+
+impl CacheBackend {
+    pub(super) fn load(&self, key: &str) -> io::Result<Option<Record>> {
+        match self {
+            Self::Disk(cache) => cache.load(key),
+            #[cfg(persistence)]
+            Self::Environment(cache) => cache.load(key),
+        }
+    }
+
+    pub(super) fn save(&self, record: &Record) -> io::Result<bool> {
+        match self {
+            Self::Disk(cache) => cache.save(record).map(|()| true),
+            #[cfg(persistence)]
+            Self::Environment(cache) => cache.save(record),
+        }
+    }
+
+    pub(super) fn remove(&self, key: &str) -> io::Result<()> {
+        match self {
+            Self::Disk(cache) => cache.remove(key),
+            #[cfg(persistence)]
+            Self::Environment(cache) => cache.remove(key),
+        }
+    }
+
+    pub(super) fn generation(&self) -> Option<u32> {
+        match self {
+            Self::Disk(_) => None,
+            #[cfg(persistence)]
+            Self::Environment(_) => Some(ruda_core::environment::generation()),
+        }
+    }
+
+    #[cfg(persistence)]
+    pub(super) fn table(&self) -> Option<&str> {
+        match self {
+            Self::Disk(_) => None,
+            Self::Environment(cache) => Some(cache.table()),
+        }
+    }
+}
+
+pub(super) fn scoped_key(generation: Option<u32>, key: &str) -> std::borrow::Cow<'_, str> {
+    match generation {
+        Some(generation) => std::borrow::Cow::Owned(std::format!("ruda-environment-generation:{generation}\n{key}")),
+        None => std::borrow::Cow::Borrowed(key),
+    }
+}
+
+pub(super) fn split_scoped_key(key: &str) -> Option<(u32, &str)> {
+    let (generation, key) = key.strip_prefix("ruda-environment-generation:")?.split_once('\n')?;
+    Some((generation.parse().ok()?, key))
+}
 
 /// Internal bounded disk store. Controller APIs supply policy/freshness checks;
 /// decoding a record does not itself validate numerical output or driver identity.

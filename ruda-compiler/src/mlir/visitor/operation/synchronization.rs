@@ -7,6 +7,7 @@ impl<'a> Visitor<'a> {
     pub fn visit_synchronization(&mut self, synchronization: &Synchronization) {
         match synchronization {
             Synchronization::SyncRuda => {
+                self.needs_parallelism = true;
                 let func_name = FlatSymbolRefAttribute::new(self.context, "sync_ruda");
                 self.block.append_operation(func::call(
                     self.context,

@@ -152,6 +152,14 @@ impl<'a> NativeAllocationController<'a> {
 }
 
 impl AllocationController for NativeAllocationController<'_> {
+    fn memory_with_policy(&self, _: super::AccessPolicy) -> Result<&[MaybeUninit<u8>], super::AccessError> {
+        Ok(self.memory())
+    }
+
+    unsafe fn memory_mut_with_policy(&mut self, _: super::AccessPolicy) -> Result<&mut [MaybeUninit<u8>], super::AccessError> {
+        Ok(unsafe { self.memory_mut() })
+    }
+
     fn grow(&mut self, size: usize, align: usize) -> Result<(), AllocationError> {
         debug_assert!(
             align <= MAX_ALIGN,
@@ -466,6 +474,7 @@ mod tests {
         }
     }
 
+    #[cfg(debug_assertions)]
     #[test_log::test]
     #[should_panic(expected = "capacity must be a multiple of alignment")]
     fn test_debug_assert_capacity_alignment_mismatch() {

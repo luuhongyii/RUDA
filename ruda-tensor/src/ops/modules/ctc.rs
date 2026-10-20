@@ -140,7 +140,8 @@ pub fn ctc_grad_from_alpha_beta_default<B: Backend>(
     grad = B::float_scatter_add(2, grad, indices_3d, scatter_value);
 
     // Mask out timesteps where t >= input_lengths[n].
-    let t_indices = B::int_arange(0..max_input_length as i64, &device, int_dtype);
+    let t_indices = B::int_with_autodiff_context(
+        B::int_arange(0..max_input_length as i64, &device, int_dtype), B::int_autodiff_context(&input_lengths));
     let t_indices = B::int_reshape(t_indices, Shape::new([max_input_length, 1, 1]));
     let t_indices = B::int_expand(
         t_indices,
@@ -194,6 +195,7 @@ impl<B: Backend> AlphaCtx<B> {
         let target_shape = targets.shape();
         let max_target_len = target_shape.dims::<2>()[1];
         let device = B::float_device(&log_probs);
+        let context = B::float_autodiff_context(&log_probs);
         let float_dtype: ruda_core::tensor::FloatDType = log_probs.dtype().into();
         let int_dtype: ruda_core::tensor::IntDType = targets.dtype().into();
         let settings = get_device_settings::<B>(&device);
@@ -210,12 +212,12 @@ impl<B: Backend> AlphaCtx<B> {
         );
 
         // Pre-allocate the full alpha tensor [T, N, 2S+1] filled with -inf.
-        let mut alpha_full = B::float_full(
+        let mut alpha_full = B::float_with_autodiff_context(B::float_full(
             Shape::new([max_input_length, batch_size, max_l_prime_len]),
             f32::NEG_INFINITY.into(),
             &device,
             float_dtype,
-        );
+        ), context);
 
         // Initialize alpha[0, :, 0] = log_probs[0, :, blank]
         // and alpha[0, :, 1] = log_probs[0, :, l'[1]].
@@ -291,18 +293,18 @@ impl<B: Backend> AlphaCtx<B> {
         // value/shape at every iteration) and the full `[T, N, 2S+1]`
         // gather of log_probs at l' (one T-sized gather replaces T small
         // gathers).
-        let pad_1 = B::float_full(
+        let pad_1 = B::float_with_autodiff_context(B::float_full(
             Shape::new([batch_size, 1]),
             f32::NEG_INFINITY.into(),
             &device,
             float_dtype,
-        );
-        let pad_2 = B::float_full(
+        ), context);
+        let pad_2 = B::float_with_autodiff_context(B::float_full(
             Shape::new([batch_size, 2]),
             f32::NEG_INFINITY.into(),
             &device,
             float_dtype,
-        );
+        ), context);
         let indices_3d = B::int_expand(
             B::int_reshape(
                 blank_inserted_targets.clone(),
@@ -318,7 +320,8 @@ impl<B: Backend> AlphaCtx<B> {
         // + bool_and per iteration.
         let t_indices_2d = B::int_expand(
             B::int_reshape(
-                B::int_arange(0..max_input_length as i64, &device, int_dtype),
+                B::int_with_autodiff_context(B::int_arange(0..max_input_length as i64, &device, int_dtype),
+                    B::int_autodiff_context(&input_lengths)),
                 Shape::new([max_input_length, 1]),
             ),
             Shape::new([max_input_length, batch_size]),
@@ -447,12 +450,12 @@ fn insert_blanks<B: Backend>(
     device: &B::Device,
     int_dtype: ruda_core::tensor::IntDType,
 ) -> IntTensor<B> {
-    let result = B::int_full(
+    let result = B::int_with_autodiff_context(B::int_full(
         Shape::new([batch_size, max_l_prime_len]),
         (blank as i64).into(),
         device,
         int_dtype,
-    );
+    ), B::int_autodiff_context(targets));
 
     if max_target_len == 0 {
         return result;
@@ -556,23 +559,23 @@ fn create_l_prime_mask<B: Backend>(
     // (i.e. targets have shape [N, 0]). Bail out before the `max_l_prime_len - 2`
     // usize subtraction underflows.
     if max_l_prime_len < 2 {
-        return B::bool_zeros(
+        return B::bool_with_autodiff_context(B::bool_zeros(
             Shape::new([batch_size, max_l_prime_len]),
             device,
             bool_dtype,
-        );
+        ), B::int_autodiff_context(blank_inserted_targets));
     }
     let l_prime = blank_inserted_targets.clone();
 
     let not_blank = B::int_not_equal_elem(l_prime.clone(), (blank as i64).into(), bool_dtype);
 
     let l_prime_shifted = {
-        let padding = B::int_full(
+        let padding = B::int_with_autodiff_context(B::int_full(
             Shape::new([batch_size, 2]),
             (blank as i64).into(),
             device,
             int_dtype,
-        );
+        ), B::int_autodiff_context(blank_inserted_targets));
         let shortened = B::int_slice(
             l_prime.clone(),
             &[
@@ -584,7 +587,8 @@ fn create_l_prime_mask<B: Backend>(
     };
     let not_equal_s_m2 = B::int_not_equal(l_prime, l_prime_shifted, bool_dtype);
 
-    let col_indices = B::int_arange(0..max_l_prime_len as i64, device, int_dtype);
+    let col_indices = B::int_with_autodiff_context(
+        B::int_arange(0..max_l_prime_len as i64, device, int_dtype), B::int_autodiff_context(blank_inserted_targets));
     let col_indices = B::int_reshape(col_indices, Shape::new([1, max_l_prime_len]));
     let col_indices = B::int_expand(col_indices, Shape::new([batch_size, max_l_prime_len]));
     let s_ge_2 = B::int_greater_equal_elem(col_indices, 2.into(), bool_dtype);
@@ -601,7 +605,8 @@ fn create_s_mask<B: Backend>(
     int_dtype: ruda_core::tensor::IntDType,
     bool_dtype: ruda_core::tensor::BoolDType,
 ) -> BoolTensor<B> {
-    let col_indices = B::int_arange(0..max_l_prime_len as i64, device, int_dtype);
+    let col_indices = B::int_with_autodiff_context(
+        B::int_arange(0..max_l_prime_len as i64, device, int_dtype), B::int_autodiff_context(target_lengths));
     let col_indices = B::int_reshape(col_indices, Shape::new([1, max_l_prime_len]));
     let col_indices = B::int_expand(col_indices, Shape::new([batch_size, max_l_prime_len]));
 

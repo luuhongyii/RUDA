@@ -269,6 +269,7 @@ impl<B: Backend> RotaryEncoding<B> {
         // Generate frequency values for positional embeddings
         let frequencies: Tensor<B, 2> =
             Tensor::<B, 1, Int>::arange(range.start as i64..range.end as i64, &theta.device())
+                .with_autodiff_context(theta.autodiff_context())
                 .float()
                 .unsqueeze()
                 .transpose()

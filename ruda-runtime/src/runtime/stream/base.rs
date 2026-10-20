@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use ruda_core::stream_id::StreamId;
+use crate::runtime::server::ServerError;
 
 /// Trait for creating streams, used by the stream pool to generate streams as needed.
 pub trait StreamFactory {
@@ -7,6 +8,8 @@ pub trait StreamFactory {
     type Stream;
     /// Creates a new stream instance.
     fn create(&mut self) -> Self::Stream;
+    /// Fallible creation, preserving the existing factory contract for older backends.
+    fn try_create(&mut self) -> Result<Self::Stream, ServerError> { Ok(self.create()) }
 }
 
 /// Represents a pool of streams, managing a collection of streams created by a factory.
@@ -21,6 +24,9 @@ pub struct StreamPool<F: StreamFactory> {
 }
 
 impl<F: StreamFactory> StreamPool<F> {
+    pub(crate) fn initialized_mut(&mut self) -> impl Iterator<Item = &mut F::Stream> {
+        self.streams.iter_mut().filter_map(Option::as_mut)
+    }
     /// Creates a new stream pool with the given backend factory and capacity constraints.
     pub fn new(backend: F, max_streams: u8, num_special: u8) -> Self {
         // Initialize a vector with capacity for regular and special streams.
@@ -45,6 +51,24 @@ impl<F: StreamFactory> StreamPool<F> {
         self.get_mut_index(index)
     }
 
+    /// Return an initialized stream or propagate a backend creation failure.
+    pub fn get_or_create(&mut self, stream_id: &StreamId) -> Result<&mut F::Stream, ServerError> {
+        let index = self.stream_index(stream_id);
+        self.get_or_create_index(index)
+    }
+
+    /// Fallible indexed stream creation.
+    pub fn get_or_create_index(&mut self, index: usize) -> Result<&mut F::Stream, ServerError> {
+        let entry = &mut self.streams[index];
+        if entry.is_none() { *entry = Some(self.factory.try_create()?); }
+        Ok(entry.as_mut().expect("initialized above"))
+    }
+
+    /// Fallible creation of an auxiliary stream.
+    pub fn get_or_create_special(&mut self, index: u8) -> Result<&mut F::Stream, ServerError> {
+        self.get_or_create_index(self.max_streams + index as usize)
+    }
+
     /// Initialize an unused regular slot with a backend-specific stream. This
     /// does not modulo-map IDs or replace a stream that may have pending work.
     /// Returns false for an occupied slot or an ID outside the regular pool.
@@ -61,8 +85,7 @@ impl<F: StreamFactory> StreamPool<F> {
 
     /// Retrieves a stream by index, initializing it if needed.
     pub fn get_mut_index(&mut self, index: usize) -> &mut F::Stream {
-        let entry = &mut self.streams[index];
-        entry.get_or_insert_with(|| self.factory.create())
+        self.get_or_create_index(index).unwrap_or_else(|error| panic!("Stream creation failed: {error}"))
     }
 
     /// Retrieves a special stream by index, initializing it if needed.

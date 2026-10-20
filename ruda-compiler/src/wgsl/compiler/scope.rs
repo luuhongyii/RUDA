@@ -21,6 +21,11 @@ impl<P: WgslLowering> WgslCompiler<P> {
 
         let processors = P::processors(self.strategy, self.kernel_name.clone(), MAX_VECTOR_SIZE);
         let processing = scope.process([&*processors[0], &*processors[1], &*processors[2]]);
+        let processing = shared_memory::lower_scalar_shared_arrays(
+            processing,
+            &scope.allocator,
+            &self.scalar_shared_arrays,
+        );
 
         for mut var in processing.variables {
             if var.ty.vector_size() > MAX_VECTOR_SIZE {
@@ -198,6 +203,7 @@ impl<P: WgslLowering> WgslCompiler<P> {
                     .collect(),
             }),
             ruda::Branch::Return => instructions.push(wgsl::Instruction::Return),
+            ruda::Branch::ReturnValue(_) => panic!("Scalar matrix callbacks are not supported by WGSL"),
             // No unreachable hint in WGSL
             ruda::Branch::Unreachable => instructions.push(wgsl::Instruction::Return),
             ruda::Branch::Break => instructions.push(wgsl::Instruction::Break),
@@ -227,10 +233,11 @@ impl<P: WgslLowering> WgslCompiler<P> {
                 instructions.push(wgsl::Instruction::WorkgroupBarrier)
             }
             ruda::Synchronization::SyncPlane => {
-                panic!("Synchronization within a plane is not supported in WGSL")
+                instructions.push(wgsl::Instruction::WorkgroupBarrier)
             }
             ruda::Synchronization::SyncStorage => {
-                instructions.push(wgsl::Instruction::StorageBarrier)
+                instructions.push(wgsl::Instruction::StorageBarrier);
+                instructions.push(wgsl::Instruction::WorkgroupBarrier)
             }
             ruda::Synchronization::SyncAsyncProxyShared => panic!("TMA is not supported in WGSL"),
         };

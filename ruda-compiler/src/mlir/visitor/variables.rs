@@ -17,7 +17,7 @@ use super::prelude::*;
 #[derive(Default, Debug)]
 pub struct Variables<'a> {
     pub local: HashMap<VariableKind, Value<'a, 'a>>,
-    pub global_constant: HashMap<u32, ir::Type>,
+    pub global_constant: HashMap<u32, (ir::Type, usize)>,
 }
 
 impl<'a> Variables<'a> {
@@ -26,7 +26,7 @@ impl<'a> Variables<'a> {
         for const_array in opt.const_arrays() {
             variables
                 .global_constant
-                .insert(const_array.id, const_array.item);
+                .insert(const_array.id, (const_array.item, const_array.length));
         }
         variables
     }
@@ -52,7 +52,13 @@ impl<'a> Visitor<'a> {
     }
 
     fn get_mutable_memory(&mut self, variable: Variable, length: usize) -> Value<'a, 'a> {
-        let r#type = variable.storage_type().to_type(self.context);
+        let r#type = if variable.storage_type().is_atomic()
+            && !matches!(variable.kind, VariableKind::LocalArray { .. })
+        {
+            IntegerType::new(self.context, 64).into()
+        } else {
+            variable.storage_type().to_type(self.context)
+        };
         let memref_type = MemRefType::new(
             r#type,
             &[variable.vector_size() as i64 * length as i64],
@@ -83,6 +89,13 @@ impl<'a> Visitor<'a> {
 
     fn insert_mutable_memory(&mut self, variable: Variable, value: Value<'a, 'a>, length: usize) {
         let memref = self.get_mutable_memory(variable, length);
+        let value = if variable.storage_type().is_atomic()
+            && !matches!(variable.kind, VariableKind::LocalArray { .. })
+        {
+            self.pointer_as_integer(value, IntegerType::new(self.context, 64).into())
+        } else {
+            value
+        };
         let integer = IntegerAttribute::new(Type::index(self.context), 0).into();
         let zero = self.append_operation_with_result(arith::constant(
             self.context,
@@ -172,20 +185,20 @@ impl<'a> Visitor<'a> {
                 self.get_mutable_memory(variable, 1)
             }
             VariableKind::LocalArray { length, .. } => self.get_mutable_memory(variable, length),
-            VariableKind::ConstantArray {
-                id,
-                length,
-                unroll_factor,
-            } => {
+            VariableKind::ConstantArray { id, .. } => {
                 let name = id.to_string();
-                let r#type = self
+                let (item, length) = self
                     .variables
                     .global_constant
                     .get(&id)
-                    .unwrap()
-                    .to_type(self.context);
-                let r#type =
-                    MemRefType::new(r#type, &[(length * unroll_factor) as i64], None, None);
+                    .copied()
+                    .unwrap();
+                let length = length.checked_mul(item.vector_size())
+                    .and_then(|length| i64::try_from(length).ok())
+                    .expect("constant array length exceeds the CPU index range");
+                let r#type = MemRefType::new(
+                    item.storage_type().to_type(self.context), &[length], None, None,
+                );
                 self.append_operation_with_result(memref::get_global(
                     self.context,
                     &name,
@@ -295,7 +308,12 @@ impl<'a> Visitor<'a> {
                     integer,
                     self.location,
                 ));
-                if variable.ty.is_vectorized() {
+                if variable.storage_type().is_atomic() {
+                    let address = self.append_operation_with_result(memref::load(
+                        memref, &[zero], self.location,
+                    ));
+                    self.native_pointer(address)
+                } else if variable.ty.is_vectorized() {
                     self.append_operation_with_result(vector::load(
                         self.context,
                         result_type,
@@ -349,6 +367,11 @@ impl<'a> Visitor<'a> {
                     .block
                     .const_int_from_type(self.context, self.location, 0, Type::index(self.context))
                     .unwrap();
+                if variable.storage_type().is_atomic() {
+                    return self.memref_element_pointer(
+                        memref, index, variable.storage_type().to_type(self.context),
+                    );
+                }
                 let value = self.append_operation_with_result(memref::load(
                     memref,
                     &[index],
@@ -381,21 +404,21 @@ impl<'a> Visitor<'a> {
         list_is_vectorized: bool,
     ) -> Value<'a, 'a> {
         let index = self.get_variable(variable);
-        let mut index = self.append_operation_with_result(index::casts(
-            index,
-            Type::index(self.context),
-            self.location,
-        ));
+        let cast = if variable.storage_type().is_unsigned_int() {
+            index::castu(index, Type::index(self.context), self.location)
+        } else {
+            index::casts(index, Type::index(self.context), self.location)
+        };
+        let mut index = self.append_operation_with_result(cast);
         if target_item.is_vectorized() && list_is_vectorized {
             let vectorization = target_item.vector_size() as i64;
-            let shift = vectorization.ilog2() as i64;
             let constant = self.append_operation_with_result(arith::constant(
                 self.context,
                 Type::index(self.context),
-                IntegerAttribute::new(Type::index(self.context), shift).into(),
+                IntegerAttribute::new(Type::index(self.context), vectorization).into(),
                 self.location,
             ));
-            index = self.append_operation_with_result(arith::shli(
+            index = self.append_operation_with_result(arith::muli(
                 self.context,
                 index,
                 constant,

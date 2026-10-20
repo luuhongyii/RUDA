@@ -130,6 +130,17 @@ impl SharedBytesAllocationController {
 }
 
 impl AllocationController for SharedBytesAllocationController {
+    fn memory_with_policy(&self, _: super::AccessPolicy) -> Result<&[MaybeUninit<u8>], super::AccessError> {
+        Ok(self.memory())
+    }
+
+    unsafe fn memory_mut_with_policy(&mut self, policy: super::AccessPolicy) -> Result<&mut [MaybeUninit<u8>], super::AccessError> {
+        if !policy.copy_allowed() && !self.init.load(Ordering::Relaxed) {
+            return Err(super::AccessError::WouldCopy);
+        }
+        Ok(unsafe { self.memory_mut() })
+    }
+
     fn alloc_align(&self) -> usize {
         // Always report MAX_ALIGN because that's what try_detach will provide.
         // This allows try_into_vec to succeed for all tensor element types.

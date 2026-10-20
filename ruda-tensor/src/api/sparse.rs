@@ -87,7 +87,7 @@ impl<B: SparseOps> CsrTensor<B> {
         let nnz = permutation.len();
         let indices = Tensor::<B, 1, Int>::from_data(
             TensorData::new(permutation, [nnz]), (&self.device(), DType::I64),
-        );
+        ).with_context_of(&self.values);
         Self::from_parts(handle, self.values.clone().select(0, indices))
     }
 

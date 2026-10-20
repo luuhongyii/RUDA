@@ -68,10 +68,10 @@ impl LoRALinearConfig {
             .init(&device);
         adapter_a.weight = adapter_a
             .weight
-            .map(|value| value.cast(adapter_dtype).detach().require_grad());
+            .map(|value| value.cast(adapter_dtype).detach()).set_require_grad(true);
         adapter_b.weight = adapter_b
             .weight
-            .map(|value| value.cast(adapter_dtype).detach().require_grad());
+            .map(|value| value.cast(adapter_dtype).detach()).set_require_grad(true);
         self.from_adapters(base, adapter_a, adapter_b, use_rslora)
     }
 
@@ -92,7 +92,7 @@ impl LoRALinearConfig {
         assert_eq!(b.dims(), [self.rank, output], "adapter B dimensions differ");
         assert!(adapter_a.bias.is_none() && adapter_b.bias.is_none(), "LoRA adapters must be bias-free");
         assert!(a.device() == weight.device() && b.device() == weight.device(), "adapter/base devices differ");
-        assert!(!B::ad_enabled(&weight.device()) || (a.is_require_grad() && b.is_require_grad()), "loaded adapters must be trainable with autodiff enabled");
+        assert!((!a.is_autodiff() || a.is_require_grad()) && (!b.is_autodiff() || b.is_require_grad()), "loaded adapters must be trainable with autodiff enabled");
         let denominator = if use_rslora { (self.rank as f64).sqrt() } else { self.rank as f64 };
         LoRALinear { base: base.no_grad(), adapter_a, adapter_b,
             dropout: DropoutConfig::new(self.dropout).init(), scale: self.alpha / denominator }

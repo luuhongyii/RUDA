@@ -8,6 +8,12 @@ mod causal_lm;
 mod seq2seq;
 mod ctc;
 mod huber;
+mod gaussian_nll;
+mod hinge_embedding;
+mod margin_ranking;
+mod multi_margin;
+mod soft_margin;
+mod triplet_margin;
 mod kldiv;
 mod kl_terms;
 mod regression_terms;
@@ -18,6 +24,9 @@ mod reduction;
 mod rnnt;
 mod smooth_l1;
 
+#[cfg(test)]
+mod parity_tests;
+
 pub use binary_cross_entropy::*;
 pub use cosine_embedding::*;
 pub use cross_entropy::*;
@@ -27,6 +36,12 @@ pub use binary_terms::*;
 pub use causal_lm::*;
 pub use ctc::*;
 pub use huber::*;
+pub use gaussian_nll::*;
+pub use hinge_embedding::*;
+pub use margin_ranking::*;
+pub use multi_margin::*;
+pub use soft_margin::*;
+pub use triplet_margin::*;
 pub use kldiv::*;
 pub use lp_loss::*;
 pub use mse::*;

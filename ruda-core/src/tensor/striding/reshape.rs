@@ -127,6 +127,9 @@ pub fn split_strides(shape: &[usize], strides: &[usize], shape_new: &[usize]) ->
     let mut strides_new = strides![1; shape_new.len()];
 
     let mut old_idx = shape.len() - 1;
+    while old_idx > 0 && shape[old_idx] == 1 {
+        old_idx -= 1;
+    }
     let mut current_stride = strides[old_idx];
     let mut dim_prod = 1;
 
@@ -137,6 +140,9 @@ pub fn split_strides(shape: &[usize], strides: &[usize], shape_new: &[usize]) ->
             continue;
         } else if dim_prod == shape[old_idx] {
             old_idx = old_idx.saturating_sub(1);
+            while old_idx > 0 && shape[old_idx] == 1 {
+                old_idx -= 1;
+            }
             current_stride = strides[old_idx];
             dim_prod = 1;
         } else {
@@ -188,7 +194,14 @@ pub fn reshape_analysis(
                     // reshapes like [2, 3] to [2, 3, 1] will panic from out of bounds access.
                     if *dim == 1 {
                         continue;
-                    } else if dim_prod == shape[old_idx] {
+                    }
+                    while old_idx < shape_rank && shape[old_idx] == 1 {
+                        old_idx += 1;
+                    }
+                    if old_idx == shape_rank {
+                        return ReshapeAnalysis::HighlyPermuted;
+                    }
+                    if dim_prod == shape[old_idx] {
                         dim_prod = 1;
                         old_idx += 1;
                     } else if dim_prod > shape[old_idx] {

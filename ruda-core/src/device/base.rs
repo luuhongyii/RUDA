@@ -10,6 +10,28 @@ pub struct DeviceId {
     pub index_id: u16,
 }
 
+/// A particular service type on a runtime-local device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ServiceId {
+    /// The runtime-local device identifier.
+    pub device: DeviceId,
+    /// The concrete service type in this process.
+    pub service: core::any::TypeId,
+}
+
+impl ServiceId {
+    /// Identify a concrete service on a runtime-local device.
+    pub fn of<S: 'static>(device: DeviceId) -> Self {
+        Self { device, service: core::any::TypeId::of::<S>() }
+    }
+}
+
+impl core::fmt::Display for ServiceId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} service {:?}", self.device, self.service)
+    }
+}
+
 /// Device trait for all ruda devices.
 pub trait Device: Default + Clone + core::fmt::Debug + Send + Sync + 'static {
     /// Create a device from its [id](DeviceId).
@@ -51,6 +73,8 @@ pub trait DeviceService: Send + 'static {
     fn init(device_id: DeviceId) -> Self;
     /// Get the service utilities.
     fn utilities(&self) -> ServerUtilitiesHandle;
+    /// Finish buffered work on the owning thread before its service is destroyed.
+    fn shutdown(&mut self) {}
     /// Which pipeline stage this service runs on.
     ///
     /// Services on [`DeviceServiceStage::Upstream`] produce work ahead of time (e.g. autodiff graph

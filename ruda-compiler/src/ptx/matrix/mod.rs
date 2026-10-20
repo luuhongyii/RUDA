@@ -14,6 +14,9 @@ fn descriptor(variable: Variable) -> Result<Matrix> {
     let VariableKind::Matrix { mat, .. } = variable.kind else {
         return Err(invalid("expected a matrix fragment"));
     };
+    if mat.scope != ruda_core::ir::MatrixScope::Plane {
+        return Err(unsupported("workgroup cooperative matrices are not supported by PTX"));
+    }
     if variable.ty != Type::new(mat.storage) { return Err(invalid("matrix fragment storage type mismatch")); }
     Ok(mat)
 }
@@ -36,7 +39,28 @@ fn same_shape(a: Matrix, b: Matrix) -> bool {
 
 impl Emitter {
     pub fn matrix(&mut self, operation: CoopMma, out: Variable) -> Result<()> {
+        match &operation {
+            CoopMma::ExecuteManual { matrix, .. }
+            | CoopMma::ExecuteScaled { matrix, .. }
+            | CoopMma::RowIndex { matrix, .. }
+            | CoopMma::ColIndex { matrix, .. }
+                if matrix.scope != ruda_core::ir::MatrixScope::Plane =>
+            {
+                return Err(unsupported("manual MMA requires subgroup scope"));
+            }
+            _ => {}
+        }
         match operation {
+            CoopMma::Elementwise { .. } => {
+                Err(unsupported("cooperative matrix callbacks are not supported by PTX"))
+            }
+            CoopMma::CreateTensorLayout { .. }
+            | CoopMma::CreateTensorView
+            | CoopMma::SliceTensorLayout { .. }
+            | CoopMma::LoadTensor { .. }
+            | CoopMma::StoreTensor { .. } => {
+                Err(unsupported("cooperative matrix tensor addressing is not supported by PTX"))
+            }
             CoopMma::Fill { value } => self.matrix_fill(out, value),
             CoopMma::Load { value, stride, offset, layout } => self.matrix_load(out, value, offset, stride, layout),
             CoopMma::Store { mat, stride, offset, layout } => self.matrix_store(out, mat, offset, stride, layout),

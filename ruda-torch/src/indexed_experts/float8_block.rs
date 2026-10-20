@@ -233,7 +233,7 @@ fn carrier_product<L:Float,R:Float>(a:&Array<L>,b:&Array<R>,indices:&Array<u32>,
                 sync_ruda();
                 let aa=cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::A,16usize,16usize,16usize,cmma::MatrixLayout::RowMajor,&al.to_slice(),16);
                 let bb=cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::B,16usize,16usize,16usize,cmma::MatrixLayout::RowMajor,&bl.to_slice(),16);
-                cmma::execute::<f16,f16,f32,f32>(&aa,&bb,&acc,&acc);sync_ruda();base+=16;
+                cmma::execute::<f16,f16,f32,f32, _>(&aa,&bb,&acc,&acc);sync_ruda();base+=16;
             }
             cmma::store(&mut result.to_slice_mut(),&acc,16,cmma::MatrixLayout::RowMajor);sync_ruda();
             #[unroll] for i in 0usize..8usize {

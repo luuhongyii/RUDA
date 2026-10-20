@@ -6,13 +6,30 @@ use syn::{Generics, Visibility, parse_quote};
 use super::codegen::RecordItemCodegen;
 
 pub(crate) struct StructRecordItemCodegen {
+    container: String,
     fields: Vec<FieldTypeAnalyzer>,
     vis: Visibility,
 }
 
 impl RecordItemCodegen for StructRecordItemCodegen {
+    fn gen_map_parameters(&self, paths: &crate::DerivePaths) -> TokenStream {
+        let model = &paths.model;
+        let fields = self.fields.iter().map(|field| {
+            let name = &field.field.ident;
+            let mapped = super::map_field(quote!(self.#name),
+                &name.as_ref().unwrap().to_string(), &self.container, paths);
+            quote!(#name: #mapped,)
+        });
+        quote! {
+            fn map_parameters<__RudaRecordMapper: #model::module::ModuleMapper<B>>(self, mapper: &mut __RudaRecordMapper) -> Self {
+                Self { #(#fields)* }
+            }
+        }
+    }
+
     fn from_ast(ast: &syn::DeriveInput, _paths: &crate::DerivePaths) -> syn::Result<Self> {
         Ok(Self {
+            container: super::container_type(ast, "Struct")?,
             fields: parse_fields(ast)
                 .into_iter()
                 .map(FieldTypeAnalyzer::new)

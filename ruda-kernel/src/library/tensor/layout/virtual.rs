@@ -167,7 +167,7 @@ mod launch {
     type ExpandFn<C, S> =
         Arc<dyn Fn(&mut KernelBuilder, bool) -> VirtualLayoutExpand<C, S> + Send + Sync>;
 
-    pub struct VirtualLayoutLaunch<C: Coordinates, S: Coordinates, R: Runtime> {
+    pub struct VirtualLayoutLaunch<C: Coordinates, S: Coordinates, R: LaunchMarker> {
         _phantom_runtime: core::marker::PhantomData<R>,
         #[allow(clippy::type_complexity)]
         register: Box<
@@ -175,7 +175,7 @@ mod launch {
         >,
     }
 
-    impl<C: Coordinates, S: Coordinates, R: Runtime> VirtualLayoutLaunch<C, S, R> {
+    impl<C: Coordinates, S: Coordinates, R: LaunchMarker> VirtualLayoutLaunch<C, S, R> {
         pub fn new<L: Layout<Coordinates = C, SourceCoordinates = S> + LaunchArg>(
             layout: L::RuntimeArg<R>,
         ) -> Self {
@@ -247,10 +247,10 @@ mod launch {
     }
 
     impl<C: Coordinates + 'static, S: Coordinates + 'static> LaunchArg for VirtualLayout<C, S> {
-        type RuntimeArg<R: Runtime> = VirtualLayoutLaunch<C, S, R>;
+        type RuntimeArg<R: LaunchMarker> = VirtualLayoutLaunch<C, S, R>;
         type CompilationArg = VirtualLayoutCompilationArg<C, S>;
 
-        fn register<R: Runtime>(
+        fn register<R: LaunchMarker>(
             arg: Self::RuntimeArg<R>,
             launcher: &mut KernelLauncher<R>,
         ) -> Self::CompilationArg {

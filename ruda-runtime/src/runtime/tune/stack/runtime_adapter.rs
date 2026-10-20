@@ -15,6 +15,18 @@ pub fn enable_stack_autotune_with_memory_eviction(policy: StackPolicy, cache_dir
     GLOBAL.set(tuner).map_err(|_| TuneFailure::invalid("stack autotuning was already configured"))?;
     Ok(GLOBAL.get().expect("controller was initialized"))
 }
+/// Install an environment-backed controller; does not change the active environment or open storage.
+#[cfg(persistence)]
+pub fn enable_stack_autotune_in_environment(policy: StackPolicy) -> Result<&'static StackTuner, TuneFailure> {
+    enable_stack_autotune_in_environment_with_memory_eviction(policy, MemoryEviction::Fifo)
+}
+/// Install environment-backed selection with an explicit process-memory eviction order.
+#[cfg(persistence)]
+pub fn enable_stack_autotune_in_environment_with_memory_eviction(policy: StackPolicy, memory_eviction: MemoryEviction) -> Result<&'static StackTuner, TuneFailure> {
+    let tuner = StackTuner::in_environment_with_memory_eviction(policy, memory_eviction)?;
+    GLOBAL.set(tuner).map_err(|_| TuneFailure::invalid("stack autotuning was already configured"))?;
+    Ok(GLOBAL.get().expect("controller was initialized"))
+}
 /// Return the installed controller, or None to preserve the legacy tuner route.
 /// Merely querying it does not create a controller, inspect files or run trials.
 pub fn stack_autotuner() -> Option<&'static StackTuner> { GLOBAL.get() }
@@ -78,25 +90,38 @@ fn complete<R: Runtime>(client: &ComputeClient<R>) -> Result<(), TuneFailure> {
     ruda_core::future::block_on(client.sync()).map_err(|e| TuneFailure::device(std::format!("autotune synchronization failed: {e:?}")))?;
     submitted.map_err(|e| TuneFailure::rejected(std::format!("candidate submission failed after a successful completion fence: {e:?}")))
 }
-fn run_output<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput>(
-    client: &ComputeClient<R>, set: &TunableSet<K,I,O>, index: usize, input: I::At<'_>,
+fn run_output<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput, Id: Send + Sync>(
+    client: &ComputeClient<R>, set: &TunableSet<K,I,O,Id>, index: usize, input: I::At<'_>,
 ) -> Result<O, TuneFailure> {
     let result = set.fastest(index).execute(input);
     complete(client)?;
     result.map_err(|e| TuneFailure::rejected(std::format!("candidate rejected: {e:?}")))
 }
-struct RuntimeTrials<'set, 'inp, R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput> {
-    client: ComputeClient<R>, set: &'set TunableSet<K,I,O>, key: &'set K,
+struct RuntimeTrials<'set, 'inp, R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput, Id: Send + Sync> {
+    client: ComputeClient<R>, set: &'set TunableSet<K,I,O,Id>, key: &'set K,
     input: &'set I::At<'inp>, indices: &'set [usize], timing: Timing,
 }
-impl<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput> TrialRunner for RuntimeTrials<'_, '_, R,K,I,O> {
+impl<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput, Id: Send + Sync> TrialRunner for RuntimeTrials<'_, '_, R,K,I,O,Id> {
+    fn time_limit(&mut self) -> Option<TimeLimit> {
+        use crate::runtime::{config::{RudaRuntimeConfig, RuntimeConfig}, tune::TimeBound};
+        let config = RudaRuntimeConfig::get();
+        if !self.set.is_short_circuit_enabled() || config.autotune.disable_short_circuit {
+            return None;
+        }
+        let _real_run = crate::runtime::dry_run::RealRun::new();
+        self.set.bounds(self.key, self.input).and_then(|bounds| bounds.time_limit())
+            .map(|duration| TimeLimit { duration, confirmations: config.autotune.bench.short_circuit_samples() })
+    }
+
     fn validate(&mut self, reference: usize, candidate: usize, tolerance: Tolerance) -> Result<Validation, TuneFailure> {
+        let _real_run = crate::runtime::dry_run::RealRun::new();
         let a = self.set.generate_inputs(self.key, self.input);
         let b = self.set.generate_inputs(self.key, self.input);
         complete(&self.client)?;
         let client = self.client.clone(); let set = self.set;
         let ri = self.indices[reference]; let ci = self.indices[candidate];
         self.client.exclusive(move || {
+            let _real_run = crate::runtime::dry_run::RealRun::new();
             let _depth = super::engine::DepthGuard::enter();
             let expected = run_output(&client, set, ri, a)?;
             let actual = run_output(&client, set, ci, b)?;
@@ -111,14 +136,22 @@ impl<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput> TrialRunner f
         }).map_err(|e| TuneFailure::device(std::format!("exclusive validation failed: {e:?}")))?
     }
     fn measure(&mut self, candidate: usize) -> Result<Duration, TuneFailure> {
+        let _real_run = crate::runtime::dry_run::RealRun::new();
         let input = self.set.generate_inputs(self.key, self.input);
+        let mut evictor = self.set.evictor(self.key, self.input);
         complete(&self.client)?;
         let client = self.client.clone(); let set = self.set;
         let index = self.indices[candidate]; let timing = self.timing;
         self.client.exclusive(move || {
+            let _real_run = crate::runtime::dry_run::RealRun::new();
             let _depth = super::engine::DepthGuard::enter();
             // Preparation/sandbox copies are outside the measured region. All allocations and
             // relayouts made INSIDE the actual candidate operation are part of EndToEnd timing.
+            if let Some(evict) = evictor.as_deref_mut() {
+                if let Err(error) = evict() {
+                    log::warn!("Autotune eviction failed for {}: {error:?}", set.fastest(index).name);
+                }
+            }
             complete(&client)?;
             match timing {
                 Timing::EndToEnd => {
@@ -133,7 +166,9 @@ impl<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput> TrialRunner f
                     complete(&client)?;
                     let (output, profile) = profiled.map_err(|e| TuneFailure::rejected(std::format!("device profile failed: {e:?}")))?;
                     let output = output.map_err(|e| TuneFailure::rejected(std::format!("candidate rejected: {e:?}")))?;
-                    let elapsed = ruda_core::future::block_on(profile.resolve()).duration();
+                    let elapsed = ruda_core::future::block_on(profile.resolve())
+                        .ok_or_else(|| TuneFailure::rejected("device profiling window contained no measurement"))?
+                        .duration();
                     std::hint::black_box(&output); drop(output);
                     Ok(elapsed)
                 }
@@ -146,9 +181,15 @@ impl<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput> TrialRunner f
 /// execution error invalidates future choices but is never silently replayed on another kernel.
 /// Requires an installed controller, an in-range explicit reference and an exact workload
 /// signature on the set. Missing metadata returns AutotuneError before live execution.
-pub fn try_execute_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput>(
-    name: &str, device_id: &str, client: &ComputeClient<R>, set: Arc<TunableSet<K,I,O>>, input: I::At<'a>,
+pub fn try_execute_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput, Id: Send + Sync>(
+    name: &str, device_id: &str, client: &ComputeClient<R>, set: Arc<TunableSet<K,I,O,Id>>, input: I::At<'a>,
 ) -> Result<O, AutotuneError> {
+    try_execute_stack_with_index(name, device_id, client, set, input).map(|(output, _)| output)
+}
+
+pub(crate) fn try_execute_stack_with_index<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput, Id: Send + Sync>(
+    name: &str, device_id: &str, client: &ComputeClient<R>, set: Arc<TunableSet<K,I,O,Id>>, input: I::At<'a>,
+) -> Result<(O, usize), AutotuneError> {
     let tuner = stack_autotuner().ok_or_else(|| autotune_error(name, "stack autotuning is not enabled"))?;
     let reference = set.stack_reference().ok_or_else(|| autotune_error(name, "no explicit reference/workload signature was registered"))?;
     if reference >= set.len() { return Err(autotune_error(name, "reference index out of range")); }
@@ -185,7 +226,7 @@ pub fn try_execute_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: Autot
             .map_err(|error| autotune_error(name, &error.to_string()))?;
         let output = set.fastest(plan.indices[decision.index]).execute(input);
         if output.is_err() { tuner.invalidate(&decision, true); }
-        return output;
+        return output.map(|output| (output, plan.indices[decision.index]));
     }
     // Enumerate EVERY eligible priority group. Group order remains a useful bounded-search
     // heuristic but a first valid group no longer terminates the search.
@@ -202,21 +243,21 @@ pub fn try_execute_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: Autot
     let decision = tuner.select_candidates(problem, &candidates, 0, &mut trials).map_err(|e| autotune_error(name, &e.to_string()))?;
     let output = set.fastest(indices[decision.index]).execute(input);
     if output.is_err() { tuner.invalidate(&decision, true); }
-    output
+    output.map(|output| (output, indices[decision.index]))
 }
 fn autotune_error(name: &str, message: &str) -> AutotuneError {
     AutotuneError::Unknown { name: name.to_string(), err: message.to_string() }
 }
 
-pub struct PreparedStackOperation<K: AutotuneKey, I: TuneInputs, O: AutotuneOutput> {
-    set: Arc<TunableSet<K,I,O>>, key: K, problem: Problem,
+pub struct PreparedStackOperation<K: AutotuneKey, I: TuneInputs, O: AutotuneOutput, Id: Send + Sync = ()> {
+    set: Arc<TunableSet<K,I,O,Id>>, key: K, problem: Problem,
     indices: Vec<usize>, candidates: Vec<Candidate>, cache_key: String,
     runtime: std::any::TypeId, device: (u16, u16, u64),
 }
 
-pub fn prepare_stack_operation<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput>(
-    name: &str, device_id: &str, client: &ComputeClient<R>, set: Arc<TunableSet<K,I,O>>, input: &I::At<'_>,
-) -> Result<PreparedStackOperation<K,I,O>, AutotuneError> {
+pub fn prepare_stack_operation<R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput, Id: Send + Sync>(
+    name: &str, device_id: &str, client: &ComputeClient<R>, set: Arc<TunableSet<K,I,O,Id>>, input: &I::At<'_>,
+) -> Result<PreparedStackOperation<K,I,O,Id>, AutotuneError> {
     let tuner = stack_autotuner().ok_or_else(|| autotune_error(name, "stack autotuning is not enabled"))?;
     let reference = set.stack_reference().ok_or_else(|| autotune_error(name, "no explicit reference/workload signature was registered"))?;
     if reference >= set.len() { return Err(autotune_error(name, "reference index out of range")); }
@@ -238,8 +279,8 @@ pub fn prepare_stack_operation<R: Runtime, K: AutotuneKey, I: TuneInputs, O: Aut
         runtime: std::any::TypeId::of::<R>(), device: (id.type_id, id.index_id, client.properties_fingerprint()) })
 }
 
-pub fn try_execute_prepared_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput>(
-    name: &str, client: &ComputeClient<R>, prepared: &PreparedStackOperation<K,I,O>, input: I::At<'a>,
+pub fn try_execute_prepared_stack<'a, R: Runtime, K: AutotuneKey, I: TuneInputs, O: AutotuneOutput, Id: Send + Sync>(
+    name: &str, client: &ComputeClient<R>, prepared: &PreparedStackOperation<K,I,O,Id>, input: I::At<'a>,
 ) -> Result<O, AutotuneError> {
     let tuner = stack_autotuner().ok_or_else(|| autotune_error(name, "stack autotuning is not enabled"))?;
     let id = client.device_id();

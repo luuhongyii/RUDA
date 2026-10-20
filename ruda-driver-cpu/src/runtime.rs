@@ -32,6 +32,8 @@ pub struct CpuRuntime;
 pub type CpuCompiler = MlirCompiler;
 
 mod device_service;
+mod cache;
+mod processor_times;
 
 impl Runtime for CpuRuntime {
     type Compiler = CpuCompiler;
@@ -44,6 +46,12 @@ impl Runtime for CpuRuntime {
 
     fn name(_client: &ComputeClient<Self>) -> &'static str {
         "cpu"
+    }
+
+    fn utilization(
+        _device: &Self::Device,
+    ) -> Result<ruda::runtime::backend::DeviceUtilization, ruda::runtime::backend::UtilizationUnavailable> {
+        processor_times::ProcessorTimes::read_machine_wide()
     }
 
     fn autotune_driver_fingerprint(_client: &ComputeClient<Self>) -> Option<String> {

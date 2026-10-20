@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use ruda_core::bytes::Bytes;
+use crate::runtime::server::ServerError;
 
 use crate::runtime::memory_management::{
     drop_queue::FlushingPolicy, drop_queue::policy::FlushingPolicyState,
@@ -7,9 +8,22 @@ use crate::runtime::memory_management::{
 
 /// A synchronization primitive that blocks until the device has finished
 /// processing all commands submitted before the fence was created.
-pub trait Fence {
+pub trait Fence: Sized {
     /// Block the current thread until the signals this fence.
     fn sync(self);
+    /// A fallible wait; legacy infallible fences retain their existing behavior.
+    fn wait(self) -> Result<(), ServerError> { self.sync(); Ok(()) }
+    /// Only release guarded memory after completion or a terminal device fault.
+    fn safe_to_release(self) -> bool {
+        match self.wait() {
+            Ok(()) => true,
+            Err(error) if error.is_device_poisoned() => true,
+            Err(error) => {
+                log::error!("Fence wait failed; keeping memory the device may still read: {error}");
+                false
+            }
+        }
+    }
 }
 
 /// Defers the drop of CPU-side [`Bytes`] allocations until the device has
@@ -103,8 +117,7 @@ impl<F: Fence> PendingDropQueue<F> {
         // Sync the fence from the previous flush and free the bytes it was
         // protecting.
         if let Some(event) = self.fence.take() {
-            event.sync();
-            self.pending.clear();
+            self.release_pending(event.safe_to_release());
         }
 
         // Safety net: if pending is somehow still populated (no prior fence),
@@ -112,8 +125,7 @@ impl<F: Fence> PendingDropQueue<F> {
         // be reading.
         if !self.pending.is_empty() {
             let event = factory();
-            event.sync();
-            self.pending.clear();
+            self.release_pending(event.safe_to_release());
         }
 
         // The current staged batch becomes the new pending batch.
@@ -123,6 +135,11 @@ impl<F: Fence> PendingDropQueue<F> {
         // free.
         self.fence = Some(factory());
         self.policy_state.reset();
+    }
+
+    fn release_pending(&mut self, device_done: bool) {
+        if device_done { self.pending.clear(); }
+        else { core::mem::forget(core::mem::take(&mut self.pending)); }
     }
 }
 

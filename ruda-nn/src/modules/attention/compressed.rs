@@ -220,9 +220,13 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
         let [batch, tokens, _] = input.dims();
         let device = input.device();
         let compute = work_dtype(input.dtype());
+        let mut context = input.autodiff_context().merge(latent.autodiff_context()).merge(query.autodiff_context())
+            .merge(pos.autodiff_context()).merge(query_valid.autodiff_context()).merge(local.autodiff_context())
+            .merge(local_valid.autodiff_context()).merge(compressed.autodiff_context()).merge(compressed_valid.autodiff_context());
+        if let Some(keys) = &index_keys { context = context.merge(keys.autodiff_context()); }
         let count = compressed.dims()[1];
         let ratio = i64::try_from(self.parts.compressor.ratio).expect("compression ratio exceeds I64");
-        let ends = positions::<B>(count, 0, &device).mul_scalar(ratio).add_scalar(ratio - 1);
+        let ends = positions::<B>(count, 0, &device).with_autodiff_context(context).mul_scalar(ratio).add_scalar(ratio - 1);
         let window = i64::try_from(self.window_size).expect("local window exceeds I64");
         let local_start = i64::try_from(local_start).expect("local position exceeds I64");
         let local_count = i64::try_from(local.dims()[1]).expect("local history exceeds I64");
@@ -235,7 +239,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
             let rows = pos.clone().slice_dim(0, begin..end);
             let qvalid = query_valid.clone().slice_dim(1, begin..end);
             let local_ids = rows.clone().reshape([length, 1]).sub_scalar(window - 1)
-                + positions::<B>(self.window_size, 0, &device).reshape([1, self.window_size]);
+                + positions::<B>(self.window_size, 0, &device).with_autodiff_context(context).reshape([1, self.window_size]);
             let local_ids = local_ids.sub_scalar(local_start);
             let local_slots = local_ids.clone().greater_equal_elem(0).bool_and(local_ids.clone().lower_elem(local_count));
             let local_ids = local_ids.mask_fill(local_slots.bool_not(), -1).reshape([1, length, self.window_size])
@@ -259,7 +263,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
                     .bool_and(qvalid.clone().reshape([batch, length, 1]).expand(shape))
                     .bool_and(ends.clone().reshape([1, 1, count]).expand(shape)
                         .lower_equal(rows.clone().reshape([1, length, 1]).expand(shape)));
-                let ids = positions::<B>(count, 0, &device).reshape([1, 1, count]).expand(shape).mask_fill(mask.clone().bool_not(), -1);
+                let ids = positions::<B>(count, 0, &device).with_autodiff_context(context).reshape([1, 1, count]).expand(shape).mask_fill(mask.clone().bool_not(), -1);
                 (ids, mask)
             };
             let selected = sparse_gather_entries(compressed.clone(), ids.clone());
@@ -271,7 +275,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
             let mut allowed = mask.reshape([batch, length, 1, entry_count]).expand([batch, length, self.num_heads, entry_count]);
             if let Some(sink) = &self.parts.sink {
                 let sink = sink.val().cast(compute).reshape([1, 1, self.num_heads, 1]).expand([batch, length, self.num_heads, 1]);
-                allowed = Tensor::cat(vec![allowed, Tensor::<B, 4, Bool>::zeros(sink.dims(), &device).bool_not()], 3);
+                allowed = Tensor::cat(vec![allowed, Tensor::<B, 4, Bool>::zeros(sink.dims(), &device).with_autodiff_context(sink.autodiff_context()).bool_not()], 3);
                 scores = Tensor::cat(vec![scores, sink], 3);
             }
             let mut probabilities = masked_softmax(scores, allowed, 3);
@@ -301,7 +305,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
         let projected = self.parts.output_up.forward(Tensor::cat(groups, 2));
         let output = projected.clone() * query_valid.cast::<FloatDType>(projected.dtype().into()).reshape([batch, tokens, 1]);
         let indexer_loss = if losses.is_empty() {
-            Tensor::zeros([1], (&device, compute))
+            Tensor::zeros([1], (&device, compute)).with_autodiff_context(context)
         } else {
             Tensor::cat(losses, 0).sum() / Tensor::cat(active_counts, 0).sum().clamp_min(1)
         };
@@ -323,10 +327,11 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
     fn forward_options(&self, input: Tensor<B, 3>, valid: Option<Tensor<B, 2, Bool>>,
         return_aux: bool, indexer_warmup: bool) -> CompressedAttentionOutput<B> {
         let valid = self.validate(&input, valid);
-        let pos = positions::<B>(input.dims()[1], 0, &input.device());
+        let pos = positions::<B>(input.dims()[1], 0, &input.device()).with_autodiff_context(input.autodiff_context());
         let (latent, query, local) = self.project(input.clone(), pos.clone());
         let (compressed, compressed_valid) = self.parts.compressor.forward(input.clone(), Some(valid.clone()));
         let block_pos = positions::<B>(compressed.dims()[1], 0, &input.device())
+            .with_autodiff_context(compressed.autodiff_context())
             .mul_scalar(i64::try_from(self.parts.compressor.ratio).expect("compression ratio exceeds I64"));
         let compressed = self.rotary.forward_shared(compressed, block_pos.clone());
         let index_keys = self.parts.index_compressor.as_ref().map(|compressor| {
@@ -340,7 +345,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
     /// Bind incremental state to this immutable actual module. Rust borrowing prevents
     /// loading/updating/moving its parameters while the live inference session exists.
     pub fn inference_session(&self) -> CompressedAttentionSession<'_, B, P> {
-        assert!(!B::ad_enabled(&self.parts.query_down.device()), "cached attention requires autograd-disabled inference");
+        assert!(!ruda_model::module::has_autodiff(self), "cached attention requires autograd-disabled inference");
         CompressedAttentionSession { module: self, cache: None }
     }
 }
@@ -407,6 +412,7 @@ impl<'a, B: Backend, P: CompressedAttentionProjection<B>> CompressedAttentionSes
 
     /// Reorder/duplicate every retained batch payload together for beam decoding.
     pub fn reorder(&mut self, parents: Tensor<B, 1, Int>) {
+        assert!(!parents.is_autodiff(), "cached attention requires autograd-disabled inference");
         if let Some(cache) = &mut self.cache {
             assert_eq!(parents.device(), cache.local.device(), "compressed cache beam parents device differs");
             cache.compressed = cache.compressed.clone().select(0, parents.clone());
@@ -422,12 +428,13 @@ impl<'a, B: Backend, P: CompressedAttentionProjection<B>> CompressedAttentionSes
     /// Process the complete supplied arbitrary-length chunk, preserving exactly the
     /// full-sequence complete-block/local-window visibility and absolute positions.
     pub fn forward(&mut self, input: Tensor<B, 3>, valid: Option<Tensor<B, 2, Bool>>) -> Tensor<B, 3> {
-        assert!(!B::ad_enabled(&input.device()), "cached attention requires autograd-disabled inference");
+        assert!(!input.is_autodiff(), "cached attention requires autograd-disabled inference");
         let valid = self.module.validate(&input, valid);
+        assert!(!valid.is_autodiff(), "cached attention requires autograd-disabled inference");
         let [batch, tokens, _] = input.dims();
         let start = self.position();
         let seen = start.checked_add(tokens).expect("compressed cache position overflow");
-        let pos = positions::<B>(tokens, start, &input.device());
+        let pos = positions::<B>(tokens, start, &input.device()).with_autodiff_context(input.autodiff_context());
         if let Some(cache) = &self.cache {
             assert_eq!(cache.local.dims()[0], batch, "compressed cache batch changed without beam reorder");
             assert_eq!(cache.local.device(), input.device(), "compressed cache device changed");
@@ -438,6 +445,7 @@ impl<'a, B: Backend, P: CompressedAttentionProjection<B>> CompressedAttentionSes
             self.cache.as_ref().map(|cache| &cache.compression));
         let first = self.compressed_blocks();
         let block_pos = positions::<B>(new_compressed.dims()[1], first, &input.device())
+            .with_autodiff_context(new_compressed.autodiff_context())
             .mul_scalar(i64::try_from(self.module.parts.compressor.ratio).expect("compression ratio exceeds I64"));
         let new_compressed = self.module.rotary.forward_shared(new_compressed, block_pos.clone());
         let compressed = self.cache.as_ref().map_or_else(|| new_compressed.clone(),
@@ -466,10 +474,12 @@ impl<'a, B: Backend, P: CompressedAttentionProjection<B>> CompressedAttentionSes
         let local_valid = local_valid.slice_dim(1, last..last + keep);
         let local = if keep == 0 { local } else {
             Tensor::empty(local.dims(), (&local.device(), local.dtype()))
+                .with_autodiff_context(local.autodiff_context())
                 .slice_assign([0..batch, 0..keep, 0..self.module.head_dim], local)
         };
         let local_valid = if keep == 0 { local_valid } else {
             Tensor::<B, 2, Bool>::empty(local_valid.dims(), (&local_valid.device(), local_valid.dtype()))
+                .with_autodiff_context(local_valid.autodiff_context())
                 .slice_assign([0..batch, 0..keep], local_valid)
         };
         self.cache = Some(CompressedHistory { seen, compressed: compressed.detach(), compressed_valid,

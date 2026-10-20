@@ -171,6 +171,7 @@ impl Display for Optimizer {
                     )?;
                 }
                 super::ControlFlow::Return => writeln!(f, "    return;")?,
+                super::ControlFlow::ReturnValue(value) => writeln!(f, "    return {value};")?,
                 super::ControlFlow::Unreachable => writeln!(f, "    unreachable;")?,
                 super::ControlFlow::None => {
                     let edge = self.program.edges(node).next();
@@ -381,6 +382,7 @@ impl Display for BasicBlock {
                 )?;
             }
             super::ControlFlow::Return => writeln!(f, "    return;")?,
+            super::ControlFlow::ReturnValue(value) => writeln!(f, "    return {value};")?,
             super::ControlFlow::Unreachable => writeln!(f, "    unreachable;")?,
             super::ControlFlow::None => {
                 writeln!(f, "    branch;")?;

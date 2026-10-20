@@ -164,6 +164,11 @@ pub mod index {
                 ) -> Self::Output {
                     expand_index_native(scope, self, index, None, false)
                 }
+                fn expand_index_reference(
+                    self, scope: &mut Scope, index: NativeExpand<usize>, writable: bool,
+                ) -> Self::Output {
+                    crate::dsl::frontend::indexation::expand_index_reference_native(scope, self, index, writable)
+                }
             }
         };
     }
@@ -184,6 +189,11 @@ pub mod index {
             index: NativeExpand<usize>,
         ) -> Self::Output {
             expand_index_native(scope, self, index, None, false)
+        }
+        fn expand_index_reference(
+            self, scope: &mut Scope, index: NativeExpand<usize>, writable: bool,
+        ) -> Self::Output {
+            crate::dsl::frontend::indexation::expand_index_reference_native(scope, self, index, writable)
         }
     }
 

@@ -59,7 +59,9 @@ pub fn hann_window<B: Backend>(
     let denominator = if periodic { size } else { size - 1 };
     let angular_increment = (2.0 * core::f64::consts::PI) / denominator as f64;
 
-    Tensor::<B, 1, Int>::arange(0..size_i64, &opt.device)
+    let mut opt = opt;
+    opt.dtype = None;
+    Tensor::<B, 1, Int>::arange(0..size_i64, opt)
         .float()
         .mul_scalar(angular_increment)
         .cos()

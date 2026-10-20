@@ -1,6 +1,6 @@
 use ruda_core::ir::{
     AddressType, DeviceProperties, ElemType, FloatKind, IntKind, OpaqueType, StorageType, UIntKind,
-    features::TypeUsage,
+    features::{AtomicUsage, TypeUsage},
 };
 use melior::{
     dialect::index,
@@ -33,7 +33,7 @@ impl IntoType for ElemType {
 impl IntoType for StorageType {
     fn to_type<'a>(self, context: &'a Context) -> Type<'a> {
         match self {
-            StorageType::Scalar(ty) => ty.to_type(context),
+            StorageType::Scalar(ty) | StorageType::Atomic(ty) => ty.to_type(context),
             StorageType::Opaque(OpaqueType::Barrier(_)) => IntegerType::new(context, 32).into(),
             _ => todo!("This type is not implemented yet. {}", self),
         }
@@ -81,18 +81,21 @@ pub fn register_supported_types(props: &mut DeviceProperties) {
         ElemType::Int(IntKind::I16),
         ElemType::Int(IntKind::I32),
         ElemType::Int(IntKind::I64),
-        // Elem::AtomicInt(IntKind::I32),
-        // Elem::AtomicInt(IntKind::I64),
-        // Elem::AtomicUInt(UIntKind::U32),
-        // Elem::AtomicUInt(UIntKind::U64),
         ElemType::Float(FloatKind::BF16),
         ElemType::Float(FloatKind::F16),
         ElemType::Float(FloatKind::F32),
         ElemType::Float(FloatKind::F64),
-        // Elem::Bool,
+        ElemType::Bool,
     ];
 
     for ty in supported_types {
         props.register_type_usage(ty, TypeUsage::all());
+    }
+    for ty in supported_types {
+        if ty != ElemType::Float(FloatKind::BF16) {
+            props.register_atomic_type_usage(
+                ruda_core::ir::Type::new(StorageType::Atomic(ty)), AtomicUsage::all(),
+            );
+        }
     }
 }

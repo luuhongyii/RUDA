@@ -1,4 +1,5 @@
 mod gate_controller;
+mod coupled_lstm;
 
 /// Basic RNN.
 pub mod basic;
@@ -10,6 +11,7 @@ pub mod gru;
 pub mod lstm;
 
 pub use basic::*;
+pub use coupled_lstm::*;
 pub use gate_controller::*;
 pub use gru::*;
 pub use lstm::*;

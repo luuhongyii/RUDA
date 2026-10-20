@@ -10,6 +10,8 @@ mod product;
 mod cumprod;
 #[cfg(test)]
 mod cross_tests;
+#[cfg(test)]
+mod indexing_tests;
 mod integer_power;
 mod interpolation;
 mod module;
@@ -19,6 +21,7 @@ mod pool_backward;
 mod qtensor;
 mod tensor;
 mod transaction;
+mod transfer;
 mod sparse;
 
 pub(crate) mod maxmin;
@@ -26,3 +29,4 @@ pub(crate) mod sort;
 
 pub use backward::*;
 pub use base::*;
+pub use transfer::DifferentiableTransfer;

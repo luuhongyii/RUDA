@@ -196,10 +196,14 @@ impl AsyncLogger {
                     self.logger.log_memory(&msg);
                 }
                 LogMessage::Profile(name, profile) => {
-                    let duration = profile.resolve().await.duration();
-                    self.profiled.update(&name, duration);
-                    self.logger
-                        .log_profiling(&format!("| {duration:<10?} | {name}"));
+                    match profile.resolve().await {
+                        Some(ticks) => {
+                            let duration = ticks.duration();
+                            self.profiled.update(&name, duration);
+                            self.logger.log_profiling(&format!("| {duration:<10?} | {name}"));
+                        }
+                        None => self.logger.log_profiling(&format!("| not measured | {name}")),
+                    }
                 }
                 LogMessage::Execution(name) => {
                     self.logger.log_profiling(&format!("Executing {name}"));

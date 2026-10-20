@@ -62,6 +62,8 @@ impl RNNTLoss {
         target_lengths: Tensor<B, 1, Int>,
     ) -> Tensor<B, 1> {
         let device = logits.device();
+        let context = logits.autodiff_context().merge(targets.autodiff_context())
+            .merge(logit_lengths.autodiff_context()).merge(target_lengths.autodiff_context());
         let [b, max_t, max_up1, v] = logits.dims();
         let max_u = max_up1 - 1;
 
@@ -76,7 +78,7 @@ impl RNNTLoss {
 
         let (lpb, lpl) = self.extract_log_probs(log_probs, targets);
         let u_mask = self.create_u_mask(&target_lengths, b, max_up1, &device);
-        let neg_inf = Tensor::<B, 2>::full([b, max_up1], f32::NEG_INFINITY, &device);
+        let neg_inf = Tensor::<B, 2>::full([b, max_up1], f32::NEG_INFINITY, &device).with_autodiff_context(context);
 
         // Forward pass: compute log_alpha across the (T, U) lattice
         let mut alpha = self.init_alpha(&lpl, b, max_up1, &device);
@@ -152,7 +154,7 @@ impl RNNTLoss {
     ) -> Tensor<B, 2> {
         // Label probs at t=0
         let lpl_0 = lpl.clone().slice(s![.., 0..1, ..]).squeeze_dim::<2>(1);
-        let zero_col = Tensor::<B, 2>::zeros([b, 1], device);
+        let zero_col = Tensor::<B, 2>::zeros([b, 1], device).with_autodiff_context(lpl.autodiff_context());
         let prefix = Tensor::cat(vec![zero_col, lpl_0.slice(s![.., 0..(max_up1 - 1)])], 1);
 
         prefix.cumsum(1)
@@ -167,6 +169,7 @@ impl RNNTLoss {
         device: &B::Device,
     ) -> Tensor<B, 2, Bool> {
         let indices = Tensor::<B, 1, Int>::arange(0..max_up1 as i64, device)
+            .with_autodiff_context(target_lengths.autodiff_context())
             .reshape([1, max_up1])
             .expand([b, max_up1]);
         let lengths = target_lengths.clone().reshape([b, 1]).expand([b, max_up1]);
@@ -196,7 +199,8 @@ impl RNNTLoss {
             .squeeze_dim::<2>(1);
         let from_blank = alpha.clone().add(blank_prob);
 
-        let mut new = Tensor::<B, 2>::full([b, max_up1], f32::NEG_INFINITY, &device);
+        let context = alpha.autodiff_context().merge(lpb.autodiff_context()).merge(lpl.autodiff_context());
+        let mut new = Tensor::<B, 2>::full([b, max_up1], f32::NEG_INFINITY, &device).with_autodiff_context(context);
         new = new.slice_assign(s![.., 0..1], from_blank.clone().slice(s![.., 0..1]));
 
         // Label probs at time t
@@ -232,7 +236,8 @@ impl RNNTLoss {
         let u_idx = target_lengths;
         let int_dtype = u_idx.dtype();
         let t_idx = logit_lengths.sub_scalar(1).cast(int_dtype);
-        let b_idx = Tensor::<B, 1, Int>::arange(0..b as i64, (&device, int_dtype));
+        let b_idx = Tensor::<B, 1, Int>::arange(0..b as i64, (&device, int_dtype))
+            .with_autodiff_context(u_idx.autodiff_context().merge(t_idx.autodiff_context()));
 
         let alpha_tu: Tensor<B, 1> =
             alpha.gather_nd(Tensor::stack::<2>(vec![b_idx.clone(), u_idx.clone()], 1));

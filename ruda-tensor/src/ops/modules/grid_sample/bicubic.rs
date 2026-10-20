@@ -36,6 +36,7 @@ fn bounded<B: Backend>(value: FloatTensor<B>, size: usize, options: &GridSampleO
 }
 
 pub(super) fn sample<B: Backend>(input: FloatTensor<B>, grid: FloatTensor<B>, options: GridSampleOptions) -> FloatTensor<B> {
+    let context = B::float_autodiff_context(&input).merge(B::float_autodiff_context(&grid));
     assert_eq!(input.dtype(), grid.dtype());
     let dtype: FloatDType = input.dtype().into();
     let accumulator = if input.dtype() == DType::F64 { FloatDType::F64 } else { FloatDType::F32 };
@@ -58,11 +59,11 @@ pub(super) fn sample<B: Backend>(input: FloatTensor<B>, grid: FloatTensor<B>, op
     let input = B::float_reshape(input, Shape::new([batch, channels, height * width]));
     let output_shape = Shape::new([batch, channels, out_h, out_w]);
     let weight_shape = Shape::new([batch, 1, out_h, out_w]);
-    let mut output = B::float_zeros(output_shape.clone(), &device, accumulator);
+    let mut output = B::float_with_autodiff_context(B::float_zeros(output_shape.clone(), &device, accumulator), context);
     for ky in 0..4 {
         let yy = bounded::<B>(B::float_add_scalar(y0.clone(), (ky as f64 - 1.0).into()), height, &options);
         let wy = B::float_reshape(coefficient::<B>(ty.clone(), ky), weight_shape.clone());
-        let mut row = B::float_zeros(output_shape.clone(), &device, accumulator);
+        let mut row = B::float_with_autodiff_context(B::float_zeros(output_shape.clone(), &device, accumulator), context);
         for kx in 0..4 {
             let xx = bounded::<B>(B::float_add_scalar(x0.clone(), (kx as f64 - 1.0).into()), width, &options);
             let invalid_y = B::bool_or(B::float_lower_elem(yy.clone(), 0.0.into(), settings.bool_dtype), B::float_greater_equal_elem(yy.clone(), (height as f64).into(), settings.bool_dtype));

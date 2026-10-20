@@ -30,6 +30,8 @@ impl<B: Backend, P: CompressedAttentionProjection<B>, F: MhcResidualBranchShape<
         let tokens = layout.tokens();
         let width = self.attention.width;
         assert_eq!(state.dims(), [1, tokens, self.attention_connection.streams, width], "mHC packed stream geometry differs");
+        let mut context = state.autodiff_context();
+        if let Some(valid) = &valid { context = context.merge(valid.autodiff_context()); }
         if let Some(valid) = &valid {
             assert_eq!(valid.dims(), [tokens], "mHC packed visibility count differs");
             assert_eq!(valid.device(), state.device(), "mHC packed visibility device differs");
@@ -40,17 +42,18 @@ impl<B: Backend, P: CompressedAttentionProjection<B>, F: MhcResidualBranchShape<
             let empty = state.clone().sum_dim(2).squeeze_dim(2);
             let update = branch(&self.feed_forward, normalized(empty, &self.ffn_norm, self.epsilon))?;
             assert_eq!(update.dims(), [1, 0, width], "mHC empty expert branch produced source rows");
-            let losses = Tensor::zeros([layout.documents()], (&state.device(), compute));
+            let losses = Tensor::zeros([layout.documents()], (&state.device(), compute)).with_autodiff_context(context);
             let state = state + update.unsqueeze_dim(2);
             return Ok(PackedMhcResidualBlockOutput { state, document_indexer_losses: losses });
         }
         let (query, mappings) = self.attention_connection.pre(state.clone());
         let query = normalized(query, &self.attention_norm, self.epsilon);
         let valid_rows = visible(&query, valid.clone().map(|value| value.reshape([1, tokens])));
+        let context = query.autodiff_context().merge(valid_rows.autodiff_context());
         let query = query.reshape([tokens, width]);
         let result = if auxiliary { self.attention.forward_packed_with_aux(query, layout, valid, warmup) }
         else { PackedCompressedAttentionOutput { output: self.attention.forward_packed(query, layout, valid),
-            document_indexer_losses: Tensor::zeros([layout.documents()], (&state.device(), compute)) } };
+            document_indexer_losses: Tensor::zeros([layout.documents()], (&state.device(), compute)).with_autodiff_context(context) } };
         // One FFN invocation for all local documents; expert worlds may have different document counts.
         let state = self.finish_with(state, result.output.reshape([1, tokens, width]), mappings, valid_rows, branch)?;
         Ok(PackedMhcResidualBlockOutput { state, document_indexer_losses: result.document_indexer_losses })
@@ -76,7 +79,9 @@ impl<B: Backend, P: CompressedAttentionProjection<B>, F: MhcResidualBranchShape<
         let [tokens, width] = input.dims();
         assert_eq!((layout.tokens(), width), (tokens, self.layers[0].attention.width), "mHC packed payload/layout geometry differs");
         let compute = if input.dtype() == DType::F64 { DType::F64 } else { DType::F32 };
-        let mut losses = Tensor::zeros([layout.documents()], (&input.device(), compute));
+        let mut context = input.autodiff_context();
+        if let Some(valid) = &valid { context = context.merge(valid.autodiff_context()); }
+        let mut losses = Tensor::zeros([layout.documents()], (&input.device(), compute)).with_autodiff_context(context);
         let input = input.reshape([1, tokens, width]);
         let visibility = visible(&input, valid.map(|value| value.reshape([1, tokens])));
         let dtype = input.dtype();
@@ -115,6 +120,8 @@ impl<B: Backend, P: CompressedAttentionProjection<B>, F: MhcResidualBranch<B>> M
         let [tokens, width] = input.dims();
         assert_eq!((layout.tokens(), width), (tokens, self.layers[0].attention.width), "mHC packed payload/layout geometry differs");
         let device = input.device();
+        let mut context = input.autodiff_context();
+        if let Some(valid) = &valid { context = context.merge(valid.autodiff_context()); }
         let storage = input.dtype();
         assert!(matches!(storage, DType::F16 | DType::BF16 | DType::F32 | DType::F64), "mHC packed activations must be floating");
         let compute = if storage == DType::F64 { DType::F64 } else { DType::F32 };
@@ -127,7 +134,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>, F: MhcResidualBranch<B>> M
         for bounds in layout.boundaries().windows(2) {
             let (start, end) = (bounds[0], bounds[1]);
             let length = end - start;
-            if length == 0 { losses.push(Tensor::<B, 1>::zeros([1], (&device, compute))); continue; }
+            if length == 0 { losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)).with_autodiff_context(context)); continue; }
             let document = input.clone().slice_dim(0, start..end).reshape([1, length, width]);
             let valid = valid.as_ref().map(|valid| valid.clone().slice_dim(0, start..end).reshape([1, length]));
             if auxiliary {
@@ -136,13 +143,14 @@ impl<B: Backend, P: CompressedAttentionProjection<B>, F: MhcResidualBranch<B>> M
                 losses.push(result.indexer_loss);
             } else {
                 outputs.push(self.forward(document, valid)?.reshape([length, width]));
-                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)));
+                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)).with_autodiff_context(context));
             }
         }
         let output = if outputs.is_empty() {
-            Tensor::<B, 2>::zeros([tokens, width], (&device, storage)) + input.sum().mul_scalar(0).reshape([1, 1])
+            Tensor::<B, 2>::zeros([tokens, width], (&device, storage)).with_autodiff_context(context)
+                + input.sum().mul_scalar(0).reshape([1, 1])
         } else { Tensor::cat(outputs, 0) };
-        let document_indexer_losses = if losses.is_empty() { Tensor::zeros([0], (&device, compute)) } else { Tensor::cat(losses, 0) };
+        let document_indexer_losses = if losses.is_empty() { Tensor::zeros([0], (&device, compute)).with_autodiff_context(context) } else { Tensor::cat(losses, 0) };
         Ok(PackedCompressedAttentionOutput { output, document_indexer_losses })
     }
 }

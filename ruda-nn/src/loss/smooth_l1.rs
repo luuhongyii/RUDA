@@ -1,7 +1,7 @@
 use super::Reduction;
 use ruda_model::config::Config;
 use ruda_model::module::Module;
-use ruda_model::tensor::{Tensor, backend::Backend};
+use ruda_model::tensor::{AsIndex, Tensor, backend::Backend};
 
 /// Configuration for the [SmoothL1Loss](SmoothL1Loss) module.
 ///
@@ -202,10 +202,20 @@ impl SmoothL1Loss {
         targets: Tensor<B, D>,
         dims: &[usize],
     ) -> Tensor<B, D> {
+        self.forward_reduce_axes(predictions, targets, dims)
+    }
+
+    /// Reduce over positive or negative axes while retaining singleton dimensions.
+    pub fn forward_reduce_axes<const D: usize, B: Backend>(
+        &self,
+        predictions: Tensor<B, D>,
+        targets: Tensor<B, D>,
+        dims: &[impl AsIndex],
+    ) -> Tensor<B, D> {
         let error = self.forward(predictions, targets);
 
         // Sort the dimensions to ascending order
-        let mut sorted_dims = dims.to_vec();
+        let mut sorted_dims: alloc::vec::Vec<_> = dims.iter().map(|dim| dim.expect_dim_index(D)).collect();
         sorted_dims.sort();
 
         // Reduce over specified dimensions

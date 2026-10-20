@@ -308,7 +308,7 @@ impl<B: Backend, S: CheckpointStrategy> VocabParallelEmbedding<Autodiff<B, S>> {
         let indices = tokens.sub_scalar(start).mask_fill(outside.clone(), 0).mask_fill(invalid, local_vocab as i64);
         let mut weight = self.local.weight.val();
         if let Some(padding) = self.padding_index.filter(|index| *index >= self.vocabulary_start && *index < self.vocabulary_start + local_vocab) {
-            let rows = Tensor::<Autodiff<B, S>, 1, Int>::arange(0..local_vocab as i64, &weight.device());
+            let rows = Tensor::<Autodiff<B, S>, 1, Int>::arange(0..local_vocab as i64, &weight.device()).with_autodiff_context(weight.autodiff_context());
             let mask = rows.equal_elem((padding - self.vocabulary_start) as i64).reshape([local_vocab, 1]).repeat_dim(1, features);
             weight = weight.clone().mask_where(mask, weight.detach());
         }
@@ -362,17 +362,18 @@ where B: Backend, S: CheckpointStrategy, C: BroadcastTensorCollective<B> {
     assert!(label_smoothing.is_finite() && (0.0..=1.0).contains(&label_smoothing), "invalid label smoothing");
     let vocabulary = local_vocab.checked_mul(world).expect("vocabulary size overflow");
     assert!(vocabulary <= i64::MAX as usize, "vocabulary IDs exceed integer range");
+    let context = logits.autodiff_context().merge(labels.autodiff_context());
     let ignored = labels.clone().equal_elem(ignore_index);
     let invalid = labels.clone().lower_elem(0).bool_or(labels.clone().greater_equal_elem(vocabulary as i64))
         .bool_and(ignored.clone().bool_not());
     assert!(!invalid.any().into_scalar().elem::<bool>(), "target lies outside the full vocabulary");
     let logits = logits.cast(DType::F32);
-    if tokens == 0 { return Ok(logits.sum_dim(1).reshape([tokens])); }
+    if tokens == 0 { return Ok(logits.sum_dim(1).reshape([tokens]).with_autodiff_context(context)); }
     let local_max = logits.clone().detach().max_dim(1).inner();
     let maxima = communicator.all_gather_float(local_max.into_primitive().tensor())?;
     let maximum = Tensor::<B, 2>::from_primitive(TensorPrimitive::Float(maxima))
         .reshape([world, tokens]).max_dim(0).reshape([tokens, 1]);
-    let maximum = Tensor::<Autodiff<B, S>, 2>::from_inner(maximum);
+    let maximum = Tensor::<Autodiff<B, S>, 2>::from_inner(maximum).with_autodiff_context(context);
     let sum = (logits.clone() - maximum.clone()).exp().sum_dim(1);
     let sum = region::reduce_from_region(sum, communicator.clone())?;
     let normalizer = sum.log() + maximum;

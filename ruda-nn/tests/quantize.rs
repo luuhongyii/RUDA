@@ -24,9 +24,13 @@ pub type B = ruda_tensor_host::Host;
 /// Backend for test cases
 pub type B = ruda_tensor_wgpu::Wgpu;
 
-#[cfg(all(test, feature = "test-cuda"))]
+#[cfg(all(test, feature = "test-cuda", not(feature = "test-cuda-native")))]
 /// Backend for test cases
 pub type B = ruda_tensor_device::cuda::Cuda;
+
+#[cfg(all(test, feature = "test-cuda-native"))]
+/// Backend for test cases
+pub type B = ruda_tensor_device::cuda::CudaNative;
 
 #[cfg(all(test, feature = "test-rocm"))]
 /// Backend for test cases

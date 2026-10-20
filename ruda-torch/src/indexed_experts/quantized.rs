@@ -132,7 +132,7 @@ fn cooperative<F:Float>(x:&Array<F>,codes:&Array<u8>,scales:&Array<f32>,offsets:
             sync_ruda();
             let a=cmma::Matrix::<F>::from_slice(cmma::MatrixIdent::A,16usize,16usize,16usize,cmma::MatrixLayout::RowMajor,&left.to_slice(),16);
             let b=cmma::Matrix::<F>::from_slice(cmma::MatrixIdent::B,16usize,16usize,16usize,cmma::MatrixLayout::ColMajor,&right.to_slice(),16);
-            cmma::execute::<F,F,f32,f32>(&a,&b,&acc,&acc);sync_ruda();
+            cmma::execute::<F,F,f32,f32, _>(&a,&b,&acc,&acc);sync_ruda();
             if inner-base<=16 {base=inner;}else {base+=16;}
         }
         cmma::store(&mut result.to_slice_mut(),&acc,16,cmma::MatrixLayout::RowMajor);sync_ruda();

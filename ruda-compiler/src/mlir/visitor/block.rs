@@ -156,6 +156,9 @@ impl<'a> Visitor<'a> {
             ControlFlow::Return => {
                 this_block.append_operation(cf::br(&self.last_block, &[], self.location));
             }
+            ControlFlow::ReturnValue(_) => {
+                panic!("Scalar matrix callbacks are not supported by this MLIR backend");
+            }
             ControlFlow::Unreachable => {
                 this_block.append_operation(llvm::unreachable(self.context, self.location).into());
             }

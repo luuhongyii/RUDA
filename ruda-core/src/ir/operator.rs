@@ -41,6 +41,9 @@ pub enum Operator {
     /// A select statement/ternary
     #[operation(pure)]
     Select(Select),
+    /// Workgroup barrier followed by a uniform load from shared memory.
+    /// All units must reach the operation with the same element address.
+    WorkgroupUniformLoad(IndexOperator),
 }
 
 impl Display for Operator {
@@ -81,6 +84,9 @@ impl Display for Operator {
             }
             Operator::Cast(op) => write!(f, "cast({})", op.input),
             Operator::Reinterpret(op) => write!(f, "reinterpret({})", op.input),
+            Operator::WorkgroupUniformLoad(op) => {
+                write!(f, "workgroup_uniform_load(&{}[{}])", op.list, op.index)
+            }
         }
     }
 }

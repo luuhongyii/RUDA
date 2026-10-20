@@ -3,6 +3,51 @@ use crate::dsl::{
     unexpanded,
 };
 
+/// Load a shared-memory value uniformly after synchronizing the workgroup.
+pub fn workgroup_uniform_load<E: crate::dsl::frontend::RudaPrimitive>(_value: &E) -> E {
+    unexpanded!()
+}
+
+pub mod workgroup_uniform_load {
+    use super::*;
+    use crate::dsl::frontend::{NativeExpand, RudaPrimitive};
+    use ruda_core::ir::{Instruction, PointerOp};
+
+    pub fn expand<E: RudaPrimitive>(scope: &mut Scope, value: NativeExpand<E>) -> NativeExpand<E> {
+        let pointer = scope.reference_pointer(*value.expand).expect("uniform load requires an address-preserving reference");
+        let out = scope.create_local(pointer.ty.pointer_type().expect("reference pointer").pointee());
+        let operation = PointerOp::UniformLoad { pointer };
+        operation.validate(Some(*out)).expect("uniform load requires a matching shared-memory pointee");
+        scope.register(Instruction::new(operation, *out));
+        out.into()
+    }
+}
+
+/// Atomically load a shared-memory value uniformly after synchronizing the workgroup.
+pub fn workgroup_uniform_load_atomic<E: crate::dsl::frontend::RudaPrimitive<Scalar: crate::dsl::frontend::Numeric>>(
+    _value: &crate::dsl::frontend::Atomic<E>,
+) -> E {
+    unexpanded!()
+}
+
+pub mod workgroup_uniform_load_atomic {
+    use super::*;
+    use crate::dsl::frontend::{Atomic, NativeExpand, Numeric, RudaPrimitive};
+    use ruda_core::ir::{Instruction, PointerOp};
+
+    pub fn expand<E: RudaPrimitive<Scalar: Numeric>>(
+        scope: &mut Scope, value: NativeExpand<Atomic<E>>,
+    ) -> NativeExpand<E> {
+        let pointer = scope.reference_pointer(*value.expand).expect("uniform atomic load requires an address-preserving reference");
+        let pointee = pointer.ty.pointer_type().expect("reference pointer").pointee();
+        let out = scope.create_local(ruda_core::ir::Type::scalar(pointee.elem_type()).with_vector_size(pointee.vector_size()));
+        let operation = PointerOp::UniformLoad { pointer };
+        operation.validate(Some(*out)).expect("uniform atomic load requires a matching shared-memory atomic pointee");
+        scope.register(Instruction::new(operation, *out));
+        out.into()
+    }
+}
+
 // Among all backends, the memory order guarantee of WebGPU is the weakest
 // So Ruda's memory order cannot be stronger than that of WebGPU
 
@@ -39,9 +84,10 @@ pub mod sync_plane {
     }
 }
 
-/// * `Sync_storage` is the same but change "ruda address space(shared memory)" to "storage address space(input args)". But the set of invocations that are collaborating is still only the invocations in the same ruda.
-///
-/// * There is no guarantee about using barriers alone to make the writes to storage buffer in one ruda become visible to invocations in a different ruda.
+/// Synchronizes every unit in the ruda, including both shared and storage memory.
+/// When `Features::device_memory_scope` is true, this also releases prior storage writes
+/// to other rudas and acquires writes they published before their own synchronization.
+/// Otherwise the memory-ordering guarantee is limited to the current ruda.
 pub fn sync_storage() {}
 
 pub mod sync_storage {

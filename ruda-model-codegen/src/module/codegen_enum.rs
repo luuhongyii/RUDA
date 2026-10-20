@@ -12,6 +12,7 @@ pub(crate) struct EnumModuleCodegen {
     pub variants: Vec<EnumVariant>,
     pub vis: Visibility,
     pub generics: ModuleGenerics,
+    pub has_backend: bool,
 }
 
 impl ModuleCodegen for EnumModuleCodegen {
@@ -38,6 +39,13 @@ impl ModuleCodegen for EnumModuleCodegen {
         let container_type = format!("Enum:{}", enum_name);
         let match_body = self.gen_variants_match_fn(|variant_name| {
             let variant_str = variant_name.to_string();
+            if !self.has_backend {
+                return quote! {{
+                    use #model::module::field::VisitField as _;
+                    let field = #model::module::field::FieldRef::<_, B>(module, core::marker::PhantomData);
+                    (&field).visit_field(visitor, #variant_str, #container_type);
+                }};
+            }
             quote! {
                 {
                     visitor.enter_module(#variant_str, #container_type);
@@ -108,6 +116,13 @@ impl ModuleCodegen for EnumModuleCodegen {
         let container_type = format!("Enum:{}", enum_name);
         let match_body = self.gen_variants_match_fn(|variant| {
             let variant_str = variant.to_string();
+            if !self.has_backend {
+                return quote! {{
+                    use #model::module::field::MapField as _;
+                    let field = #model::module::field::Field::<_, B>::new(module);
+                    Self::#variant((&field).map_field(mapper, #variant_str, #container_type))
+                }};
+            }
             quote! {
                 {
                     mapper.enter_module(#variant_str, #container_type);
@@ -128,6 +143,13 @@ impl ModuleCodegen for EnumModuleCodegen {
     fn gen_valid(&self, paths: &crate::DerivePaths) -> TokenStream {
         let model = &paths.model;
         let match_body = self.gen_variants_match_fn(|variant| {
+            if !self.has_backend {
+                return quote! {{
+                    use #model::module::field::ValidField as _;
+                    let field = #model::module::field::FieldRef::<_, B>(module, core::marker::PhantomData);
+                    Self::InnerModule::#variant((&field).valid_field())
+                }};
+            }
             quote! {
                 Self::InnerModule::#variant(#model::module::AutodiffModule::<B>::valid(module))
             }
@@ -144,6 +166,13 @@ impl ModuleCodegen for EnumModuleCodegen {
         let model = &paths.model;
         let match_body =
             self.gen_variants_match_fn_param("module", "Self::InnerModule::", |variant| {
+                if !self.has_backend {
+                    return quote! {{
+                        use #model::module::field::TrainField as _;
+                        let field = #model::module::field::Field::<_, B>::new(module);
+                        Self::#variant((&field).train_field())
+                    }};
+                }
                 quote! {
                     Self::#variant(#model::module::AutodiffModule::<B>::from_inner(module))
                 }
@@ -247,6 +276,7 @@ impl EnumModuleCodegen {
             variants: parse_variants(ast)?,
             vis: ast.vis.clone(),
             generics: parse_module_generics(&ast.generics),
+            has_backend: ast.generics.type_params().any(|param| param.ident == "B"),
         })
     }
 

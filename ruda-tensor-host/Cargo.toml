@@ -144,6 +144,19 @@ optional = true
 [dev-dependencies.realfft]
 version = "3"
 
+[dev-dependencies.ruda-tensor]
+path = "../ruda-tensor"
+default-features = false
+features = ["api-std"]
+
+[[test]]
+name = "readback"
+path = "tests/readback.rs"
+
+[[test]]
+name = "ownership"
+path = "tests/ownership.rs"
+
 [lints.clippy]
 
 [lints.rustdoc]

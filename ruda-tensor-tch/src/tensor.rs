@@ -89,6 +89,10 @@ impl TensorMetadata for TchTensor {
     fn rank(&self) -> usize {
         self.tensor.dim()
     }
+
+    fn can_mut(&self) -> bool {
+        TchTensor::can_mut(self)
+    }
 }
 
 /// Integer quantized values with separate, same-device FP32 scales.
@@ -106,6 +110,7 @@ impl TensorMetadata for TchQTensor {
     fn dtype(&self) -> DType { DType::QFloat(self.scheme) }
     fn shape(&self) -> Shape { self.values.shape() }
     fn rank(&self) -> usize { self.values.rank() }
+    fn can_mut(&self) -> bool { self.values.can_mut() && self.scales.can_mut() }
 }
 impl ruda_tensor::QTensorPrimitive for TchQTensor {
     fn scheme(&self) -> &ruda_tensor::quantization::QuantScheme { &self.scheme }
@@ -489,7 +494,7 @@ mod tests {
         assert!(!B::supports_dtype(&device, DType::U64));
         assert!(!B::supports_dtype(&device, DType::U32));
         assert!(!B::supports_dtype(&device, DType::U16));
-        assert!(!B::supports_dtype(
+        assert!(B::supports_dtype(
             &device,
             DType::QFloat(QuantScheme::default())
         ));

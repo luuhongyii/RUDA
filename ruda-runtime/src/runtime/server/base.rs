@@ -21,7 +21,7 @@ use core::fmt::Debug;
 use ruda_core::{
     backtrace::BackTrace,
     bytes::Bytes,
-    device::{self, DeviceId},
+    device::{self, DeviceId, ServiceId},
     future::DynFut,
     profile::ProfileDuration,
     stream_id::StreamId,
@@ -31,9 +31,10 @@ use ruda_core::ir::{DeviceProperties, ElemType, StorageType};
 use ruda_core::tensor::{Shape, Strides, metadata::Metadata};
 use hashbrown::HashSet;
 use thiserror::Error;
+pub use ruda_core::poison::DevicePoison;
 
 #[derive(Error, Clone)]
-#[cfg_attr(std_io, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(serializable, derive(serde::Serialize, serde::Deserialize))]
 /// An error during profiling.
 pub enum ProfileError {
     /// An unknown error happened during profiling
@@ -44,7 +45,7 @@ pub enum ProfileError {
         /// The caused of the error
         reason: String,
         /// The captured backtrace.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
@@ -52,7 +53,7 @@ pub enum ProfileError {
     #[error("No profiling registered\nBacktrace:\n{backtrace}")]
     NotRegistered {
         /// The captured backtrace.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
@@ -63,6 +64,14 @@ pub enum ProfileError {
     /// An execution error happened during profiling
     #[error("An execution error happened during profiling\nCaused by:\n  {0}")]
     Server(#[from] Box<ServerError>),
+
+    /// The window contained no device measurement.
+    #[error("Profiling window contained no measurement\nBacktrace:\n{backtrace}")]
+    NotMeasured {
+        /// The captured backtrace.
+        #[cfg_attr(serializable, serde(skip))]
+        backtrace: BackTrace,
+    },
 }
 
 impl core::fmt::Debug for ProfileError {
@@ -71,8 +80,30 @@ impl core::fmt::Debug for ProfileError {
     }
 }
 
+impl ProfileError {
+    /// Whether a fault in the measured work poisoned its device.
+    pub fn is_device_poisoned(&self) -> bool {
+        match self {
+            Self::Launch(error) => error.is_device_poisoned(),
+            Self::Server(error) => error.is_device_poisoned(),
+            _ => false,
+        }
+    }
+
+    /// Whether the measured work was refused before execution.
+    pub fn is_refusal(&self) -> bool {
+        match self {
+            Self::Launch(error) => error.is_refusal(),
+            Self::Server(error) => error.is_refusal(),
+            _ => false,
+        }
+    }
+}
+
 /// Contains many different types that are useful for server implementations and compute clients.
 pub struct ServerUtilities<Server: ComputeServer> {
+    /// Identity stamped on allocations made by this service.
+    pub service: ServiceId,
     /// The time when `profile-tracy` is activated.
     #[cfg(feature = "runtime-profile-tracy")]
     pub epoch_time: web_time::Instant,
@@ -85,6 +116,7 @@ pub struct ServerUtilities<Server: ComputeServer> {
     pub properties_hash: u64,
     /// Information specific to the current server.
     pub info: Server::Info,
+    pub runtime_name: Option<&'static str>,
     /// The logger based on global ruda configs.
     pub logger: Arc<ServerLogger>,
     /// How to create the allocation.
@@ -103,6 +135,7 @@ pub trait MemoryLayoutPolicy: Send + Sync + 'static {
     /// single `Binding`.
     fn apply(
         &self,
+        service: ServiceId,
         stream_id: StreamId,
         descriptors: &[MemoryLayoutDescriptor],
     ) -> (Handle, Vec<MemoryLayout>);
@@ -115,6 +148,7 @@ where
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_struct("ServerUtilities")
+            .field("service", &self.service)
             .field("properties", &self.properties)
             .field("info", &self.info)
             .field("logger", &self.logger)
@@ -125,6 +159,7 @@ where
 impl<S: ComputeServer> ServerUtilities<S> {
     /// Creates a new server utilities.
     pub fn new(
+        service: ServiceId,
         properties: DeviceProperties,
         logger: Arc<ServerLogger>,
         info: S::Info,
@@ -135,6 +170,7 @@ impl<S: ComputeServer> ServerUtilities<S> {
         let client = tracy_client::Client::start();
 
         Self {
+            service,
             properties_hash: properties.checksum(),
             properties,
             logger,
@@ -153,6 +189,7 @@ impl<S: ComputeServer> ServerUtilities<S> {
             #[cfg(feature = "runtime-profile-tracy")]
             epoch_time: web_time::Instant::now(),
             info,
+            runtime_name: None,
             layout_policy: allocator,
             check_mode: RudaRuntimeConfig::get().compilation.check_mode,
             initialized_comms: RwLock::new(HashSet::default()),
@@ -162,7 +199,7 @@ impl<S: ComputeServer> ServerUtilities<S> {
 
 /// Kernel Launch Errors.
 #[derive(Error, Clone)]
-#[cfg_attr(std_io, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(serializable, derive(serde::Serialize, serde::Deserialize))]
 pub enum LaunchError {
     /// The given kernel can't be compiled.
     #[error("A compilation error happened during launch\nCaused by:\n  {0}")]
@@ -176,7 +213,7 @@ pub enum LaunchError {
         /// The caused of the memory error.
         reason: String,
         /// The backtrace for this error.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
@@ -192,18 +229,43 @@ pub enum LaunchError {
         /// The caused of the unknown error.
         reason: String,
         /// The backtrace for this error.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
     /// Can't launch because of an IO Error.
     #[error("An io error happened during launch\nCaused by:\n  {0}")]
     IoError(#[from] IoError),
+    /// The driver reports an unrecoverable context/device fault.
+    #[error("The device was poisoned during launch\n{0}")]
+    DevicePoisoned(#[from] DevicePoison),
+}
+
+impl LaunchError {
+    /// Whether the driver can no longer execute work on the device.
+    pub fn is_device_poisoned(&self) -> bool {
+        match self {
+            Self::DevicePoisoned(_) => true,
+            Self::CompilationError(error) => error.is_device_poisoned(),
+            Self::IoError(error) => error.is_device_poisoned(),
+            _ => false,
+        }
+    }
+
+    /// Whether the backend declined a kernel configuration before running it.
+    pub fn is_refusal(&self) -> bool {
+        match self {
+            Self::CompilationError(error) => error.is_refusal(),
+            Self::IoError(error) => error.is_refusal(),
+            Self::TooManyResources(_) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Resource limit errors.
 #[derive(Error, Clone)]
-#[cfg_attr(std_io, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(serializable, derive(serde::Serialize, serde::Deserialize))]
 pub enum ResourceLimitError {
     /// Shared memory exceeds maximum
     #[error(
@@ -215,7 +277,7 @@ pub enum ResourceLimitError {
         /// Maximum value
         max: usize,
         /// The backtrace for this error.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
     /// Total units exceeds maximum
@@ -228,7 +290,7 @@ pub enum ResourceLimitError {
         /// Maximum value
         max: u32,
         /// The backtrace for this error.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
     /// `RudaDim` exceeds maximum
@@ -241,7 +303,7 @@ pub enum ResourceLimitError {
         /// Maximum value
         max: (u32, u32, u32),
         /// The backtrace for this error.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 }
@@ -258,9 +320,37 @@ impl core::fmt::Debug for ResourceLimitError {
     }
 }
 
+/// An operation using a runtime's native inter-device transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(serializable, derive(serde::Serialize, serde::Deserialize))]
+pub enum Collective {
+    /// Initialize a group of devices.
+    CommInit,
+    /// Reduce a buffer across a group.
+    AllReduce,
+    /// Send a buffer to another device.
+    Send,
+    /// Receive a buffer from another device.
+    Recv,
+    /// Wait for queued collective work.
+    SyncCollective,
+}
+
+impl core::fmt::Display for Collective {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::CommInit => "comm_init",
+            Self::AllReduce => "all_reduce",
+            Self::Send => "send",
+            Self::Recv => "recv",
+            Self::SyncCollective => "sync_collective",
+        })
+    }
+}
+
 /// Error that can happen asynchronously while executing registered kernels.
 #[derive(Error, Debug, Clone)]
-#[cfg_attr(std_io, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(serializable, derive(serde::Serialize, serde::Deserialize))]
 pub enum ServerError {
     /// A generic runtime error.
     #[error("An error happened during execution\nCaused by:\n  {reason}\nBacktrace:\n{backtrace}")]
@@ -268,7 +358,7 @@ pub enum ServerError {
         /// The details of the generic error.
         reason: String,
         /// The backtrace for this error.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
@@ -290,9 +380,96 @@ pub enum ServerError {
         /// The details of the generic error.
         errors: Vec<Self>,
         /// The backtrace for this error.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
+
+    /// A root failure and the dependency path through buffers it left unwritten.
+    #[error("The bytes were never written (failure #{failure}, claiming {claimed} buffers)\n{chain:?}\nCaused by:\n{root}\n{backtrace}")]
+    Unwritten {
+        failure: u64,
+        claimed: u32,
+        chain: Vec<String>,
+        root: Box<ServerError>,
+        #[cfg_attr(serializable, serde(skip))]
+        backtrace: BackTrace,
+    },
+
+    /// Distinct failures carried by a set of buffers.
+    #[error("Several failures at once\nCaused by:\n{errors:?}\n{backtrace}")]
+    Several {
+        errors: Vec<Self>,
+        #[cfg_attr(serializable, serde(skip))]
+        backtrace: BackTrace,
+    },
+    /// A producer was dropped without completing or reporting its failure.
+    #[error("Producer was torn down before its write scope completed")]
+    TornDown,
+    /// The underlying driver/device can no longer execute work.
+    #[error("The device is poisoned\n{0}")]
+    DevicePoisoned(#[from] DevicePoison),
+    /// A handle was supplied to a different device service; no work was submitted.
+    #[error("A handle of {handle} was used on {client}\nBacktrace:\n{backtrace}")]
+    ForeignHandle {
+        /// The service that owns the handle.
+        handle: String,
+        /// The service reached by the client.
+        client: String,
+        #[cfg_attr(serializable, serde(skip))]
+        backtrace: BackTrace,
+    },
+    /// A native resource was requested through the wrong concrete service type.
+    #[error("The client reaches {client}, not a {requested}\nBacktrace:\n{backtrace}")]
+    ServiceMismatch {
+        /// The service reached by the client.
+        client: String,
+        /// The concrete service type requested by the caller.
+        requested: String,
+        #[cfg_attr(serializable, serde(skip))]
+        backtrace: BackTrace,
+    },
+    /// The runtime has no native inter-device transport for this operation.
+    #[error("{operation} needs a transport between devices, and this runtime has none\nBacktrace:\n{backtrace}")]
+    NoDeviceTransport {
+        /// The requested operation.
+        operation: Collective,
+        #[cfg_attr(serializable, serde(skip))]
+        backtrace: BackTrace,
+    },
+}
+
+impl ServerError {
+    /// Report an unsupported native collective without touching its buffers.
+    pub fn no_device_transport(operation: Collective) -> Self {
+        Self::NoDeviceTransport { operation, backtrace: BackTrace::capture() }
+    }
+
+    /// Whether any root failure reports an unrecoverable device fault.
+    pub fn is_device_poisoned(&self) -> bool {
+        match self {
+            Self::DevicePoisoned(_) => true,
+            Self::Launch(error) => error.is_device_poisoned(),
+            Self::Io(error) => error.is_device_poisoned(),
+            Self::Profile(error) => error.is_device_poisoned(),
+            Self::Unwritten { root, .. } => root.is_device_poisoned(),
+            Self::Several { errors, .. } | Self::ServerUnhealthy { errors, .. } =>
+                errors.iter().any(Self::is_device_poisoned),
+            _ => false,
+        }
+    }
+
+    /// Whether every reported root is a pre-execution kernel refusal.
+    pub fn is_refusal(&self) -> bool {
+        match self {
+            Self::Launch(error) => error.is_refusal(),
+            Self::Io(error) => error.is_refusal(),
+            Self::Profile(error) => error.is_refusal(),
+            Self::Unwritten { root, .. } => root.is_refusal(),
+            Self::Several { errors, .. } | Self::ServerUnhealthy { errors, .. } =>
+                !errors.is_empty() && errors.iter().all(Self::is_refusal),
+            _ => false,
+        }
+    }
 }
 
 /// How errors are handled in a stream when executing a task.
@@ -356,6 +533,40 @@ where
     /// Wait for the completion of every task in the server.
     fn sync(&mut self, stream_id: StreamId) -> DynFut<Result<(), ServerError>>;
 
+    /// Check buffer claims without submitting a device barrier or copying bytes.
+    fn check(&mut self, bindings: Vec<Binding>, _stream_id: StreamId) -> Result<(), ServerError> {
+        Binding::check_all(bindings.iter())
+    }
+
+    /// Complete the issuing and owning streams, then check the requested buffers.
+    fn sync_buffers(
+        &mut self,
+        bindings: Vec<Binding>,
+        stream_id: StreamId,
+    ) -> DynFut<Result<(), ServerError>> {
+        let mut streams = alloc::vec![stream_id];
+        for binding in &bindings {
+            if !streams.contains(&binding.stream) {
+                streams.push(binding.stream);
+            }
+        }
+        let futures: Vec<_> = streams.into_iter().map(|stream| self.sync(stream)).collect();
+        Box::pin(async move {
+            let mut first_error = None;
+            for future in futures {
+                if let Err(error) = future.await {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+            if let Some(error) = first_error {
+                return Err(error);
+            }
+            Binding::check_all(bindings.iter())
+        })
+    }
+
     /// Given a resource handle, returns the storage resource.
     fn get_resource(
         &mut self,
@@ -380,8 +591,58 @@ where
         stream_id: StreamId,
     );
 
+    /// Compile the kernel and either dispatch it or retain only its compiled artifact.
+    /// The mode is captured on the issuing thread, before submission to the server.
+    ///
+    /// Backends supporting dry runs must override this method. The default preserves
+    /// normal launches for existing backends without silently executing skipped work.
+    ///
+    /// # Safety
+    /// The same requirements as [`Self::launch`] apply when executing the kernel.
+    unsafe fn launch_with_mode(
+        &mut self,
+        kernel: Self::Kernel,
+        count: RudaCount,
+        bindings: KernelArguments,
+        kind: ExecutionMode,
+        stream_id: StreamId,
+        launch_mode: crate::runtime::dry_run::LaunchMode,
+    ) {
+        assert!(!launch_mode.is_skipped(), "This compute server does not implement dry-run compilation");
+        unsafe { self.launch(kernel, count, bindings, kind, stream_id) };
+    }
+
     /// Flush all outstanding tasks in the server.
     fn flush(&mut self, stream_id: StreamId) -> Result<(), ServerError>;
+
+    /// Prepare pools and metadata for a closure's graph-capture warmup.
+    fn graph_prepare(&mut self, _stream: StreamId) -> Result<(), ServerError> {
+        Err(ServerError::Generic { reason: "Hardware graph capture is unsupported".into(), backtrace: BackTrace::capture() })
+    }
+
+    /// Open a recording window on the selected stream.
+    fn graph_start_capture(&mut self, _stream: StreamId) -> Result<(), ServerError> {
+        Err(ServerError::Generic { reason: "Hardware graph capture is unsupported".into(), backtrace: BackTrace::capture() })
+    }
+
+    /// Close the recording even on failure and return a server-owned graph id.
+    fn graph_stop_capture(&mut self, _stream: StreamId) -> Result<u64, ServerError> {
+        Err(ServerError::Generic { reason: "Hardware graph capture is unsupported".into(), backtrace: BackTrace::capture() })
+    }
+
+    /// Close a recording that unwound without producing an output.
+    fn graph_abort_capture(&mut self, _stream: StreamId) {}
+
+    /// Enqueue a captured graph on its original stream.
+    ///
+    /// # Safety
+    /// Captured inputs must remain valid and must not race another stream.
+    unsafe fn graph_replay(&mut self, _stream: StreamId, _graph: u64) -> Result<(), ServerError> {
+        Err(ServerError::Generic { reason: "Hardware graph replay is unsupported".into(), backtrace: BackTrace::capture() })
+    }
+
+    /// Release the executable and its retained pages after pending work completes.
+    fn graph_release(&mut self, _stream: StreamId, _graph: u64) {}
 
     /// The current memory usage of the server.
     fn memory_usage(&mut self, stream_id: StreamId) -> Result<MemoryUsage, ServerError>;
@@ -404,6 +665,11 @@ where
         stream_id: StreamId,
         token: ProfilingToken,
     ) -> Result<ProfileDuration, ProfileError>;
+
+    /// Release a window that will not be measured. Native implementations need not flush.
+    fn abandon_profile(&mut self, stream_id: StreamId, token: ProfilingToken) {
+        let _ = self.end_profile(stream_id, token);
+    }
 
     /// Update the memory mode of allocation in the server.
     fn allocation_mode(&mut self, mode: MemoryAllocationMode, stream_id: StreamId);
@@ -436,7 +702,7 @@ pub trait ServerCommunication {
     /// Returns a `Result` containing an `ServerError` if the operation fails.
     #[allow(unused_variables)]
     fn sync_collective(&mut self, stream_id: StreamId) -> Result<(), ServerError> {
-        todo!() // For backends other than cuda.
+        Err(ServerError::no_device_transport(Collective::SyncCollective))
     }
 
     /// Initialize the communication between the devices in `device_ids`.
@@ -450,7 +716,7 @@ pub trait ServerCommunication {
     /// Returns a `Result` containing an `ServerError` if the operation fails.
     #[allow(unused_variables)]
     fn comm_init(&mut self, device_ids: Vec<DeviceId>) -> Result<(), ServerError> {
-        unimplemented!()
+        Err(ServerError::no_device_transport(Collective::CommInit))
     }
 
     /// Performs an `all_reduce` operation on the input data and writes it to the output buffer.
@@ -478,7 +744,7 @@ pub trait ServerCommunication {
         op: ReduceOperation,
         device_ids: Vec<DeviceId>,
     ) -> Result<(), ServerError> {
-        unimplemented!()
+        Err(ServerError::no_device_transport(Collective::AllReduce))
     }
 
     /// Sends data from this server to a destination server.
@@ -501,7 +767,7 @@ pub trait ServerCommunication {
         stream_id: StreamId,
         device_id_dst: DeviceId,
     ) -> Result<(), ServerError> {
-        unimplemented!()
+        Err(ServerError::no_device_transport(Collective::Send))
     }
 
     /// Receive data from another server.
@@ -524,7 +790,7 @@ pub trait ServerCommunication {
         stream_id: StreamId,
         device_id_src: DeviceId,
     ) -> Result<(), ServerError> {
-        unimplemented!()
+        Err(ServerError::no_device_transport(Collective::Recv))
     }
 }
 
@@ -672,7 +938,7 @@ impl From<String> for Reason {
 /// Error returned from `create`/`read`/`write` functions. Due to async execution not all errors
 /// are able to be caught, so some IO errors will still panic.
 #[derive(Error, Clone)]
-#[cfg_attr(std_io, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(serializable, derive(serde::Serialize, serde::Deserialize))]
 pub enum IoError {
     /// Buffer size exceeds the max available
     #[error("can't allocate buffer of size: {size}\n{backtrace}")]
@@ -680,7 +946,7 @@ pub enum IoError {
         /// The size of the buffer in bytes.
         size: u64,
         /// The captured backtrace.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
@@ -688,7 +954,7 @@ pub enum IoError {
     #[error("the provided strides are not supported for this operation\n{backtrace}")]
     UnsupportedStrides {
         /// The backtrace.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
@@ -696,7 +962,7 @@ pub enum IoError {
     #[error("couldn't find resource for that handle: {reason}\n{backtrace}")]
     NotFound {
         /// The backtrace.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
         /// The reason the handle is invalid.
         reason: Reason,
@@ -706,7 +972,7 @@ pub enum IoError {
     #[error("couldn't free the handle, since it is currently in used. \n{backtrace}")]
     FreeError {
         /// The backtrace.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
@@ -716,7 +982,7 @@ pub enum IoError {
         /// Details of the error
         description: String,
         /// The backtrace.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
@@ -724,13 +990,35 @@ pub enum IoError {
     #[error("The current IO operation is not supported\n{backtrace}")]
     UnsupportedIoOperation {
         /// The backtrace.
-        #[cfg_attr(std_io, serde(skip))]
+        #[cfg_attr(serializable, serde(skip))]
         backtrace: BackTrace,
     },
 
     /// Can't perform the IO operation because of a runtime error.
     #[error("Can't perform the IO operation because of a runtime error: {0}")]
     Execution(#[from] Box<ServerError>),
+    /// The driver reports an unrecoverable device/context fault.
+    #[error("The device is poisoned during IO\n{0}")]
+    DevicePoisoned(#[from] DevicePoison),
+}
+
+impl IoError {
+    /// Preserve the classification of a runtime failure wrapped by an IO operation.
+    pub fn is_refusal(&self) -> bool {
+        match self {
+            Self::Execution(error) => error.is_refusal(),
+            _ => false,
+        }
+    }
+
+    /// Whether this IO operation failed because the device is unusable.
+    pub fn is_device_poisoned(&self) -> bool {
+        match self {
+            Self::DevicePoisoned(_) => true,
+            Self::Execution(error) => error.is_device_poisoned(),
+            _ => false,
+        }
+    }
 }
 
 impl core::fmt::Debug for IoError {
@@ -744,6 +1032,9 @@ impl core::fmt::Debug for IoError {
 pub struct KernelArguments {
     /// Buffer bindings
     pub buffers: Vec<Binding>,
+    /// Launch-site accesses, used only where the compiled kernel has no answer.
+    /// Missing entries are read-write; buffer and tensor-map indices remain separate.
+    pub declared_io: ruda_core::kernel::KernelIo,
     /// Packed scalars and metadata. First scalars sorted by type, then static metadata,
     /// then dynamic metadata.
     pub info: MetadataBindingInfo,
@@ -774,6 +1065,14 @@ impl KernelArguments {
         self
     }
 
+    /// Add a buffer with a fallback declaration that survives compilation failure.
+    pub fn with_buffer_io(mut self, binding: Binding, io: ruda_core::kernel::BufferIOAttr) -> Self {
+        self.declared_io.buffers.resize(self.buffers.len(), ruda_core::kernel::BufferIOAttr::ReadWrite);
+        self.buffers.push(binding);
+        self.declared_io.buffers.push(io);
+        self
+    }
+
     /// Extend the buffers with `bindings`
     pub fn with_buffers(mut self, bindings: Vec<Binding>) -> Self {
         self.buffers.extend(bindings);
@@ -790,6 +1089,45 @@ impl KernelArguments {
     pub fn with_tensor_maps(mut self, bindings: Vec<TensorMapBinding>) -> Self {
         self.tensor_maps.extend(bindings);
         self
+    }
+
+    /// Add a tensor map with an explicit fallback access declaration.
+    pub fn with_tensor_map_io(mut self, binding: TensorMapBinding, io: ruda_core::kernel::BufferIOAttr) -> Self {
+        self.declared_io.tensor_maps.resize(self.tensor_maps.len(), ruda_core::kernel::BufferIOAttr::ReadWrite);
+        self.tensor_maps.push(binding);
+        self.declared_io.tensor_maps.push(io);
+        self
+    }
+
+    /// Payloads the launch may read: compiled access, then declaration, then read-write.
+    pub fn buffers_read<'a>(&'a self, io: Option<&'a ruda_core::kernel::KernelIo>)
+        -> impl Iterator<Item = &'a Binding>
+    {
+        self.bindings_with_io(io).filter_map(|(binding, access)| access.reads().then_some(binding))
+    }
+
+    /// Payloads the launch may write, including tensor-map backing buffers.
+    pub fn buffers_written<'a>(&'a self, io: Option<&'a ruda_core::kernel::KernelIo>)
+        -> impl Iterator<Item = &'a Binding>
+    {
+        self.bindings_with_io(io).filter_map(|(binding, access)| access.writes().then_some(binding))
+    }
+
+    fn bindings_with_io<'a>(&'a self, io: Option<&'a ruda_core::kernel::KernelIo>)
+        -> impl Iterator<Item = (&'a Binding, ruda_core::kernel::BufferIOAttr)>
+    {
+        use ruda_core::kernel::BufferIOAttr;
+        self.buffers.iter().enumerate().map(move |(index, binding)| {
+            let access = io.and_then(|io| io.buffers.get(index))
+                .or_else(|| self.declared_io.buffers.get(index))
+                .copied().unwrap_or(BufferIOAttr::ReadWrite);
+            (binding, access)
+        }).chain(self.tensor_maps.iter().enumerate().map(move |(index, map)| {
+            let access = io.and_then(|io| io.tensor_maps.get(index))
+                .or_else(|| self.declared_io.tensor_maps.get(index))
+                .copied().unwrap_or(BufferIOAttr::ReadWrite);
+            (&map.binding, access)
+        }))
     }
 }
 

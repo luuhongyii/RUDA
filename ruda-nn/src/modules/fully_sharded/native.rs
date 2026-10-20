@@ -25,9 +25,10 @@ impl<B:Backend> ShardedParameter<B> {
         assert_eq!(local.dims(),[elements.div_ceil(self.world_size)],"loaded native local parameter slice length differs");
         let local = if let Some(dtype) = dtype {local.cast(dtype)} else {local};
         let dtype = local.dtype();let device = local.device();
+        let context = local.autodiff_context();
         let padded = local.dims()[0].checked_mul(self.world_size).expect("native parameter gather length overflow");
         let output = communicator.all_gather_float(local.into_primitive().tensor())?;
-        let output = Tensor::<B,1>::from_primitive(TensorPrimitive::Float(output));
+        let output = Tensor::<B,1>::from_primitive(TensorPrimitive::Float(output)).with_autodiff_context(context);
         assert_eq!(output.dims(),[padded],"native parameter transport gather shape differs");
         assert_eq!(output.dtype(),dtype,"native parameter transport changed precision");
         assert_eq!(output.device(),device,"native parameter transport changed device");

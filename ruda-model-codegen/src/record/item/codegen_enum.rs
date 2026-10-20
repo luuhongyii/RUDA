@@ -6,14 +6,30 @@ use syn::{Generics, Visibility, parse_quote};
 use super::codegen::RecordItemCodegen;
 
 pub(crate) struct EnumRecordItemCodegen {
+    container: String,
     /// Enum variants.
     variants: Vec<EnumVariant>,
     vis: Visibility,
 }
 
 impl RecordItemCodegen for EnumRecordItemCodegen {
+    fn gen_map_parameters(&self, paths: &crate::DerivePaths) -> TokenStream {
+        let model = &paths.model;
+        let arms = self.variants.iter().map(|variant| {
+            let name = &variant.ident;
+            let mapped = super::map_field(quote!(record), &name.to_string(), &self.container, paths);
+            quote!(Self::#name(record) => Self::#name(#mapped),)
+        });
+        quote! {
+            fn map_parameters<__RudaRecordMapper: #model::module::ModuleMapper<B>>(self, mapper: &mut __RudaRecordMapper) -> Self {
+                match self { #(#arms)* }
+            }
+        }
+    }
+
     fn from_ast(ast: &syn::DeriveInput, _paths: &crate::DerivePaths) -> syn::Result<Self> {
         Ok(Self {
+            container: super::container_type(ast, "Enum")?,
             variants: parse_variants(ast)?,
             vis: ast.vis.clone(),
         })

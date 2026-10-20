@@ -18,6 +18,9 @@ pub enum InterpolateMode {
     /// Lanczos3 interpolation (6-tap sinc-based filter).
     /// <https://en.wikipedia.org/wiki/Lanczos_resampling>
     Lanczos3,
+
+    /// Nearest-neighbor interpolation using half-pixel centers.
+    NearestExact,
 }
 
 /// Interpolation options.

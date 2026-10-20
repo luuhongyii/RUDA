@@ -18,6 +18,7 @@ mod compiler;
 mod debug;
 mod extensions;
 mod extended;
+mod function;
 mod globals;
 mod instruction;
 mod item;
@@ -25,8 +26,10 @@ mod lookups;
 mod metadata;
 mod subgroup;
 mod sync;
+mod tensor_addressing;
 mod target;
 mod variable;
+mod uniform_load;
 
 pub use compiler::*;
 use serde::{Deserialize, Serialize};
@@ -34,6 +37,8 @@ pub use target::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpirvKernel {
+    #[serde(default)]
+    pub io: Option<ruda_core::kernel::KernelIo>,
     #[serde(skip)]
     pub module: Option<Arc<Module>>,
     #[serde(skip)]

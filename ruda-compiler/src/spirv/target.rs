@@ -92,6 +92,15 @@ impl SpirvTarget for GLCompute {
         if caps.contains(&Capability::CooperativeMatrixKHR) {
             b.extension("SPV_KHR_cooperative_matrix");
         }
+        if caps.contains(&Capability::TensorAddressingNV) {
+            b.extension("SPV_NV_tensor_addressing");
+        }
+        if caps.contains(&Capability::CooperativeMatrixTensorAddressingNV)
+            || caps.contains(&Capability::CooperativeMatrixConversionsNV)
+            || caps.contains(&Capability::CooperativeMatrixPerElementOperationsNV)
+        {
+            b.extension("SPV_NV_cooperative_matrix2");
+        }
 
         if caps.contains(&Capability::AtomicFloat16AddEXT) {
             b.extension("SPV_EXT_shader_atomic_float16_add");

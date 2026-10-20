@@ -10,10 +10,12 @@ pub(crate) fn generate_record<G: RecordItemCodegen>(ast: &syn::DeriveInput, path
         Ok(record_gen) => {
             let item_type = record_gen.gen_record_type(paths);
             let record_impl = record_gen.gen_impl_record(paths);
+            let runtime_impl = super::runtime::generate(ast, paths);
 
             quote! {
                 #item_type
                 #record_impl
+                #runtime_impl
             }
         }
         Err(err) => err.to_compile_error(),
@@ -63,6 +65,7 @@ impl<G: RecordItemCodegen> RecordCodegen<G> {
         let name_item = &self.ty.item;
         let into_item_fn = self.codegen.gen_into_item(name_item, paths);
         let from_item_fn = self.codegen.gen_from_item(paths);
+        let map_parameters_fn = self.codegen.gen_map_parameters(paths);
 
         // Return the generated stream of token trees (i.e., code to be generated)
         let name = &self.ty.name;
@@ -72,6 +75,7 @@ impl<G: RecordItemCodegen> RecordCodegen<G> {
 
                 #into_item_fn
                 #from_item_fn
+                #map_parameters_fn
 
             }
         }

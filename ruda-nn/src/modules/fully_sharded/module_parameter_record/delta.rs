@@ -17,7 +17,7 @@ pub struct FullyShardedModuleDeltaRecord<B:Backend> {
 
 fn signatures<B:Backend>(shards:&BTreeMap<ParamId,ShardedParameter<B>>) -> Vec<Signature> {
     shards.iter().map(|(id,parameter)|(id.val(),parameter.logical_shape.clone(),parameter.rank,parameter.world_size,
-        parameter.local.val().dtype(),parameter.local.val().is_require_grad())).collect()
+        parameter.local.val().dtype(),parameter.local.planned_is_require_grad())).collect()
 }
 
 impl<B:Backend> FullyShardedModuleDeltaRecord<B> {
@@ -73,7 +73,7 @@ impl<B:Backend> FullyShardedModuleDeltaRecord<B> {
             let target=targets.get(&ParamId::from(signature.0)).ok_or(FullyShardedParameterError::Record)?;
             if target.logical_shape!=signature.1 || target.rank!=signature.2 || target.world_size!=signature.3 {return Err(FullyShardedParameterError::Record);}
             if target.local.val().dtype()!=signature.4 {return Err(FullyShardedParameterError::DType);}
-            if B::ad_enabled(&target.local.val().device()) && target.local.val().is_require_grad()!=signature.5 {return Err(FullyShardedParameterError::Trainability);}
+            if target.local.val().is_autodiff() && target.local.val().is_require_grad()!=signature.5 {return Err(FullyShardedParameterError::Trainability);}
         }
         Ok(())
     }
@@ -83,7 +83,8 @@ impl<B:Backend> FullyShardedModuleDeltaRecord<B> {
         self.validate_for(&module,base_id)?;let targets=schema(&module)?;let mut values=BTreeMap::new();
         for saved in self.updates.parameters {
             let target=targets.get(&saved.id()).ok_or(FullyShardedParameterError::Record)?.local.val();
-            let value=saved.local().val().to_device(&target.device()).detach().set_require_grad(target.is_require_grad());
+            let value=saved.local().val().to_device(&target.device()).detach()
+                .with_autodiff_context(target.autodiff_context()).set_require_grad(target.is_require_grad());
             values.insert(saved.id(),value);
         }
         restore_values(module,values)

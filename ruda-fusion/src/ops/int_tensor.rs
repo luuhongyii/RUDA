@@ -331,6 +331,16 @@ impl<B: FusionBackend> IntTensorOps<Self> for Fusion<B> {
         indices: IntTensor<Self>,
         value: IntTensor<Self>,
     ) -> IntTensor<Self> {
+        Self::int_scatter(dim, tensor, indices, value, IndexingUpdateOp::Add)
+    }
+
+    fn int_scatter(
+        dim: usize,
+        tensor: IntTensor<Self>,
+        indices: IntTensor<Self>,
+        value: IntTensor<Self>,
+        update: IndexingUpdateOp,
+    ) -> IntTensor<Self> {
         #[derive(new, Debug)]
         struct ScatterOps<B: FusionBackend> {
             desc: ScatterOpIr,
@@ -343,7 +353,7 @@ impl<B: FusionBackend> IntTensorOps<Self> for Fusion<B> {
                 let indices = handles.get_int_tensor::<B>(&self.desc.indices);
                 let value = handles.get_int_tensor::<B>(&self.desc.value);
 
-                let output = B::int_scatter_add(self.desc.dim, tensor, indices, value);
+                let output = B::int_scatter(self.desc.dim, tensor, indices, value, self.desc.update);
 
                 handles.register_int_tensor::<B>(&self.desc.out.id, output);
             }
@@ -357,7 +367,7 @@ impl<B: FusionBackend> IntTensorOps<Self> for Fusion<B> {
             dim,
             indices.into_ir(),
             value.into_ir(),
-            IndexingUpdateOp::Add,
+            update,
             || client.create_empty_handle(),
         );
 
@@ -491,6 +501,16 @@ impl<B: FusionBackend> IntTensorOps<Self> for Fusion<B> {
         indices: IntTensor<Self>,
         value: IntTensor<Self>,
     ) -> IntTensor<Self> {
+        Self::int_select_assign(tensor, dim, indices, value, IndexingUpdateOp::Add)
+    }
+
+    fn int_select_assign(
+        tensor: IntTensor<Self>,
+        dim: usize,
+        indices: IntTensor<Self>,
+        value: IntTensor<Self>,
+        update: IndexingUpdateOp,
+    ) -> IntTensor<Self> {
         #[derive(new, Debug)]
         struct SelectAssignOps<B: FusionBackend> {
             desc: SelectAssignOpIr,
@@ -503,7 +523,7 @@ impl<B: FusionBackend> IntTensorOps<Self> for Fusion<B> {
                 let indices = handles.get_int_tensor::<B>(&self.desc.indices);
                 let value = handles.get_int_tensor::<B>(&self.desc.value);
 
-                let output = B::int_select_add(tensor, self.desc.dim, indices, value);
+                let output = B::int_select_assign(tensor, self.desc.dim, indices, value, self.desc.update);
 
                 handles.register_int_tensor::<B>(&self.desc.out.id, output);
             }
@@ -517,7 +537,7 @@ impl<B: FusionBackend> IntTensorOps<Self> for Fusion<B> {
             dim,
             indices.into_ir(),
             value.into_ir(),
-            IndexingUpdateOp::Add,
+            update,
             || client.create_empty_handle(),
         );
 

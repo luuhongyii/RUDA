@@ -210,7 +210,7 @@ fn carrier<I: Numeric, T: Float, S: Numeric, O: Float>(
         sync_ruda();
         let aa = cmma::Matrix::<T>::from_slice(cmma::MatrixIdent::A, 16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor, &left.to_slice(), 16u32);
         let bb = cmma::Matrix::<T>::from_slice(cmma::MatrixIdent::B, 16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor, &right.to_slice(), 16u32);
-        cmma::execute::<T, T, f32, f32>(&aa, &bb, &acc, &acc); sync_ruda();
+        cmma::execute::<T, T, f32, f32, _>(&aa, &bb, &acc, &acc); sync_ruda();
         let mut end_group = k - base <= 16usize;
         if comptime!(kind >= 2) {
             let size = comptime!(if kind == 4 {16usize} else {32usize});

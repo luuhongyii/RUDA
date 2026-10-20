@@ -111,7 +111,7 @@ impl FromDeriveInput for RudaTypeEnum {
 
 impl RudaTypeEnum {
     pub fn expanded_generics(&self) -> Generics {
-        let runtime = prelude_type("Runtime");
+        let runtime = prelude_type("LaunchMarker");
         let mut generics = self.generics.clone();
         if !self.is_empty() {
             generics.params.push(parse_quote![R: #runtime]);
@@ -120,7 +120,7 @@ impl RudaTypeEnum {
     }
 
     pub fn assoc_generics(&self) -> Generics {
-        let runtime = prelude_type("Runtime");
+        let runtime = prelude_type("LaunchMarker");
         parse_quote![<R: #runtime>]
     }
 

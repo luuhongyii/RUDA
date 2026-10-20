@@ -43,6 +43,14 @@ impl PartialEq for Allocator {
 impl Eq for Allocator {}
 
 impl Allocator {
+    /// Allocate function-local variables without reusing the caller's mutable locals.
+    pub fn function_child(&self) -> Self {
+        Self {
+            local_mut_pool: Default::default(),
+            next_id: self.next_id.clone(),
+        }
+    }
+
     /// Create a new immutable local variable of type specified by `item`.
     pub fn create_local(&self, item: Type) -> ManagedVariable {
         let id = self.new_local_index();

@@ -1,6 +1,7 @@
 pub mod barrier;
 pub mod branch;
 pub mod cmma;
+pub mod tensor_layout;
 pub mod synchronization;
 pub mod unaligned_vector;
 
@@ -44,6 +45,7 @@ pub use runtime_option::*;
 pub use scalar::*;
 pub use synchronization::*;
 pub use topology::*;
+pub use tensor_layout::*;
 pub use trigonometry::*;
 pub use validation::*;
 

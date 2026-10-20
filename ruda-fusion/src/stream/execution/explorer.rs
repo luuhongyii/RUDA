@@ -1,10 +1,12 @@
+use std::sync::Arc;
 use ruda_tensor::graph::OperationIr;
-use ruda_tensor_config::{fusion::FusionLogLevel, log_fusion};
+use ruda_tensor_config::{config, fusion::FusionLogLevel, log_fusion};
 
 use super::{ExecutionMode, op_kind};
 use crate::{
     NumOperations, OperationFuser,
     search::{BlockOptimization, StreamOptimizer},
+    stream::store::ExecutionStrategy,
 };
 
 /// Explore and create new optimization.
@@ -13,6 +15,8 @@ pub struct Explorer<O> {
     num_deferred: usize,
     num_explored: usize,
     is_still_optimizing: bool,
+    num_explorations: usize,
+    max_explorations: Option<usize>,
 }
 
 /// The result of an exploration done by the [explorer](Explorer).
@@ -21,6 +25,8 @@ pub enum ExplorationAction<O> {
     Completed(BlockOptimization<O>),
     /// We should continue exploring before arriving at a conclusion.
     Continue,
+    /// Run the segment without optimizing or caching after the exploration limit.
+    Unfused(BlockOptimization<O>),
 }
 
 impl<O: NumOperations> Explorer<O> {
@@ -31,6 +37,8 @@ impl<O: NumOperations> Explorer<O> {
             num_deferred: 0,
             num_explored: 0,
             is_still_optimizing: true,
+            num_explorations: 0,
+            max_explorations: config().fusion.beam_search.max_explorations,
         }
     }
 
@@ -60,6 +68,14 @@ impl<O: NumOperations> Explorer<O> {
             format!("[explorer] explore ({mode_dbg}): {deferred} deferred of {total_ops} queued")
         });
 
+        if self.max_explorations.is_some_and(|max| self.num_explorations >= max) {
+            self.num_deferred = 0;
+            self.is_still_optimizing = false;
+            let ordering: Vec<_> = (0..operations.len()).collect();
+            let strategy = ExecutionStrategy::Operations { ordering: Arc::new(ordering.clone()) };
+            return ExplorationAction::Unfused(BlockOptimization::new(strategy, ordering));
+        }
+
         self.update(operations);
 
         // Can only continue exploration when not sync.
@@ -70,6 +86,7 @@ impl<O: NumOperations> Explorer<O> {
         }
 
         let optimization = self.optimizer.optimize(operations);
+        self.num_explorations += 1;
 
         ExplorationAction::Completed(optimization)
     }

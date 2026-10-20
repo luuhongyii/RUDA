@@ -27,11 +27,13 @@ pub struct LookupTables {
     pub ruda_dims: Vec<Word>,
     pub ruda_size: Word,
 
-    pub const_arrays: Vec<Array>,
+    pub const_arrays: HashMap<Id, Array>,
+    pub function_values: HashMap<ir::Variable, Variable>,
     pub shared_arrays: HashMap<Id, SharedArray>,
     pub shared: HashMap<Id, SharedVar>,
     pub local_arrays: HashMap<Id, Array>,
     pub matrices: HashMap<Id, Matrix>,
+    pub tensor_types: HashMap<Item, Word>,
     pub globals: HashMap<Builtin, Word>,
     pub loaded_builtins: HashMap<BuiltIn, Word>,
 
@@ -121,6 +123,7 @@ pub struct Matrix {
     pub k: u32,
     pub elem: Elem,
     pub layout: Option<CooperativeMatrixLayout>,
+    pub scope: Scope,
 }
 
 #[derive(Clone, Debug)]
@@ -386,13 +389,23 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             },
             arr.item,
         );
-        let item = self.compile_type(arr.item);
-        let array_ty = Item::Array(Box::new(item.clone()), arr.length as u32);
+        let factor = arr.item.vector_size().div_ceil(MAX_VECTORIZATION);
+        let item_type = arr.item.with_vector_size(arr.item.vector_size().min(MAX_VECTORIZATION));
+        let item = self.compile_type(item_type);
+        let array_ty = Item::Array(Box::new(item.clone()), (arr.length * factor) as u32);
         let pointer_ty = Item::Pointer(StorageClass::Function, Box::new(array_ty.clone())).id(self);
         let array_ty = array_ty.id(self);
         let values = arr
             .values
             .into_iter()
+            .flat_map(|mut value| {
+                if matches!(value.kind, VariableKind::Constant(_))
+                    && value.ty.vector_size() > MAX_VECTORIZATION
+                {
+                    value.ty = value.ty.with_vector_size(MAX_VECTORIZATION);
+                }
+                std::iter::repeat_n(value, factor)
+            })
             .map(|it| self.compile_variable(it))
             .collect::<Vec<_>>()
             .into_iter()
@@ -402,11 +415,11 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
         let id = self.variable(pointer_ty, None, StorageClass::Function, Some(constant));
         self.debug_var_name(id, var);
         self.state.const_arrays.insert(
-            arr.id as usize,
+            arr.id,
             Array {
                 id,
                 item,
-                len: arr.length as u32,
+                len: (arr.length * factor) as u32,
                 var,
                 alignment: None,
             },

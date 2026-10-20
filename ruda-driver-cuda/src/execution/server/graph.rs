@@ -18,7 +18,7 @@ fn collect_graph_accesses(dispatches: &[GraphDispatch])
         total = total.checked_add(dispatch.arguments.buffers.len())
             .ok_or_else(|| error("DAG access count overflow"))?;
         if total > MAX_ACCESSES { return Err(error("DAG has too many buffer accesses")); }
-        let definition = dispatch.task.kernel_definition()
+        let definition = dispatch.task.try_kernel_definition().map_err(LaunchError::from)?
             .ok_or_else(|| error(format!("DAG node {index}: kernel IR is required for access validation")))?;
         if definition.buffers.len() != dispatch.arguments.buffers.len()
             || !definition.tensor_maps.is_empty() || definition.options.cluster_dim.is_some() {

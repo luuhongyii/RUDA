@@ -683,6 +683,7 @@ fn try_const_eval_operator(op: &mut Operator, out_ty: Option<Type>) -> Option<Co
         }
         Operator::Cast(op) => op.input.as_const().map(|val| val.cast_to(out_ty.unwrap())),
         Operator::Index(_)
+        | Operator::WorkgroupUniformLoad(_)
         | Operator::NativeAddress(_)
         | Operator::NativeLoad(_)
         | Operator::NativeStore(_)

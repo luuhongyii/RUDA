@@ -3,8 +3,10 @@ use super::*;
 impl DeviceService for WgpuServer {
     fn init(device_id: ruda_core::device::DeviceId) -> Self {
         let device = WgpuDevice::from_id(device_id);
-        let setup = future::block_on(create_setup_for_device(&device, AutoGraphicsApi::backend()));
-        create_server(setup, RuntimeOptions::default())
+        let options = RuntimeOptions::try_default().expect("Invalid Wgpu runtime options");
+        let setup = future::block_on(try_create_setup_for_device(&device))
+            .expect("Unable to acquire Wgpu device");
+        try_create_server(device_id, setup, options, device.backend()).expect("Unable to initialize Wgpu server")
     }
 
     fn utilities(&self) -> ServerUtilitiesHandle {
@@ -12,7 +14,14 @@ impl DeviceService for WgpuServer {
     }
 }
 
-pub(crate) fn create_server(setup: WgpuSetup, options: RuntimeOptions) -> WgpuServer {
+pub(crate) fn try_create_server(
+    device_id: ruda_core::device::DeviceId,
+    setup: WgpuSetup,
+    options: RuntimeOptions,
+    requested_backend: WgpuBackend,
+) -> Result<WgpuServer, WgpuInitError> {
+    options.validate()?;
+    setup.validate(requested_backend)?;
     let limits = setup.device.limits();
     let adapter_limits = setup.adapter.limits();
     let mut adapter_info = setup.adapter.get_info();
@@ -27,13 +36,11 @@ pub(crate) fn create_server(setup: WgpuSetup, options: RuntimeOptions) -> WgpuSe
         adapter_info.subgroup_max_size = 128;
     }
 
-    let mem_props = MemoryDeviceProperties {
-        max_page_size: limits.max_storage_buffer_binding_size,
-        alignment: limits.min_uniform_buffer_offset_alignment as u64,
-    };
+    let mem_props = MemoryDeviceProperties::new(limits.max_storage_buffer_binding_size.min(limits.max_buffer_size), limits.min_uniform_buffer_offset_alignment.max(limits.min_storage_buffer_offset_alignment) as u64);
     let max_count = adapter_limits.max_compute_workgroups_per_dimension;
     let hardware_props = HardwareProperties {
         load_width: 128,
+        vector_register_count: None,
         // On Apple Silicon, the plane size is 32,
         // though the minimum and maximum differ.
         // https://github.com/gpuweb/gpuweb/issues/3950
@@ -63,12 +70,14 @@ pub(crate) fn create_server(setup: WgpuSetup, options: RuntimeOptions) -> WgpuSe
         num_tensor_cores: None,
         min_tensor_cores_dim: None,
         num_cpu_cores: None, // TODO: Check if device is CPU.
+        last_level_cache_size: None,
         max_vector_size: 4,
+        ruda_mma_reserved_shared_memory: 0,
     };
 
     let mut compilation_options = Default::default();
 
-    let features = setup.adapter.features();
+    let features = setup.device.features();
 
     let time_measurement = if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
         TimingMethod::Device
@@ -81,7 +90,8 @@ pub(crate) fn create_server(setup: WgpuSetup, options: RuntimeOptions) -> WgpuSe
         mem_props,
         hardware_props,
         time_measurement,
-    );
+    ).with_identity(backend::identity(&setup.adapter, &setup.device));
+    backend::register_memory_capacity(&setup.adapter, &setup.device, &mut device_props.memory);
 
     #[cfg(not(all(target_os = "macos", feature = "msl")))]
     {
@@ -94,12 +104,6 @@ pub(crate) fn create_server(setup: WgpuSetup, options: RuntimeOptions) -> WgpuSe
         }
     }
 
-    #[cfg(any(feature = "spirv", feature = "msl"))]
-    device_props
-        .features
-        .plane
-        .insert(ruda_core::ir::features::Plane::NonUniformControlFlow);
-
     backend::register_features(
         &setup.adapter,
         &mut device_props,
@@ -107,10 +111,20 @@ pub(crate) fn create_server(setup: WgpuSetup, options: RuntimeOptions) -> WgpuSe
         &options.memory_config,
     );
 
+    if compilation_options.supports_vulkan || compilation_options.supports_msl {
+        device_props.features.plane.insert(ruda_core::ir::features::Plane::NonUniformControlFlow);
+    }
+    #[cfg(feature = "msl")]
+    if requested_backend == WgpuBackend::Metal && !compilation_options.supports_msl {
+        return Err(WgpuInitError::InvalidConfiguration {
+            message: "Native MSL compilation is unavailable for the requested Metal device".into(),
+        });
+    }
+
     let logger = alloc::sync::Arc::new(ServerLogger::default());
 
     let allocator = ContiguousMemoryLayoutPolicy::new(device_props.memory.alignment as usize);
-    WgpuServer::new(
+    Ok(WgpuServer::new(
         device_props.memory.clone(),
         options.memory_config,
         compilation_options,
@@ -119,6 +133,9 @@ pub(crate) fn create_server(setup: WgpuSetup, options: RuntimeOptions) -> WgpuSe
         options.tasks_max,
         setup.backend,
         time_measurement,
-        ServerUtilities::new(device_props, logger, setup.backend, allocator),
-    )
+        ServerUtilities::new(
+            ruda_core::device::ServiceId::of::<WgpuServer>(device_id),
+            device_props, logger, setup.backend, allocator,
+        ),
+    ))
 }

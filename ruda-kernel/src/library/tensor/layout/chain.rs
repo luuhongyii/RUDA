@@ -53,7 +53,7 @@ mod launch {
     pub struct ChainLaunch<
         L0: Layout + ViewLayoutLaunchArg,
         L1: Layout<SourceCoordinates = L0::Coordinates> + ViewLayoutLaunchArg,
-        R: Runtime,
+        R: LaunchMarker,
     > {
         _phantom_runtime: PhantomData<R>,
         l0: L0::RuntimeArg<R>,
@@ -62,7 +62,7 @@ mod launch {
     impl<
         L0: Layout + ViewLayoutLaunchArg,
         L1: Layout<SourceCoordinates = L0::Coordinates> + ViewLayoutLaunchArg,
-        R: Runtime,
+        R: LaunchMarker,
     > ChainLaunch<L0, L1, R>
     {
         pub fn new(l0: L0::RuntimeArg<R>, l1: L1::RuntimeArg<R>) -> Self {
@@ -137,10 +137,10 @@ mod launch {
         L1: Layout<SourceCoordinates = L0::Coordinates> + ViewLayoutLaunchArg,
     > ViewLayoutLaunchArg for Chain<L0, L1>
     {
-        type RuntimeArg<R: Runtime> = ChainLaunch<L0, L1, R>;
+        type RuntimeArg<R: LaunchMarker> = ChainLaunch<L0, L1, R>;
         type CompilationArg = ChainCompilationArg<L0, L1>;
 
-        fn register<R: Runtime, B: BufferArg>(
+        fn register<R: LaunchMarker, B: BufferArg>(
             arg: Self::RuntimeArg<R>,
             buffer: &B,
             ty: Type,

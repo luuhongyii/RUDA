@@ -30,7 +30,9 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
             gpu::Operation::Synchronization(val) => match val {
                 gpu::Synchronization::SyncRuda => instructions.push(Instruction::SyncThreads),
                 gpu::Synchronization::SyncPlane => instructions.push(Instruction::SyncWarp),
-                gpu::Synchronization::SyncStorage => instructions.push(Instruction::SyncThreads),
+                gpu::Synchronization::SyncStorage => instructions.push(Instruction::SyncStorage {
+                    device_scope: self.compilation_options.supports_features.device_memory_scope,
+                }),
                 gpu::Synchronization::SyncAsyncProxyShared => {
                     self.flags.inst_tma = true;
                     instructions.push(Instruction::ProxyAsyncToSharedFence)

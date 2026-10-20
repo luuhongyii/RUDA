@@ -107,7 +107,7 @@ impl KernelBuilder {
             .expect("Position valid");
 
         input.visibility = Visibility::ReadWrite;
-        self.scope.input(position, input.item)
+        self.scope.input(input.id, input.item)
     }
 
     /// Register an input array and return the [element](ManagedVariable) to be used for kernel expansion.
@@ -131,7 +131,8 @@ impl KernelBuilder {
     }
 
     /// Build the [kernel definition](KernelDefinition).
-    pub fn build(self, settings: KernelSettings) -> KernelDefinition {
+    pub fn build(mut self, settings: KernelSettings) -> KernelDefinition {
+        self.scope.lower_reference_values().expect("valid address-preserving references");
         let scalars = self
             .scalars
             .into_iter()

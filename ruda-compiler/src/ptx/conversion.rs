@@ -2,6 +2,62 @@ use super::{Result, emit::Emitter, invalid, types::Scalar, unsupported};
 use ruda_core::ir::{ConstantValue, Variable};
 
 impl Emitter {
+    pub fn reinterpret_vector(&mut self, out: Variable, input: Variable) -> Result<()> {
+        let to = Scalar::of(out.ty.with_vector_size(1))?;
+        let from = Scalar::of(input.ty.with_vector_size(1))?;
+        if to == Scalar::Pred || from == Scalar::Pred
+            || out.ty.vector_size() * to.bytes() != input.ty.vector_size() * from.bytes()
+        {
+            return Err(invalid("reinterpret requires equal total byte widths and non-predicate storage"));
+        }
+        let sources = self.vector_values(input)?;
+        let destinations = self.vector_destination(out)?;
+        let mut bits = Vec::with_capacity(sources.len());
+        for source in sources {
+            let wide = self.reg(Scalar::U64);
+            match from.bytes() {
+                8 => self.line(format!("mov.b64 {wide}, {source};")),
+                2 if from.half() => self.line(format!("cvt.u64.u16 {wide}, {source};")),
+                _ => {
+                    let raw = self.reg(Scalar::U32);
+                    self.line(format!("mov.b32 {raw}, {source};"));
+                    self.line(format!("cvt.u64.u32 {wide}, {raw};"));
+                    if from.bytes() < 4 {
+                        self.line(format!("and.b64 {wide}, {wide}, {};", (1u64 << (from.bytes() * 8)) - 1));
+                    }
+                }
+            }
+            bits.push(wide);
+        }
+        for (lane, destination) in destinations.iter().enumerate() {
+            let assembled = self.reg(Scalar::U64);
+            self.line(format!("mov.u64 {assembled}, 0;"));
+            let start = lane * to.bytes();
+            let end = start + to.bytes();
+            for index in start / from.bytes()..end.div_ceil(from.bytes()) {
+                let lo = start.max(index * from.bytes());
+                let hi = end.min((index + 1) * from.bytes());
+                let part = self.reg(Scalar::U64);
+                self.line(format!("shr.u64 {part}, {}, {};", bits[index], (lo - index * from.bytes()) * 8));
+                if hi - lo < 8 {
+                    self.line(format!("and.b64 {part}, {part}, {};", (1u64 << ((hi - lo) * 8)) - 1));
+                }
+                self.line(format!("shl.b64 {part}, {part}, {};", (lo - start) * 8));
+                self.line(format!("or.b64 {assembled}, {assembled}, {part};"));
+            }
+            if to.bytes() == 8 {
+                self.line(format!("mov.b64 {destination}, {assembled};"));
+            } else if to.half() {
+                self.line(format!("cvt.u16.u64 {destination}, {assembled};"));
+            } else {
+                let raw = self.reg(Scalar::U32);
+                self.line(format!("cvt.u32.u64 {raw}, {assembled};"));
+                self.line(format!("mov.b32 {destination}, {raw};"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn tf32_target(&self) -> Result<()> {
         if self.target.sm < 80 || self.target.version < (7, 0) {
             return Err(unsupported("TF32 conversion/MMA requires SM >= 80 and PTX >= 7.0"));

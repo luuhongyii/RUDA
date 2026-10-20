@@ -60,8 +60,9 @@ impl<B:Backend> FullyShardedParameterRecord<B> {
     }
     pub(super) fn from_exact_item(item:(u32,Vec<usize>,usize,usize,u64,bool,ruda_model::tensor::TensorData),device:&B::Device) -> Self {
         let storage=item.6.dtype;
-        let value=Tensor::<B,1>::from_data(item.6,(device,storage)).set_require_grad(item.5);
-        Self {version:item.0,shape:item.1,rank:item.2,world:item.3,storage,trainable:item.5,local:Param::initialized(ParamId::from(item.4),value)}
+        let value=Tensor::<B,1>::from_data(item.6,(device,storage));
+        let local=Param::initialized(ParamId::from(item.4),value).set_require_grad(item.5);
+        Self {version:item.0,shape:item.1,rank:item.2,world:item.3,storage,trainable:item.5,local}
     }
     /// Actual original logical parameter dimensions, without padding.
     pub fn logical_shape(&self) -> &[usize] {&self.shape}
@@ -82,7 +83,7 @@ impl<B:Backend> FullyShardedParameterRecord<B> {
         let value = self.local.val();
         if value.dims()!=[size] {return Err(FullyShardedParameterError::Geometry("saved local slice length differs"));}
         if !matches!(self.storage,DType::F32|DType::F16|DType::BF16|DType::F64) || value.dtype()!=self.storage {return Err(FullyShardedParameterError::DType);}
-        if B::ad_enabled(&value.device()) && value.is_require_grad()!=self.trainable {return Err(FullyShardedParameterError::Trainability);}
+        if value.is_autodiff() && value.is_require_grad()!=self.trainable {return Err(FullyShardedParameterError::Trainability);}
         Ok(())
     }
     /// Restore one canonical local leaf for subsequent explicit shared model assembly.
@@ -116,7 +117,7 @@ impl<B:Backend> Record<B> for FullyShardedParameterRecord<B> {
     }
     fn from_item<P:PrecisionSettings>(item:Self::Item<P>,device:&B::Device) -> Self {
         let local = <Param<Tensor<B,1>> as Record<B>>::from_item::<P>(item.6,device)
-            .map(|value|value.cast(item.4).set_require_grad(item.5));
+            .map(|value|value.cast(item.4)).set_require_grad(item.5);
         Self {version:item.0,shape:item.1,rank:item.2,world:item.3,storage:item.4,trainable:item.5,local}
     }
 }
@@ -126,7 +127,7 @@ impl<B:Backend> ShardedParameter<B> {
     pub fn parameter_record(&self) -> Result<FullyShardedParameterRecord<B>,FullyShardedParameterError> {
         let value = self.local.val();
         let record = FullyShardedParameterRecord {version:1,shape:self.logical_shape.clone(),rank:self.rank,world:self.world_size,
-            storage:value.dtype(),trainable:value.is_require_grad(),local:self.local.clone()};
+            storage:value.dtype(),trainable:self.local.planned_is_require_grad(),local:self.local.clone()};
         record.validate()?;Ok(record)
     }
     /// Load matching saved local storage into this original canonical leaf, retaining its Param mapper.
@@ -138,8 +139,9 @@ impl<B:Backend> ShardedParameter<B> {
         }
         let original = self.local.val();
         if original.dtype()!=record.storage {return Err(FullyShardedParameterError::DType);}
-        if B::ad_enabled(&original.device()) && original.is_require_grad()!=record.trainable {return Err(FullyShardedParameterError::Trainability);}
-        let value = record.local.val().to_device(&original.device()).detach().set_require_grad(original.is_require_grad());
+        if original.is_autodiff() && original.is_require_grad()!=record.trainable {return Err(FullyShardedParameterError::Trainability);}
+        let value = record.local.val().to_device(&original.device()).detach()
+            .with_autodiff_context(original.autodiff_context()).set_require_grad(original.is_require_grad());
         self.local = self.local.map(|_|value);Ok(self)
     }
 
@@ -161,10 +163,12 @@ impl<B:Backend> ShardedParameter<B> {
             let value = source.local.val();
             if value.dtype()!=original.dtype() {return Err(FullyShardedParameterError::DType);}
             if value.device()!=original.device() {return Err(FullyShardedParameterError::Device);}
-            if value.is_require_grad()!=original.is_require_grad() {return Err(FullyShardedParameterError::Trainability);}
+            if value.is_require_grad()!=original.is_require_grad()
+                || source.local.planned_is_require_grad()!=first.local.planned_is_require_grad() {return Err(FullyShardedParameterError::Trainability);}
         }
         let start = rank*size;let end = (start+size).min(elements);
-        let mut local = Tensor::<B,1>::zeros([size],(&original.device(),original.dtype()));
+        let mut local = Tensor::<B,1>::zeros([size],(&original.device(),original.dtype()))
+            .with_autodiff_context(original.autodiff_context());
         for (source_rank,source) in sources.iter().enumerate() {
             let source_start = source_rank*source_size;
             let overlap_start = start.max(source_start);

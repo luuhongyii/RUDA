@@ -23,7 +23,7 @@ pub enum ComputingProperty {
 }
 
 /// A node contains graph metadata and should be used wrapped in an Arc for cheap cloning.
-#[derive(new, Debug)]
+#[derive(new, Debug, Clone)]
 pub struct Node {
     pub parents: Vec<Parent>,
     pub order: usize,
@@ -31,6 +31,13 @@ pub struct Node {
     pub requirement: Requirement,
     pub properties: ComputingProperty,
     pub client: AutodiffClientImpl,
+    #[new(default)]
+    pub checkpointing: Option<ruda_tensor::GradientCheckpointingStrategy>,
+    #[new(value = "true")]
+    pub autodiff_enabled: bool,
+    #[cfg(feature = "distributed")]
+    #[new(default)]
+    pub native_backend: Option<core::any::TypeId>,
     #[cfg(feature = "distributed")]
     pub distributed_params: Option<DistributedParams>,
 }
@@ -39,9 +46,31 @@ pub type NodeRef = Arc<Node>;
 #[derive(new, Debug, Clone, PartialEq, Eq)]
 pub struct Parent {
     pub id: NodeId,
+    pub is_leaf: bool,
 }
 
 impl Node {
+    pub(crate) fn with_backend<B: ruda_tensor::Backend>(self) -> Self {
+        #[cfg(feature = "distributed")]
+        {
+            let mut node = self;
+            node.native_backend = Some(core::any::TypeId::of::<B>());
+            node
+        }
+        #[cfg(not(feature = "distributed"))]
+        self
+    }
+
+    pub(crate) fn with_autodiff_enabled(mut self, enabled: bool) -> Self {
+        self.autodiff_enabled = enabled;
+        self
+    }
+
+    pub(crate) fn with_checkpointing(mut self, policy: Option<ruda_tensor::GradientCheckpointingStrategy>) -> Self {
+        self.checkpointing = policy;
+        self
+    }
+
     /// Returns the [node](Node) only if gradients are required.
     pub fn clone_if_require_grad(self: &Arc<Self>) -> Option<NodeRef> {
         match self.requirement.is_none() {

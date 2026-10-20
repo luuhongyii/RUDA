@@ -58,8 +58,64 @@ impl<B: FusionBackend> Backend for Fusion<B> {
         client.sync(move || B::sync(&device))
     }
 
+    fn flush(device: &Self::Device) -> Result<(), ExecutionError> {
+        let client = GlobalFusionClient::<B::FusionRuntime>::load(device);
+        let device = device.clone();
+        let stream = ruda_tensor::StreamId::current();
+        client.sync(move || stream.executes(|| B::flush(&device)))
+    }
+
     fn ad_enabled(_device: &Self::Device) -> bool {
         false
+    }
+
+    fn profile<O: Send + 'static>(device: &Self::Device, options: ruda_tensor::ProfileOptions,
+        func: impl FnOnce() -> O + Send) -> Result<(O, ruda_tensor::ProfileDuration), ExecutionError> {
+        ruda_tensor::profile_with_tokens::<Self, O>(device, options, func)
+    }
+    fn profile_start(device: &Self::Device) -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> {
+        get_client::<B>(device).profile_start::<B>(device.clone())
+    }
+    fn profile_end(device: &Self::Device, token: ruda_tensor::ProfileToken, options: ruda_tensor::ProfileOptions)
+        -> Result<ruda_tensor::ProfileDuration, ExecutionError> { get_client::<B>(device).profile_end(token, options) }
+    fn profile_abandon(device: &Self::Device, token: ruda_tensor::ProfileToken) {
+        get_client::<B>(device).profile_abandon(token);
+    }
+
+    fn graph_prepare(device: &Self::Device) -> Result<(), ExecutionError> {
+        let client = get_client::<B>(device);
+        let device = device.clone();
+        let stream = ruda_tensor::StreamId::current();
+        client.sync(move || stream.executes(|| B::graph_prepare(&device)))
+    }
+
+    fn graph_start_capture(device: &Self::Device) -> Result<(), ExecutionError> {
+        let client = get_client::<B>(device);
+        let device = device.clone();
+        let stream = ruda_tensor::StreamId::current();
+        client.sync(move || stream.executes(|| B::graph_start_capture(&device)))
+    }
+
+    fn graph_stop_capture(device: &Self::Device) -> Result<ruda_tensor::BackendGraph, ExecutionError> {
+        let client = get_client::<B>(device);
+        let device = device.clone();
+        let stream = ruda_tensor::StreamId::current();
+        client.sync(move || stream.executes(|| B::graph_stop_capture(&device)))
+    }
+
+    fn graph_abort_capture(device: &Self::Device) {
+        let client = get_client::<B>(device);
+        let device = device.clone();
+        let stream = ruda_tensor::StreamId::current();
+        client.abort_capture(move || stream.executes(|| B::graph_abort_capture(&device)))
+    }
+
+    unsafe fn graph_replay(device: &Self::Device, graph: &ruda_tensor::BackendGraph) -> Result<(), ExecutionError> {
+        let client = get_client::<B>(device);
+        let device = device.clone();
+        let graph = graph.clone();
+        let stream = ruda_tensor::StreamId::current();
+        client.sync(move || stream.executes(|| unsafe { B::graph_replay(&device, &graph) }))
     }
 
     fn memory_persistent_allocations<
@@ -179,7 +235,16 @@ pub type FusionHandle<R> = <R as FusionRuntime>::FusionHandle;
 /// Client alias.
 pub type Client<R> = GlobalFusionClient<R>;
 
-/// Trait that defines a runtime that will benefits from fused operations.
+/// Whether an operation was dispatched before its handles were released.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperationRan {
+    /// The operation completed dispatch.
+    Yes,
+    /// The operation was discarded without dispatch.
+    No,
+}
+
+/// Runtime responsible for graph optimization and tensor-handle ownership.
 pub trait FusionRuntime: Send + Sync + Sized + core::fmt::Debug + 'static {
     /// The state that can be serialized for an optimization.
     type OptimizationState: Serialize + DeserializeOwned;
@@ -192,6 +257,15 @@ pub trait FusionRuntime: Send + Sync + Sized + core::fmt::Debug + 'static {
 
     /// The list of fusers that will be used to optimize the computational graph.
     fn fusers(device: Self::FusionDevice) -> Vec<Box<dyn OperationFuser<Self::Optimization>>>;
+
+    /// Create an independently consumable handle for another stream.
+    fn alias_handle(handle: &Self::FusionHandle) -> Self::FusionHandle { handle.clone() }
+
+    /// Release last-use handles after dispatch or cancellation.
+    fn free_handle(handles: &mut ruda_tensor::graph::HandleContainer<Self::FusionHandle>,
+        tensor: &ruda_tensor::graph::TensorIr, _ran: OperationRan) {
+        handles.free(tensor);
+    }
 }
 
 /// Trait that allows an existing [backend](Backend) to specify graph optimizations using

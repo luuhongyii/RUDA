@@ -58,13 +58,13 @@ impl TensorMapKind for Im2colWide {
 ///
 /// The tensormap is treated as an opaque type at runtime.
 ///
-pub struct TensorMapArg<R: Runtime, K: TensorMapKind> {
+pub struct TensorMapArg<R: LaunchMarker, K: TensorMapKind> {
     pub tensor: TensorArg<R>,
     pub metadata: TensorMapMeta,
     pub _kind: PhantomData<K>,
 }
 
-impl<R: Runtime, K: TensorMapKind> TensorMapArg<R, K> {
+impl<R: LaunchMarker, K: TensorMapKind> TensorMapArg<R, K> {
     pub fn new(args: K::Args, tensor: TensorArg<R>, ty: impl Into<Type>) -> Self {
         let ty = ty.into();
         let TensorArg::Handle { handle, .. } = &tensor else {
@@ -154,10 +154,10 @@ impl<E: RudaPrimitive, K: TensorMapKind> VectorizedExpand for NativeExpand<Tenso
 }
 
 impl<E: RudaPrimitive, K: TensorMapKind> LaunchArg for TensorMap<E, K> {
-    type RuntimeArg<R: Runtime> = TensorMapArg<R, K>;
+    type RuntimeArg<R: LaunchMarker> = TensorMapArg<R, K>;
     type CompilationArg = ();
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {

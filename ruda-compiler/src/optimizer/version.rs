@@ -161,6 +161,7 @@ impl Optimizer {
             ControlFlow::IfElse { cond, .. } => self.version_read(cond, state),
             ControlFlow::LoopBreak { break_cond, .. } => self.version_read(break_cond, state),
             ControlFlow::Switch { value, .. } => self.version_read(value, state),
+            ControlFlow::ReturnValue(value) => self.version_read(value, state),
             ControlFlow::Loop { .. } => {}
             ControlFlow::Return | ControlFlow::Unreachable | ControlFlow::None => {}
         }

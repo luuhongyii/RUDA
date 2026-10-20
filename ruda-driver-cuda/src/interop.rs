@@ -64,6 +64,14 @@ pub fn command(device:DeviceId, command:StreamCommand)->Result<u64,ServerError> 
 
 /// Retain a native allocation until work already submitted to the stream ends.
 pub fn record_allocation(device:DeviceId, stream:u64, handle:Handle)->Result<(),ServerError> {
+    let service = ruda_core::device::ServiceId::of::<CudaServer>(device);
+    if handle.service != service {
+        return Err(ServerError::ForeignHandle {
+            handle: format!("{}", handle.service),
+            client: format!("{service}"),
+            backtrace: BackTrace::capture(),
+        });
+    }
     DeviceHandle::<CudaServer>::new(device).submit_blocking(move |s|s.interop_record_allocation(stream,handle))
         .map_err(|e|ServerError::Generic { reason:format!("record_stream device queue failed: {e:?}"),backtrace:BackTrace::capture() })?
 }

@@ -53,14 +53,14 @@ fn unwrap_fields(mut ty: RudaTypeStruct) -> RudaTypeStruct {
 
 impl RudaTypeStruct {
     pub fn expanded_generics(&self) -> Generics {
-        let runtime = prelude_type("Runtime");
+        let runtime = prelude_type("LaunchMarker");
         let mut generics = self.generics.clone();
         generics.params.push(parse_quote![R: #runtime]);
         generics
     }
 
     pub fn assoc_generics(&self) -> Generics {
-        let runtime = prelude_type("Runtime");
+        let runtime = prelude_type("LaunchMarker");
         parse_quote![<R: #runtime>]
     }
 }

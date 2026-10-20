@@ -52,6 +52,14 @@ macro_rules! native_coordinate {
         )+}
         impl<$b:Backend,const $d:usize> Record<$b> for NativeCoordinateState<$b,$d> {
             type Item<$p:PrecisionSettings>=NativeCoordinateStateItem<$b,$p,$d>;
+            fn map_parameters<M: ruda_model::module::ModuleMapper<$b>>(self, mapper: &mut M) -> Self {
+                match self {$(Self::$variant(state) => {
+                    mapper.enter_module(stringify!($variant), "Enum:NativeCoordinateState");
+                    let state = state.map_parameters(mapper);
+                    mapper.exit_module(stringify!($variant), "Enum:NativeCoordinateState");
+                    Self::$variant(state)
+                },)+}
+            }
             fn into_item<$p:PrecisionSettings>(self) -> Self::Item<$p> {match self {$(Self::$variant(state)=>NativeCoordinateStateItem::$variant(state.into_item::<$p>()),)+}}
             fn from_item<$p:PrecisionSettings>(item:Self::Item<$p>,device:&$b::Device) -> Self {
                 match item {$(NativeCoordinateStateItem::$variant(state)=>Self::$variant(Record::<$b>::from_item::<$p>(state,device)),)+}

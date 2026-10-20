@@ -29,6 +29,16 @@ pub enum Timing {
     /// Include candidate-internal allocation, layout conversion, submission and waiting.
     EndToEnd
 }
+
+/// A measured resource bound at which further candidate search may stop.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(persistence, derive(serde::Serialize, serde::Deserialize))]
+pub struct TimeLimit {
+    /// Completed candidate duration that counts as clearing the bound.
+    pub duration: Duration,
+    /// Number of independent samples that must clear it.
+    pub confirmations: usize,
+}
 /// Whether the adapter can establish numerical agreement for this trial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Validation {

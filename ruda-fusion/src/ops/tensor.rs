@@ -666,6 +666,16 @@ impl<B: FusionBackend> FloatTensorOps<Self> for Fusion<B> {
         indices: IntTensor<Self>,
         value: FloatTensor<Self>,
     ) -> FloatTensor<Self> {
+        Self::float_scatter(dim, tensor, indices, value, IndexingUpdateOp::Add)
+    }
+
+    fn float_scatter(
+        dim: usize,
+        tensor: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+        value: FloatTensor<Self>,
+        update: IndexingUpdateOp,
+    ) -> FloatTensor<Self> {
         #[derive(new, Debug)]
         struct ScatterOps<B: FusionBackend> {
             desc: ScatterOpIr,
@@ -678,7 +688,7 @@ impl<B: FusionBackend> FloatTensorOps<Self> for Fusion<B> {
                 let indices = handles.get_int_tensor::<B>(&self.desc.indices);
                 let value = handles.get_float_tensor::<B>(&self.desc.value);
 
-                let output = B::float_scatter_add(self.desc.dim, tensor, indices, value);
+                let output = B::float_scatter(self.desc.dim, tensor, indices, value, self.desc.update);
 
                 handles.register_float_tensor::<B>(&self.desc.out.id, output);
             }
@@ -692,7 +702,7 @@ impl<B: FusionBackend> FloatTensorOps<Self> for Fusion<B> {
             dim,
             indices.into_ir(),
             value.into_ir(),
-            IndexingUpdateOp::Add,
+            update,
             || client.create_empty_handle(),
         );
 
@@ -826,6 +836,16 @@ impl<B: FusionBackend> FloatTensorOps<Self> for Fusion<B> {
         indices: IntTensor<Self>,
         value: FloatTensor<Self>,
     ) -> FloatTensor<Self> {
+        Self::float_select_assign(tensor, dim, indices, value, IndexingUpdateOp::Add)
+    }
+
+    fn float_select_assign(
+        tensor: FloatTensor<Self>,
+        dim: usize,
+        indices: IntTensor<Self>,
+        value: FloatTensor<Self>,
+        update: IndexingUpdateOp,
+    ) -> FloatTensor<Self> {
         #[derive(new, Debug)]
         struct SelectAssignOps<B: FusionBackend> {
             desc: SelectAssignOpIr,
@@ -838,7 +858,7 @@ impl<B: FusionBackend> FloatTensorOps<Self> for Fusion<B> {
                 let indices = handles.get_int_tensor::<B>(&self.desc.indices);
                 let value = handles.get_float_tensor::<B>(&self.desc.value);
 
-                let output = B::float_select_add(tensor, self.desc.dim, indices, value);
+                let output = B::float_select_assign(tensor, self.desc.dim, indices, value, self.desc.update);
 
                 handles.register_float_tensor::<B>(&self.desc.out.id, output);
             }
@@ -852,7 +872,7 @@ impl<B: FusionBackend> FloatTensorOps<Self> for Fusion<B> {
             dim,
             indices.into_ir(),
             value.into_ir(),
-            IndexingUpdateOp::Add,
+            update,
             || client.create_empty_handle(),
         );
 
@@ -1878,6 +1898,22 @@ impl<B: FusionBackend> FloatTensorOps<Self> for Fusion<B> {
                 streams,
                 OperationIr::Float(desc.out.dtype, FloatOperationIr::ArcTan2(desc.clone())),
                 ArcTan2Ops::<B>::new(desc),
+            )
+            .output()
+    }
+
+    fn float_hypot(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
+        binary_float_ops!(HypotOps, B::float_hypot);
+        let streams = OperationStreams::with_inputs([&lhs, &rhs]);
+        let client = lhs.client.clone();
+        let desc = BinaryOpIr::create(lhs.into_ir(), rhs.into_ir(), || {
+            client.create_empty_handle()
+        });
+        client
+            .register(
+                streams,
+                OperationIr::Float(desc.out.dtype, FloatOperationIr::Hypot(desc.clone())),
+                HypotOps::<B>::new(desc),
             )
             .output()
     }

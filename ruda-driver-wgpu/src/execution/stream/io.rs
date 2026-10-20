@@ -15,6 +15,7 @@ impl WgpuStream {
         &mut self,
         descriptors: Vec<(WgpuResource, Shape, usize)>,
     ) -> DynFut<Result<Vec<Bytes>, ServerError>> {
+        if let Err(error) = self.poison.check() { return Box::pin(async move { Err(error) }); }
         self.compute_pass = None;
         let mut staging_info = Vec::with_capacity(descriptors.len());
         let mut callbacks = Vec::with_capacity(descriptors.len());
@@ -46,12 +47,9 @@ impl WgpuStream {
         }
 
         // Flush all commands to the queue, so GPU gets started on copying to the staging buffer.
-        let _ = self
-            .flush(StreamErrorMode {
-                ignore: true,
-                flush: false,
-            })
-            .ok();
+        if let Err(error) = self.flush(StreamErrorMode { ignore: true, flush: false }) {
+            return Box::pin(async move { Err(error) });
+        }
 
         for entry in staging_info.iter() {
             if let Some((staging, _binding, _size)) = entry {
@@ -72,15 +70,21 @@ impl WgpuStream {
         }
 
         let poll = self.poll.start_polling();
+        let poison = self.poison.clone();
 
         Box::pin(async move {
             for receiver in callbacks.iter().flatten() {
-                receiver
-                    .recv()
-                    .await
-                    .expect("Unable to receive buffer slice result.")
-                    .expect("Failed to map buffer");
+                let result = receiver.recv().await;
+                poison.check()?;
+                result.map_err(|error| ServerError::Generic {
+                    reason: format!("Wgpu map callback unavailable: {error}"),
+                    backtrace: BackTrace::capture(),
+                })?.map_err(|error| ServerError::Io(IoError::Unknown {
+                    description: format!("Wgpu read mapping failed: {error}"),
+                    backtrace: BackTrace::capture(),
+                }))?;
             }
+            poison.check()?;
 
             // Can stop polling now.
             core::mem::drop(poll);

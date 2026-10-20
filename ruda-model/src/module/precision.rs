@@ -1,34 +1,43 @@
 use super::{ModuleMapper, Param, ParamId};
-use alloc::collections::BTreeSet;
-use ruda_tensor::{FloatDType, api::Tensor, backend::Backend, tensor::TensorContainer};
+use alloc::{collections::BTreeSet, vec::Vec};
+use ruda_tensor::{AutodiffContext, FloatDType, api::Tensor, backend::Backend, tensor::TensorContainer};
 
-pub(super) struct DtypeMapper {
+pub(super) struct DtypeMapper<B: Backend> {
     dtype: FloatDType,
     selected: Option<BTreeSet<ParamId>>,
-    converted: TensorContainer<(ParamId, bool)>,
+    contexts: Vec<(B::Device, AutodiffContext)>,
+    converted: TensorContainer<(ParamId, bool, bool, usize)>,
 }
 
-impl DtypeMapper {
+impl<B: Backend> DtypeMapper<B> {
     pub(super) fn new(dtype: FloatDType) -> Self {
         Self {
             dtype,
             selected: None,
+            contexts: Vec::new(),
             converted: TensorContainer::new(),
         }
     }
     pub(super) fn new_selected(dtype: FloatDType, parameters: &[ParamId]) -> Self {
-        Self { dtype, selected: Some(parameters.iter().copied().collect()), converted: TensorContainer::new() }
+        Self { dtype, selected: Some(parameters.iter().copied().collect()), contexts: Vec::new(), converted: TensorContainer::new() }
     }
 }
 
-impl<B: Backend> ModuleMapper<B> for DtypeMapper {
+impl<B: Backend> ModuleMapper<B> for DtypeMapper<B> {
     fn map_float<const D: usize>(&mut self, param: Param<Tensor<B, D>>) -> Param<Tensor<B, D>> {
         if self.selected.as_ref().is_some_and(|selected| !selected.contains(&param.id)) {
             return param;
         }
+        let planned = param.planned_is_require_grad();
         let (id, tensor, mapper) = param.consume();
         let requires_grad = tensor.is_require_grad();
-        let key = (id, requires_grad);
+        let context = (tensor.device(), tensor.autodiff_context());
+        let context_index = self.contexts.iter().position(|entry| entry == &context).unwrap_or_else(|| {
+            let index = self.contexts.len();
+            self.contexts.push(context);
+            index
+        });
+        let key = (id, planned, requires_grad, context_index);
         if let Some(converted) = self.converted.get::<B>(&key) {
             return Param::from_mapped_value(id, Tensor::<B, D>::from_primitive(converted), mapper);
         }

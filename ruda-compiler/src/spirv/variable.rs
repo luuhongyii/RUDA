@@ -292,6 +292,9 @@ pub enum IndexedVariable {
 
 impl<T: SpirvTarget> SpirvCompiler<T> {
     pub fn compile_variable(&mut self, variable: ir::Variable) -> Variable {
+        if let Some(value) = self.state.function_values.get(&variable) {
+            return value.clone();
+        }
         let item = variable.ty;
         match variable.kind {
             ir::VariableKind::Constant(value) => {
@@ -335,7 +338,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             }
             ir::VariableKind::ConstantArray { id, length, .. } => {
                 let item = self.compile_type(item);
-                let id = self.state.const_arrays[id as usize].id;
+                let id = self.state.const_arrays[&id].id;
                 Variable::ConstantArray(id, item, length as u32)
             }
             ir::VariableKind::SharedArray { id, length, .. } => {
@@ -357,7 +360,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
                 let id = if let Some(arr) = self.state.local_arrays.get(&id) {
                     arr.id
                 } else {
-                    let arr_ty = Item::Array(Box::new(item.clone()), length as u32);
+                    let arr_ty = Item::Array(Box::new(item.clone()), (length * unroll_factor) as u32);
                     let ptr_ty = Item::Pointer(StorageClass::Function, Box::new(arr_ty)).id(self);
                     let arr_id = self.declare_function_variable(ptr_ty);
                     self.debug_var_name(arr_id, variable);

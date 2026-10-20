@@ -407,24 +407,23 @@ mod lazy_clone {
         let data = cloned.weight_basic.to_data();
         assert_eq!(data.shape, [20, 20].into());
 
-        // Original should still be uninitialized.
-        assert!(!module.weight_basic.is_initialized());
+        assert!(module.weight_basic.is_initialized());
+        assert_eq!(data, module.weight_basic.to_data());
     }
 
     #[test]
-    fn lazy_clone_and_original_produce_independent_values() {
+    fn lazy_clone_and_original_share_first_initialized_value() {
         let device = Default::default();
         let module = ModuleBasic::<TestBackend>::new(&device);
         let cloned = module.clone();
 
-        // Access clone first, then original. Both should produce valid but different
-        // tensors since each runs the random init function independently.
+        // Access clone first, then original; random initialization runs once.
         let clone_data = cloned.weight_basic.to_data();
         let orig_data = module.weight_basic.to_data();
 
         assert_eq!(clone_data.shape, [20, 20].into());
         assert_eq!(orig_data.shape, [20, 20].into());
-        assert_ne!(clone_data, orig_data);
+        assert_eq!(clone_data, orig_data);
     }
 
     #[test]
@@ -437,7 +436,7 @@ mod lazy_clone {
         let shape = cloned.weight_basic.shape();
         assert_eq!(shape, [20, 20].into());
         assert!(cloned.weight_basic.is_initialized());
-        assert!(!module.weight_basic.is_initialized());
+        assert!(module.weight_basic.is_initialized());
     }
 
     #[test]

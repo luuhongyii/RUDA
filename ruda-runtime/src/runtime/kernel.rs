@@ -32,10 +32,12 @@ pub trait KernelMetadata: Send + Sync + 'static {
     fn address_type(&self) -> StorageType;
 }
 
-pub use ruda_core::kernel::{KernelArg, KernelDefinition, KernelOptions, ScalarKernelArg, Visibility};
+pub use ruda_core::kernel::{BufferIOAttr, KernelIo, KernelArg, KernelDefinition, KernelOptions, ScalarKernelArg, Visibility};
 
 /// A kernel, compiled in the target language
 pub struct CompiledKernel<C: Compiler> {
+    /// Compiled payload accesses, falling back to launch declarations when absent.
+    pub io: Option<ruda_core::kernel::KernelIo>,
     /// The name of the kernel entrypoint.
     /// For example
     ///
@@ -89,6 +91,30 @@ pub struct DebugInformation {
 pub trait RudaKernel: KernelMetadata {
     /// Define the kernel for compilation
     fn define(&self) -> KernelDefinition;
+
+    /// Target-language source instead of compiling the definition's body.
+    fn source(&self) -> Option<PrecompiledSource> { None }
+}
+
+/// Hand-written source. The kernel ID must distinguish different source contents.
+pub struct PrecompiledSource {
+    /// Source in the target compiler's language.
+    pub source: String,
+    /// Entrypoint exported by the source.
+    pub entrypoint_name: String,
+    /// Must match the selected compiler's language tag.
+    pub lang: &'static str,
+}
+
+impl KernelMetadata for Box<dyn RudaKernel> {
+    fn name(&self) -> &'static str { self.as_ref().name() }
+    fn id(&self) -> KernelId { self.as_ref().id() }
+    fn address_type(&self) -> StorageType { self.as_ref().address_type() }
+}
+
+impl RudaKernel for Box<dyn RudaKernel> {
+    fn define(&self) -> KernelDefinition { self.as_ref().define() }
+    fn source(&self) -> Option<PrecompiledSource> { self.as_ref().source() }
 }
 
 /// Wraps a [`RudaKernel`] to allow it be compiled.
@@ -111,11 +137,51 @@ impl<C: Compiler, K: RudaKernel> KernelTask<C, K> {
             _compiler: PhantomData,
         }
     }
+
+    fn compile_definition(
+        &self,
+        definition: KernelDefinition,
+        compiler: &mut C,
+        options: &C::CompilationOptions,
+        mode: ExecutionMode,
+        addr_type: StorageType,
+    ) -> Result<CompiledKernel<C>, CompilationError> {
+        let entrypoint_name = definition.options.kernel_name.clone();
+        let ruda_dim = definition.ruda_dim;
+        if let Some(source) = self.kernel_definition.source() {
+            if source.lang != compiler.lang_tag() {
+                return Err(CompilationError::Generic {
+                    reason: alloc::format!("kernel `{}` carries {} source, but this compiler expects {}",
+                        self.name(), source.lang, compiler.lang_tag()),
+                    backtrace: ruda_core::backtrace::BackTrace::capture(),
+                });
+            }
+            return Ok(CompiledKernel {
+                io: None,
+                entrypoint_name: source.entrypoint_name,
+                debug_name: Some(self.kernel_definition.name()),
+                source: source.source,
+                repr: None,
+                ruda_dim,
+                debug_info: None,
+            });
+        }
+        let repr = compiler.compile(definition, options, mode, addr_type)?;
+        Ok(CompiledKernel {
+            io: compiler.buffer_io(&repr),
+            entrypoint_name,
+            debug_name: Some(self.kernel_definition.name()),
+            source: repr.to_string(),
+            repr: Some(repr),
+            ruda_dim,
+            debug_info: None,
+        })
+    }
 }
 
 impl<C: Compiler, K: RudaKernel> RudaTask<C> for KernelTask<C, K> {
     fn kernel_definition(&self) -> Option<KernelDefinition> {
-        Some(self.kernel_definition.define())
+        if self.kernel_definition.source().is_some() { None } else { Some(self.kernel_definition.define()) }
     }
 
     fn compile(
@@ -125,19 +191,23 @@ impl<C: Compiler, K: RudaKernel> RudaTask<C> for KernelTask<C, K> {
         mode: ExecutionMode,
         addr_type: StorageType,
     ) -> Result<CompiledKernel<C>, CompilationError> {
-        let gpu_ir = self.kernel_definition.define();
-        let entrypoint_name = gpu_ir.options.kernel_name.clone();
-        let ruda_dim = gpu_ir.ruda_dim;
-        let lower_level_ir = compiler.compile(gpu_ir, compilation_options, mode, addr_type)?;
+        let gpu_ir = crate::runtime::compiler::catch_expansion(|| self.kernel_definition.define())?;
+        self.compile_definition(gpu_ir, compiler, compilation_options, mode, addr_type)
+    }
 
-        Ok(CompiledKernel {
-            entrypoint_name,
-            debug_name: Some(core::any::type_name::<K>()),
-            source: lower_level_ir.to_string(),
-            repr: Some(lower_level_ir),
-            ruda_dim,
-            debug_info: None,
-        })
+    fn compile_recorded(
+        &self,
+        compiler: &mut C,
+        options: &C::CompilationOptions,
+        mode: ExecutionMode,
+        addr_type: StorageType,
+        recording: &mut crate::runtime::compiler::CompilationRecording,
+    ) -> Result<CompiledKernel<C>, CompilationError> {
+        let definition = crate::runtime::compiler::catch_expansion(|| self.kernel_definition.define())?;
+        recording.defined(&definition);
+        let compiled = self.compile_definition(definition, compiler, options, mode, addr_type)?;
+        recording.source(&compiled.source);
+        Ok(compiled)
     }
 }
 

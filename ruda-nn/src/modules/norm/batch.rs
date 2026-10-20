@@ -4,7 +4,7 @@ use ruda_model::module::{Content, DisplaySettings, ModuleDisplay};
 use ruda_model::tensor::{Tensor, backend::Backend};
 use ruda_model::{
     config::Config,
-    module::{Module, Param, RunningState},
+    module::{Flag, Module, Param, RunningState},
 };
 
 /// [`BatchNorm`] Configuration.
@@ -41,6 +41,8 @@ pub struct BatchNormConfig {
 #[derive(Module, Debug)]
 #[module(custom_display)]
 pub struct BatchNorm<B: Backend> {
+    /// Use batch statistics and update running statistics on an autodiff device.
+    pub training: Param<Flag>,
     /// The learnable weight gamma.
     pub gamma: Param<Tensor<B, 1>>,
     /// The learnable weight beta.
@@ -58,6 +60,11 @@ pub struct BatchNorm<B: Backend> {
 impl BatchNormConfig {
     /// Initializes a new [batch norm](BatchNorm) module.
     pub fn init<B: Backend>(&self, device: &B::Device) -> BatchNorm<B> {
+        assert!(self.num_features > 0, "num_features must be greater than zero.");
+        assert!(self.epsilon.is_finite() && self.epsilon > 0.0,
+            "epsilon must be finite and positive.");
+        assert!(self.momentum.is_finite() && (0.0..=1.0).contains(&self.momentum),
+            "momentum must be finite and within [0, 1].");
         let gamma = Initializer::Ones.init([self.num_features], device);
         let beta = Initializer::Zeros.init([self.num_features], device);
 
@@ -65,6 +72,7 @@ impl BatchNormConfig {
         let running_var = Tensor::ones([self.num_features], device);
 
         BatchNorm {
+            training: Param::from_bool(true),
             gamma,
             beta,
             running_mean: RunningState::new(running_mean),
@@ -98,8 +106,10 @@ impl<B: Backend> BatchNorm<B> {
                 D
             );
         }
+        assert_eq!(input.dims()[1], self.gamma.shape().dims::<1>()[0],
+            "BatchNorm input channels must match num_features");
 
-        match B::ad_enabled(&input.device()) {
+        match self.training.is_enabled() && input.is_autodiff() {
             true => self.forward_train(input),
             false => self.forward_inference(input),
         }
@@ -107,86 +117,31 @@ impl<B: Backend> BatchNorm<B> {
 
     fn forward_inference<const D: usize>(&self, input: Tensor<B, D>) -> Tensor<B, D> {
         let device = input.device();
-        let channels = input.dims()[1];
         let mean = self.running_mean.value().to_device(&device);
         let var = self.running_var.value().to_device(&device);
-
-        let mut shape = [1; D];
-        shape[1] = channels;
-
-        self.forward_shared(input, mean.reshape(shape), var.reshape(shape))
+        ruda_model::tensor::module::batch_norm(
+            input, self.gamma.val(), self.beta.val(), mean, var, self.epsilon,
+        )
     }
 
     fn forward_train<const D: usize>(&self, input: Tensor<B, D>) -> Tensor<B, D> {
         let device = input.device();
-        let dims = input.dims();
-        let batch_size = dims[0];
-        let channels = dims[1];
-
-        let mut shape_unsqueeze = [1; D];
-        let mut flatten_size = batch_size;
-        shape_unsqueeze[1] = channels;
-
-        for dim in dims.iter().take(D).skip(2) {
-            flatten_size *= dim;
-        }
-
-        let mean = input
-            .clone()
-            .swap_dims(0, 1)
-            .reshape([channels, flatten_size])
-            .mean_dim(1)
-            .reshape(shape_unsqueeze);
-
-        let var = input
-            .clone()
-            .sub(mean.clone())
-            .square()
-            .swap_dims(0, 1)
-            .reshape([channels, flatten_size])
-            .mean_dim(1)
-            .reshape(shape_unsqueeze);
+        let result = ruda_model::tensor::module::batch_norm_train(
+            input, self.gamma.val(), self.beta.val(), self.epsilon,
+        );
 
         let running_mean = self.running_mean.value_sync().to_device(&device);
         let running_var = self.running_var.value_sync().to_device(&device);
 
-        let running_mean = running_mean.mul_scalar(1.0 - self.momentum).add(
-            mean.clone()
-                .detach()
-                .mul_scalar(self.momentum)
-                .reshape([channels]),
-        );
-        let running_var = running_var.mul_scalar(1.0 - self.momentum).add(
-            var.clone()
-                .detach()
-                .mul_scalar(self.momentum)
-                .reshape([channels]),
-        );
+        let running_mean = running_mean.mul_scalar(1.0 - self.momentum)
+            .add(result.mean.detach().mul_scalar(self.momentum));
+        let running_var = running_var.mul_scalar(1.0 - self.momentum)
+            .add(result.variance.detach().mul_scalar(self.momentum));
 
         self.running_mean.update(running_mean.detach());
         self.running_var.update(running_var.detach());
 
-        self.forward_shared(input, mean, var)
-    }
-
-    fn forward_shared<const D: usize>(
-        &self,
-        x: Tensor<B, D>,
-        mean: Tensor<B, D>,
-        var: Tensor<B, D>,
-    ) -> Tensor<B, D> {
-        let channels = x.dims()[1];
-        let mut shape = [1; D];
-        shape[1] = channels;
-
-        let std = var.add_scalar(self.epsilon).sqrt();
-
-        let x = x.sub(mean);
-        let x = x.div(std);
-
-        let x = x.mul(self.gamma.val().reshape(shape));
-
-        x.add(self.beta.val().reshape(shape))
+        result.output
     }
 }
 
@@ -200,11 +155,12 @@ impl<B: Backend> ModuleDisplay for BatchNorm<B> {
     fn custom_content(&self, content: Content) -> Option<Content> {
         let [num_features] = self.beta.shape().dims();
 
-        content
+        let content = content
             .add("num_features", &num_features)
             .add("momentum", &self.momentum)
-            .add("epsilon", &self.epsilon)
-            .optional()
+            .add("epsilon", &self.epsilon);
+        if self.training.is_enabled() { content.optional() }
+        else { content.add("training", &self.training).optional() }
     }
 }
 

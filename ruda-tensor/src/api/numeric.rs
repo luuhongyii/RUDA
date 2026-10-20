@@ -16,6 +16,14 @@ where
     K: Numeric<B>,
     K::Elem: Element,
 {
+    /// Applies element wise square operation.
+    ///
+    #[cfg_attr(doc, doc = r#"$y_i = x_i * x_i$"#)]
+    #[cfg_attr(not(doc), doc = "`y_i = x_i * x_i`")]
+    pub fn square(self) -> Self {
+        Self::new(K::numeric_square(self.primitive))
+    }
+
     /// Applies element wise addition operation.
     ///
     /// `y = x2 + x1`
@@ -730,7 +738,7 @@ where
         // last two dimensions
         let shape = &self.shape()[D - 2..].to_owned();
 
-        let mask = Tensor::<B, 2, Bool>::triu_mask(shape, diagonal, &self.device()).unsqueeze();
+        let mask = Tensor::<B, 2, Bool>::triu_mask(shape, diagonal, &self.device()).with_context_of(&self).unsqueeze();
         self.mask_fill(mask, 0)
     }
 
@@ -774,7 +782,7 @@ where
 
         // last two dimensions
         let shape = &self.shape()[D - 2..].to_owned();
-        let mask = Tensor::<B, 2, Bool>::tril_mask(shape, diagonal, &self.device()).unsqueeze();
+        let mask = Tensor::<B, 2, Bool>::tril_mask(shape, diagonal, &self.device()).with_context_of(&self).unsqueeze();
 
         self.mask_fill(mask, 0)
     }
@@ -900,7 +908,7 @@ where
         // Use the given dtype when provided, otherwise default device dtype
         let opt = options.into();
         let dtype = opt.resolve_dtype::<K>();
-        Self::new(K::random(shape.into(), distribution, &opt.device, dtype))
+        Self::new(opt.apply_context::<K>(K::random(shape.into(), distribution, &opt.device, dtype)))
     }
 
     /// Applies the matrix multiplication operation.

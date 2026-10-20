@@ -9,18 +9,18 @@ use crate::tiling::{
 };
 
 #[ruda]
-pub fn cmma_execute<L: Numeric, R: Numeric, A: Numeric>(
-    lhs: &cmma::Matrix<L>,
-    rhs: &cmma::Matrix<R>,
-    acc: &mut cmma::Matrix<A>,
+pub fn cmma_execute<L: Numeric, R: Numeric, A: Numeric, S: cmma::MatrixScope>(
+    lhs: &cmma::Matrix<L, S>,
+    rhs: &cmma::Matrix<R, S>,
+    acc: &mut cmma::Matrix<A, S>,
 ) {
-    cmma::execute::<L, R, A, A>(lhs, rhs, acc, acc);
+    cmma::execute::<L, R, A, A, _>(lhs, rhs, acc, acc);
 }
 
 #[ruda]
-pub fn cmma_load_from_shared<E: Numeric, ES: Size, N: Numeric, IO: SliceVisibility>(
+pub fn cmma_load_from_shared<E: Numeric, ES: Size, N: Numeric, IO: SliceVisibility, S: cmma::MatrixScope>(
     shared: &StridedTile<E, ES, IO>,
-    matrix: &mut cmma::Matrix<N>,
+    matrix: &mut cmma::Matrix<N, S>,
     #[comptime] ident: StageIdent,
     #[comptime] matrix_layout: MatrixLayout,
 ) {
@@ -41,15 +41,15 @@ pub fn cmma_load_from_shared<E: Numeric, ES: Size, N: Numeric, IO: SliceVisibili
 }
 
 #[ruda]
-pub fn cmma_load_zeros<N: Numeric>(matrix: &mut cmma::Matrix<N>) {
+pub fn cmma_load_zeros<N: Numeric, S: cmma::MatrixScope>(matrix: &mut cmma::Matrix<N, S>) {
     cmma::fill(matrix, N::from_int(0));
 }
 
 #[ruda]
-pub fn cmma_write_to_shared<E: Numeric, ES: Size, A: Numeric>(
+pub fn cmma_write_to_shared<E: Numeric, ES: Size, A: Numeric, S: cmma::MatrixScope>(
     shared: &mut StridedTile<E, ES, ReadWrite>,
-    matrix: &cmma::Matrix<A>,
+    matrix: &cmma::Matrix<A, S>,
 ) {
-    let casted = cmma::cast::<A, E>(matrix);
+    let casted = cmma::cast::<A, E, _>(matrix);
     CmmaStageWriter::store_fragment(shared, &casted);
 }

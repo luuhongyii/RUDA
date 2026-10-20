@@ -7,10 +7,11 @@ use ruda_kernel::dsl::{
 };
 use ruda_core::ir::DeviceProperties;
 use ruda::runtime::{compiler::CompilationError, id::KernelId};
+use crate::compilation::PreparedPipeline;
 use std::{borrow::Cow, sync::Arc};
 use wgpu::{
     Adapter, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, BufferBindingType,
-    ComputePipeline, Device, PipelineLayoutDescriptor, Queue, ShaderModule, ShaderModuleDescriptor,
+    Device, PipelineLayoutDescriptor, Queue, ShaderModule, ShaderModuleDescriptor,
     ShaderStages,
 };
 
@@ -24,42 +25,93 @@ use ruda_kernel::dsl::lowering::cpp::metal as cpp_metal;
 
 mod pipeline;
 
+/// Shader input after reconciling a compiled representation with its language tag.
+pub enum ModuleSource<'a> {
+    #[cfg(feature = "spirv")]
+    SpirV(&'a ruda_compiler::spirv::SpirvKernel),
+    #[cfg(all(feature = "msl", target_os = "macos"))]
+    Msl(&'a str, ruda_core::launch::RudaDim),
+    Wgsl(&'a str),
+}
+
+impl<'a> ModuleSource<'a> {
+    pub fn resolve(
+        repr: Option<AutoRepresentationRef<'a>>,
+        lang: &str,
+        source: &'a str,
+        dim: ruda_core::launch::RudaDim,
+    ) -> Result<Self, CompilationError> {
+        match repr {
+            #[cfg(feature = "spirv")]
+            Some(AutoRepresentationRef::SpirV(repr)) => Ok(Self::SpirV(repr)),
+            Some(AutoRepresentationRef::Wgsl(_)) => Ok(Self::Wgsl(source)),
+            #[cfg(feature = "msl")]
+            Some(AutoRepresentationRef::Msl(_)) => Self::msl(source, dim),
+            None => match lang {
+                "wgsl" => Ok(Self::Wgsl(source)),
+                "msl" => Self::msl(source, dim),
+                other => Err(CompilationError::Generic {
+                    reason: format!("wgpu has no text passthrough for a precompiled `{other}` kernel"),
+                    backtrace: ruda_core::backtrace::BackTrace::capture(),
+                }),
+            },
+        }
+    }
+
+    #[cfg(all(feature = "msl", target_os = "macos"))]
+    fn msl(source: &'a str, dim: ruda_core::launch::RudaDim) -> Result<Self, CompilationError> {
+        Ok(Self::Msl(source, dim))
+    }
+
+    #[cfg(not(all(feature = "msl", target_os = "macos")))]
+    fn msl(_source: &'a str, _dim: ruda_core::launch::RudaDim) -> Result<Self, CompilationError> {
+        Err(CompilationError::Generic {
+            reason: "MSL passthrough is only available on macOS".into(),
+            backtrace: ruda_core::backtrace::BackTrace::capture(),
+        })
+    }
+}
+
 pub async fn request_device(adapter: &Adapter) -> (Device, Queue) {
-    if let Some(result) = request_vulkan_device(adapter).await {
-        return result;
+    try_request_device(adapter).await.expect("Unable to request Wgpu device")
+}
+
+pub async fn try_request_device(adapter: &Adapter) -> Result<(Device, Queue), crate::WgpuInitError> {
+    if let Some(result) = request_vulkan_device(adapter).await? {
+        return Ok(result);
     }
-    if let Some(result) = request_metal_device(adapter).await {
-        return result;
+    if let Some(result) = request_metal_device(adapter).await? {
+        return Ok(result);
     }
-    wgsl::request_device(adapter).await
+    wgsl::try_request_device(adapter).await
 }
 
 #[cfg(feature = "spirv")]
-async fn request_vulkan_device(adapter: &Adapter) -> Option<(Device, Queue)> {
+async fn request_vulkan_device(adapter: &Adapter) -> Result<Option<(Device, Queue)>, crate::WgpuInitError> {
     if is_vulkan(adapter) {
-        vulkan::request_vulkan_device(adapter).await
+        vulkan::try_request_vulkan_device(adapter).await
     } else {
-        None
+        Ok(None)
     }
 }
 
 #[cfg(not(feature = "spirv"))]
-async fn request_vulkan_device(_adapter: &Adapter) -> Option<(Device, Queue)> {
-    None
+async fn request_vulkan_device(_adapter: &Adapter) -> Result<Option<(Device, Queue)>, crate::WgpuInitError> {
+    Ok(None)
 }
 
 #[cfg(all(feature = "msl", target_os = "macos"))]
-async fn request_metal_device(adapter: &Adapter) -> Option<(Device, Queue)> {
+async fn request_metal_device(adapter: &Adapter) -> Result<Option<(Device, Queue)>, crate::WgpuInitError> {
     if is_metal(adapter) {
-        Some(metal::request_metal_device(adapter).await)
+        metal::try_request_metal_device(adapter).await.map(Some)
     } else {
-        None
+        Ok(None)
     }
 }
 
 #[cfg(not(all(feature = "msl", target_os = "macos")))]
-async fn request_metal_device(_adapter: &Adapter) -> Option<(Device, Queue)> {
-    None
+async fn request_metal_device(_adapter: &Adapter) -> Result<Option<(Device, Queue)>, crate::WgpuInitError> {
+    Ok(None)
 }
 
 pub fn register_features(
@@ -110,7 +162,7 @@ pub fn register_metal_features(
 ) -> bool {
     if is_metal(adapter) {
         metal::register_metal_features(adapter, props, comp_options);
-        true
+        comp_options.supports_msl
     } else {
         false
     }

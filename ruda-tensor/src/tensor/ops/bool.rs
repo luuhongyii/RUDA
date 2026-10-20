@@ -17,6 +17,21 @@ impl<B: Backend> TransactionOp<B> for Bool {
 }
 
 impl<B: Backend> BasicOps<B> for Bool {
+    fn erase_primitive(tensor: Self::Primitive) -> crate::primitive::ErasedTensorPrimitive<B> {
+        crate::primitive::ErasedTensorPrimitive::Bool(tensor)
+    }
+    fn restore_primitive(tensor: crate::primitive::ErasedTensorPrimitive<B>) -> Self::Primitive {
+        match tensor {
+            crate::primitive::ErasedTensorPrimitive::Bool(tensor) => tensor,
+            _ => panic!("Module mapping changed the boolean tensor kind"),
+        }
+    }
+    fn autodiff_context(tensor: &Self::Primitive) -> crate::AutodiffContext { B::bool_autodiff_context(tensor) }
+
+    fn with_autodiff_context(tensor: Self::Primitive, context: crate::AutodiffContext) -> Self::Primitive {
+        B::bool_with_autodiff_context(tensor, context)
+    }
+
     type Elem = B::BoolElem;
 
     fn empty(shape: Shape, device: &Device<B>, dtype: DType) -> Self::Primitive {

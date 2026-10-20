@@ -29,9 +29,16 @@ impl<C: RunnerClient> TensorMetadata for RouterTensor<C> {
     fn rank(&self) -> usize {
         self.shape.num_dims()
     }
+
+    fn can_mut(&self) -> bool {
+        self.count.load(Ordering::Acquire) <= 1
+    }
 }
 
 impl<C: RunnerClient> RouterTensor<C> {
+    /// Identifier of this tensor in its owning client's graph namespace.
+    pub fn id(&self) -> TensorId { self.id }
+
     /// Create a new router tensor.
     pub fn new(id: TensorId, shape: Shape, dtype: DType, client: C) -> Self {
         Self {

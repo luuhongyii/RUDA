@@ -5,6 +5,7 @@ pub mod decay;
 pub mod momentum;
 
 mod adagrad;
+mod adafactor;
 mod adam;
 mod adamw;
 mod adan;
@@ -21,13 +22,20 @@ mod fp32_master;
 mod checkpoint_partition;
 mod grads;
 mod lbfgs;
+mod lamb;
+mod lion;
 mod muon;
 mod rmsprop;
 mod sgd;
 mod simple;
+mod state_tensor;
 mod visitor;
 
+#[cfg(test)]
+mod parity_tests;
+
 pub use adagrad::*;
+pub use adafactor::*;
 pub use adam::*;
 pub use adamw::*;
 pub use adan::*;
@@ -44,6 +52,8 @@ pub use fp32_master::*;
 pub use checkpoint_partition::*;
 pub use grads::*;
 pub use lbfgs::*;
+pub use lamb::*;
+pub use lion::*;
 pub use muon::*;
 pub use rmsprop::*;
 pub use sgd::*;

@@ -19,8 +19,9 @@ impl<B:Backend> VocabParallelProjection<B> {
             assert_eq!(value.device(),weight.device(),"projection bias and weight must share the device");value
         });
         if interval.end <= layout.vocabulary_size() {return (weight,bias);}
-        let rows = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&weight.device(),DType::I64));
-        let limit = Tensor::<B,1,Int>::from_data(TensorData::new(alloc::vec![layout.vocabulary_size() as i64],[1]),(&weight.device(),DType::I64)).expand([width]);
+        let context=weight.autodiff_context();
+        let rows = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&weight.device(),DType::I64)).with_autodiff_context(context);
+        let limit = Tensor::<B,1,Int>::from_data(TensorData::new(alloc::vec![layout.vocabulary_size() as i64],[1]),(&weight.device(),DType::I64)).with_autodiff_context(context).expand([width]);
         let padding = rows.greater_equal(limit);
         let weight = weight.mask_fill(padding.clone().reshape([width,1]).expand([width,features]),0);
         let bias = bias.map(|value|value.mask_fill(padding,0));
@@ -56,9 +57,13 @@ impl<B: Backend> VocabParallelEmbedding<B> {
         assert_eq!(self.vocabulary_size,layout.vocabulary_size(),"embedding logical vocabulary differs from layout");
         assert_eq!(tokens.device(),weight.device(),"token indices and local embedding must share the device");
         let [batch,length] = tokens.dims();
-        if batch == 0 || length == 0 {return weight.slice([0..0,0..features]).reshape([batch,length,features]);}
+        if batch == 0 || length == 0 {
+            let context=weight.autodiff_context().merge(tokens.autodiff_context());
+            return weight.slice([0..0,0..features]).reshape([batch,length,features]).with_autodiff_context(context);
+        }
         let tokens = tokens.cast(IntDType::I64);
-        let constant = |value:i64|Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![value],[1,1]),(&tokens.device(),DType::I64)).expand([batch,length]);
+        let constant = |value:i64|Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![value],[1,1]),(&tokens.device(),DType::I64))
+            .with_autodiff_context(tokens.autodiff_context()).expand([batch,length]);
         let invalid = tokens.clone().lower_elem(0).bool_or(tokens.clone().greater_equal(constant(layout.vocabulary_size() as i64)));
         assert!(!invalid.any().into_scalar().elem::<bool>(),"token lies outside the logical vocabulary");
         let start = constant(interval.start as i64);
@@ -66,9 +71,10 @@ impl<B: Backend> VocabParallelEmbedding<B> {
         let indices = (tokens-start).mask_fill(outside.clone(),0);
         if let Some(padding) = self.padding_index {assert!(padding < layout.vocabulary_size(),"configured embedding padding is not a real class");}
         if interval.end > layout.vocabulary_size() || (freeze_padding && self.padding_index.is_some_and(|index|interval.contains(&index))) {
-            let rows = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&weight.device(),DType::I64));
+            let context=weight.autodiff_context();
+            let rows = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&weight.device(),DType::I64)).with_autodiff_context(context);
             let weight_device = weight.device();
-            let scalar = |value:i64|Tensor::<B,1,Int>::from_data(TensorData::new(alloc::vec![value],[1]),(&weight_device,DType::I64)).expand([width]);
+            let scalar = |value:i64|Tensor::<B,1,Int>::from_data(TensorData::new(alloc::vec![value],[1]),(&weight_device,DType::I64)).with_autodiff_context(context).expand([width]);
             if interval.end > layout.vocabulary_size() {
                 let padding = rows.clone().greater_equal(scalar(layout.vocabulary_size() as i64)).reshape([width,1]).expand([width,features]);
                 weight = weight.mask_fill(padding,0);
@@ -89,7 +95,8 @@ impl<B: Backend> VocabParallelEmbedding<B> {
         -> Result<Tensor<B,3>,C::Error> {
         let empty = tokens.dims().contains(&0);
         let local = self.local_lookup(tokens,layout,communicator.rank(),communicator.world_size(),false);
-        if empty || communicator.world_size() == 1 {Ok(local)} else {Ok(Tensor::from_primitive(TensorPrimitive::Float(communicator.all_reduce_sum(local.into_primitive().tensor())?)))}
+        let context=local.autodiff_context();
+        if empty || communicator.world_size() == 1 {Ok(local)} else {Ok(Tensor::from_primitive(TensorPrimitive::Float(communicator.all_reduce_sum(local.into_primitive().tensor())?)).with_autodiff_context(context))}
     }
 
     /// Actual packed token lookup on the native inference backend; document boundaries are caller-owned.

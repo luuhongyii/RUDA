@@ -18,6 +18,7 @@ pub mod interpolate;
 
 mod dropout;
 mod embedding;
+mod identity;
 mod linear;
 mod lora;
 mod lora_record;
@@ -60,12 +61,17 @@ mod pos_encoding;
 mod rnn;
 mod rope_encoding;
 mod unfold;
+mod fold;
+mod cosine_similarity;
+mod pairwise_distance;
+mod pixel_shuffle;
 
 pub mod norm;
 pub use norm::{batch::*, group::*, instance::*, layer::*, local_response::*, rms::*};
 
 pub use dropout::*;
 pub use embedding::*;
+pub use identity::*;
 pub use linear::*;
 pub use lora::*;
 pub use lora_record::*;
@@ -95,3 +101,7 @@ pub use pos_encoding::*;
 pub use rnn::*;
 pub use rope_encoding::*;
 pub use unfold::*;
+pub use fold::*;
+pub use cosine_similarity::*;
+pub use pairwise_distance::*;
+pub use pixel_shuffle::*;

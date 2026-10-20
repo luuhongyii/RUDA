@@ -172,6 +172,7 @@ pub enum FuseOp {
     Rsqrt(UnaryFuseArgs),
     Silu(UnaryFuseArgs),
     Powi(BinaryFuseArgs),
+    Hypot(BinaryFuseArgs),
 }
 
 impl Display for FuseOp {
@@ -182,6 +183,7 @@ impl Display for FuseOp {
             FuseOp::Mul(args) => write!(f, "{} = {} * {}", args.out, args.lhs, args.rhs),
             FuseOp::Div(args) => write!(f, "{} = {} / {}", args.out, args.lhs, args.rhs),
             FuseOp::Powf(args) => write!(f, "{} = powf({}, {})", args.out, args.lhs, args.rhs),
+            FuseOp::Hypot(args) => write!(f, "{} = hypot({}, {})", args.out, args.lhs, args.rhs),
             FuseOp::Powi(args) => write!(f, "{} = powi({}, {})", args.out, args.lhs, args.rhs),
             FuseOp::Abs(args) => write!(f, "{} = abs({})", args.out, args.input),
             FuseOp::Exp(args) => write!(f, "{} = exp({})", args.out, args.input),
@@ -269,6 +271,7 @@ impl FuseOp {
             FuseOp::Mul(op) => op.lhs.precision().into_elem(),
             FuseOp::Div(op) => op.lhs.precision().into_elem(),
             FuseOp::Powf(op) => op.lhs.precision().into_elem(),
+            FuseOp::Hypot(op) => op.lhs.precision().into_elem(),
             FuseOp::Powi(op) => op.lhs.precision().into_elem(),
             FuseOp::Abs(op) => op.out.precision().into_elem(),
             FuseOp::Exp(op) => op.out.precision().into_elem(),
@@ -318,7 +321,7 @@ pub struct GlobalArgs {
     pub variables: MultiBlockVariables,
 }
 
-impl<R: Runtime> GlobalArgsLaunch<R> {
+impl<R: LaunchMarker> GlobalArgsLaunch<R> {
     pub fn required_address_type(&self) -> AddressType {
         self.tensors
             .values
@@ -380,10 +383,10 @@ unsafe impl Send for MultiBlockVariables {}
 unsafe impl Sync for MultiBlockVariables {}
 
 impl LaunchArg for MultiBlockVariables {
-    type RuntimeArg<R: Runtime> = ();
+    type RuntimeArg<R: LaunchMarker> = ();
     type CompilationArg = ();
 
-    fn register<R: Runtime>(_arg: Self::RuntimeArg<R>, _launcher: &mut KernelLauncher<R>) {}
+    fn register<R: LaunchMarker>(_arg: Self::RuntimeArg<R>, _launcher: &mut KernelLauncher<R>) {}
 
     fn expand(
         _arg: &Self::CompilationArg,
@@ -395,7 +398,7 @@ impl LaunchArg for MultiBlockVariables {
     }
 }
 
-impl<R: Runtime> Default for GlobalArgsLaunch<R> {
+impl<R: LaunchMarker> Default for GlobalArgsLaunch<R> {
     fn default() -> Self {
         Self {
             tensors: Default::default(),
@@ -408,13 +411,13 @@ impl<R: Runtime> Default for GlobalArgsLaunch<R> {
     }
 }
 
-impl<R: Runtime> core::fmt::Debug for GlobalArgsLaunch<R> {
+impl<R: LaunchMarker> core::fmt::Debug for GlobalArgsLaunch<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({:?})", self.tensors.values)
     }
 }
 
-impl<R: Runtime> GlobalArgsLaunch<R> {
+impl<R: LaunchMarker> GlobalArgsLaunch<R> {
     /// Get the shape of the given [argument](Arg).
     ///
     /// # Panics
@@ -640,6 +643,7 @@ impl FuseOp {
             | FuseOp::Mul(binary_fuse_args)
             | FuseOp::Div(binary_fuse_args)
             | FuseOp::Powf(binary_fuse_args)
+            | FuseOp::Hypot(binary_fuse_args)
             | FuseOp::Powi(binary_fuse_args)
             | FuseOp::Equal(binary_fuse_args)
             | FuseOp::Lower(binary_fuse_args)
@@ -796,6 +800,7 @@ impl From<ElemType> for FuseType {
                 FloatKind::F16 => Self::F16,
                 FloatKind::BF16 => Self::BF16,
                 FloatKind::F32 => Self::F32,
+                FloatKind::F64 => Self::F64,
                 FloatKind::Flex32 => Self::Flex32,
                 _ => panic!("Unsupported precision for fusion: {value}"),
             },

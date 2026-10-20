@@ -1,5 +1,5 @@
 use ruda_core::ir::{ConstantValue, ManagedVariable};
-use ruda::runtime::backend::Runtime;
+use crate::dsl::frontend::LaunchMarker;
 use num_traits::{NumCast, One, Zero};
 
 use crate::dsl::compute::KernelLauncher;
@@ -94,11 +94,11 @@ pub trait Numeric:
     }
 }
 
-/// Similar to [`ArgSettings`], however only for scalar types that don't depend on the [Runtime]
+/// Similar to [`ArgSettings`], however only for scalar types that don't depend on the [`ruda::runtime::backend::Runtime`]
 /// trait.
 pub trait ScalarArgSettings: Send + Sync + RudaPrimitive {
     /// Register the information to the [`KernelLauncher`].
-    fn register<R: Runtime>(&self, launcher: &mut KernelLauncher<R>);
+    fn register<R: LaunchMarker>(&self, launcher: &mut KernelLauncher<R>);
     fn expand_scalar(builder: &mut KernelBuilder) -> NativeExpand<Self> {
         builder
             .scalar(Self::as_type(&builder.scope).storage_type())
@@ -107,30 +107,30 @@ pub trait ScalarArgSettings: Send + Sync + RudaPrimitive {
 }
 
 impl<E: ScalarArgType> ScalarArgSettings for E {
-    fn register<R: Runtime>(&self, launcher: &mut KernelLauncher<R>) {
+    fn register<R: LaunchMarker>(&self, launcher: &mut KernelLauncher<R>) {
         launcher.register_scalar(*self);
     }
 }
 
 impl ScalarArgSettings for usize {
-    fn register<R: Runtime>(&self, launcher: &mut KernelLauncher<R>) {
+    fn register<R: LaunchMarker>(&self, launcher: &mut KernelLauncher<R>) {
         let value = InputScalar::new(*self, launcher.settings.address_type.unsigned_type());
         InputScalar::register(value, launcher);
     }
 }
 
 impl ScalarArgSettings for isize {
-    fn register<R: Runtime>(&self, launcher: &mut KernelLauncher<R>) {
+    fn register<R: LaunchMarker>(&self, launcher: &mut KernelLauncher<R>) {
         let value = InputScalar::new(*self, launcher.settings.address_type.signed_type());
         InputScalar::register(value, launcher);
     }
 }
 
 impl<T: ScalarArgSettings> LaunchArg for T {
-    type RuntimeArg<R: Runtime> = T;
+    type RuntimeArg<R: LaunchMarker> = T;
     type CompilationArg = ();
 
-    fn register<R: Runtime>(arg: Self::RuntimeArg<R>, launcher: &mut KernelLauncher<R>) {
+    fn register<R: LaunchMarker>(arg: Self::RuntimeArg<R>, launcher: &mut KernelLauncher<R>) {
         arg.register(launcher);
     }
 

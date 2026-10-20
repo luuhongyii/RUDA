@@ -41,13 +41,14 @@ pub fn pool_sequence<B: Backend>(hidden: Tensor<B,3>,visible: Tensor<B,2,Bool>,
     let storage = hidden.dtype();
     assert!(matches!(storage,DType::F16|DType::BF16|DType::F32|DType::F64),"pooling requires supported floating storage");
     let compute = if storage == DType::F64 { DType::F64 } else { DType::F32 };
+    let context = hidden.autodiff_context().merge(visible.autodiff_context());
     if batch == 0 || tokens == 0 {
-        let excluded = Tensor::<B,3,Bool>::zeros(hidden.dims(),&device).bool_not();
+        let excluded = Tensor::<B,3,Bool>::zeros(hidden.dims(),&device).with_autodiff_context(context).bool_not();
         let zero = hidden.cast(compute).mask_fill(excluded,0).sum().reshape([1,1]);
         return SequencePoolOutput {
-            values:(Tensor::<B,2>::zeros([batch,width],(&device,compute))+zero).cast(storage),
-            valid_rows:Tensor::<B,1,Bool>::zeros([batch],&device),
-            token_counts:Tensor::<B,1,Int>::zeros([batch],(&device,DType::I64)),
+            values:(Tensor::<B,2>::zeros([batch,width],(&device,compute)).with_autodiff_context(context)+zero).cast(storage),
+            valid_rows:Tensor::<B,1,Bool>::zeros([batch],&device).with_autodiff_context(context),
+            token_counts:Tensor::<B,1,Int>::zeros([batch],(&device,DType::I64)).with_autodiff_context(context),
         };
     }
     assert!(tokens <= i64::MAX as usize,"sequence token indices exceed I64");
@@ -65,6 +66,7 @@ pub fn pool_sequence<B: Backend>(hidden: Tensor<B,3>,visible: Tensor<B,2,Bool>,
         }
         SequencePooling::First | SequencePooling::Last => {
             let positions = Tensor::<B,1,Int>::arange(0..tokens as i64,(&device,DType::I64))
+                .with_autodiff_context(context)
                 .reshape([1,tokens]).expand([batch,tokens]);
             let positions = if matches!(pooling,SequencePooling::First) {
                 positions.mask_fill(visible.clone().bool_not(),tokens as i64).min_dim(1)
@@ -98,16 +100,18 @@ pub fn pool_packed_sequences<B: Backend>(hidden: Tensor<B,2>,layout: &PackedSequ
     let device = hidden.device();
     let storage = hidden.dtype();
     assert!(matches!(storage,DType::F16|DType::BF16|DType::F32|DType::F64),"packed pooling requires supported floating storage");
+    let mut context = hidden.autodiff_context();
     if let Some(mask) = &visible {
         assert_eq!(mask.dims(),[tokens],"packed pooling visibility differs from actual tokens");
         assert_eq!(mask.device(),device,"packed pooling payload/mask devices differ");
+        context = context.merge(mask.autodiff_context());
     }
     if layout.documents() == 0 {
-        let excluded = Tensor::<B,2,Bool>::zeros(hidden.dims(),&device).bool_not();
+        let excluded = Tensor::<B,2,Bool>::zeros(hidden.dims(),&device).with_autodiff_context(context).bool_not();
         let compute = if storage == DType::F64 { DType::F64 } else { DType::F32 };
         let zero = hidden.cast(compute).mask_fill(excluded,0).sum().reshape([1,1]);
-        return SequencePoolOutput {values:(Tensor::<B,2>::zeros([0,width],(&device,compute))+zero).cast(storage),
-            valid_rows:Tensor::<B,1,Bool>::zeros([0],&device),token_counts:Tensor::<B,1,Int>::zeros([0],(&device,DType::I64))};
+        return SequencePoolOutput {values:(Tensor::<B,2>::zeros([0,width],(&device,compute)).with_autodiff_context(context)+zero).cast(storage),
+            valid_rows:Tensor::<B,1,Bool>::zeros([0],&device).with_autodiff_context(context),token_counts:Tensor::<B,1,Int>::zeros([0],(&device,DType::I64)).with_autodiff_context(context)};
     }
     let mut values = Vec::with_capacity(layout.documents());
     let mut valid = Vec::with_capacity(layout.documents());
@@ -117,7 +121,7 @@ pub fn pool_packed_sequences<B: Backend>(hidden: Tensor<B,2>,layout: &PackedSequ
         let input = hidden.clone().slice_dim(0,boundary[0]..boundary[1]).reshape([1,length,width]);
         let mask = if let Some(mask) = &visible {
             mask.clone().slice_dim(0,boundary[0]..boundary[1]).reshape([1,length])
-        } else { Tensor::<B,2,Bool>::zeros([1,length],&device).bool_not() };
+        } else { Tensor::<B,2,Bool>::zeros([1,length],&device).with_autodiff_context(context).bool_not() };
         let pooled = pool_sequence(input,mask,pooling);
         values.push(pooled.values);
         valid.push(pooled.valid_rows);

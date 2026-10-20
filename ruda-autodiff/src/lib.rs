@@ -42,11 +42,15 @@ pub(crate) mod tensor;
 pub(crate) mod utils;
 
 mod backend;
+mod context;
 
 pub(crate) mod runtime;
 
 pub use backend::*;
-pub use tensor::AutodiffQTensor;
+pub use tensor::{AutodiffQTensor, AutodiffValue};
+
+#[cfg(test)]
+mod ownership_tests;
 
 /// A facade around for HashMap and HashSet.
 /// This avoids elaborate import wrangling having to happen in every module.

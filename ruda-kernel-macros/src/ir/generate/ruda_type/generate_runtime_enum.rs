@@ -296,6 +296,7 @@ impl RudaTypeEnum {
 
             impl #generics_impl core::hash::Hash for #name #generic_names #where_clause {
                 fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                    core::hash::Hash::hash(&core::mem::discriminant(self), state);
                     match self {
                         Self::Comptime { discriminant, value } => {
                             discriminant.hash(state);
@@ -333,6 +334,7 @@ impl RudaTypeEnum {
     fn register_impl_runtime(&self) -> proc_macro2::TokenStream {
         let launch_arg = prelude_type("LaunchArg");
         let kernel_launcher = prelude_type("KernelLauncher");
+        let launch_marker = prelude_type("LaunchMarker");
         let args_name = Ident::new(&format!("{}Args", self.ident), Span::call_site());
         let compilation_arg_name =
             Ident::new(&format!("{}CompilationArg", self.ident), Span::call_site());
@@ -380,7 +382,7 @@ impl RudaTypeEnum {
         );
 
         quote! {
-            fn register<R: Runtime>(runtime_arg: Self::RuntimeArg<R>, launcher: &mut #kernel_launcher<R>) -> Self::CompilationArg {
+            fn register<R: #launch_marker>(runtime_arg: Self::RuntimeArg<R>, launcher: &mut #kernel_launcher<R>) -> Self::CompilationArg {
                 match runtime_arg {
                     #launch_name::Comptime(value) => {
                         let discriminant = #body_discriminant;

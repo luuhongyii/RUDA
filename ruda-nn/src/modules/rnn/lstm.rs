@@ -151,6 +151,23 @@ impl LstmConfig {
 }
 
 impl<B: Backend> Lstm<B> {
+    pub(super) fn as_ref(&self) -> LstmRef<'_, B> {
+        LstmRef {
+            input_gate: &self.input_gate,
+            forget_gate: &self.forget_gate,
+            output_gate: &self.output_gate,
+            cell_gate: &self.cell_gate,
+            d_hidden: self.d_hidden,
+            batch_first: self.batch_first,
+            reverse: self.reverse,
+            clip: self.clip,
+            input_forget: self.input_forget,
+            gate_activation: &self.gate_activation,
+            cell_activation: &self.cell_activation,
+            hidden_activation: &self.hidden_activation,
+        }
+    }
+
     /// Applies the forward pass on the input tensor. This LSTM implementation
     /// returns the state for each element in a sequence (i.e., across seq_length) and a final state.
     ///
@@ -173,6 +190,31 @@ impl<B: Backend> Lstm<B> {
         batched_input: Tensor<B, 3>,
         state: Option<LstmState<B, 2>>,
     ) -> (Tensor<B, 3>, LstmState<B, 2>) {
+        self.as_ref().forward(batched_input, state)
+    }
+}
+
+pub(super) struct LstmRef<'a, B: Backend> {
+    pub input_gate: &'a GateController<B>,
+    pub forget_gate: &'a GateController<B>,
+    pub output_gate: &'a GateController<B>,
+    pub cell_gate: &'a GateController<B>,
+    pub d_hidden: usize,
+    pub batch_first: bool,
+    pub reverse: bool,
+    pub clip: Option<f64>,
+    pub input_forget: bool,
+    pub gate_activation: &'a Activation<B>,
+    pub cell_activation: &'a Activation<B>,
+    pub hidden_activation: &'a Activation<B>,
+}
+
+impl<B: Backend> LstmRef<'_, B> {
+    pub(super) fn forward(
+        &self,
+        batched_input: Tensor<B, 3>,
+        state: Option<LstmState<B, 2>>,
+    ) -> (Tensor<B, 3>, LstmState<B, 2>) {
         // Convert to batch-first layout internally if needed
         let batched_input = if self.batch_first {
             batched_input
@@ -181,6 +223,10 @@ impl<B: Backend> Lstm<B> {
         };
 
         let device = batched_input.device();
+        let mut context = batched_input.autodiff_context();
+        if let Some(state) = &state {
+            context = context.merge(state.cell.autodiff_context()).merge(state.hidden.autodiff_context());
+        }
         let [batch_size, seq_length, _] = batched_input.dims();
 
         // Process sequence in forward or reverse order based on config
@@ -191,6 +237,7 @@ impl<B: Backend> Lstm<B> {
                 batch_size,
                 seq_length,
                 &device,
+                context,
             )
         } else {
             self.forward_iter(
@@ -199,6 +246,7 @@ impl<B: Backend> Lstm<B> {
                 batch_size,
                 seq_length,
                 &device,
+                context,
             )
         };
 
@@ -219,15 +267,16 @@ impl<B: Backend> Lstm<B> {
         batch_size: usize,
         seq_length: usize,
         device: &B::Device,
+        context: ruda_model::tensor::AutodiffContext,
     ) -> (Tensor<B, 3>, LstmState<B, 2>) {
         let mut batched_hidden_state =
-            Tensor::empty([batch_size, seq_length, self.d_hidden], device);
+            Tensor::empty([batch_size, seq_length, self.d_hidden], device).with_autodiff_context(context);
 
         let (mut cell_state, mut hidden_state) = match state {
             Some(state) => (state.cell, state.hidden),
             None => (
-                Tensor::zeros([batch_size, self.d_hidden], device),
-                Tensor::zeros([batch_size, self.d_hidden], device),
+                Tensor::zeros([batch_size, self.d_hidden], device).with_autodiff_context(context),
+                Tensor::zeros([batch_size, self.d_hidden], device).with_autodiff_context(context),
             ),
         };
 
@@ -405,6 +454,28 @@ impl<B: Backend> BiLstm<B> {
     /// - state: A `LstmState` represents the final forward and reverse states. Both `state.cell` and
     ///   `state.hidden` have the shape `[2, batch_size, hidden_size]`.
     pub fn forward(
+        &self,
+        batched_input: Tensor<B, 3>,
+        state: Option<LstmState<B, 3>>,
+    ) -> (Tensor<B, 3>, LstmState<B, 3>) {
+        BiLstmRef {
+            forward: self.forward.as_ref(),
+            reverse: self.reverse.as_ref(),
+            d_hidden: self.d_hidden,
+            batch_first: self.batch_first,
+        }.forward(batched_input, state)
+    }
+}
+
+pub(super) struct BiLstmRef<'a, B: Backend> {
+    pub forward: LstmRef<'a, B>,
+    pub reverse: LstmRef<'a, B>,
+    pub d_hidden: usize,
+    pub batch_first: bool,
+}
+
+impl<B: Backend> BiLstmRef<'_, B> {
+    pub(super) fn forward(
         &self,
         batched_input: Tensor<B, 3>,
         state: Option<LstmState<B, 3>>,

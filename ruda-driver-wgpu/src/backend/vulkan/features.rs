@@ -19,6 +19,7 @@ pub struct ExtendedFeatures<'a> {
     pub buf_8: Option<PhysicalDevice8BitStorageFeatures<'a>>,
     pub subgroup_extended: Option<PhysicalDeviceShaderSubgroupExtendedTypesFeatures<'a>>,
     pub uniform_standard_layout: Option<PhysicalDeviceUniformBufferStandardLayoutFeatures<'a>>,
+    pub variable_pointers: Option<PhysicalDeviceVariablePointersFeatures<'a>>,
 
     // extensions
     pub cooperative_matrix: Option<PhysicalDeviceCooperativeMatrixFeaturesKHR<'a>>,
@@ -37,6 +38,7 @@ pub struct ExtendedFeatures<'a> {
 
     // Nvidia
     pub nv_atomic_float_vector: Option<PhysicalDeviceShaderAtomicFloat16VectorFeaturesNV<'a>>,
+    pub nv_cooperative_matrix2: Option<PhysicalDeviceCooperativeMatrix2FeaturesNV<'a>>,
 
     pub max_spirv_version: (u8, u8),
     pub extensions: Vec<&'static CStr>,
@@ -114,6 +116,7 @@ impl<'a> ExtendedFeatures<'a> {
             KHR_8BIT_STORAGE_NAME; API_VERSION_1_2 => buf_8,
             KHR_SHADER_SUBGROUP_EXTENDED_TYPES_NAME; API_VERSION_1_2 => subgroup_extended,
             KHR_UNIFORM_BUFFER_STANDARD_LAYOUT_NAME; API_VERSION_1_2 => uniform_standard_layout,
+            KHR_VARIABLE_POINTERS_NAME; API_VERSION_1_1 => variable_pointers,
         );
 
         fill_opt!(self,
@@ -130,6 +133,7 @@ impl<'a> ExtendedFeatures<'a> {
             KHR_MAINTENANCE8_NAME => maintenance_8,
             KHR_MAINTENANCE9_NAME => maintenance_9,
             NV_SHADER_ATOMIC_FLOAT16_VECTOR_NAME => nv_atomic_float_vector,
+            NV_COOPERATIVE_MATRIX2_NAME => nv_cooperative_matrix2,
         );
     }
 
@@ -158,6 +162,7 @@ impl<'a> ExtendedFeatures<'a> {
         info = push_opt(info, &mut self.buf_8);
         info = push_opt(info, &mut self.subgroup_extended);
         info = push_opt(info, &mut self.uniform_standard_layout);
+        info = push_opt(info, &mut self.variable_pointers);
 
         // Extensions
         info = push_opt(info, &mut self.cooperative_matrix);
@@ -174,6 +179,7 @@ impl<'a> ExtendedFeatures<'a> {
 
         // Nvidia
         info = push_opt(info, &mut self.nv_atomic_float_vector);
+        info = push_opt(info, &mut self.nv_cooperative_matrix2);
 
         info
     }
@@ -202,6 +208,7 @@ impl<'a> ExtendedFeatures<'a> {
         features = push_opt(features, &mut self.buf_8);
         features = push_opt(features, &mut self.subgroup_extended);
         features = push_opt(features, &mut self.uniform_standard_layout);
+        features = push_opt(features, &mut self.variable_pointers);
 
         // Extensions
         features = push_opt(features, &mut self.cooperative_matrix);
@@ -218,6 +225,7 @@ impl<'a> ExtendedFeatures<'a> {
 
         // Nvidia
         features = push_opt(features, &mut self.nv_atomic_float_vector);
+        features = push_opt(features, &mut self.nv_cooperative_matrix2);
 
         unsafe {
             ash.get_physical_device_features2(adapter.raw_physical_device(), &mut features);
@@ -241,6 +249,7 @@ impl<'a> ExtendedFeatures<'a> {
             buf_8,
             subgroup_extended,
             uniform_standard_layout,
+            variable_pointers,
             // Extensions
             cooperative_matrix,
             atomic_float,
@@ -254,6 +263,7 @@ impl<'a> ExtendedFeatures<'a> {
             maintenance_8,
             maintenance_9,
             nv_atomic_float_vector,
+            nv_cooperative_matrix2,
         );
     }
 

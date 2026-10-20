@@ -36,6 +36,9 @@ impl<R: FusionRuntime> DeviceService for FusionServer<R> {
     fn stage() -> DeviceServiceStage {
         DeviceServiceStage::Upstream
     }
+    fn shutdown(&mut self) {
+        FusionServer::shutdown(self);
+    }
 }
 
 impl<R> Clone for GlobalFusionClient<R>
@@ -124,6 +127,12 @@ where
         outputs
     }
 
+    pub(crate) fn tag_shared_view(&self, stream: StreamId, source: TensorId, destination: TensorId) {
+        self.server
+            .submit_blocking(move |server| server.tag_shared_view(stream, source, destination))
+            .unwrap();
+    }
+
     /// Register all lazy computation.
     pub fn sync<Re: Send + 'static>(&self, sync_fn: impl FnOnce() -> Re + Send + 'static) -> Re {
         let id = StreamId::current();
@@ -133,6 +142,33 @@ where
                 sync_fn()
             })
             .unwrap()
+    }
+
+    pub(crate) fn abort_capture(&self, abort: impl FnOnce() + Send + 'static) {
+        let id = StreamId::current();
+        let result = self.server.submit_blocking(move |server| {
+            let discarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.discard_stream(id)));
+            abort();
+            if let Err(payload) = discarded { std::panic::resume_unwind(payload); }
+        });
+        if !std::thread::panicking() { result.unwrap(); }
+    }
+
+    pub(crate) fn profile_start<B: FusionBackend<FusionRuntime = R>>(&self, device: B::Device)
+        -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> {
+        let stream = StreamId::current();
+        self.server.submit_blocking(move |server| server.profile_start::<B>(stream, device))
+            .map_err(|error| ExecutionError::WithContext { reason: format!("Fusion profiling start: {error:?}") })?
+    }
+
+    pub(crate) fn profile_end(&self, token: ruda_tensor::ProfileToken, options: ruda_tensor::ProfileOptions)
+        -> Result<ruda_tensor::ProfileDuration, ExecutionError> {
+        self.server.submit_blocking(move |server| server.profile_end(token, options))
+            .map_err(|error| ExecutionError::WithContext { reason: format!("Fusion profiling end: {error:?}") })?
+    }
+
+    pub(crate) fn profile_abandon(&self, token: ruda_tensor::ProfileToken) {
+        self.server.submit(move |server| server.profile_abandon(token));
     }
 
     /// Flush the operations queue.

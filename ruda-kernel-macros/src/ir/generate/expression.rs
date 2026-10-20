@@ -21,6 +21,24 @@ macro_rules! error {
 impl Expression {
     pub fn to_tokens(&self, context: &mut Context) -> TokenStream {
         match self {
+            Expression::Binary { left, operator, right, .. }
+                if operator.is_assign() && matches!(**left, Expression::Unary { operator: Operator::Deref, .. }) =>
+            {
+                let Expression::Unary { input, .. } = &**left else { unreachable!() };
+                let reference = input.to_tokens(context);
+                let right = right.to_tokens(context);
+                let into_mut = frontend_type("IntoMut");
+                let frontend = frontend_path();
+                let name = operator.op_name();
+                let op = format_ident!("{}", name.strip_suffix("_assign_op").unwrap());
+                quote! {{
+                    let _reference = #reference;
+                    let _right = #right;
+                    let _left = #into_mut::expand_deref(_reference.clone(), scope);
+                    let _value = #frontend::#op::expand(scope, _left.into(), _right.into());
+                    #into_mut::expand_deref_assign(_reference.clone(), scope, _value.into());
+                }}
+            }
             Expression::Binary {
                 left,
                 operator,
@@ -83,7 +101,11 @@ impl Expression {
                 input,
                 operator: Operator::Deref,
                 ..
-            } => input.to_tokens(context),
+            } => {
+                let input = input.to_tokens(context);
+                let into_mut = frontend_type("IntoMut");
+                quote! {{ let _reference = #input; #into_mut::expand_deref(_reference.clone(), scope) }}
+            }
             Expression::Unary {
                 input,
                 operator,
@@ -133,6 +155,19 @@ impl Expression {
                 quote![#expand_elem::from_lit(scope, #value)]
             }
 
+            Expression::Assignment { left, right, .. }
+                if matches!(**left, Expression::Unary { operator: Operator::Deref, .. }) =>
+            {
+                let Expression::Unary { input, .. } = &**left else { unreachable!() };
+                let reference = input.to_tokens(context);
+                let right = right.to_tokens(context);
+                let into_mut = frontend_type("IntoMut");
+                quote! {{
+                    let _value = #right;
+                    let _reference = #reference;
+                    #into_mut::expand_deref_assign(_reference.clone(), scope, _value.into());
+                }}
+            }
             Expression::Assignment { left, right, .. }
                 if matches!(**left, Expression::Index { .. }) =>
             {
@@ -466,12 +501,25 @@ impl Expression {
                 quote![#init_ty::new(#len, #init)]
             }
             Expression::VerbatimTerminated { tokens } => tokens.clone(),
-            Expression::Reference { inner } => {
-                if let Some(as_const) = inner.as_const(context) {
-                    quote![&#as_const]
+            Expression::Reference { inner, writable } => {
+                if let Some(as_const) = self.as_const(context) {
+                    as_const
+                } else if let Expression::Index { expr, index, .. } = &**inner {
+                    let expr = expr.to_tokens(context);
+                    let index = index.to_tokens(context);
+                    quote! {{
+                        let _array = #expr;
+                        let _index = #index;
+                        _array.clone().expand_index_reference(scope, _index.into(), #writable)
+                    }}
+                } else if let Expression::Unary { input, operator: Operator::Deref, .. } = &**inner {
+                    let input = input.to_tokens(context);
+                    let into_mut = frontend_type("IntoMut");
+                    quote! {{ let _reference = #input; #into_mut::expand_reborrow(_reference.clone(), scope, #writable) }}
                 } else {
                     let inner = inner.to_tokens(context);
-                    quote![#inner]
+                    let into_mut = frontend_type("IntoMut");
+                    quote! {{ let _value = #inner; #into_mut::expand_reference(_value.clone(), scope, #writable) }}
                 }
             }
             Expression::StructInit { path, fields } => {
@@ -884,10 +932,16 @@ fn map_args(args: &[Expression], context: &mut Context) -> (Vec<TokenStream>, Ve
             if matches!(value, Expression::Closure { .. }) {
                 quote![]
             } else {
-                let tokens = value
-                    .as_const(context)
-                    .unwrap_or_else(|| value.to_tokens(context));
-                quote_spanned![tokens.span()=> let #i = #tokens;]
+                if let Some(tokens) = value.as_const(context) {
+                    quote_spanned![tokens.span()=> let #i = #tokens;]
+                } else {
+                    let tokens = value.to_tokens(context);
+                    let into_mut = frontend_type("IntoMut");
+                    quote_spanned![tokens.span()=> let #i = {
+                        let _value = #tokens;
+                        #into_mut::expand_reference_value(_value.into(), scope)
+                    };]
+                }
             }
         })
         .collect();
@@ -897,6 +951,8 @@ fn map_args(args: &[Expression], context: &mut Context) -> (Vec<TokenStream>, Ve
         .map(|(name, value)| {
             if matches!(value, Expression::Closure { .. }) {
                 value.to_tokens(context)
+            } else if !value.is_const() {
+                quote![#name]
             } else {
                 quote![#name.into()]
             }
@@ -921,10 +977,11 @@ fn init_fields<'a>(
         } else {
             it.to_tokens(context)
         };
+        let into_mut = frontend_type("IntoMut");
         quote! {
             #pat: {
                 let _init = #it;
-                _init
+                #into_mut::expand_reference_value(_init.clone(), scope)
             }
         }
     })

@@ -1,4 +1,5 @@
 use super::*;
+use ruda_core::ir::{DeviceIdentity, PciVendor, PhysicalDevice};
 
 impl DeviceService for HipServer {
     fn init(device_id: ruda_core::device::DeviceId) -> Self {
@@ -7,7 +8,10 @@ impl DeviceService for HipServer {
         #[allow(unused_assignments)]
         let mut prop_warp_size = 0;
         #[allow(unused_assignments)]
-        let mut prop_arch_name = "";
+        let mut prop_arch_name = String::new();
+        let prop_name;
+        let mut physical = PhysicalDevice::default();
+        physical.vendor = Some(PciVendor::Amd);
         #[allow(unused_assignments)]
         let mut prop_max_shared_memory_size = 0;
         #[allow(unused_assignments)]
@@ -29,8 +33,13 @@ impl DeviceService for HipServer {
             let ll_device_props = ll_device_props.assume_init();
             prop_warp_size = ll_device_props.warpSize;
             prop_arch_name = CStr::from_ptr(ll_device_props.gcnArchName.as_ptr())
-                .to_str()
-                .unwrap();
+                .to_string_lossy().into_owned();
+            prop_name = CStr::from_ptr(ll_device_props.name.as_ptr()).to_string_lossy().into_owned();
+            #[cfg(windows)]
+            {
+                let luid = ll_device_props.luid.map(|byte| byte as u8);
+                physical.luid = (luid != [0; 8]).then(|| ruda_core::ir::AdapterLuid::new(luid));
+            }
             prop_max_shared_memory_size = ll_device_props.sharedMemPerBlock;
             max_ruda_count = (
                 ll_device_props.maxGridSize[0] as u32,
@@ -46,7 +55,15 @@ impl DeviceService for HipServer {
             mem_alignment = usize::max(mem_alignment, ll_device_props.textureAlignment);
             mem_alignment = usize::max(mem_alignment, ll_device_props.surfaceAlignment);
         };
-        let normalized_arch_name = prop_arch_name.split(':').next().unwrap_or(prop_arch_name);
+        let mut bus_id = [0u8; 32];
+        let status = unsafe {
+            ruda_hip_sys::hipDeviceGetPCIBusId(bus_id.as_mut_ptr().cast(), bus_id.len() as _, device.index as _)
+        };
+        if status == HIP_SUCCESS {
+            physical.pci_address = CStr::from_bytes_until_nul(&bus_id).ok()
+                .and_then(|id| id.to_str().ok()?.parse().ok());
+        }
+        let normalized_arch_name = prop_arch_name.split(':').next().unwrap_or(&prop_arch_name);
         let arch = AMDArchitecture::parse(normalized_arch_name).unwrap();
         assert_eq!(prop_warp_size as u32, arch.warp_size());
 
@@ -79,10 +96,8 @@ impl DeviceService for HipServer {
             );
             total
         };
-        let mem_properties = MemoryDeviceProperties {
-            max_page_size: max_memory as u64 / 4,
-            alignment: mem_alignment as u64,
-        };
+        let mem_properties = MemoryDeviceProperties::new(max_memory as u64 / 4, mem_alignment as u64)
+            .with_max_memory(max_memory as u64);
 
         let supported_wmma_combinations = HipWmmaCompiler::supported_wmma_combinations(&arch);
         let supported_mma_combinations = HipWmmaCompiler::supported_mma_combinations(&arch);
@@ -91,6 +106,7 @@ impl DeviceService for HipServer {
 
         let topology = HardwareProperties {
             load_width: 128,
+            vector_register_count: None,
             plane_size_min: prop_warp_size as u32,
             plane_size_max: prop_warp_size as u32,
             max_bindings: crate::device::AMD_MAX_BINDINGS,
@@ -106,15 +122,21 @@ impl DeviceService for HipServer {
                 Some(16)
             },
             num_cpu_cores: None,
+            last_level_cache_size: None,
             max_vector_size: VectorSize::MAX,
+            ruda_mma_reserved_shared_memory: 0,
         };
 
         let mut device_props = DeviceProperties::new(
             Default::default(),
             mem_properties.clone(),
             topology,
-            TimingMethod::System,
-        );
+            TimingMethod::Device,
+        ).with_identity(DeviceIdentity {
+            name: prop_name,
+            fingerprint: format!("hip-subgroup-v11-{prop_arch_name}"),
+            physical: Some(physical),
+        });
         register_supported_types(&mut device_props);
 
         // TODO look into unsafeAtomicAdd (https://github.com/ROCm/HIP/issues/3573120)
@@ -123,7 +145,9 @@ impl DeviceService for HipServer {
 
         device_props.features.memory_reinterpret = true;
         device_props.features.alignment = true;
+        device_props.features.device_memory_scope = true;
         device_props.features.plane.insert(Plane::Ops);
+        device_props.features.plane.insert(Plane::Sync);
         device_props.features.plane.insert(Plane::Packed);
         device_props
             .features
@@ -138,13 +162,16 @@ impl DeviceService for HipServer {
             warp_size: arch.warp_size(),
             supports_features: CppSupportedFeatures {
                 fast_math: true,
+                device_memory_scope: true,
                 ..Default::default()
             },
         };
         let hip_ctx = HipContext::new(comp_opts, device_props.clone());
         let logger = Arc::new(ServerLogger::default());
         let policy = PitchedMemoryLayoutPolicy::new(device_props.memory.alignment as usize);
-        let utilities = ServerUtilities::new(device_props, logger, (), policy);
+        let utilities = ServerUtilities::new(
+            ruda_core::device::ServiceId::of::<Self>(device_id), device_props, logger, (), policy,
+        );
         let options = RuntimeOptions::default();
 
         // SAFETY: `is_integrated_gpu` calls HIP FFI functions with a valid device index.

@@ -5,7 +5,10 @@ use ruda_tensor_device::DeviceBackend;
 
 pub use ruda_driver_hip::AmdDevice as RocmDevice;
 
-use ruda_driver_hip::HipRuntime;
+pub use ruda_driver_hip::HipRuntime;
+
+/// ROCm without the Fusion decorator, independent of enabled Cargo features.
+pub type RocmNative<F = f32, I = i32, B = u8> = DeviceBackend<HipRuntime, F, I, B>;
 
 #[cfg(not(feature = "fusion"))]
 pub type Rocm<F = f32, I = i32, B = u8> = DeviceBackend<HipRuntime, F, I, B>;

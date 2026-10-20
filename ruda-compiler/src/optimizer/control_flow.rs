@@ -42,6 +42,8 @@ pub enum ControlFlow {
     /// A return statement. This should only occur once in the program and all other returns should
     /// instead branch to this single return block.
     Return,
+    /// Value returned by a device function through the common return block.
+    ReturnValue(Variable),
     /// Unreachable control flow
     Unreachable,
     /// No special control flow. The block must have exactly one edge that should be followed.
@@ -92,6 +94,29 @@ impl Optimizer {
                 let current_block = self.current_block.take().unwrap();
                 let loop_break = self.loop_break.back().expect("Can't break outside loop");
                 self.program.add_edge(current_block, *loop_break, 0);
+                ControlFlowAction::AbortBlock
+            }
+            Branch::ReturnValue(value) => {
+                let slot = if let Some(slot) = self.return_value {
+                    assert_eq!(slot.ty, value.ty, "inconsistent function return types");
+                    slot
+                } else {
+                    let slot = *self.allocator.create_local_restricted(value.ty);
+                    let VariableKind::LocalMut { id } = slot.kind else { unreachable!() };
+                    self.program.variables.insert(id, slot.ty);
+                    let return_block = self.node_ids().into_iter().find(|block| {
+                        matches!(*self.program[*block].control_flow.borrow(), ControlFlow::Return)
+                    }).expect("function must have a common return block");
+                    *self.program[return_block].control_flow.borrow_mut() = ControlFlow::ReturnValue(slot);
+                    self.return_value = Some(slot);
+                    slot
+                };
+                self.current_block_mut().ops.borrow_mut().push(
+                    Instruction::new(Operation::Copy(value), slot),
+                );
+                let current_block = self.current_block.take().unwrap();
+                let ret = self.ret();
+                self.program.add_edge(current_block, ret, 0);
                 ControlFlowAction::AbortBlock
             }
         }

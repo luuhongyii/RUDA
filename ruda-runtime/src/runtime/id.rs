@@ -104,6 +104,11 @@ impl Display for KernelId {
 }
 
 impl KernelId {
+    /// The concrete kernel type represented by this ID.
+    pub fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+
     /// Create a new [kernel id](KernelId) for a type.
     pub fn new<T: 'static>() -> Self {
         Self {

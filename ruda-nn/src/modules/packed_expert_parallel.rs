@@ -29,7 +29,7 @@ impl<B:Backend> AwqExpertPartitionContext<B> {
             let local=entry.local.val();assert_eq!(local.device(),value.device(),"tied AWQ word source devices differ");
             let (id,_,mapper)=parameter.consume();return Param::from_mapped_value(id,local,mapper);
         }
-        let count=range.len();let mut local=Tensor::<B,3,Int>::empty([count,rows,columns],(&value.device(),DType::I32));
+        let count=range.len();let mut local=Tensor::<B,3,Int>::empty([count,rows,columns],(&value.device(),DType::I32)).with_autodiff_context(value.autodiff_context());
         if count!=0 {local=local.slice_assign([0..count,0..rows,0..columns],value.slice([range.clone(),0..rows,0..columns]));}
         let local=parameter.map(|_|local);self.words.insert(local.id,WordEntry {shape,range,local:local.clone()});local
     }
@@ -41,7 +41,7 @@ impl<B:Backend> AwqExpertPartitionContext<B> {
             let local=entry.local.val();assert_eq!(local.dtype(),value.dtype(),"tied AWQ bias storage differs");assert_eq!(local.device(),value.device(),"tied AWQ bias devices differ");
             let (id,_,mapper)=parameter.consume();return Param::from_mapped_value(id,local,mapper);
         }
-        let count=range.len();let width=shape[1];let mut local=Tensor::<B,2>::empty([count,width],(&value.device(),value.dtype()));
+        let count=range.len();let width=shape[1];let mut local=Tensor::<B,2>::empty([count,width],(&value.device(),value.dtype())).with_autodiff_context(value.autodiff_context());
         if count!=0 {local=local.slice_assign([0..count,0..width],value.slice([range.clone(),0..width]));}
         let local=parameter.map(|_|local.detach().set_require_grad(false));self.bias.insert(local.id,BiasEntry {shape,range,local:local.clone()});local
     }
@@ -190,7 +190,7 @@ impl<B:Backend> PackedExpertPartitionContext<B> {
             let local=entry.local.val();assert_eq!(local.device(),value.device(),"tied NF4 source byte devices differ");
             let (id,_,mapper)=source.consume();return Param::from_mapped_value(id,local,mapper);
         }
-        let mut local=Tensor::<B,1,Int>::empty([range.len()],(&value.device(),DType::U8));
+        let mut local=Tensor::<B,1,Int>::empty([range.len()],(&value.device(),DType::U8)).with_autodiff_context(value.autodiff_context());
         if !range.is_empty() {local=local.slice_assign([0..range.len()],value.slice([range.clone()]));}
         let local=source.map(|_|local);self.bytes.insert(local.id,ByteWindowEntry {shape,range,local:local.clone()});local
     }
@@ -203,7 +203,7 @@ impl<B:Backend> PackedExpertPartitionContext<B> {
             let local=entry.local.val();assert_eq!(local.device(),value.device(),"tied NF4 source scale devices differ");
             let (id,_,mapper)=source.consume();return Param::from_mapped_value(id,local,mapper);
         }
-        let mut local=Tensor::<B,1>::empty([range.len()],(&value.device(),DType::F32));
+        let mut local=Tensor::<B,1>::empty([range.len()],(&value.device(),DType::F32)).with_autodiff_context(value.autodiff_context());
         if !range.is_empty() {local=local.slice_assign([0..range.len()],value.slice([range.clone()]));}
         let local=source.map(|_|local.detach().set_require_grad(false));self.scales.insert(local.id,ScaleWindowEntry {shape,range,local:local.clone()});local
     }

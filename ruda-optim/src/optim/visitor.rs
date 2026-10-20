@@ -2,6 +2,7 @@
 use super::GradientsParams;
 use ruda_model::module::{AutodiffModule, ModuleVisitor, Param, ParamId};
 use ruda_model::tensor::{Tensor, backend::AutodiffBackend};
+use ruda_model::tensor::ops::FloatTensorOps;
 use core::marker::PhantomData;
 use hashbrown::HashSet;
 
@@ -44,22 +45,28 @@ where
     M: AutodiffModule<B>,
 {
     fn visit_float<const D: usize>(&mut self, param: &Param<Tensor<B, D>>) {
-        if let Some(filter) = self.filter.as_ref()
-            && !filter.contains(&param.id)
-        {
-            return;
-        }
-
-        let Some(grad) = param.val().grad_remove(self.grads) else {
-            return;
+        use ruda_model::tensor::TensorPrimitive;
+        let mut extract = |id: ParamId, value: &dyn core::any::Any| {
+            if self.filter.as_ref().is_some_and(|filter| !filter.contains(&id)) { return; }
+            let value = value.downcast_ref::<TensorPrimitive<B>>()
+                .expect("Reparameterization parameter backend mismatch");
+            let grad = match value {
+                TensorPrimitive::Float(value) => {
+                    if !B::float_is_require_grad(value) { return; }
+                    B::grad_remove(value, self.grads)
+                }
+                TensorPrimitive::QFloat(value) => B::q_grad_remove(value, self.grads),
+            };
+            let Some(grad) = grad else { return; };
+            let grad = match self.grads_params.container.remove::<B::InnerBackend>(&id) {
+                Some(TensorPrimitive::Float(previous)) => B::InnerBackend::float_add(previous, grad),
+                Some(TensorPrimitive::QFloat(_)) => panic!("Parameter gradient cannot be quantized"),
+                None => grad,
+            };
+            self.grads_params.container.register::<B::InnerBackend>(id, TensorPrimitive::Float(grad));
         };
-
-        let grad = match self.grads_params.remove::<B::InnerBackend, D>(param.id) {
-            Some(previous) => previous.add(grad),
-            None => grad,
-        };
-        self.grads_params
-            .register::<B::InnerBackend, D>(param.id, grad);
+        extract(param.id, &param.base().into_primitive());
+        param.visit_reparameterization_primitives(&mut extract);
     }
 }
 

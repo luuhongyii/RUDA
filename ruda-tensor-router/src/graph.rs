@@ -7,13 +7,16 @@ pub(crate) fn graph_error(reason: impl Into<alloc::string::String>) -> Execution
     ExecutionError::Generic { reason: reason.into(), backtrace: BackTrace::capture() }
 }
 
-pub(crate) struct CachedGraph {
+/// Validated relative graph that can bind and dispatch to executing or recording clients.
+#[derive(Debug)]
+pub struct CachedGraph {
     graph: GraphIr,
     layout: Layout,
     boundary: BTreeSet<TensorId>,
 }
 impl CachedGraph {
-    pub(crate) fn new(mut graph: GraphIr) -> Result<Self, ExecutionError> {
+    /// Validate the relative layout and complete tensor boundary.
+    pub fn new(mut graph: GraphIr) -> Result<Self, ExecutionError> {
         let (inputs, outputs) = GraphIr::classify(&graph.operations);
         if inputs != graph.inputs || outputs != graph.outputs {
             return Err(graph_error("graph boundary does not match its relative operations"));
@@ -25,7 +28,8 @@ impl CachedGraph {
         Ok(Self { graph, layout, boundary })
     }
 
-    pub(crate) fn replay(
+    /// Bind an invocation, allocating intermediate IDs and forwarding concrete operations.
+    pub fn replay(
         &self,
         bindings: GraphBindings,
         mut allocate: impl FnMut(&BTreeSet<TensorId>) -> Result<TensorId, ExecutionError>,
@@ -64,7 +68,7 @@ impl CachedGraph {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Layout {
     tensors: BTreeSet<TensorId>,
     shapes: usize,

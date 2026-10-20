@@ -1,0 +1,41 @@
+[package]
+name = "ruda-tensor-dispatch"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["std"]
+distributed = ["std", "ruda-tensor/distributed", "ruda-autodiff/distributed", "ruda-tensor-device?/distributed", "ruda-fusion?/distributed", "ruda-tensor-tch?/distributed", "ruda-tensor-remote?/distributed"]
+std = ["ruda-tensor/std", "ruda-core/std", "ruda-autodiff/std", "ruda-tensor-host/std", "ruda-tensor-capture?/std", "ruda-runtime?/runtime-std", "ruda-kernel?/std"]
+throughput = ["dep:ruda-runtime", "dep:ruda-kernel"]
+capture = ["dep:ruda-tensor-capture"]
+cuda = ["std", "throughput", "dep:ruda-tensor-device", "ruda-tensor-device/cuda", "ruda-tensor-device/std"]
+cpu = ["std", "throughput", "ruda-tensor/cpu", "dep:ruda-tensor-device", "ruda-tensor-device/std", "dep:ruda-driver-cpu"]
+wgpu = ["std", "throughput", "dep:ruda-tensor-wgpu", "ruda-tensor-wgpu/std"]
+vulkan = ["wgpu", "ruda-tensor-wgpu/vulkan"]
+metal = ["wgpu", "ruda-tensor-wgpu/metal"]
+webgpu = ["wgpu", "ruda-tensor-wgpu/webgpu"]
+rocm = ["std", "throughput", "dep:ruda-tensor-rocm", "ruda-tensor-rocm/std"]
+tch = ["std", "dep:ruda-tensor-tch"]
+remote = ["std", "dep:ruda-tensor-remote"]
+remote-server = ["remote", "ruda-tensor-remote/server", "ruda-tensor/graph"]
+iroh = ["remote", "ruda-tensor-remote/iroh"]
+fusion = ["std", "dep:ruda-fusion", "ruda-tensor-device?/fusion", "ruda-tensor-wgpu?/fusion", "ruda-tensor-rocm?/fusion", "ruda-tensor-capture?/fusion", "ruda-tensor-remote?/fusion"]
+autotune = ["ruda-tensor-device?/autotune", "ruda-tensor-wgpu?/autotune", "ruda-tensor-rocm?/autotune"]
+
+[dependencies]
+ruda-runtime = { path = "../ruda-runtime", default-features = false, features = ["runtime"], optional = true }
+ruda-kernel = { path = "../ruda-kernel", default-features = false, features = ["library"], optional = true }
+ruda-tensor = { path = "../ruda-tensor", default-features = false }
+ruda-core = { path = "../ruda-core", default-features = false, features = ["ir"] }
+ruda-autodiff = { path = "../ruda-autodiff", default-features = false }
+ruda-fusion = { path = "../ruda-fusion", default-features = false, features = ["std"], optional = true }
+ruda-tensor-host = { path = "../ruda-tensor-host", default-features = false }
+ruda-tensor-capture = { path = "../ruda-tensor-capture", default-features = false, optional = true }
+ruda-tensor-device = { path = "../ruda-tensor-device", default-features = false, optional = true }
+ruda-driver-cpu = { path = "../ruda-driver-cpu", optional = true }
+ruda-tensor-wgpu = { path = "../ruda-tensor-wgpu", default-features = false, optional = true }
+ruda-tensor-rocm = { path = "../ruda-tensor-rocm", default-features = false, optional = true }
+ruda-tensor-tch = { path = "../ruda-tensor-tch", default-features = false, optional = true }
+ruda-tensor-remote = { path = "../ruda-tensor-remote", default-features = false, features = ["client"], optional = true }

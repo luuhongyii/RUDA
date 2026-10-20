@@ -56,10 +56,10 @@ pub struct LinearViewLayoutLaunch {
 }
 
 impl ViewLayoutLaunchArg for LinearViewLayout {
-    type RuntimeArg<R: Runtime> = LinearViewLayoutLaunch;
+    type RuntimeArg<R: LaunchMarker> = LinearViewLayoutLaunch;
     type CompilationArg = LinearLayoutCompilationArg;
 
-    fn register<R: Runtime, B: BufferArg>(
+    fn register<R: LaunchMarker, B: BufferArg>(
         runtime_arg: Self::RuntimeArg<R>,
         buffer: &B,
         ty: Type,
@@ -128,7 +128,7 @@ impl LinearViewLayoutLaunch {
     }
 
     /// Construct a possibly broadcast linear layout from a tensor handle and reference handle
-    pub fn from_reference_handle<R: Runtime>(reference: TensorBinding<R>) -> Self {
+    pub fn from_reference_handle<R: LaunchMarker>(reference: TensorBinding<R>) -> Self {
         Self::from_reference_shape(reference.shape)
     }
 }
@@ -166,7 +166,7 @@ pub type LinearView<E, IO = ReadOnly> = View<E, Coords1d, IO>;
 pub type LinearViewLaunch<R> = ViewArg<Coords1d, R>;
 
 /// Create a linear layout from a handle and vector size
-pub fn linear_layout<R: Runtime>(
+pub fn linear_layout<R: LaunchMarker>(
     handle: &TensorBinding<R>,
     vector_size: VectorSize,
 ) -> LinearLayoutLaunch<R> {
@@ -179,13 +179,13 @@ pub fn linear_layout<R: Runtime>(
 }
 
 /// Create a linear tensor view from a handle
-pub fn linear_view<R: Runtime>(handle: TensorBinding<R>) -> LinearViewLaunch<R> {
+pub fn linear_view<R: LaunchMarker>(handle: TensorBinding<R>) -> LinearViewLaunch<R> {
     let layout = LinearViewLayoutLaunch::new();
     LinearViewLaunch::new_tensor::<LinearViewLayout>(handle.into_tensor_arg(), layout)
 }
 
 /// Create a possibly broadcast linear tensor view from a handle and reference handle
-pub fn linear_view_with_reference<R: Runtime>(
+pub fn linear_view_with_reference<R: LaunchMarker>(
     handle: TensorBinding<R>,
     reference: TensorBinding<R>,
 ) -> LinearViewLaunch<R> {
@@ -193,7 +193,7 @@ pub fn linear_view_with_reference<R: Runtime>(
     LinearViewLaunch::new_tensor::<LinearViewLayout>(handle.into_tensor_arg(), layout)
 }
 
-pub fn linear_view_alias<R: Runtime>(handle: &TensorBinding<R>, pos: usize) -> LinearViewLaunch<R> {
+pub fn linear_view_alias<R: LaunchMarker>(handle: &TensorBinding<R>, pos: usize) -> LinearViewLaunch<R> {
     let layout = LinearViewLayoutLaunch::new();
     LinearViewLaunch::new_tensor::<LinearViewLayout>(handle.as_alias(pos), layout)
 }

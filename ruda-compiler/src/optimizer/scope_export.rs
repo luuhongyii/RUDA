@@ -11,11 +11,15 @@ use super::{ControlFlow, NodeIndex, Optimizer};
 /// Run typed-pointer SSA optimization, then lower at a structured GPU backend boundary.
 /// Kernels without pointer values retain their existing compilation path.
 pub fn lower_optimized_pointer_values(scope: &mut Scope, dim: RudaDim) -> Result<(), String> {
+    scope.lower_reference_values()?;
     fn present(scope: &Scope) -> bool {
         scope.instructions.iter().any(|inst| {
             matches!(inst.operation, Operation::Pointer(_))
                 || inst.out.is_some_and(|out| out.ty.is_pointer())
                 || match &inst.operation {
+                    Operation::CoopMma(CoopMma::Elementwise { function, captures, .. }) => {
+                        captures.iter().any(|capture| capture.ty.is_pointer()) || present(&function.body)
+                    }
                     Operation::Branch(branch) => match branch {
                         Branch::If(b) => present(&b.scope),
                         Branch::IfElse(b) => present(&b.scope_if) || present(&b.scope_else),
@@ -79,6 +83,16 @@ impl Optimizer {
             }
         };
         self.visit_all(replace, replace);
+        scope.parameters = self.root_scope.parameters.iter().map(|parameter| {
+            let initial = match parameter.kind {
+                VariableKind::LocalMut { id } | VariableKind::LocalConst { id } => {
+                    Variable::new(VariableKind::Versioned { id, version: 0 }, parameter.ty)
+                }
+                _ => *parameter,
+            };
+            replacements.get(&initial).or_else(|| replacements.get(parameter))
+                .copied().unwrap_or(*parameter)
+        }).collect();
         for array in &self.program.const_arrays {
             let var = Variable::new(
                 VariableKind::ConstantArray {
@@ -252,6 +266,10 @@ impl Optimizer {
                 }
                 ControlFlow::Return => {
                     scope.register(Branch::Return);
+                    return Ok(false);
+                }
+                ControlFlow::ReturnValue(value) => {
+                    scope.register(Branch::ReturnValue(value));
                     return Ok(false);
                 }
                 ControlFlow::Unreachable => {

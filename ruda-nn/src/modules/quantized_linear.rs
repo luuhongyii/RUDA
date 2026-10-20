@@ -115,8 +115,8 @@ impl LoRALinearConfig {
         let device = weight.device();
         let mut adapter_a = LinearConfig::new(input, self.rank).with_bias(false).init(&device);
         let mut adapter_b = LinearConfig::new(self.rank, output).with_bias(false).with_initializer(Initializer::Zeros).init(&device);
-        adapter_a.weight = adapter_a.weight.map(|value| value.cast(adapter_dtype).detach().require_grad());
-        adapter_b.weight = adapter_b.weight.map(|value| value.cast(adapter_dtype).detach().require_grad());
+        adapter_a.weight = adapter_a.weight.map(|value| value.cast(adapter_dtype).detach()).set_require_grad(true);
+        adapter_b.weight = adapter_b.weight.map(|value| value.cast(adapter_dtype).detach()).set_require_grad(true);
         self.from_quantized_adapters(base, adapter_a, adapter_b, use_rslora)
     }
 
@@ -133,7 +133,7 @@ impl LoRALinearConfig {
         for value in [adapter_a.weight.val(), adapter_b.weight.val()] {
             assert_eq!(value.device(), weight.device(), "quantized LoRA adapter device differs");
             assert!(matches!(value.dtype(), DType::F16 | DType::BF16 | DType::F32), "quantized LoRA adapter precision unsupported");
-            assert!(!B::ad_enabled(&value.device()) || value.is_require_grad(), "quantized LoRA adapters must be trainable");
+            assert!(!value.is_autodiff() || value.is_require_grad(), "quantized LoRA adapters must be trainable");
         }
         let divisor = if use_rslora { (self.rank as f64).sqrt() } else { self.rank as f64 };
         QuantizedLoRALinear { base, adapter_a, adapter_b, dropout: DropoutConfig::new(self.dropout).init(), scale: self.alpha / divisor }

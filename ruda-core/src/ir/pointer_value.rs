@@ -29,6 +29,16 @@ pub enum PointerOp {
         address: Variable,
         ty: PointerValueType,
     },
+    UniformLoad {
+        pointer: Variable,
+    },
+    ReferenceLoad {
+        reference: Variable,
+    },
+    ReferenceStore {
+        reference: Variable,
+        value: Variable,
+    },
 }
 
 #[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -42,6 +52,9 @@ pub enum PointerOpCode {
     Atomic(AtomicOpCode),
     NativeAddress,
     FromNative(PointerValueType),
+    UniformLoad,
+    ReferenceLoad,
+    ReferenceStore,
 }
 
 #[cfg(feature = "ir-serde")]
@@ -107,6 +120,9 @@ impl OperationReflect for PointerOp {
             Self::Atomic { operation, .. } => PointerOpCode::Atomic(*operation),
             Self::NativeAddress(_) => PointerOpCode::NativeAddress,
             Self::FromNative { ty, .. } => PointerOpCode::FromNative(*ty),
+            Self::UniformLoad { .. } => PointerOpCode::UniformLoad,
+            Self::ReferenceLoad { .. } => PointerOpCode::ReferenceLoad,
+            Self::ReferenceStore { .. } => PointerOpCode::ReferenceStore,
         }
     }
     fn args(&self) -> Option<Vec<Variable>> {
@@ -115,7 +131,7 @@ impl OperationReflect for PointerOp {
             Self::Offset(p) => vec![p.lhs, p.rhs],
             Self::ReadOnly(p) | Self::NativeAddress(p) => vec![p.input],
             Self::Select(p) => vec![p.cond, p.then, p.or_else],
-            Self::Load { pointer, .. } => vec![*pointer],
+            Self::Load { pointer, .. } | Self::UniformLoad { pointer } => vec![*pointer],
             Self::Store { pointer, value, .. } => vec![*pointer, *value],
             Self::Atomic {
                 pointer, values, ..
@@ -125,6 +141,8 @@ impl OperationReflect for PointerOp {
                 args
             }
             Self::FromNative { address, .. } => vec![*address],
+            Self::ReferenceLoad { reference } => vec![*reference],
+            Self::ReferenceStore { reference, value } => vec![*reference, *value],
         })
     }
     fn from_code_and_args(code: Self::OpCode, args: &[Variable]) -> Option<Self> {
@@ -152,6 +170,9 @@ impl OperationReflect for PointerOp {
                 pointer: *pointer,
                 checked,
             },
+            (PointerOpCode::UniformLoad, [pointer]) => Self::UniformLoad {
+                pointer: *pointer,
+            },
             (PointerOpCode::Store(checked), [pointer, value]) => Self::Store {
                 pointer: *pointer,
                 value: *value,
@@ -168,6 +189,10 @@ impl OperationReflect for PointerOp {
             (PointerOpCode::FromNative(ty), [address]) => Self::FromNative {
                 address: *address,
                 ty,
+            },
+            (PointerOpCode::ReferenceLoad, [reference]) => Self::ReferenceLoad { reference: *reference },
+            (PointerOpCode::ReferenceStore, [reference, value]) => Self::ReferenceStore {
+                reference: *reference, value: *value,
             },
             _ => return None,
         })
@@ -192,6 +217,9 @@ impl PointerOp {
             }
         };
         match self {
+            Self::ReferenceLoad { .. } | Self::ReferenceStore { .. } => {
+                Err("reference binding operations must be lowered before pointer validation".into())
+            }
             Self::Address(p) => {
                 p.validate()?;
                 same(output()?.ty, p.ty.value_type())
@@ -221,6 +249,18 @@ impl PointerOp {
                     return Err("ordinary pointer load requires a non-atomic pointee".into());
                 }
                 same(output()?.ty, ty.pointee())
+            }
+            Self::UniformLoad { pointer } => {
+                let ty = pointer_ty(*pointer)?;
+                if ty.address_space != AddressSpace::Shared || ty.width == 0 {
+                    return Err("workgroup uniform load requires a shared-memory pointer".into());
+                }
+                let result = match ty.storage {
+                    StorageType::Scalar(_) | StorageType::Packed(_, _) => ty.pointee(),
+                    StorageType::Atomic(elem) => Type::scalar(elem).with_vector_size(ty.width),
+                    _ => return Err("workgroup uniform load requires a numeric or boolean pointee".into()),
+                };
+                same(output()?.ty, result)
             }
             Self::Store { pointer, value, .. } => {
                 let ty = pointer_ty(*pointer)?;
@@ -308,6 +348,9 @@ fn walk(
 ) -> Result<(), String> {
     for inst in &scope.instructions {
         visit(inst)?;
+        if let Operation::CoopMma(super::CoopMma::Elementwise { function, .. }) = &inst.operation {
+            walk(&function.body, visit)?;
+        }
         if let Operation::Branch(branch) = &inst.operation {
             match branch {
                 Branch::If(b) => walk(&b.scope, visit)?,
@@ -346,7 +389,18 @@ impl PointerValueLowering {
         };
         let mut edges = Vec::new();
         walk(scope, &mut |inst| {
-            if let Operation::Pointer(op) = &inst.operation {
+            if let Operation::CoopMma(super::CoopMma::Elementwise { function, captures, .. }) = &inst.operation {
+                for (formal, actual) in function.body.parameters[function.num_arguments..]
+                    .iter().zip(captures)
+                {
+                    if formal.ty.is_pointer() {
+                        if formal.ty != actual.ty {
+                            return Err("closure pointer capture type mismatch".into());
+                        }
+                        edges.push((*formal, *actual));
+                    }
+                }
+            } else if let Operation::Pointer(op) = &inst.operation {
                 op.validate(inst.out)?;
                 match op {
                     PointerOp::Address(p) => {
@@ -413,6 +467,7 @@ impl PointerValueLowering {
             let args = match &inst.operation {
                 Operation::Pointer(op) => op.args().unwrap_or_default(),
                 Operation::Copy(input) if input.ty.is_pointer() => vec![*input],
+                Operation::CoopMma(super::CoopMma::Elementwise { captures, .. }) => captures.clone(),
                 _ => vec![],
             };
             for var in args.into_iter().filter(|v| v.ty.is_pointer()) {
@@ -530,6 +585,17 @@ impl PointerValueLowering {
                     PointerOp::Load { .. } => {
                         scope.register(Instruction::new(TypedMemory::Load(ptr), out.unwrap()));
                     }
+                    PointerOp::UniformLoad { .. } => {
+                        scope.register(Instruction::new(
+                            Operator::WorkgroupUniformLoad(IndexOperator {
+                                list: base,
+                                index: handle.index,
+                                vector_size: if ty.width == base.ty.vector_size() { 0 } else { ty.width },
+                                unroll_factor,
+                            }),
+                            out.unwrap(),
+                        ));
+                    }
                     PointerOp::Store { value, .. } => {
                         scope.register(Instruction::new(
                             TypedMemory::Store {
@@ -597,6 +663,25 @@ impl PointerValueLowering {
                 }
             }
             Origin::Native => match op {
+                PointerOp::UniformLoad { .. } => {
+                    scope.register(Synchronization::SyncRuda);
+                    if ty.storage.is_atomic() {
+                        let atomic = *scope.create_local(ty.pointee());
+                        scope.register(Instruction::new(
+                            Operator::Reinterpret(UnaryOperator { input: handle.native.unwrap() }),
+                            atomic,
+                        ));
+                        scope.register(Instruction::new(
+                            AtomicOp::Load(UnaryOperator { input: atomic }),
+                            out.unwrap(),
+                        ));
+                    } else {
+                        scope.register(Instruction::new(
+                            Operator::NativeLoad(UnaryOperator { input: handle.native.unwrap() }),
+                            out.unwrap(),
+                        ));
+                    }
+                }
                 PointerOp::Load { .. } => {
                     scope.register(Instruction::new(
                         Operator::NativeLoad(UnaryOperator {
@@ -654,6 +739,9 @@ impl PointerValueLowering {
             let modes = inst.modes;
             match inst.operation {
                 Operation::Pointer(ref op) => match op {
+                    PointerOp::ReferenceLoad { .. } | PointerOp::ReferenceStore { .. } => {
+                        return Err("reference binding operations must be lowered before pointer values".into());
+                    }
                     PointerOp::Address(p) => {
                         let handle = self.handle(scope, inst.out());
                         let id = self.origin_id(Origin::Storage(p.base, p.unroll_factor));
@@ -754,6 +842,7 @@ impl PointerValueLowering {
                         }
                     }
                     PointerOp::Load { pointer, .. }
+                    | PointerOp::UniformLoad { pointer }
                     | PointerOp::Store { pointer, .. }
                     | PointerOp::Atomic { pointer, .. }
                     | PointerOp::NativeAddress(UnaryOperator { input: pointer }) => {
@@ -808,6 +897,50 @@ impl PointerValueLowering {
                     let source = self.handle(scope, input);
                     Self::copy(scope, dest, source);
                 }
+                Operation::CoopMma(super::CoopMma::Elementwise {
+                    input, mut function, captures,
+                }) => {
+                    let formals = function.body.parameters.clone();
+                    let mut parameters = formals[..function.num_arguments].to_vec();
+                    let mut lowered_captures = Vec::new();
+                    for (formal, actual) in formals[function.num_arguments..]
+                        .iter().copied().zip(captures)
+                    {
+                        if formal.ty.is_pointer() {
+                            parameters.extend(self.components(&function.body, formal));
+                            lowered_captures.extend(self.components(scope, actual));
+                            for origin in self.reachable[&formal].clone() {
+                                if let Origin::Storage(base, _) = self.origins[origin] {
+                                    parameters.push(base);
+                                    lowered_captures.push(base);
+                                }
+                            }
+                        } else {
+                            parameters.push(formal);
+                            lowered_captures.push(actual);
+                        }
+                    }
+                    function.body.parameters = parameters;
+                    self.lower_scope(&mut function.body)?;
+                    for var in function.body.allocator.take_variables() {
+                        if !var.ty.is_pointer() {
+                            function.body.add_local_mut(var);
+                        }
+                    }
+                    for handle in self.handles.values() {
+                        for var in [Some(handle.origin), Some(handle.index), handle.native].into_iter().flatten() {
+                            if matches!(var.kind, VariableKind::LocalMut { .. }) {
+                                function.body.add_local_mut(var);
+                            }
+                        }
+                    }
+                    scope.instructions.push(Instruction {
+                        operation: Operation::CoopMma(super::CoopMma::Elementwise {
+                            input, function, captures: lowered_captures,
+                        }),
+                        ..inst
+                    });
+                }
                 Operation::Branch(mut branch) => {
                     match &mut branch {
                         Branch::If(b) => self.lower_scope(&mut b.scope)?,
@@ -845,6 +978,7 @@ impl Scope {
     /// Lower pointer values to storage selectors and element offsets before the existing SSA pass.
     /// The pointee/address-space/access descriptors remain on each resulting memory operation.
     pub fn lower_pointer_values(&mut self) -> Result<(), String> {
+        self.lower_reference_values()?;
         let mut present = false;
         walk(self, &mut |inst| {
             present |= matches!(inst.operation, Operation::Pointer(_))

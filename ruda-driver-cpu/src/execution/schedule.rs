@@ -14,9 +14,14 @@ use std::sync::Arc;
 /// Defines tasks that can be scheduled on a cpu stream.
 pub enum ScheduleTask {
     /// Represents a task to write data to a buffer.
-    Write { data: Bytes, buffer: BytesResource },
+    Write {
+        data: Bytes,
+        buffer: BytesResource,
+        destination: ruda::runtime::server::Binding,
+    },
     /// Represents a task to execute a kernel.
     Execute {
+        execution: ruda::runtime::server::KernelExecution,
         mlir_engine: MlirEngine,
         bindings: BindingsResource,
         kind: ExecutionMode,
@@ -28,12 +33,13 @@ pub enum ScheduleTask {
 impl core::fmt::Debug for ScheduleTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Write { data, buffer } => f
+            Self::Write { data, buffer, .. } => f
                 .debug_struct("Write")
                 .field("data", data)
                 .field("buffer", buffer)
                 .finish(),
             Self::Execute {
+                execution: _,
                 mlir_engine: _,
                 bindings: _,
                 kind,
@@ -52,6 +58,8 @@ impl core::fmt::Debug for ScheduleTask {
 /// Represents a collection of resources and bindings for a compute task.
 #[derive(Debug)]
 pub struct BindingsResource {
+    pub bindings: Vec<ruda::runtime::server::Binding>,
+    pub declared_io: ruda_core::kernel::KernelIo,
     /// List of cpu resources used in the task.
     pub resources: Vec<BytesResource>,
     /// Metadata for uniform bindings.

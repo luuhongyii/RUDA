@@ -41,6 +41,12 @@ impl Emitter {
     pub fn vector_instruction(&mut self, instruction: &Instruction) -> Result<bool> {
         let output = instruction.out;
         match &instruction.operation {
+            Operation::Operator(Operator::Reinterpret(op))
+                if output.is_some_and(|out| out.ty.vector_size() != op.input.ty.vector_size()) =>
+            {
+                self.reinterpret_vector(output.unwrap(), op.input)?;
+                return Ok(true);
+            }
             Operation::Arithmetic(Arithmetic::Normalize(op)) => {
                 let out = output.ok_or_else(|| invalid("vector normalize requires output"))?;
                 self.vector_normalize(out, op.input)?;

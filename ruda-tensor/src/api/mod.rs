@@ -3,12 +3,16 @@ pub(crate) mod stats;
 pub(crate) mod check;
 
 mod autodiff;
+mod capture;
+pub use capture::{capture, CapturedGraph};
 mod base;
 mod bool;
 mod cartesian_grid;
 #[path = "cast.rs"]
 mod tensor_cast;
 mod float;
+mod einsum;
+pub use einsum::EinsumOperand;
 mod fmod;
 mod int;
 mod numeric;
@@ -55,8 +59,8 @@ pub use crate::moe_exchange::{MoeDispatched,MoeDispatchOps,MoeCombineSelection,M
 
 // Re-exported types
 pub use crate::{
-    BoolDType, BoolStore, DType, DataError, FloatDType, IntDType, TensorData, TensorMetadata,
-    TensorPrimitive, Tolerance,
+    AutodiffContext, BoolDType, BoolStore, DType, DataError, FloatDType, IntDType, GradientCheckpointingStrategy, TensorData, TensorMetadata,
+    TensorPrimitive, TensorReadError, Tolerance,
     distribution::*,
     element::*,
     indexing::*,
@@ -93,6 +97,9 @@ pub mod module;
 
 /// The signal processing module.
 pub mod signal;
+
+/// Vision operations on backend-generic tensors.
+pub mod vision;
 
 /// Operations on tensors module.
 pub mod ops {

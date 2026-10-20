@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
 
 use ruda_core::profile::{Duration, Instant, ProfileDuration, ProfileTicks};
 use ruda_kernel::dsl::{
@@ -10,6 +10,80 @@ use wgpu::{QUERY_SIZE, QuerySet, QuerySetDescriptor, QueryType};
 
 type QuerySetId = u64;
 
+const PROFILE_START_INDEX: u32 = 0;
+const PROFILE_END_INDEX: u32 = 1;
+
+/// Shared per-device limit for Metal's timestamp counter buffers.
+#[derive(Debug)]
+pub struct TimestampQuerySetBudget { live: AtomicU32, max: u32 }
+
+impl TimestampQuerySetBudget {
+    pub fn metal() -> Self {
+        let max = std::env::var("RUDA_MAX_METAL_TIMING_QUERY_SETS")
+            .ok().and_then(|value| value.parse().ok()).unwrap_or(28);
+        Self { live: AtomicU32::new(0), max }
+    }
+    pub fn unbounded() -> Self { Self { live: AtomicU32::new(0), max: u32::MAX } }
+    pub(crate) fn try_acquire(&self) -> bool {
+        let mut live = self.live.load(Ordering::Relaxed);
+        loop {
+            if live >= self.max { return false; }
+            match self.live.compare_exchange_weak(live, live + 1, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return true,
+                Err(actual) => live = actual,
+            }
+        }
+    }
+    fn release(&self, count: u32) { self.live.fetch_sub(count, Ordering::Relaxed); }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampSampling { InCommandStream, AtStageBoundaries }
+impl TimestampSampling {
+    pub fn new(backend: wgpu::Backend) -> Self {
+        if backend == wgpu::Backend::Metal { Self::AtStageBoundaries } else { Self::InCommandStream }
+    }
+    pub fn drains_before_window(self) -> bool { self == Self::AtStageBoundaries }
+    pub fn resolves_after_completion(self) -> bool { self == Self::AtStageBoundaries }
+}
+
+#[derive(Debug)]
+struct QuerySetAllocator {
+    budget: Arc<TimestampQuerySetBudget>,
+    held: u32,
+    created: Vec<QuerySet>,
+    reuse_idx: usize,
+}
+
+impl QuerySetAllocator {
+    fn new(budget: Arc<TimestampQuerySetBudget>) -> Self {
+        Self { budget, held: 1, created: Vec::new(), reuse_idx: 0 }
+    }
+    fn acquire(&mut self, device: &wgpu::Device) -> QuerySet {
+        if (self.created.len() as u32) < self.held || self.budget.try_acquire() {
+            if self.created.len() as u32 >= self.held { self.held += 1; }
+            let query_set = device.create_query_set(&QuerySetDescriptor {
+                label: Some("Ruda profile queries"), ty: QueryType::Timestamp, count: 2,
+            });
+            self.created.push(query_set.clone());
+            query_set
+        } else {
+            let query_set = self.created[self.reuse_idx % self.created.len()].clone();
+            self.reuse_idx = self.reuse_idx.wrapping_add(1);
+            query_set
+        }
+    }
+}
+impl Drop for QuerySetAllocator {
+    fn drop(&mut self) { self.budget.release(self.held); }
+}
+
+#[derive(Debug)]
+pub struct TimestampReadback {
+    pub commands: wgpu::CommandBuffer,
+    pub map_buffer: wgpu::Buffer,
+}
+
 #[derive(Debug)]
 /// Struct encapsulating how timings are captured on wgpu.
 pub struct QueryProfiler {
@@ -17,10 +91,12 @@ pub struct QueryProfiler {
     init_tokens: Vec<ProfilingToken>,
     query_set_pool: Vec<QuerySet>,
     query_sets: HashMap<QuerySetId, QuerySetItem>,
+    allocator: QuerySetAllocator,
     current: Option<u64>,
     counter_token: u64,
     counter_query_set: u64,
     cleanups: Vec<QuerySetId>,
+    sampling: TimestampSampling,
     queue_period: f64,
     epoch_tick: u64,
     epoch_instant: Instant,
@@ -124,7 +200,8 @@ fn get_cur_timestamp(queue: &wgpu::Queue, device: &wgpu::Device) -> u64 {
 }
 
 impl QueryProfiler {
-    pub fn new(queue: &wgpu::Queue, #[allow(unused)] device: &wgpu::Device) -> Self {
+    pub fn new(queue: &wgpu::Queue, #[allow(unused)] device: &wgpu::Device,
+        budget: Arc<TimestampQuerySetBudget>, sampling: TimestampSampling) -> Self {
         #[cfg(feature = "profile-tracy")]
         let sync_timestamps = get_cur_timestamp(queue, device);
 
@@ -138,10 +215,12 @@ impl QueryProfiler {
 
         Self {
             cleanups: Vec::new(),
+            sampling,
             counter_query_set: 0,
             counter_token: 0,
             query_sets: HashMap::new(),
             query_set_pool: Vec::new(),
+            allocator: QuerySetAllocator::new(budget),
             current: None,
             timestamps: HashMap::new(),
             init_tokens: Vec::new(),
@@ -170,17 +249,34 @@ impl QueryProfiler {
 
     pub fn error(&mut self, error: ProfileError) {
         self.timestamps.iter_mut().for_each(|(_key, value)| {
-            *value = Err(error.clone());
+            if let Ok(Timestamp { start: Some(start), .. }) = core::mem::replace(value, Err(error.clone())) {
+                if let Some(query_set) = self.query_sets.get_mut(&start) {
+                    query_set.num_ref -= 1;
+                    if query_set.num_ref == 0 { self.cleanups.push(start); }
+                }
+            }
         });
     }
+
+    pub fn abandon_profile(&mut self, token: ProfilingToken) {
+        self.init_tokens.retain(|pending| *pending != token);
+        if let Some(Ok(Timestamp { start: Some(start), .. })) = self.timestamps.remove(&token) {
+            if let Some(query_set) = self.query_sets.get_mut(&start) {
+                query_set.num_ref -= 1;
+                if query_set.num_ref == 0 { self.cleanups.push(start); }
+            }
+        }
+    }
+
+    pub fn sampling(&self) -> TimestampSampling { self.sampling }
 
     /// Stop the profiling on a device.
     pub fn stop_profile_setup(
         &mut self,
         token: ProfilingToken,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> Result<Option<wgpu::Buffer>, ProfileError> {
+    ) -> Result<Option<TimestampReadback>, ProfileError> {
+        self.init_tokens.retain(|pending| *pending != token);
         let timestamps =
             self.timestamps
                 .remove(&token)
@@ -220,11 +316,14 @@ impl QueryProfiler {
         let query_set_end = self.query_sets.get(end).ok_or_else(query_set_error)?;
 
         let size = QUERY_SIZE as u64;
-        encoder.resolve_query_set(&query_set_start.query_set, 0..1, &resolve_start, 0);
-        encoder.resolve_query_set(&query_set_end.query_set, 1..2, &resolve_end, 0);
-        encoder.copy_buffer_to_buffer(&resolve_start, 0, &map_buffer, 0, size);
-        encoder.copy_buffer_to_buffer(&resolve_end, 0, &map_buffer, size, size);
-        Ok(Some(map_buffer))
+        let mut readback = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Ruda profile readback"),
+        });
+        readback.resolve_query_set(&query_set_start.query_set, PROFILE_START_INDEX..PROFILE_START_INDEX + 1, &resolve_start, 0);
+        readback.resolve_query_set(&query_set_end.query_set, PROFILE_END_INDEX..PROFILE_END_INDEX + 1, &resolve_end, 0);
+        readback.copy_buffer_to_buffer(&resolve_start, 0, &map_buffer, 0, size);
+        readback.copy_buffer_to_buffer(&resolve_end, 0, &map_buffer, size, size);
+        Ok(Some(TimestampReadback { commands: readback.finish(), map_buffer }))
     }
 
     pub fn stop_profile(
@@ -232,86 +331,63 @@ impl QueryProfiler {
         map_buffer: Option<wgpu::Buffer>,
         poll_signal: Arc<()>,
     ) -> Result<ProfileDuration, ProfileError> {
-        if let Some(map_buffer) = map_buffer {
-            let period = self.queue_period;
-            let epoch_tick = self.epoch_tick;
-            let epoch_instant = self.epoch_instant;
+        let Some(map_buffer) = map_buffer else {
+            return Err(ProfileError::NotMeasured { backtrace: BackTrace::capture() });
+        };
+        let period = self.queue_period;
+        let epoch_tick = self.epoch_tick;
+        let epoch_instant = self.epoch_instant;
+        let (sender, rec) = async_channel::bounded(1);
+        map_buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            core::mem::drop(poll_signal);
+            let _ = sender.try_send(result);
+        });
 
-            Ok(ProfileDuration::new_device_time(async move {
-                let (sender, rec) = async_channel::bounded(1);
-                map_buffer
-                    .slice(..)
-                    .map_async(wgpu::MapMode::Read, move |v| {
-                        // This might fail if the channel is closed (eg. the future is dropped).
-                        // This is fine, just means results aren't needed anymore.
-                        let _ = sender.try_send(v);
-                    });
-                rec.recv()
-                    .await
-                    .expect("Unable to receive buffer slice result.")
-                    .expect("Failed to map buffer");
-                // Can stop polling now.
-                core::mem::drop(poll_signal);
-
-                let binding = map_buffer.slice(..).get_mapped_range();
-                let data: &[u64] = bytemuck::try_cast_slice(&binding).unwrap();
-
-                // Get nr. of ticks since epoch.
-                let data_start = data[0].saturating_sub(epoch_tick);
-                let data_end = data[1].saturating_sub(epoch_tick);
-                drop(binding);
-
-                map_buffer.unmap();
-                // Convert to a duration.
-                let start_duration = Duration::from_nanos((data_start as f64 * period) as u64);
-                let end_duration = Duration::from_nanos((data_end as f64 * period) as u64);
-
-                // Convert to an `Instant`.
-                let instant_start = epoch_instant + start_duration;
-                let instant_end = epoch_instant + end_duration;
-
-                ProfileTicks::from_start_end(instant_start, instant_end)
-            }))
-        } else {
-            // If there was no work done between the start and stop of the profile, logically the
-            // time should be 0. We could use a ProfileDuration::from_duration here,
-            // but it seems better to always return things as 'device' timing method.
-            let now = Instant::now();
-            Ok(ProfileDuration::new_device_time(async move {
-                ProfileTicks::from_start_end(now, now)
-            }))
-        }
+        Ok(ProfileDuration::new_device_time_maybe(async move {
+            rec.recv().await.expect("Unable to receive buffer slice result.")
+                .expect("Failed to map buffer");
+            let binding = map_buffer.slice(..).get_mapped_range();
+            let data: &[u64] = bytemuck::try_cast_slice(&binding).unwrap();
+            let (raw_start, raw_end) = (data[0], data[1]);
+            drop(binding);
+            map_buffer.unmap();
+            if raw_start == 0 || raw_end == 0 || raw_end <= raw_start {
+                return None;
+            }
+            let data_start = raw_start.saturating_sub(epoch_tick);
+            let data_end = raw_end.saturating_sub(epoch_tick);
+            let start_duration = Duration::from_nanos((data_start as f64 * period) as u64);
+            let end_duration = Duration::from_nanos((data_end as f64 * period) as u64);
+            Some(ProfileTicks::from_start_end(epoch_instant + start_duration, epoch_instant + end_duration))
+        }))
     }
 
-    /// Returns the query set to be used by the [`wgpu::ComputePass`].
-    ///
-    /// Also performs cleanup of old [query set](QuerySet).
-    pub fn register_profile_device(&mut self, device: &wgpu::Device) -> Option<&QuerySet> {
-        self.init_query_set().map(|info| {
-            let item = self.new_query_set(info, device);
-            &item.query_set
+    /// Write a window's start once and update its end on every subsequent pass.
+    pub fn register_profile_device(&mut self, device: &wgpu::Device)
+        -> Option<wgpu::ComputePassTimestampWrites<'_>> {
+        let (query_set_id, beginning_of_pass_write_index) = match self.init_query_set() {
+            Some(info) => {
+                self.new_query_set(info, device);
+                (info.0, Some(PROFILE_START_INDEX))
+            }
+            None if self.timestamps.is_empty() => return None,
+            None => (self.current?, None),
+        };
+        let item = self.query_sets.get(&query_set_id)?;
+        Some(wgpu::ComputePassTimestampWrites {
+            query_set: &item.query_set,
+            beginning_of_pass_write_index,
+            end_of_pass_write_index: Some(PROFILE_END_INDEX),
         })
     }
 
-    fn new_query_set(
-        &mut self,
-        query_set_info: (u64, u32),
-        device: &wgpu::Device,
-    ) -> &mut QuerySetItem {
+    fn new_query_set(&mut self, query_set_info: (u64, u32), device: &wgpu::Device) {
         let (query_set_id, num_ref) = query_set_info;
-        let query_set = if let Some(pool) = self.query_set_pool.pop() {
-            pool
-        } else {
-            device.create_query_set(&QuerySetDescriptor {
-                label: Some("Ruda profile queries"),
-                ty: QueryType::Timestamp,
-                count: 2,
-            })
+        let query_set = match self.query_set_pool.pop() {
+            Some(query_set) => query_set,
+            None => self.allocator.acquire(device),
         };
-
-        let slot = QuerySetItem { query_set, num_ref };
-        self.query_sets.insert(query_set_id, slot);
-        self.query_sets.get_mut(&query_set_id).unwrap()
+        self.query_sets.insert(query_set_id, QuerySetItem { query_set, num_ref });
     }
 
     fn init_query_set(&mut self) -> Option<(QuerySetId, u32)> {
@@ -344,12 +420,13 @@ impl QueryProfiler {
     }
 
     fn cleanup_query_sets(&mut self) {
-        for key in self.cleanups.drain(..) {
-            let removed = self
-                .query_sets
-                .remove(&key)
-                .expect("Unknown query set cleaned up");
+        let mut cleanups = core::mem::take(&mut self.cleanups);
+        cleanups.retain(|key| {
+            if Some(*key) == self.current { return true; }
+            let removed = self.query_sets.remove(key).expect("Unknown query set cleaned up");
             self.query_set_pool.push(removed.query_set);
-        }
+            false
+        });
+        self.cleanups = cleanups;
     }
 }

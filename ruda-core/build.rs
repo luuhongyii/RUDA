@@ -11,6 +11,8 @@ fn main() {
         multi_threading: { all(feature = "std", not(target_family = "wasm")) },
         // Filesystem and environment access for config loading and caching.
         std_io: { all(feature = "std", any(target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android")) },
+        native_cache: { all(feature = "environment-persistence", std_io) },
+        browser_cache: { all(feature = "environment-persistence", target_family = "wasm") },
         compiler_std_io: { all(feature = "compiler-std", any(target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android")) },
         // TODO: We can't yet activate it for everything because of how error handling is done in matmul.
         backtrace: { all(test, feature="std") },

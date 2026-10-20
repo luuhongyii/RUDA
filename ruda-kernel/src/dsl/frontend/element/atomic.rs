@@ -141,7 +141,7 @@ impl<Inner: RudaPrimitive<Scalar: Numeric>> Atomic<Inner> {
 }
 
 #[ruda]
-impl<Inner: RudaPrimitive<Scalar: Int>> Atomic<Inner> {
+impl<Inner: RudaPrimitive<Scalar: Numeric>> Atomic<Inner> {
     /// Compare the value at `pointer` to `cmp` and set it to `value` only if they are the same.
     /// Returns the old value of the pointer before the store.
     ///
@@ -165,7 +165,10 @@ impl<Inner: RudaPrimitive<Scalar: Int>> Atomic<Inner> {
             new_var.into()
         })
     }
+}
 
+#[ruda]
+impl<Inner: RudaPrimitive<Scalar: Int>> Atomic<Inner> {
     /// Executes an atomic bitwise and operation on the atomic variable. Returns the old value.
     #[allow(unused_variables)]
     pub fn fetch_and(&self, value: Inner) -> Inner {

@@ -20,8 +20,9 @@ pub use ruda_kernel::dsl::RudaDim;
 pub use ruda_core::flex32;
 
 pub use ruda_driver_wgpu::{
-    AutoCompiler, MemoryConfiguration, RuntimeOptions, WgpuDevice, WgpuResource, WgpuRuntime,
-    WgpuSetup, WgpuStorage, init_device, init_setup, init_setup_async,
+    AutoCompiler, MemoryConfiguration, RuntimeOptions, WgpuBackend, WgpuDevice, WgpuDeviceKind,
+    WgpuInitError, WgpuResource, WgpuRuntime, WgpuSetup, WgpuStorage, init_device, init_setup,
+    init_setup_async, try_init_device, try_init_device_with_api, try_init_setup, try_init_setup_async,
 };
 // Vulkan and WebGpu would have conflicting type names
 pub mod graphics {

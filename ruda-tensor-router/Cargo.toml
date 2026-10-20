@@ -19,6 +19,7 @@ resolver = "2"
 
 [features]
 default = [ "std",]
+fusion = [ "std", "dep:ruda-fusion", "dep:serde",]
 distributed = [ "std", "dep:tokio", "dep:ruccl", "ruda-tensor/graph-distributed", "ruda-core/std", "ruda-core/id-tests-std", "ruda-tensor-config/std", "ruda-test-runtime?/std",]
 doc = [ "default",]
 std = [ "ruda-tensor/std", "ruda-core/std", "ruda-core/id-tests-std", "ruda-tensor-config/std", "ruda-test-runtime?/std",]
@@ -30,6 +31,18 @@ path = "src/lib.rs"
 
 [dependencies.hashbrown]
 version = "0.16"
+
+[dependencies.ruda-fusion]
+path = "../ruda-fusion"
+version = "0.21.72"
+default-features = false
+features = ["std"]
+optional = true
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+optional = true
 
 [dependencies.log]
 version = "0.4.29"

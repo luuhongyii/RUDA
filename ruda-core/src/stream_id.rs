@@ -18,6 +18,16 @@ std::thread_local! {
 }
 
 impl StreamId {
+    /// Allocate a logical stream independent of the thread currently executing it.
+    pub fn unique() -> Self {
+        Self {
+            #[cfg(multi_threading)]
+            value: STREAM_COUNT.fetch_add(1, core::sync::atomic::Ordering::Acquire),
+            #[cfg(not(multi_threading))]
+            value: 0,
+        }
+    }
+
     /// Executes `f` on this stream, restoring the previous stream afterward.
     ///
     /// The previous [`StreamId`] is saved before the call and restored on
@@ -93,7 +103,7 @@ impl StreamId {
             match val.as_mut() {
                 Some(val) => *val,
                 None => {
-                    let new = STREAM_COUNT.fetch_add(1, core::sync::atomic::Ordering::Acquire);
+                    let new = Self::unique().value;
                     *val = Some(new);
                     new
                 }

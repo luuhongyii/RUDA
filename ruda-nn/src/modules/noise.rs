@@ -1,6 +1,6 @@
 
 use ruda_model::config::Config;
-use ruda_model::module::{Content, DisplaySettings, Module, ModuleDisplay};
+use ruda_model::module::{Content, DisplaySettings, Flag, Module, ModuleDisplay, Param};
 use ruda_model::tensor::backend::Backend;
 use ruda_model::tensor::{Distribution, Tensor};
 
@@ -23,6 +23,8 @@ pub struct GaussianNoiseConfig {
 pub struct GaussianNoise {
     /// Standard deviation of the normal noise distribution.
     pub std: f64,
+    /// Permit stochastic behavior on an autodiff device.
+    pub training: Param<Flag>,
 }
 
 impl GaussianNoiseConfig {
@@ -34,7 +36,7 @@ impl GaussianNoiseConfig {
                 self.std
             );
         }
-        GaussianNoise { std: self.std }
+        GaussianNoise { std: self.std, training: Param::from_bool(true) }
     }
 }
 
@@ -48,12 +50,12 @@ impl GaussianNoise {
     /// - input: `[..., any]`
     /// - output: `[..., any]`
     pub fn forward<B: Backend, const D: usize>(&self, input: Tensor<B, D>) -> Tensor<B, D> {
-        if B::ad_enabled(&input.device()) && self.std != 0.0 {
+        if self.training.is_enabled() && input.is_autodiff() && self.std != 0.0 {
             let noise = Tensor::random(
                 input.shape(),
                 Distribution::Normal(0.0, self.std),
                 &input.device(),
-            );
+            ).with_autodiff_context(input.autodiff_context());
             input + noise
         } else {
             input
@@ -69,7 +71,9 @@ impl ModuleDisplay for GaussianNoise {
     }
 
     fn custom_content(&self, content: Content) -> Option<Content> {
-        content.add("std", &self.std).optional()
+        let content = content.add("std", &self.std);
+        if self.training.is_enabled() { content.optional() }
+        else { content.add("training", &self.training).optional() }
     }
 }
 

@@ -25,7 +25,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use ruda_tensor::{Backend, DType, ExecutionError, Shape, TensorData, tensor::IndexingUpdateOp};
 use ruda_tensor::graph::{
-    BackendIr, BaseOperationIr, BoolOperationIr, FloatOperationIr, HandleContainer, IntOperationIr,
+    BackendIr, BaseOperationIr, BoolOperationIr, FloatOperationIr, HandleContainer, HandleKind, IntOperationIr,
     GraphBindings, GraphId, GraphIr, ModuleOperationIr, NumericOperationIr, OperationIr, TensorId, TensorIr, TensorStatus,
 };
 use ruda_core::{future::DynFut, stub::Mutex};
@@ -56,6 +56,7 @@ pub struct Runner<B: BackendIr> {
     // Mutex for the mutable handles
     context: Arc<Mutex<RunnerContext<B>>>,
     device: B::Device,
+    custom_ops: crate::CustomOpRegistry<B>,
     #[cfg(feature = "distributed")]
     native_collectives: Option<NativeCollectives<B>>,
 }
@@ -71,12 +72,18 @@ impl<B: BackendIr> core::fmt::Debug for Runner<B> {
 impl<B: BackendIr> Runner<B> {
     /// Create a new runner.
     pub fn new(device: B::Device) -> Self {
+        Self::with_custom_ops(device, crate::CustomOpRegistry::new())
+    }
+
+    /// Create a runner with handlers for custom operations and registered graph replays.
+    pub fn with_custom_ops(device: B::Device, custom_ops: crate::CustomOpRegistry<B>) -> Self {
         Self {
             context: Arc::new(Mutex::new(RunnerContext {
                 handles: HandleContainer::new(),
                 graphs: BTreeMap::new(),
             })),
             device,
+            custom_ops,
             #[cfg(feature = "distributed")]
             native_collectives: None,
         }
@@ -95,10 +102,31 @@ impl<B: BackendIr> Runner<B> {
         runner
     }
 
+    /// Dispatch a validated graph snapshot, retaining it independently of registration lifetime.
+    pub fn execute_cached_graph(&self, graph: &crate::CachedGraph, bindings: GraphBindings) -> Result<(), ExecutionError> {
+        graph.replay(bindings, |reserved: &BTreeSet<TensorId>| {
+            let context = self.context.lock().unwrap();
+            loop {
+                let value = GRAPH_TENSOR_COUNTER.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
+                    |value| value.checked_add(1).filter(|next| *next <= 1 << 63))
+                    .map_err(|_| crate::graph::graph_error("graph intermediate ID space exhausted"))?;
+                let tensor = TensorId::new(value | 1 << 63);
+                if !reserved.contains(&tensor) && !context.handles.has_handle(&tensor) { return Ok(tensor); }
+            }
+        }, |operation| self.register_op(operation))
+    }
+
     /// Create a runner forwarding collectives to a native distributed backend.
     /// Normal runners do not gain a hidden host-staged fallback.
     #[cfg(feature = "distributed")]
     pub fn new_distributed(device: B::Device) -> Self
+    where B: ruda_tensor::distributed::DistributedBackend {
+        Self::new(device).with_native_collectives()
+    }
+
+    /// Enable native collectives while preserving this runner's handlers and tensor context.
+    #[cfg(feature = "distributed")]
+    pub fn with_native_collectives(mut self) -> Self
     where B: ruda_tensor::distributed::DistributedBackend {
         fn enqueue<B: BackendIr + ruda_tensor::distributed::DistributedBackend>(
             tensor: ruda_tensor::tensor::FloatTensor<B>, op: ruda_tensor::distributed::ReduceOperation,
@@ -108,18 +136,25 @@ impl<B: BackendIr> Runner<B> {
             // sync_collective before the resulting float handle is exposed.
             unsafe { B::all_reduce(tensor, op, devices).assume_resolved() }
         }
-        let mut runner = Self::new(device);
-        runner.native_collectives = Some(NativeCollectives {
+        self.native_collectives = Some(NativeCollectives {
             enqueue: enqueue::<B>, synchronize: B::sync_collective,
         });
-        runner
+        self
     }
 
     #[cfg(feature = "distributed")]
-    pub(crate) fn sync_native_collective(&self) {
+    pub fn sync_native_collective(&self) {
         let native = self.native_collectives.as_ref()
             .expect("use NativeDistributedChannel or Runner::new_distributed");
         (native.synchronize)(&self.device);
+    }
+
+    /// Whether this interpreter was configured with native collective callbacks.
+    pub fn has_native_collectives(&self) -> bool {
+        #[cfg(feature = "distributed")]
+        { self.native_collectives.is_some() }
+        #[cfg(not(feature = "distributed"))]
+        { false }
     }
 
     #[cfg(feature = "distributed")]
@@ -151,6 +186,29 @@ impl<B: BackendIr> Runner<B> {
     pub fn get_tensor_handle(&self, tensor: &TensorIr) -> B::Handle {
         let handles = &mut self.context.lock().unwrap().handles;
         handles.get_tensor_handle(tensor).handle
+    }
+
+    /// Take or clone a device-resident primitive according to the descriptor's ownership.
+    pub fn get_tensor(&self, tensor: &TensorIr) -> HandleKind<B> {
+        let handles = &mut self.context.lock().unwrap().handles;
+        match tensor.dtype {
+            DType::QFloat(_) => HandleKind::Quantized(handles.get_quantized_tensor::<B>(tensor)),
+            dtype if dtype.is_float() => HandleKind::Float(handles.get_float_tensor::<B>(tensor)),
+            dtype if dtype.is_int() || dtype.is_uint() => HandleKind::Int(handles.get_int_tensor::<B>(tensor)),
+            dtype if dtype.is_bool() => HandleKind::Bool(handles.get_bool_tensor::<B>(tensor)),
+            dtype => panic!("Unsupported native tensor kind: {dtype:?}"),
+        }
+    }
+
+    /// Move a native primitive onto this runner's device without serializing its data.
+    pub fn register_tensor_to_device(&self, id: TensorId, tensor: HandleKind<B>) {
+        let handle = match tensor {
+            HandleKind::Float(tensor) => B::float_tensor_handle(B::float_to_device(tensor, &self.device)),
+            HandleKind::Int(tensor) => B::int_tensor_handle(B::int_to_device(tensor, &self.device)),
+            HandleKind::Bool(tensor) => B::bool_tensor_handle(B::bool_to_device(tensor, &self.device)),
+            HandleKind::Quantized(tensor) => B::quantized_tensor_handle(B::q_to_device(tensor, &self.device)),
+        };
+        self.context.lock().unwrap().handles.register_handle(id, handle);
     }
 
     /// Create a tensor with the given handle and shape.
@@ -226,6 +284,8 @@ impl<B: BackendIr> Runner<B> {
 
 // This is a Remote Runner
 impl<B: BackendIr> RunnerClient for Runner<B> {
+    fn context_id(&self) -> Option<usize> { Some(Arc::as_ptr(&self.context) as usize) }
+
     type Device = B::Device;
 
     fn avg_pool3d_native_output_size(&self, input: [usize; 3], kernel: [usize; 3],
@@ -250,9 +310,10 @@ impl<B: BackendIr> RunnerClient for Runner<B> {
             OperationIr::Int(op) => self.run_integer(handles, op),
             OperationIr::Float(_dtype, op) => self.run_float(handles, op),
             OperationIr::Module(op) => self.run_module(handles, op),
-            OperationIr::Custom(_) => {
-                panic!("Can't execute custom operation here")
-            }
+            OperationIr::Custom(desc) => match self.custom_ops.get(&desc.id) {
+                Some(handler) => handler(handles, desc, &self.device),
+                None => panic!("No custom-op handler registered for `{}`; use Runner::with_custom_ops", desc.id),
+            },
             OperationIr::Init(_) => {
                 // Nothing to do.
             }
@@ -262,6 +323,17 @@ impl<B: BackendIr> RunnerClient for Runner<B> {
             #[cfg(feature = "distributed")]
             OperationIr::Distributed(op) => self.run_distributed(handles, op),
         }
+    }
+
+    fn register_alias(&self, destination: TensorId, source: TensorId) -> Result<(), ExecutionError> {
+        let mut context = self.context.lock().unwrap();
+        if context.handles.has_handle(&destination) {
+            return Err(crate::graph::graph_error("alias destination is already registered"));
+        }
+        let handle = context.handles.get_handle_ref(&source)
+            .ok_or_else(|| crate::graph::graph_error("alias source is not initialized"))?.clone();
+        context.handles.register_handle(destination, handle);
+        Ok(())
     }
 
     fn register_graph(&self, graph: GraphIr) -> Result<GraphId, ExecutionError> {
@@ -276,16 +348,7 @@ impl<B: BackendIr> RunnerClient for Runner<B> {
     fn execute_graph(&self, id: GraphId, bindings: GraphBindings) -> Result<(), ExecutionError> {
         let graph = self.context.lock().unwrap().graphs.get(&id).cloned()
             .ok_or_else(|| crate::graph::graph_error(alloc::format!("unknown registered graph {}", id.0)))?;
-        graph.replay(bindings, |reserved: &BTreeSet<TensorId>| {
-            let context = self.context.lock().unwrap();
-            loop {
-                let value = GRAPH_TENSOR_COUNTER.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
-                    |value| value.checked_add(1).filter(|next| *next <= 1 << 63))
-                    .map_err(|_| crate::graph::graph_error("graph intermediate ID space exhausted"))?;
-                let tensor = TensorId::new(value | 1 << 63);
-                if !reserved.contains(&tensor) && !context.handles.has_handle(&tensor) { return Ok(tensor); }
-            }
-        }, |operation| self.register_op(operation))
+        self.execute_cached_graph(&graph, bindings)
     }
 
     fn remove_graph(&self, id: GraphId) -> Result<(), ExecutionError> {
@@ -340,6 +403,37 @@ impl<B: BackendIr> RunnerClient for Runner<B> {
         #[cfg(feature = "distributed")]
         if let Some(native) = &self.native_collectives { (native.synchronize)(&self.device); }
         B::sync(&self.device)
+    }
+
+    fn flush(&self) -> Result<(), ExecutionError> {
+        B::flush(&self.device)
+    }
+
+    fn profile_start(&self) -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> {
+        B::profile_start(&self.device)
+    }
+    fn profile_end(&self, token: ruda_tensor::ProfileToken, options: ruda_tensor::ProfileOptions)
+        -> Result<ruda_tensor::ProfileDuration, ExecutionError> { B::profile_end(&self.device, token, options) }
+    fn profile_abandon(&self, token: ruda_tensor::ProfileToken) { B::profile_abandon(&self.device, token); }
+
+    fn graph_prepare(&self) -> Result<(), ExecutionError> {
+        B::graph_prepare(&self.device)
+    }
+
+    fn graph_start_capture(&self) -> Result<(), ExecutionError> {
+        B::graph_start_capture(&self.device)
+    }
+
+    fn graph_stop_capture(&self) -> Result<ruda_tensor::BackendGraph, ExecutionError> {
+        B::graph_stop_capture(&self.device)
+    }
+
+    fn graph_abort_capture(&self) {
+        B::graph_abort_capture(&self.device)
+    }
+
+    unsafe fn graph_replay(&self, graph: &ruda_tensor::BackendGraph) -> Result<(), ExecutionError> {
+        unsafe { B::graph_replay(&self.device, graph) }
     }
 
     fn seed(&self, seed: u64) {

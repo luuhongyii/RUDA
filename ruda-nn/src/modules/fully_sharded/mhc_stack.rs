@@ -106,6 +106,7 @@ macro_rules! mhc_stack_execution {
                 assert!(batch > 0 && tokens > 0 && !self.layers.is_empty(), "sharded mHC rows/layers must be nonempty");
                 assert_eq!(width, self.width(), "sharded mHC hidden width differs");
                 let valid = mhc_visible(&input, valid);
+                let context = input.autodiff_context().merge(valid.autodiff_context());
                 let compute = if input.dtype() == DType::F64 { DType::F64 } else { DType::F32 };
                 let device = input.device();
                 let mut losses = Vec::with_capacity(self.layers.len());
@@ -124,7 +125,7 @@ macro_rules! mhc_stack_execution {
                     }
                 }
                 let norm = Param::initialized(self.final_norm.local.id, self.final_norm.$gather::<C, 1>(communicator).map_err(FullyShardedMhcError::Collective)?);
-                let indexer_loss = if auxiliary { Tensor::cat(losses, 0).sum() } else { Tensor::zeros([1], (&device, compute)) };
+                let indexer_loss = if auxiliary { Tensor::cat(losses, 0).sum() } else { Tensor::zeros([1], (&device, compute)).with_autodiff_context(context) };
                 Ok(CompressedAttentionOutput { output: normalize_mhc(self.layers.last().unwrap().ffn_connection.reduce(state), &norm, self.epsilon), indexer_loss })
             }
 
@@ -148,9 +149,10 @@ macro_rules! mhc_stack_execution {
                 let [tokens, width] = input.dims();
                 assert_eq!((tokens, width), (layout.tokens(), self.width()), "sharded mHC packed layout/width differs");
                 let compute = if input.dtype() == DType::F64 { DType::F64 } else { DType::F32 };
-                let mut losses = Tensor::zeros([layout.documents()], (&input.device(), compute));
                 let input = input.reshape([1, tokens, width]);
                 let valid = mhc_visible(&input, valid.map(|mask| mask.reshape([1, tokens])));
+                let context = input.autodiff_context().merge(valid.autodiff_context());
+                let mut losses = Tensor::zeros([layout.documents()], (&input.device(), compute)).with_autodiff_context(context);
                 let storage = input.dtype();
                 let input = input * valid.clone().cast::<FloatDType>(storage.into()).reshape([1, tokens, 1]);
                 let mut state = self.layers[0].attention_connection.expand(input);

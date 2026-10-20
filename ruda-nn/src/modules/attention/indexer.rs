@@ -147,7 +147,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LightningIndexer<B, P> {
         let key = self.key.as_ref().expect("external-key indexer has no token-key projection");
         let norm = self.key_norm.as_ref().expect("indexer token-key normalization missing");
         let input = if self.detach_inputs { input.detach() } else { input };
-        let pos = pos.unwrap_or_else(|| positions::<B>(input.dims()[1], 0, &input.device()));
+        let pos = pos.unwrap_or_else(|| positions::<B>(input.dims()[1], 0, &input.device()).with_autodiff_context(input.autodiff_context()));
         self.rotary.forward_shared(norm.forward(key.forward(input)), pos)
     }
 
@@ -161,7 +161,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LightningIndexer<B, P> {
         assert_eq!(latent.device(), input.device(), "indexer query latent device differs");
         work_dtype(latent.dtype());
         let compute = work_dtype(input.dtype());
-        let pos = pos.unwrap_or_else(|| positions::<B>(tokens, 0, &input.device()));
+        let pos = pos.unwrap_or_else(|| positions::<B>(tokens, 0, &input.device()).with_autodiff_context(input.autodiff_context().merge(latent.autodiff_context())));
         let input = if selection || self.detach_inputs { input.detach() } else { input };
         let latent = if selection || self.detach_inputs { latent.detach() } else { latent };
         let q = self.query.forward_in_compute(latent.cast(compute), compute, 0..self.num_heads * self.head_dim, selection)
@@ -180,6 +180,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LightningIndexer<B, P> {
         let compute = query.dtype();
         if count == 0 || queries == 0 || batch == 0 {
             return Tensor::zeros([batch, queries, count], (&query.device(), compute))
+                .with_autodiff_context(query.autodiff_context().merge(weights.autodiff_context()).merge(keys.autodiff_context()))
                 + (query.sum() + weights.sum() + keys.cast(compute).sum()).mul_scalar(0).reshape([1, 1, 1]);
         }
         let dots = query.swap_dims(1, 2).matmul(keys.cast(compute).reshape([batch, 1, count, width]).swap_dims(2, 3));
@@ -205,6 +206,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LightningIndexer<B, P> {
         let entries = sparse_gather_entries(keys.cast(query.dtype()), indices);
         if count == 0 || tokens == 0 || batch == 0 {
             return Tensor::zeros([batch, tokens, count], (&query.device(), query.dtype()))
+                .with_autodiff_context(query.autodiff_context().merge(weights.autodiff_context()).merge(entries.autodiff_context()))
                 + (query.sum() + weights.sum() + entries.sum()).mul_scalar(0).reshape([1, 1, 1]);
         }
         (ruda_model::tensor::activation::relu(query.matmul(entries.swap_dims(2, 3)))
@@ -244,24 +246,29 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LightningIndexer<B, P> {
         let [batch, tokens, _] = input.dims();
         let count = keys.dims()[1];
         let device = input.device();
-        let pos = mask.query_positions.clone().unwrap_or_else(|| positions::<B>(tokens, 0, &device));
+        let pos = mask.query_positions.clone().unwrap_or_else(|| positions::<B>(tokens, 0, &device).with_autodiff_context(input.autodiff_context()));
         let (query, weights) = self.queries(input, latent, Some(pos.clone()), true);
         let keys = keys.detach();
+        let mut context = query.autodiff_context().merge(weights.autodiff_context()).merge(keys.autodiff_context()).merge(pos.autodiff_context());
+        if let Some(allowed) = &mask.allowed { context = context.merge(allowed.autodiff_context()); }
+        if let Some(valid) = &mask.query_valid { context = context.merge(valid.autodiff_context()); }
+        if let Some(valid) = &mask.key_valid { context = context.merge(valid.autodiff_context()); }
+        if let Some(ends) = &mask.key_end_positions { context = context.merge(ends.autodiff_context()); }
         if batch == 0 || tokens == 0 || count == 0 || self.topk == 0 {
-            return Tensor::empty([batch, tokens, self.topk.min(count)], (&device, DType::I64));
+            return Tensor::empty([batch, tokens, self.topk.min(count)], (&device, DType::I64)).with_autodiff_context(context);
         }
         let mut chunks = Vec::new();
         for begin in (0..tokens).step_by(self.query_chunk_size) {
             let end = tokens.min(begin.saturating_add(self.query_chunk_size));
             let length = end - begin;
-            let mut best = Tensor::<B, 3>::empty([batch, length, 0], (&device, query.dtype()));
-            let mut ids = Tensor::<B, 3, Int>::empty([batch, length, 0], (&device, DType::I64));
+            let mut best = Tensor::<B, 3>::empty([batch, length, 0], (&device, query.dtype())).with_autodiff_context(context);
+            let mut ids = Tensor::<B, 3, Int>::empty([batch, length, 0], (&device, DType::I64)).with_autodiff_context(context);
             for start in (0..count).step_by(self.key_chunk_size) {
                 let stop = count.min(start.saturating_add(self.key_chunk_size));
                 let score = self.score(query.clone().slice_dim(1, begin..end), weights.clone().slice_dim(1, begin..end),
                     keys.clone().slice_dim(1, start..stop));
                 let shape = [batch, length, stop - start];
-                let mut valid = Tensor::<B, 3, Bool>::zeros(shape, &device).bool_not();
+                let mut valid = Tensor::<B, 3, Bool>::zeros(shape, &device).with_autodiff_context(context).bool_not();
                 if let Some(allowed) = &mask.allowed { valid = valid.bool_and(allowed.clone().slice([0..batch, begin..end, start..stop])); }
                 if let Some(key_valid) = &mask.key_valid {
                     valid = valid.bool_and(key_valid.clone().slice_dim(1, start..stop).reshape([batch, 1, stop - start]).expand(shape));
@@ -274,7 +281,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LightningIndexer<B, P> {
                     let rows = pos.clone().slice_dim(0, begin..end).reshape([1, length, 1]).expand(shape);
                     valid = valid.bool_and(ends.lower_equal(rows));
                 }
-                let next_ids = positions::<B>(stop - start, start, &device).reshape([1, 1, stop - start]).expand(shape);
+                let next_ids = positions::<B>(stop - start, start, &device).with_autodiff_context(context).reshape([1, 1, stop - start]).expand(shape);
                 let combined_valid = Tensor::cat(vec![ids.clone().greater_equal_elem(0), valid], 2);
                 let selected = sparse_stable_topk(Tensor::cat(vec![best, score], 2), self.topk,
                     Some(Tensor::cat(vec![ids, next_ids], 2)), Some(combined_valid));
@@ -291,7 +298,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LightningIndexer<B, P> {
     pub fn forward_prepared(&self, input: Tensor<B, 3>, keys: Tensor<B, 3>, latent: Option<Tensor<B, 3>>,
         mut mask: IndexerMask<B>, causal: bool) -> IndexerOutput<B> {
         if causal && mask.key_end_positions.is_none() {
-            mask.key_end_positions = Some(positions::<B>(keys.dims()[1], 0, &input.device()));
+            mask.key_end_positions = Some(positions::<B>(keys.dims()[1], 0, &input.device()).with_autodiff_context(input.autodiff_context().merge(keys.autodiff_context())));
         }
         let pos = mask.query_positions.clone();
         let indices = self.select(input.clone(), keys.clone(), latent.clone(), mask);

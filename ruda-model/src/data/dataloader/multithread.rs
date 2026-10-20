@@ -33,6 +33,7 @@ pub struct MultiThreadDataLoader<B: Backend, I, O> {
     num_threads: usize,
     reuse_workers: bool,
     batch_reading: bool,
+    autodiff_context: Option<ruda_tensor::AutodiffContext>,
 
     // The lazily initialized data loaders
     dataloaders: OnceLock<Vec<BatchDataLoader<B, I, O>>>,
@@ -253,6 +254,7 @@ where
             dataloaders: OnceLock::new(),
             reuse_workers: false,
             batch_reading: false,
+            autodiff_context: None,
             worker_pool: OnceLock::new(),
         }
     }
@@ -379,6 +381,7 @@ where
                             rng,
                         )
                         .batch_reading(self.batch_reading)
+                        .creation_context(self.autodiff_context)
                     })
                     .collect()
             })
@@ -467,8 +470,7 @@ where
     }
 
     fn to_device(&self, device: &B::Device) -> Arc<dyn DataLoader<B, O>> {
-        Arc::new(
-            Self::from_seed(
+        let mut loader = Self::from_seed(
                 self.strategy.clone_dyn(),
                 self.dataset.clone(),
                 self.batcher.clone(),
@@ -477,12 +479,34 @@ where
                 self.seed,
             )
             .reuse_workers(self.reuse_workers)
-            .batch_reading(self.batch_reading),
+            .batch_reading(self.batch_reading);
+        loader.autodiff_context = self.autodiff_context;
+        Arc::new(loader)
+    }
+
+    fn with_autodiff_context(&self, context: ruda_tensor::AutodiffContext) -> Arc<dyn DataLoader<B, O>> {
+        let mut loader = Self::from_seed(
+            self.strategy.clone_dyn(),
+            self.dataset.clone(),
+            self.batcher.clone(),
+            self.num_threads,
+            self.device.clone(),
+            self.seed,
         )
+        .reuse_workers(self.reuse_workers)
+        .batch_reading(self.batch_reading);
+        loader.autodiff_context = Some(context);
+        if let Some(dataloaders) = self.dataloaders.get() {
+            let configured = dataloaders.iter()
+                .map(|dataloader| dataloader.clone().creation_context(Some(context)))
+                .collect();
+            let _ = loader.dataloaders.set(configured);
+        }
+        Arc::new(loader)
     }
 
     fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<B, O>> {
-        let dataloader = Self::from_seed(
+        let mut dataloader = Self::from_seed(
             self.strategy.clone_dyn(),
             Arc::new(PartialDataset::new(self.dataset.clone(), start, end)),
             self.batcher.clone(),
@@ -492,6 +516,7 @@ where
         )
         .reuse_workers(self.reuse_workers)
         .batch_reading(self.batch_reading);
+        dataloader.autodiff_context = self.autodiff_context;
         Arc::new(dataloader)
     }
 }

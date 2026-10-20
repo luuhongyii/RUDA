@@ -78,7 +78,9 @@ pub fn blackman_window<B: Backend>(
     let size_i64 = i64::try_from(size).expect("BlackmanWindow size doesn't fit in i64 range.");
     let denominator = if periodic { size } else { size - 1 };
     let angular_increment = (2.0 * core::f64::consts::PI) / denominator as f64;
-    let cos_val = Tensor::<B, 1, Int>::arange(0..size_i64, &opt.device)
+    let mut opt = opt;
+    opt.dtype = None;
+    let cos_val = Tensor::<B, 1, Int>::arange(0..size_i64, opt)
         .float()
         .mul_scalar(angular_increment)
         .cos();

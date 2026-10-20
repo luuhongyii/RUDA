@@ -3,7 +3,6 @@ use ruda_kernel::dsl::{
     ir::MemoryDeviceProperties,
     server::{Binding, ServerError},
 };
-use ruda_hip_sys::HIP_SUCCESS;
 use ruda::runtime::{
     logging::ServerLogger,
     memory_management::{
@@ -25,7 +24,6 @@ pub struct Stream {
     pub(crate) sys: ruda_hip_sys::hipStream_t,
     pub memory_management_gpu: MemoryManagement<GpuStorage>,
     pub memory_management_cpu: MemoryManagement<PinnedMemoryStorage>,
-    pub errors: Vec<ServerError>,
     pub drop_queue: drop_queue::PendingDropQueue<Fence>,
 }
 
@@ -33,6 +31,7 @@ impl drop_queue::Fence for Fence {
     fn sync(self) {
         let _ = self.wait_sync().ok();
     }
+    fn wait(self) -> Result<(), ServerError> { self.wait_sync() }
 }
 
 #[derive(new, Debug)]
@@ -49,8 +48,12 @@ impl EventStreamBackend for HipStreamBackend {
     type Event = Fence;
 
     fn create_stream(&self) -> Self::Stream {
+        self.try_create_stream().unwrap_or_else(|error| panic!("HIP stream creation failed: {error}"))
+    }
+
+    fn try_create_stream(&self) -> Result<Self::Stream, ServerError> {
         // SAFETY: Calling HIP FFI to create a non-blocking stream. The stream handle is
-        // initialized by HIP on success (asserted below) and stored for the lifetime of
+        // initialized by HIP on success and stored for the lifetime of
         // this `Stream`.
         let stream = unsafe {
             let mut stream: ruda_hip_sys::hipStream_t = std::ptr::null_mut();
@@ -58,7 +61,7 @@ impl EventStreamBackend for HipStreamBackend {
                 &mut stream,
                 ruda_hip_sys::hipStreamNonBlocking,
             );
-            assert_eq!(stream_status, HIP_SUCCESS, "Should create a stream");
+            super::status::checked("hipStreamCreateWithFlags", stream_status)?;
             stream
         };
         let storage = GpuStorage::new(self.mem_alignment, stream);
@@ -78,20 +81,16 @@ impl EventStreamBackend for HipStreamBackend {
         };
         let memory_management_cpu = MemoryManagement::from_configuration(
             PinnedMemoryStorage::new(stream),
-            &MemoryDeviceProperties {
-                max_page_size: self.mem_props.max_page_size,
-                alignment: PINNED_MEMORY_ALIGNMENT as u64,
-            },
+            &MemoryDeviceProperties::new(self.mem_props.max_page_size, PINNED_MEMORY_ALIGNMENT as u64),
             host_memory_config,
             self.logger.clone(),
             MemoryManagementOptions::new("Pinned CPU Memory").mode(MemoryAllocationMode::Auto),
         );
 
-        Stream {
+        Ok(Stream {
             sys: stream,
             memory_management_gpu,
             memory_management_cpu,
-            errors: Vec::new(),
             drop_queue: PendingDropQueue::new(FlushingPolicy {
                 max_bytes_count: match self.is_integrated {
                     // Integrated GPUs (APUs) share memory and IOMMU with the CPU.
@@ -109,7 +108,7 @@ impl EventStreamBackend for HipStreamBackend {
                 },
                 ..Default::default()
             }),
-        }
+        })
     }
 
     fn flush(stream: &mut Self::Stream) -> Self::Event {
@@ -117,7 +116,13 @@ impl EventStreamBackend for HipStreamBackend {
     }
 
     fn wait_event(stream: &mut Self::Stream, event: Self::Event) {
-        event.wait_async(stream.sys);
+        if let Err(error) = event.wait_async(stream.sys) {
+            log::error!("HIP event dependency failed: {error}");
+        }
+    }
+
+    fn wait_event_checked(stream: &mut Self::Stream, event: Self::Event) -> Result<(), ServerError> {
+        event.wait_async(stream.sys)
     }
 
     fn wait_event_sync(event: Self::Event) -> Result<(), ServerError> {
@@ -131,7 +136,7 @@ impl EventStreamBackend for HipStreamBackend {
             .unwrap()
     }
 
-    fn is_healthy(stream: &Self::Stream) -> bool {
-        stream.errors.is_empty()
+    fn is_healthy(_stream: &Self::Stream) -> bool {
+        true
     }
 }

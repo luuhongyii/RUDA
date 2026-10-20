@@ -455,6 +455,25 @@ pub trait FloatTensorOps<B: Backend> {
         value: FloatTensor<B>,
     ) -> FloatTensor<B>;
 
+    /// Scatter with the specified update operation.
+    fn float_scatter(
+        dim: usize,
+        tensor: FloatTensor<B>,
+        indices: IntTensor<B>,
+        value: FloatTensor<B>,
+        update: crate::tensor::IndexingUpdateOp,
+    ) -> FloatTensor<B> {
+        let count = indices.shape().num_elements();
+        if count == 0 { return tensor; }
+        match update {
+            crate::tensor::IndexingUpdateOp::Add => B::float_scatter_add(dim, tensor, indices, value),
+            _ => B::float_scatter_nd(
+                tensor, crate::tensor::scatter_coordinates::<B>(dim, indices),
+                B::float_reshape(value, Shape::from([count])), update,
+            ),
+        }
+    }
+
     /// Multi-dimensional scatter: update `data` at locations specified by `indices` with `values`.
     ///
     /// # Arguments
@@ -522,6 +541,21 @@ pub trait FloatTensorOps<B: Backend> {
         indices: IntTensor<B>,
         value: FloatTensor<B>,
     ) -> FloatTensor<B>;
+
+    /// Update selected slices using the specified operation.
+    fn float_select_assign(
+        tensor: FloatTensor<B>,
+        dim: usize,
+        indices: IntTensor<B>,
+        value: FloatTensor<B>,
+        update: crate::tensor::IndexingUpdateOp,
+    ) -> FloatTensor<B> {
+        if value.shape().num_elements() == 0 { return tensor; }
+        match update {
+            crate::tensor::IndexingUpdateOp::Add => B::float_select_add(tensor, dim, indices, value),
+            _ => B::float_scatter(dim, tensor, crate::tensor::select_indices::<B>(dim, indices, value.shape()), value, update),
+        }
+    }
 
     /// Select tensor elements corresponding to the given slices.
     ///
@@ -807,6 +841,38 @@ pub trait FloatTensorOps<B: Backend> {
         false
     }
 
+    /// Whether the tensor belongs to a recorded graph, independently of gradient retention.
+    fn float_is_tracked(tensor: &FloatTensor<B>) -> bool {
+        Self::float_is_require_grad(tensor)
+    }
+
+    /// The tensor's checkpointing policy, or `None` without autodiff.
+    fn float_gradient_checkpointing_strategy(_tensor: &FloatTensor<B>) -> Option<crate::GradientCheckpointingStrategy> {
+        None
+    }
+
+    /// Runtime autodiff association of a floating tensor.
+    fn float_autodiff_context(tensor: &FloatTensor<B>) -> crate::AutodiffContext {
+        if B::ad_enabled(&Self::float_device(tensor)) {
+            crate::AutodiffContext::Enabled(Self::float_gradient_checkpointing_strategy(tensor)
+                .unwrap_or(crate::GradientCheckpointingStrategy::Disabled))
+        } else { crate::AutodiffContext::Disabled }
+    }
+
+    /// Change runtime association on a backend supporting dynamic autodiff.
+    fn float_with_autodiff_context(tensor: FloatTensor<B>, context: crate::AutodiffContext) -> FloatTensor<B> {
+        assert_eq!(Self::float_autodiff_context(&tensor), context,
+            "Backend cannot change autodiff association; use Tensor::into_autodiff to select an autodiff backend");
+        tensor
+    }
+
+    /// Override the tensor's policy without detaching it from its current graph.
+    fn float_with_gradient_checkpointing_strategy(
+        _tensor: FloatTensor<B>, _strategy: crate::GradientCheckpointingStrategy,
+    ) -> FloatTensor<B> {
+        panic!("Tensor::with_gradient_checkpointing_strategy requires a supporting autodiff backend")
+    }
+
     /// Sum of all elements in a tensor.
     ///
     /// # Arguments
@@ -859,7 +925,8 @@ pub trait FloatTensorOps<B: Backend> {
         let len = shape[dim];
         if len == 0 {
             shape[dim] = 1;
-            return B::float_ones(shape, &B::float_device(&tensor), tensor.dtype().into());
+            return B::float_with_autodiff_context(
+                B::float_ones(shape, &B::float_device(&tensor), tensor.dtype().into()), B::float_autodiff_context(&tensor));
         }
         let mut slices = alloc::vec![Slice::full(); shape.num_dims()];
         slices[dim] = Slice::from(len - 1..len);
@@ -1038,7 +1105,8 @@ pub trait FloatTensorOps<B: Backend> {
     /// The elements of `lhs` raised to the value of `rhs`.
     fn float_powi_scalar(lhs: FloatTensor<B>, rhs: Scalar) -> FloatTensor<B> {
         match rhs.elem::<i64>() {
-            0 => Self::float_ones(lhs.shape(), &B::float_device(&lhs), lhs.dtype().into()),
+            0 => Self::float_with_autodiff_context(
+                Self::float_ones(lhs.shape(), &B::float_device(&lhs), lhs.dtype().into()), Self::float_autodiff_context(&lhs)),
             1 => lhs,
             2 => B::float_mul(lhs.clone(), lhs),
             -1 => Self::float_recip(lhs),
@@ -1126,6 +1194,23 @@ pub trait FloatTensorOps<B: Backend> {
     ///
     /// A tensor with the same shape as `tensor` with square root values.
     fn float_sqrt(tensor: FloatTensor<B>) -> FloatTensor<B>;
+
+    /// Computes the element-wise hypotenuse without intermediate squaring overflow.
+    fn float_hypot(lhs: FloatTensor<B>, rhs: FloatTensor<B>) -> FloatTensor<B> {
+        let bool_dtype = get_device_settings::<B>(&B::float_device(&lhs)).bool_dtype;
+        let lhs = B::float_abs(lhs);
+        let rhs = B::float_abs(rhs);
+        let infinite = B::bool_or(B::float_is_inf(lhs.clone(), bool_dtype), B::float_is_inf(rhs.clone(), bool_dtype));
+        let swap = B::float_lower(lhs.clone(), rhs.clone(), bool_dtype);
+        let max = B::float_mask_where(lhs.clone(), swap.clone(), rhs.clone());
+        let min = B::float_mask_where(rhs, swap, lhs);
+        let zero = B::float_equal_elem(max.clone(), 0.0.into(), bool_dtype);
+        let denominator = B::float_mask_fill(max.clone(), zero, 1.0.into());
+        let ratio = B::float_div(min, denominator);
+        let square = B::float_mul(ratio.clone(), ratio);
+        let result = B::float_mul(max, B::float_sqrt(B::float_add_scalar(square, 1.0.into())));
+        B::float_mask_fill(result, infinite, f64::INFINITY.into())
+    }
 
     /// Returns element-wise reciprocal square roots. Backends may provide a native instruction.
     fn float_rsqrt(tensor: FloatTensor<B>) -> FloatTensor<B> {
@@ -1417,7 +1502,8 @@ pub trait FloatTensorOps<B: Backend> {
     fn float_topk(tensor: FloatTensor<B>, dim: usize, k: usize) -> FloatTensor<B> {
         let device = Self::float_device(&tensor);
         let dtype = get_device_settings::<B>(&device).int_dtype;
-        let k_indices = B::int_arange(0..k as i64, &device, dtype);
+        let k_indices = B::int_with_autodiff_context(
+            B::int_arange(0..k as i64, &device, dtype), B::float_autodiff_context(&tensor));
         Self::float_select(Self::float_sort(tensor, dim, true), dim, k_indices)
     }
 
@@ -1667,7 +1753,8 @@ pub trait FloatTensorOps<B: Backend> {
     fn float_sign(tensor: FloatTensor<B>) -> FloatTensor<B> {
         let device = B::float_device(&tensor);
         let bool_dtype = get_device_settings::<B>(&B::float_device(&tensor)).bool_dtype;
-        let zeros = B::float_zeros(tensor.shape(), &device, tensor.dtype().into());
+        let zeros = B::float_with_autodiff_context(B::float_zeros(tensor.shape(), &device, tensor.dtype().into()),
+            B::float_autodiff_context(&tensor));
         let less_than_zero = B::float_lower_elem(tensor.clone(), 0f32.into(), bool_dtype);
         let greater_than_zero = B::float_greater_elem(tensor, 0f32.into(), bool_dtype);
 

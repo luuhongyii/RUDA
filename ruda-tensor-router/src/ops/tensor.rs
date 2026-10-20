@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use ruda_tensor::backend::ExecutionError;
-use ruda_tensor::{Scalar, tensor::FloatElem};
+use ruda_tensor::Scalar;
 use ruda_core::tensor::{BoolDType, IntDType};
 
 use crate::{BackendRouter, RunnerChannel, RunnerClient, get_client};
@@ -82,11 +82,7 @@ impl<R: RunnerChannel> FloatTensorOps<Self> for BackendRouter<R> {
     }
 
     async fn float_into_data(tensor: FloatTensor<Self>) -> Result<TensorData, ExecutionError> {
-        Ok(tensor
-            .into_data()
-            .await?
-            // Since underlying backends can have different data types, we convert to the current elem
-            .convert::<FloatElem<Self>>())
+        tensor.into_data().await
     }
 
     fn float_device(tensor: &FloatTensor<Self>) -> Device<Self> {
@@ -345,13 +341,23 @@ impl<R: RunnerChannel> FloatTensorOps<Self> for BackendRouter<R> {
         indices: IntTensor<Self>,
         value: FloatTensor<Self>,
     ) -> FloatTensor<Self> {
+        Self::float_scatter(dim, tensor, indices, value, IndexingUpdateOp::Add)
+    }
+
+    fn float_scatter(
+        dim: usize,
+        tensor: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+        value: FloatTensor<Self>,
+        update: IndexingUpdateOp,
+    ) -> FloatTensor<Self> {
         let client = tensor.client.clone();
         let desc = ScatterOpIr::create(
             tensor.into_ir(),
             dim,
             indices.into_ir(),
             value.into_ir(),
-            IndexingUpdateOp::Add,
+            update,
             || client.create_empty_handle(),
         );
 
@@ -412,13 +418,23 @@ impl<R: RunnerChannel> FloatTensorOps<Self> for BackendRouter<R> {
         indices: IntTensor<Self>,
         value: FloatTensor<Self>,
     ) -> FloatTensor<Self> {
+        Self::float_select_assign(tensor, dim, indices, value, IndexingUpdateOp::Add)
+    }
+
+    fn float_select_assign(
+        tensor: FloatTensor<Self>,
+        dim: usize,
+        indices: IntTensor<Self>,
+        value: FloatTensor<Self>,
+        update: IndexingUpdateOp,
+    ) -> FloatTensor<Self> {
         let client = tensor.client.clone();
         let desc = SelectAssignOpIr::create(
             tensor.into_ir(),
             dim,
             indices.into_ir(),
             value.into_ir(),
-            IndexingUpdateOp::Add,
+            update,
             || client.create_empty_handle(),
         );
 
@@ -1030,6 +1046,16 @@ impl<R: RunnerChannel> FloatTensorOps<Self> for BackendRouter<R> {
                 desc.out.dtype,
                 FloatOperationIr::ArcTan2(desc),
             ))
+            .output()
+    }
+
+    fn float_hypot(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
+        let client = lhs.client.clone();
+        let desc = BinaryOpIr::create(lhs.into_ir(), rhs.into_ir(), || {
+            client.create_empty_handle()
+        });
+        client
+            .register(OperationIr::Float(desc.out.dtype, FloatOperationIr::Hypot(desc)))
             .output()
     }
 

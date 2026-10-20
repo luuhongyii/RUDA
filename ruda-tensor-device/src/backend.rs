@@ -71,6 +71,53 @@ where
         })
     }
 
+    fn flush(device: &Self::Device) -> Result<(), ExecutionError> {
+        R::client(device).flush().map_err(|err| ExecutionError::WithContext {
+            reason: format!("{err}"),
+        })
+    }
+
+    fn profile<O: Send + 'static>(device: &Self::Device, options: ruda_tensor::ProfileOptions,
+        func: impl FnOnce() -> O + Send) -> Result<(O, ruda_tensor::ProfileDuration), ExecutionError> {
+        ruda_tensor::profile_with_tokens::<Self, O>(device, options, func)
+    }
+
+    fn profile_start(device: &Self::Device) -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> {
+        R::client(device).profile_start().map(|window| Some(ruda_tensor::ProfileToken {
+            id: window.token.id, opened_on: window.stream_id.value,
+        })).map_err(|error| ExecutionError::WithContext { reason: format!("{error}") })
+    }
+
+    fn profile_end(device: &Self::Device, token: ruda_tensor::ProfileToken, _options: ruda_tensor::ProfileOptions)
+        -> Result<ruda_tensor::ProfileDuration, ExecutionError> {
+        R::client(device).profile_end(ruda::runtime::client::ProfileWindow {
+            stream_id: ruda_tensor::StreamId { value: token.opened_on },
+            token: ruda::runtime::server::ProfilingToken { id: token.id },
+        }).map_err(|error| ExecutionError::WithContext { reason: format!("{error}") })
+    }
+
+    fn profile_abandon(device: &Self::Device, token: ruda_tensor::ProfileToken) {
+        R::client(device).profile_abandon(ruda::runtime::client::ProfileWindow {
+            stream_id: ruda_tensor::StreamId { value: token.opened_on },
+            token: ruda::runtime::server::ProfilingToken { id: token.id },
+        });
+    }
+
+    fn graph_prepare(device: &Self::Device) -> Result<(), ExecutionError> {
+        R::client(device).graph_prepare().map_err(|err| ExecutionError::WithContext { reason: format!("{err}") })
+    }
+
+    fn graph_start_capture(device: &Self::Device) -> Result<(), ExecutionError> {
+        R::client(device).graph_start_capture().map_err(|err| ExecutionError::WithContext { reason: format!("{err}") })
+    }
+
+    fn graph_stop_capture(device: &Self::Device) -> Result<ruda_tensor::BackendGraph, ExecutionError> {
+        R::client(device).graph_stop_capture().map(|graph| ruda_tensor::BackendGraph::new(DeviceGraph(graph)))
+            .map_err(|err| ExecutionError::WithContext { reason: format!("{err}") })
+    }
+
+    fn graph_abort_capture(device: &Self::Device) { R::client(device).graph_abort_capture(); }
+
     fn memory_persistent_allocations<
         Output: Send,
         Input: Send,
@@ -141,6 +188,14 @@ impl<R: DeviceRuntime, F: FloatElement, I: IntElement, BT: BoolElement> core::fm
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("RudaBackend")
+    }
+}
+
+struct DeviceGraph<R: DeviceRuntime>(ruda::runtime::capture::RuntimeGraph<R>);
+
+impl<R: DeviceRuntime> ruda_tensor::HardwareGraph for DeviceGraph<R> {
+    unsafe fn replay(&self) -> Result<(), ExecutionError> {
+        unsafe { self.0.replay() }.map_err(|err| ExecutionError::WithContext { reason: format!("{err}") })
     }
 }
 

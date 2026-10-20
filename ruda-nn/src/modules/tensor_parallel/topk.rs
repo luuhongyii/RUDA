@@ -14,20 +14,21 @@ pub struct VocabParallelTopKSelection<B:Backend,const D:usize=2> {
     pub valid:Tensor<B,D,Bool>,
 }
 
-fn integer<B:Backend>(value:i64,shape:[usize;2],device:&B::Device) -> Tensor<B,2,Int> {
-    Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![value],[1,1]),(device,DType::I64)).expand(shape)
+fn integer<B:Backend>(value:i64,shape:[usize;2],device:&B::Device,context:ruda_model::tensor::AutodiffContext) -> Tensor<B,2,Int> {
+    Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![value],[1,1]),(device,DType::I64)).with_autodiff_context(context).expand(shape)
 }
 
 fn select<B:Backend>(scores:Tensor<B,2>,ids:Tensor<B,2,Int>,mut valid:Tensor<B,2,Bool>,k:usize) -> (Tensor<B,2>,Tensor<B,2,Int>) {
-    let [rows,width] = scores.dims();let sentinel = integer(i64::MAX,[rows,width],&scores.device());
+    let context = scores.autodiff_context().merge(ids.autodiff_context()).merge(valid.autodiff_context());
+    let [rows,width] = scores.dims();let sentinel = integer(i64::MAX,[rows,width],&scores.device(),context);
     let offsets = Tensor::<B,1,Int>::arange(0..i64::try_from(width).expect("top-k candidate positions exceed signed index range"),(&scores.device(),DType::I64))
-        .reshape([1,width]).expand([rows,width]);
+        .with_autodiff_context(context).reshape([1,width]).expand([rows,width]);
     let mut score_columns = Vec::with_capacity(k);let mut index_columns = Vec::with_capacity(k);
     for _ in 0..k {
         let maximum = actual_maximum(&scores,Some(&valid));
         let candidate = scores.clone().equal(maximum.clone()).bool_and(valid.clone());
         let selected = ids.clone().mask_where(candidate.bool_not(),sentinel.clone()).min_dim(1);
-        let missing = selected.clone().equal(integer(i64::MAX,[rows,1],&scores.device()));
+        let missing = selected.clone().equal(integer(i64::MAX,[rows,1],&scores.device(),context));
         let chosen = ids.clone().equal(selected.clone().expand([rows,width])).bool_and(valid.clone());
         let offset = offsets.clone().mask_where(chosen.clone().bool_not(),sentinel.clone()).min_dim(1).mask_fill(missing.clone(),0);
         score_columns.push(scores.clone().gather(1,offset).mask_fill(missing,f32::NEG_INFINITY));index_columns.push(selected);
@@ -48,16 +49,18 @@ pub(crate) fn full_logits_topk<B:Backend>(logits:Tensor<B,2>,k:usize,visible:Opt
         assert_eq!(mask.device(),logits.device(),"complete-class visibility must share the score device");
     }
     let device=logits.device();
+    let mut context=logits.autodiff_context();
+    if let Some(mask)=&visible {context=context.merge(mask.autodiff_context());}
     if rows==0 || k==0 {
-        return VocabParallelTopKSelection {scores:Tensor::zeros([rows,k],(&device,DType::F32)),
-            indices:Tensor::zeros([rows,k],(&device,DType::I64)),valid:Tensor::zeros([rows,k],&device)};
+        return VocabParallelTopKSelection {scores:Tensor::zeros([rows,k],(&device,DType::F32)).with_autodiff_context(context),
+            indices:Tensor::zeros([rows,k],(&device,DType::I64)).with_autodiff_context(context),valid:Tensor::zeros([rows,k],&device).with_autodiff_context(context)};
     }
     let logits=logits.cast(DType::F32);
-    let ids=Tensor::<B,1,Int>::arange(0..limit,(&device,DType::I64)).reshape([1,width]).expand([rows,width]);
+    let ids=Tensor::<B,1,Int>::arange(0..limit,(&device,DType::I64)).with_autodiff_context(context).reshape([1,width]).expand([rows,width]);
     let mut valid=logits.clone().is_nan().bool_not();
     if let Some(mask)=visible {valid=valid.bool_and(mask.reshape([rows,1]).expand([rows,width]));}
     let (scores,indices)=select(logits,ids,valid,k);
-    let valid=indices.clone().not_equal(integer(i64::MAX,[rows,k],&device));
+    let valid=indices.clone().not_equal(integer(i64::MAX,[rows,k],&device,context));
     VocabParallelTopKSelection {scores,indices:indices.mask_fill(valid.clone().bool_not(),-1),valid}
 }
 
@@ -79,36 +82,38 @@ impl VocabParallelLossLayout {
             assert_eq!(visible.dims(),[rows],"top-k row visibility differs");assert_eq!(visible.device(),logits.device(),"top-k visibility must share the device");
         }
         let device = logits.device();
+        let mut context=logits.autodiff_context();
+        if let Some(visible)=&visible {context=context.merge(visible.autodiff_context());}
         if k == 0 || rows == 0 {
-            return Ok(VocabParallelTopKSelection {scores:Tensor::zeros([rows,k],(&device,DType::F32)),
-                indices:Tensor::zeros([rows,k],(&device,DType::I64)),valid:Tensor::zeros([rows,k],&device)});
+            return Ok(VocabParallelTopKSelection {scores:Tensor::zeros([rows,k],(&device,DType::F32)).with_autodiff_context(context),
+                indices:Tensor::zeros([rows,k],(&device,DType::I64)).with_autodiff_context(context),valid:Tensor::zeros([rows,k],&device).with_autodiff_context(context)});
         }
         let local_k = k.min(interval.end.min(self.vocabulary_size()).saturating_sub(interval.start));
         let (mut scores,mut indices) = if local_k == 0 {
-            (Tensor::<B,2>::full([rows,k],f32::NEG_INFINITY,(&device,DType::F32)),integer(i64::MAX,[rows,k],&device))
+            (Tensor::<B,2>::full([rows,k],f32::NEG_INFINITY,(&device,DType::F32)).with_autodiff_context(context),integer(i64::MAX,[rows,k],&device,context))
         } else {
             let logits = logits.cast(DType::F32);
-            let ids = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&device,DType::I64)).reshape([1,width]).expand([rows,width]);
-            let mut valid = logits.clone().is_nan().bool_not().bool_and(ids.clone().lower(integer(self.vocabulary_size() as i64,[rows,width],&device)));
+            let ids = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&device,DType::I64)).with_autodiff_context(context).reshape([1,width]).expand([rows,width]);
+            let mut valid = logits.clone().is_nan().bool_not().bool_and(ids.clone().lower(integer(self.vocabulary_size() as i64,[rows,width],&device,context)));
             if let Some(visible) = visible {valid = valid.bool_and(visible.reshape([rows,1]).expand([rows,width]));}
             select(logits,ids,valid,local_k)
         };
         if local_k > 0 && local_k != k {
-            let padding = k-local_k;scores = Tensor::cat(alloc::vec![scores,Tensor::full([rows,padding],f32::NEG_INFINITY,(&device,DType::F32))],1);
-            indices = Tensor::cat(alloc::vec![indices,integer(i64::MAX,[rows,padding],&device)],1);
+            let padding = k-local_k;scores = Tensor::cat(alloc::vec![scores,Tensor::full([rows,padding],f32::NEG_INFINITY,(&device,DType::F32)).with_autodiff_context(context)],1);
+            indices = Tensor::cat(alloc::vec![indices,integer(i64::MAX,[rows,padding],&device,context)],1);
         }
         let (scores,indices) = if self.world_size() == 1 {(scores,indices)} else {
             let candidate_width = self.world_size().checked_mul(k).expect("native top-k candidate width overflow");
             let gathered_rows = self.world_size().checked_mul(rows).expect("native top-k candidate row count overflow");
             let gathered = communicator.all_gather_float(scores.into_primitive().tensor())?;
-            let gathered = Tensor::<B,2>::from_primitive(TensorPrimitive::Float(gathered));
+            let gathered = Tensor::<B,2>::from_primitive(TensorPrimitive::Float(gathered)).with_autodiff_context(context);
             assert_eq!(gathered.dims(),[gathered_rows,k],"top-k score transport returned incompatible geometry");
             let gathered = gathered.reshape([self.world_size(),rows,k]).swap_dims(0,1).reshape([rows,candidate_width]);
             let indices = gather_index_matrix(indices,&communicator)?.swap_dims(0,1).reshape([rows,candidate_width]);
-            let valid = indices.clone().not_equal(integer(i64::MAX,[rows,candidate_width],&device));
+            let valid = indices.clone().not_equal(integer(i64::MAX,[rows,candidate_width],&device,context));
             select(gathered,indices,valid,k)
         };
-        let valid = indices.clone().not_equal(integer(i64::MAX,[rows,k],&device));
+        let valid = indices.clone().not_equal(integer(i64::MAX,[rows,k],&device,context));
         Ok(VocabParallelTopKSelection {scores,indices:indices.mask_fill(valid.clone().bool_not(),-1),valid})
     }
 

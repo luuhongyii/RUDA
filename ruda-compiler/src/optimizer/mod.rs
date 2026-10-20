@@ -147,6 +147,7 @@ pub struct Optimizer {
     loop_break: VecDeque<NodeIndex>,
     /// The single return block
     pub ret: NodeIndex,
+    return_value: Option<Variable>,
     /// Root scope to allocate variables on
     pub root_scope: Scope,
     /// The `RudaDim` used for range analysis
@@ -164,6 +165,7 @@ impl Default for Optimizer {
             current_block: Default::default(),
             loop_break: Default::default(),
             ret: Default::default(),
+            return_value: None,
             root_scope: Scope::root(false),
             ruda_dim: RudaDim::new_1d(1),
             analysis_cache: Default::default(),
@@ -174,13 +176,34 @@ impl Default for Optimizer {
 }
 
 impl Optimizer {
+    /// Payload effects of the optimized program, including phi-carried pointer aliases.
+    pub fn buffer_io(
+        &self,
+        buffers: &[ruda_core::kernel::KernelArg],
+        tensor_maps: &[ruda_core::kernel::KernelArg],
+    ) -> ruda_core::kernel::KernelIo {
+        let mut analysis = ruda_core::kernel::BufferIoAnalysis::new(buffers, tensor_maps);
+        for block in self.program.node_weights() {
+            for phi in block.phi_nodes.borrow().iter() {
+                for entry in &phi.entries { analysis.alias(phi.out, entry.value); }
+            }
+            for instruction in block.ops.borrow().values() {
+                analysis.instruction(instruction);
+            }
+        }
+        analysis.finish()
+    }
+}
+
+impl Optimizer {
     /// Optimize first-class pointer values without lowering their types before SSA.
     pub fn new_pointer_values(
-        expand: Scope,
+        mut expand: Scope,
         ruda_dim: RudaDim,
         transformers: Vec<Rc<dyn IrTransformer>>,
         processors: Vec<Box<dyn Processor>>,
     ) -> Self {
+        expand.lower_reference_values().expect("valid references before pointer SSA");
         core::PointerValueLowering::new(&expand).expect("valid pointer values before SSA");
         let mut opt = Self {
             root_scope: expand.clone(),
@@ -291,6 +314,11 @@ impl Optimizer {
         self.current_block = Some(entry);
         self.ret = self.program.add_node(BasicBlock::default());
         *self.program[self.ret].control_flow.borrow_mut() = ControlFlow::Return;
+        for parameter in &scope.parameters {
+            if let VariableKind::LocalMut { id } = parameter.kind {
+                self.program.variables.insert(id, parameter.ty);
+            }
+        }
         self.parse_scope(scope);
         if let Some(current_block) = self.current_block {
             self.program.add_edge(current_block, self.ret, 0);

@@ -58,12 +58,12 @@ impl<T: RudaType> ComptimeOptionExpand<T> {
     }
 }
 
-pub enum ComptimeOptionArgs<T: LaunchArg, R: Runtime> {
+pub enum ComptimeOptionArgs<T: LaunchArg, R: LaunchMarker = ()> {
     Some(<T as LaunchArg>::RuntimeArg<R>),
     None,
 }
 
-impl<T: LaunchArg, R: Runtime> From<Option<<T as LaunchArg>::RuntimeArg<R>>>
+impl<T: LaunchArg, R: LaunchMarker> From<Option<<T as LaunchArg>::RuntimeArg<R>>>
     for ComptimeOptionArgs<T, R>
 {
     fn from(value: Option<<T as LaunchArg>::RuntimeArg<R>>) -> Self {
@@ -75,10 +75,10 @@ impl<T: LaunchArg, R: Runtime> From<Option<<T as LaunchArg>::RuntimeArg<R>>>
 }
 
 impl<T: LaunchArg> LaunchArg for ComptimeOption<T> {
-    type RuntimeArg<R: Runtime> = ComptimeOptionArgs<T, R>;
+    type RuntimeArg<R: LaunchMarker> = ComptimeOptionArgs<T, R>;
     type CompilationArg = ComptimeOptionCompilationArg<T>;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {

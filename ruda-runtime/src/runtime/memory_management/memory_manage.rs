@@ -1,7 +1,7 @@
 use super::{
     adaptive::AdaptiveState,
     MemoryConfiguration, MemoryPoolOptions, MemoryUsage, PoolType,
-    memory_pool::{ExclusiveMemoryPool, MemoryPool, PersistentPool, SlicedPool},
+    memory_pool::{DedicatedAllocations, ExclusiveMemoryPool, MemoryPool, PersistentPool, SlicedPool},
 };
 use crate::runtime::{
     config::{
@@ -19,7 +19,7 @@ use alloc::string::{String, ToString};
 #[cfg(not(exclusive_memory_only))]
 use alloc::vec;
 use alloc::vec::Vec;
-use ruda_core::{backtrace::BackTrace, stub::Arc};
+use ruda_core::{backtrace::BackTrace, stream_id::StreamId, stub::Arc};
 use ruda_core::ir::MemoryDeviceProperties;
 
 pub use super::memory_pool::{ManagedMemoryBinding, handle::*};
@@ -42,6 +42,15 @@ impl DynamicPool {
 }
 
 impl MemoryPool for DynamicPool {
+    fn materialize<Storage: ComputeStorage>(
+        &mut self, storage: &mut Storage, binding: &ManagedMemoryBinding,
+    ) -> Result<(), IoError> {
+        match self {
+            DynamicPool::Sliced(pool) => pool.materialize(storage, binding),
+            DynamicPool::Exclusive(pool) => pool.materialize(storage, binding),
+        }
+    }
+
     fn accept(&self, size: u64) -> bool {
         match self {
             DynamicPool::Sliced(pool) => pool.accept(size),
@@ -118,19 +127,32 @@ pub enum MemoryAllocationMode {
     /// Use a persistent memory management strategy, meaning that all allocations are for data that is
     /// likely never going to be freed.
     Persistent,
+    /// One driver allocation per buffer, outside reusable pools and adaptive sizing.
+    Dedicated,
 }
 
 /// Reserves and keeps track of chunks of memory in the storage, and slices upon these chunks.
 pub struct MemoryManagement<Storage> {
+    recording: hashbrown::HashMap<StreamId, MemoryCapture>,
+    capture_allocations_forbidden: bool,
     name: String,
     persistent: PersistentPool,
+    dedicated: DedicatedAllocations,
     pools: Vec<DynamicPool>,
     adaptive: Option<AdaptiveState>,
     storage: Storage,
     alloc_reserve_count: u64,
     mode: MemoryAllocationMode,
+    base_mode: MemoryAllocationMode,
+    windows: Vec<MemoryAllocationMode>,
     config: PersistentMemory,
     logger: Arc<ServerLogger>,
+}
+
+#[derive(Default)]
+struct MemoryCapture {
+    forbid_allocations: bool,
+    pages: hashbrown::HashMap<crate::runtime::storage::StorageId, super::page_guard::PageRef>,
 }
 
 fn generate_bucket_sizes(
@@ -357,16 +379,21 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
 
         Self {
             name: options.name,
+            recording: Default::default(),
+            capture_allocations_forbidden: false,
             persistent: PersistentPool::new(
                 properties.max_page_size,
                 properties.alignment,
                 if adaptive.is_some() { u8::MAX } else { pools.len() as u8 },
             ),
+            dedicated: DedicatedAllocations::new(properties.max_page_size, properties.alignment),
             pools,
             adaptive,
             storage,
             alloc_reserve_count: 0,
             mode,
+            base_mode: mode,
+            windows: Vec::new(),
             config,
             logger,
         }
@@ -374,11 +401,15 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
 
     /// Change the mode of allocation.
     pub fn mode(&mut self, mode: MemoryAllocationMode) {
-        // We override the mode based on the ruda config.
-        let mode = match self.config {
-            PersistentMemory::Enabled => mode,
-            PersistentMemory::Disabled | PersistentMemory::Enforced => return,
-        };
+        match mode {
+            MemoryAllocationMode::Auto => { self.windows.pop(); }
+            MemoryAllocationMode::Persistent => self.windows.push(match self.config {
+                PersistentMemory::Enabled => mode,
+                PersistentMemory::Disabled | PersistentMemory::Enforced => self.base_mode,
+            }),
+            MemoryAllocationMode::Dedicated => self.windows.push(mode),
+        }
+        let mode = self.windows.last().copied().unwrap_or(self.base_mode);
 
         self.logger.log_memory(
             |level| !matches!(level, MemoryLogLevel::Disabled),
@@ -394,6 +425,7 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
 
     /// Cleanup allocations in pools that are deemed unnecessary.
     pub fn cleanup(&mut self, explicit: bool) {
+        if !self.recording.is_empty() { return; }
         self.logger.log_memory(
             |level| !matches!(level, MemoryLogLevel::Disabled) && explicit,
             || "Manual memory cleanup ...".to_string(),
@@ -401,6 +433,7 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
 
         self.persistent
             .cleanup(&mut self.storage, self.alloc_reserve_count, explicit);
+        self.dedicated.reclaim(&mut self.storage);
 
         for pool in self.pools.iter_mut() {
             pool.cleanup(&mut self.storage, self.alloc_reserve_count, explicit);
@@ -411,6 +444,9 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
     /// Pinned resources stay in place. Fixed pools only release empty pages.
     /// Relocation errors remain explicit; success does not guarantee pages were freed.
     pub fn compact(&mut self) -> Result<(), IoError> {
+        if !self.recording.is_empty() {
+            return Err(IoError::Unknown { description: "Cannot relocate memory during graph capture".into(), backtrace: BackTrace::capture() });
+        }
         if let Some(adaptive) = self.adaptive.as_mut() {
             adaptive.compact(&mut self.pools, &mut self.storage)?;
         }
@@ -427,6 +463,12 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
     /// Returns the storage from the specified binding
     fn find(&self, binding: ManagedMemoryBinding) -> Result<&Slice, IoError> {
         let location = binding.descriptor().location();
+        if location.init == 0 {
+            return Err(IoError::NotFound { reason: "Memory allocation was not initialized".into(), backtrace: BackTrace::capture() });
+        }
+        if location.is_dedicated() {
+            return self.dedicated.find(&binding);
+        }
 
         if location.pool >= self.pools.len() as u8 {
             return self.persistent.find_at(location);
@@ -449,8 +491,36 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
 
     /// Returns the storage from the specified binding
     pub fn get_storage(&mut self, binding: ManagedMemoryBinding) -> Result<StorageHandle, IoError> {
+        self.materialize(&binding)?;
         let slice = self.find(binding)?;
         Ok(slice.storage.clone())
+    }
+
+    /// Record a page used by the capturing stream, including memory owned by another stream.
+    pub fn touch_capture(&mut self, owner: StreamId, binding: ManagedMemoryBinding) -> Result<(), IoError> {
+        self.materialize(&binding)?;
+        let slice = self.find(binding)?;
+        let (storage, page) = (slice.storage.id, slice.page.clone());
+        if let Some(recording) = self.recording.get_mut(&owner) { recording.pages.entry(storage).or_insert(page); }
+        Ok(())
+    }
+
+    fn materialize(&mut self, binding: &ManagedMemoryBinding) -> Result<(), IoError> {
+        if self.find(binding.clone())?.mapped { return Ok(()); }
+        if self.capture_allocations_forbidden {
+            return Err(IoError::Unknown {
+                description: "Cannot materialize a lazy page during allocation-free graph capture".into(),
+                backtrace: BackTrace::capture(),
+            });
+        }
+        let location = binding.descriptor().location();
+        if location.is_dedicated() {
+            self.dedicated.materialize(&mut self.storage, binding)
+        } else if location.pool >= self.pools.len() as u8 {
+            self.persistent.materialize(&mut self.storage, binding)
+        } else {
+            self.pools[location.pool as usize].materialize(&mut self.storage, binding)
+        }
     }
 
     /// Returns the resource from the storage at the specified handle
@@ -481,12 +551,41 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
     /// Whether an adaptive reservation may relocate existing data. Queued-command
     /// backends must submit their pending encoders before calling `reserve` here.
     pub fn relocation_pending(&self, size: u64) -> bool {
-        self.adaptive.as_ref().is_some_and(|state| state.pending(&self.pools, size))
+        !matches!(self.mode, MemoryAllocationMode::Dedicated)
+            && self.recording.is_empty()
+            && self.adaptive.as_ref().is_some_and(|state| state.pending(&self.pools, size))
     }
 
     /// Finds a spot in memory for a resource with the given size in bytes, and returns a handle to it
     #[cfg_attr(feature = "runtime-tracing", tracing::instrument(level = "trace", skip(self)))]
     pub fn reserve(&mut self, size: u64) -> Result<ManagedMemoryHandle, IoError> {
+        if matches!(self.mode, MemoryAllocationMode::Dedicated) {
+            if self.capture_allocations_forbidden {
+                return Err(IoError::Unknown {
+                    description: "Cannot create a dedicated allocation during allocation-free graph capture".into(),
+                    backtrace: BackTrace::capture(),
+                });
+            }
+            if self.recording.is_empty() {
+                self.dedicated.reclaim(&mut self.storage);
+            }
+            return self.dedicated.alloc(&mut self.storage, size);
+        }
+        if !self.recording.is_empty() {
+            if let Some(handle) = self.persistent.try_reserve(size) { return Ok(handle); }
+            for pool in &mut self.pools {
+                if pool.accept(size) {
+                    if let Some(handle) = pool.try_reserve(size) { return Ok(handle); }
+                }
+            }
+            if !self.capture_allocations_forbidden {
+                return self.persistent.alloc(&mut self.storage, size);
+            }
+            return Err(IoError::Unknown {
+                description: format!("Graph capture needs {size} bytes not available in warmed allocation pages"),
+                backtrace: BackTrace::capture(),
+            });
+        }
         // If this happens every nanosecond, counts overflows after 585 years, so not worth thinking too
         // hard about overflow here.
         self.alloc_reserve_count += 1;
@@ -563,6 +662,24 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
         allocated
     }
 
+    /// Record page usage without retaining individual slices during the window.
+    pub fn begin_capture(&mut self, owner: StreamId, forbid_allocations: bool) {
+        let recording = self.recording.entry(owner).or_default();
+        recording.forbid_allocations |= forbid_allocations;
+        self.capture_allocations_forbidden |= forbid_allocations;
+    }
+
+    /// Whether reservations are restricted to already held pages.
+    pub fn is_capturing(&self) -> bool { !self.recording.is_empty() }
+
+    /// Close the window and optionally keep its touched pages for replay.
+    pub fn end_capture(&mut self, owner: StreamId, retain: bool) -> Vec<super::PageGuard> {
+        let recording = self.recording.remove(&owner);
+        self.capture_allocations_forbidden = self.recording.values().any(|capture| capture.forbid_allocations);
+        recording.into_iter().flat_map(|capture| capture.pages.into_values())
+            .filter(|_| retain).map(|page| page.guard()).collect()
+    }
+
     /// Fetch the storage used by the memory manager.
     ///
     /// # Notes
@@ -589,6 +706,7 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
             |m1, m2| m1.combine(m2),
         );
         memory_usage.combine(self.persistent.get_memory_usage())
+            .combine(self.dedicated.memory_usage())
     }
 
     /// Print out a report of the current memory usage.
@@ -612,6 +730,9 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
                 reason: "Reserved memory isn't initialized".into(),
             });
         }
+        if descriptor.location().is_dedicated() {
+            return self.dedicated.bind(reserved, assigned, cursor);
+        }
 
         let pool_index = descriptor.location().pool as usize;
         if pool_index >= self.pools.len() {
@@ -633,6 +754,7 @@ impl<Storage: ComputeStorage> core::fmt::Display for MemoryManagement<Storage> {
         f.write_str("\n# MemoryManagement\n\n")?;
         f.write_fmt(format_args!(" - name: {:?}\n", self.name))?;
         f.write_fmt(format_args!("\n## Persistent\n\n{}", self.persistent))?;
+        f.write_fmt(format_args!("\n## Dedicated\n\n{}", self.dedicated.memory_usage()))?;
         f.write_str("\n## Dynamic\n\n")?;
 
         for pool in self.pools.iter() {
@@ -666,10 +788,7 @@ mod tests {
     use crate::runtime::{memory_management::MemoryManagement, storage::BytesStorage};
     use alloc::vec;
 
-    const DUMMY_MEM_PROPS: MemoryDeviceProperties = MemoryDeviceProperties {
-        max_page_size: 128 * 1024 * 1024,
-        alignment: 32,
-    };
+    const DUMMY_MEM_PROPS: MemoryDeviceProperties = MemoryDeviceProperties::new(128 * 1024 * 1024, 32);
 
     fn options() -> MemoryManagementOptions {
         MemoryManagementOptions {
@@ -826,10 +945,7 @@ mod tests {
         let page_size = 500;
         let mut memory_management = MemoryManagement::from_configuration(
             BytesStorage::default(),
-            &MemoryDeviceProperties {
-                max_page_size: page_size,
-                alignment: 50,
-            },
+            &MemoryDeviceProperties::new(page_size, 50),
             MemoryConfiguration::Custom {
                 pool_options: vec![MemoryPoolOptions {
                     pool_type: PoolType::SlicedPages {
@@ -866,10 +982,7 @@ mod tests {
             .collect();
         let mut memory_management = MemoryManagement::from_configuration(
             BytesStorage::default(),
-            &MemoryDeviceProperties {
-                max_page_size: 128 * 1024 * 1024,
-                alignment: 10,
-            },
+            &MemoryDeviceProperties::new(128 * 1024 * 1024, 10),
             MemoryConfiguration::Custom {
                 pool_options: pools,
             },
@@ -892,10 +1005,7 @@ mod tests {
     fn allocate_deallocate_reallocate() {
         let mut memory_management = MemoryManagement::from_configuration(
             BytesStorage::default(),
-            &MemoryDeviceProperties {
-                max_page_size: 128 * 1024 * 1024,
-                alignment: 32,
-            },
+            &MemoryDeviceProperties::new(128 * 1024 * 1024, 32),
             MemoryConfiguration::SubSlices,
             Arc::new(ServerLogger::default()),
             options(),
@@ -923,10 +1033,7 @@ mod tests {
     fn test_fragmentation_resistance() {
         let mut memory_management = MemoryManagement::from_configuration(
             BytesStorage::default(),
-            &MemoryDeviceProperties {
-                max_page_size: 128 * 1024 * 1024,
-                alignment: 32,
-            },
+            &MemoryDeviceProperties::new(128 * 1024 * 1024, 32),
             MemoryConfiguration::SubSlices,
             Arc::new(ServerLogger::default()),
             options(),
@@ -956,10 +1063,7 @@ mod tests {
     fn noslice_test_handle_mutability() {
         let mut memory_management = MemoryManagement::from_configuration(
             BytesStorage::default(),
-            &(MemoryDeviceProperties {
-                max_page_size: 128 * 1024 * 1024,
-                alignment: 32,
-            }),
+            &(MemoryDeviceProperties::new(128 * 1024 * 1024, 32)),
             MemoryConfiguration::ExclusivePages,
             Arc::new(ServerLogger::default()),
             options(),
@@ -1057,10 +1161,7 @@ mod tests {
     fn noslice_alloc_respects_alignment_size() {
         let mut memory_management = MemoryManagement::from_configuration(
             BytesStorage::default(),
-            &MemoryDeviceProperties {
-                max_page_size: DUMMY_MEM_PROPS.max_page_size,
-                alignment: 50,
-            },
+            &MemoryDeviceProperties::new(DUMMY_MEM_PROPS.max_page_size, 50),
             MemoryConfiguration::Custom {
                 pool_options: vec![MemoryPoolOptions {
                     pool_type: PoolType::ExclusivePages {
@@ -1094,10 +1195,7 @@ mod tests {
             .collect();
         let mut memory_management = MemoryManagement::from_configuration(
             BytesStorage::default(),
-            &MemoryDeviceProperties {
-                max_page_size: DUMMY_MEM_PROPS.max_page_size,
-                alignment: 10,
-            },
+            &MemoryDeviceProperties::new(DUMMY_MEM_PROPS.max_page_size, 10),
             MemoryConfiguration::Custom {
                 pool_options: pools,
             },
@@ -1116,10 +1214,7 @@ mod tests {
     fn noslice_allocate_deallocate_reallocate() {
         let mut memory_management = MemoryManagement::from_configuration(
             BytesStorage::default(),
-            &MemoryDeviceProperties {
-                max_page_size: 128 * 1024 * 1024,
-                alignment: 32,
-            },
+            &MemoryDeviceProperties::new(128 * 1024 * 1024, 32),
             MemoryConfiguration::ExclusivePages,
             Arc::new(ServerLogger::default()),
             options(),

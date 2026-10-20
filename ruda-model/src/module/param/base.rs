@@ -4,7 +4,7 @@ use alloc::format;
 
 #[cfg(not(target_has_atomic = "ptr"))]
 use alloc::boxed::Box;
-use ruda_core::stub::RwLock;
+use ruda_core::stub::{Mutex, RwLock};
 use ruda_tensor::api::Shape;
 use core::ops::Deref;
 
@@ -53,6 +53,39 @@ fn new_init_fn<P: Parameter, F: Fn(&P::Device, bool) -> P + Send + Sync + 'stati
     Arc::new(Box::new(func))
 }
 
+struct SharedInitializer<P: Parameter> {
+    init: InitFn<P>,
+    value: SyncOnceCell<Mutex<(P, bool)>>,
+}
+
+impl<P: Parameter> SharedInitializer<P> {
+    fn new(init: InitFn<P>) -> Arc<Self> {
+        Arc::new(Self {
+            init,
+            value: SyncOnceCell::new(),
+        })
+    }
+
+    fn initialize(&self, device: &P::Device, require_grad: bool) -> P {
+        let cached = self
+            .value
+            .get_or_init(|| Mutex::new(((self.init)(device, require_grad), require_grad)))
+            .lock()
+            .unwrap();
+        let (value, initialized_require_grad) = (cached.0.clone(), cached.1);
+        core::mem::drop(cached);
+        if require_grad == initialized_require_grad {
+            value
+        } else {
+            value.set_require_grad(require_grad)
+        }
+    }
+
+    fn is_initialized(&self) -> bool {
+        self.value.get().is_some()
+    }
+}
+
 /// Parameters are the fundamental building blocks of [modules](crate::module::Module) where they
 /// serve as containers for [tensors](crate::tensor::Tensor) that can be updated during
 /// training, and loaded during inference. If you don't want to save the tensors
@@ -84,6 +117,8 @@ pub struct Param<T: Parameter> {
     pub(crate) param_mapper: ParamMapper<T>,
     // For stateful `module.valid()` <> `module.train()`
     pub(crate) require_grad: bool,
+    pub(crate) transform: Option<super::transform::SharedTransform<T>>,
+    pub(crate) transform_record: Option<super::transform::TransformRecord>,
 }
 
 #[derive(Clone)]
@@ -102,6 +137,7 @@ pub struct Param<T: Parameter> {
 pub struct ParamMapper<T: Parameter> {
     load: Option<Mapper<T>>,
     save: Option<Mapper<T>>,
+    mapped_require_grad: Option<bool>,
 }
 
 impl<T: Parameter> core::fmt::Debug for ParamMapper<T> {
@@ -115,6 +151,21 @@ impl<T: Parameter> core::fmt::Debug for ParamMapper<T> {
 }
 
 impl<T: Parameter> ParamMapper<T> {
+    pub(crate) fn convert<U, IntoOld, IntoNew>(self, into_old: IntoOld, into_new: IntoNew) -> ParamMapper<U>
+    where
+        T: 'static, U: Parameter + 'static,
+        IntoOld: Fn(U) -> T + Clone + Send + Sync + 'static,
+        IntoNew: Fn(T) -> U + Clone + Send + Sync + 'static,
+    {
+        let load_old = into_old.clone();
+        let load_new = into_new.clone();
+        ParamMapper {
+            load: self.load.map(|mapper| new_mapper(move |value| load_new(mapper(load_old(value))))),
+            save: self.save.map(|mapper| new_mapper(move |value| into_new(mapper(into_old(value))))),
+            mapped_require_grad: self.mapped_require_grad,
+        }
+    }
+
     /// Applies the transformation when loading the given parameter.
     pub fn on_load(&self, param: T) -> T {
         match &self.load {
@@ -136,6 +187,7 @@ impl<T: Parameter> Default for ParamMapper<T> {
         Self {
             load: None,
             save: None,
+            mapped_require_grad: None,
         }
     }
 }
@@ -165,16 +217,32 @@ pub trait Parameter: Clone + core::fmt::Debug + Send {
 
     /// Set the gradient requirement.
     fn set_require_grad(self, require_grad: bool) -> Self;
+
+    #[doc(hidden)]
+    fn into_materialized(self, require_grad: bool) -> Self { self.set_require_grad(require_grad) }
+
+    #[doc(hidden)]
+    fn mapped_require_grad(&self, _previous: bool) -> bool {
+        self.is_require_grad()
+    }
+
+    #[doc(hidden)]
+    fn autodiff_context(&self) -> Option<ruda_tensor::AutodiffContext> { None }
+
+    #[doc(hidden)]
+    fn creation_context(_device: &Self::Device) -> Option<ruda_tensor::AutodiffContext> { None }
+
+    #[doc(hidden)]
+    fn in_creation_context<R>(_device: &Self::Device, _context: Option<ruda_tensor::AutodiffContext>, func: impl FnOnce() -> R) -> R { func() }
 }
 
 /// The deferred initialization state for lazy parameters.
 #[allow(clippy::type_complexity)]
 pub(crate) struct Uninitialized<P: Parameter> {
     /// The initialization function. Called with `(device, is_require_grad) -> Parameter`.
-    /// Wrapped in `Arc` so that cloning a `Param` preserves the lazy state without
-    /// triggering initialization. Each clone holds its own `Uninitialized` state and
-    /// will run the init function separately on first access (producing independent values).
-    init: InitFn<P>,
+    /// Clones share the first initialization result without triggering evaluation.
+    /// Per-parameter transformations and gradient settings remain independent.
+    init: Arc<SharedInitializer<P>>,
     /// The target device on which the parameter should be initialized.
     /// Used by `lazy_device()` to provide device information without triggering initialization.
     pub(crate) device: P::Device,
@@ -184,6 +252,7 @@ pub(crate) struct Uninitialized<P: Parameter> {
     /// The shape of the tensor parameter.
     /// Used by `lazy_shape()` to provide shape information without triggering initialization.
     pub(crate) shape: Shape,
+    context: Option<ruda_tensor::AutodiffContext>,
 }
 
 impl<P: Parameter> Clone for Uninitialized<P> {
@@ -193,6 +262,7 @@ impl<P: Parameter> Clone for Uninitialized<P> {
             device: self.device.clone(),
             is_require_grad: self.is_require_grad,
             shape: self.shape.clone(),
+            context: self.context,
         }
     }
 }
@@ -203,11 +273,9 @@ impl<P: Parameter> Uninitialized<P> {
     /// This is called by [Param::val] when accessing an uninitialized parameter for the first time.
     /// The function is given the stored device and gradient requirement, and returns the initialized parameter.
     ///
-    /// Although this takes `&self` (the `Arc<dyn Fn>` is callable multiple times), callers
-    /// are expected to invoke this only once per `Param` instance. The caller (`val()`) takes
-    /// the `Uninitialized` out of its `Option` via `take()` to enforce single-initialization.
+    /// The initializer is evaluated once across all clones; each parameter caches its own value.
     fn initialize(&self) -> P {
-        (self.init)(&self.device, self.is_require_grad)
+        self.init.initialize(&self.device, self.is_require_grad)
     }
 }
 
@@ -221,6 +289,8 @@ impl<T: Parameter> Param<T> {
             initialization: None,
             param_mapper: Default::default(),
             require_grad,
+            transform: None,
+            transform_record: None,
         }
     }
 
@@ -235,17 +305,23 @@ impl<T: Parameter> Param<T> {
     where
         F: Fn(&T::Device, bool) -> T + Send + Sync + 'static,
     {
+        let context = T::creation_context(&device);
         Self {
             id,
             state: SyncOnceCell::new(),
             initialization: Some(RwLock::new(Some(Uninitialized {
-                init: new_init_fn(init),
+                init: SharedInitializer::new(new_init_fn(move |device, require_grad| {
+                    T::in_creation_context(device, context, || init(device, require_grad))
+                })),
                 device,
                 is_require_grad,
                 shape,
+                context,
             }))),
             param_mapper: Default::default(),
             require_grad: is_require_grad,
+            transform: None,
+            transform_record: None,
         }
     }
 
@@ -254,6 +330,15 @@ impl<T: Parameter> Param<T> {
     /// For initialized parameters, this returns a clone of the cached value.
     /// For uninitialized parameters, this triggers initialization:
     pub fn val(&self) -> T {
+        let base = self.base();
+        match &self.transform {
+            Some(transform) => transform.apply(base),
+            None => base,
+        }
+    }
+
+    /// Return the stored base without materializing an attached transformation.
+    pub fn base(&self) -> T {
         self.state
             .get_or_init(|| {
                 let mut result = self
@@ -268,18 +353,52 @@ impl<T: Parameter> Param<T> {
             .clone()
     }
 
+    /// Borrow the concrete state attached by a reparameterized module.
+    pub fn reparameterization<R: 'static>(&self) -> Option<&R> {
+        self.transform.as_ref()?.as_any().downcast_ref()
+    }
+
+    #[doc(hidden)]
+    pub fn visit_reparameterization_primitives(&self, visitor: &mut dyn FnMut(ParamId, &dyn core::any::Any)) {
+        if let Some(transform) = &self.transform { transform.visit_float_primitives(visitor); }
+    }
+
+    pub(crate) fn transform_owner(&self) -> Option<usize> {
+        self.transform.as_ref().map(|transform| transform.owner())
+    }
+
+    pub(crate) fn without_transform(mut self) -> Self {
+        self.transform = None;
+        self
+    }
+
+    /// Replace the structural base with its current effective value.
+    pub fn materialize(self) -> Self {
+        if self.transform.is_none() { return self; }
+        let value = self.val().into_materialized(self.base().is_require_grad());
+        let mut result = Self::from_mapped_value(self.id, value, self.param_mapper);
+        result.require_grad = self.require_grad;
+        result
+    }
+
     /// Check if the parameter has been initialized.
     ///
     /// Returns `true` if the parameter's value has been computed and cached,
     /// `false` if it's still lazy and will be initialized on first access.
     pub fn is_initialized(&self) -> bool {
         self.state.get().is_some()
+            || self.initialization.as_ref().is_some_and(|init| {
+                init.read()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|value| value.init.is_initialized())
+            })
     }
 
     /// Read the initialized or declared lazy gradient requirement without running the initializer.
     /// A backend/device without autodiff can still produce an untracked tensor when initialized.
     pub fn planned_is_require_grad(&self) -> bool {
-        self.lazy_is_require_grad()
+        self.require_grad
     }
 
     /// Gets the parameter's value while consuming the parameter.
@@ -289,18 +408,23 @@ impl<T: Parameter> Param<T> {
 
     /// Gets the parameter id and value while consuming the parameter.
     pub fn consume(self) -> (ParamId, T, ParamMapper<T>) {
-        let tensor = self.val();
+        let tensor = self.base();
+        let mut mapper = self.param_mapper;
+        mapper.mapped_require_grad = Some(self.require_grad);
 
         core::mem::drop(self.state);
 
-        (self.id, tensor, self.param_mapper)
+        (self.id, tensor, mapper)
     }
 
     /// Execute the given function on the inner value.
-    pub fn map<F: FnOnce(T) -> T>(self, func: F) -> Self {
+    pub fn map<F: FnOnce(T) -> T>(mut self, func: F) -> Self {
+        let previous = self.require_grad;
+        let transform = self.transform.take();
+        let transform_record = self.transform_record.take();
         let (id, tensor, param_mapper) = self.consume();
         let tensor = func(tensor);
-        let require_grad = tensor.is_require_grad();
+        let require_grad = tensor.mapped_require_grad(previous);
 
         Self {
             id,
@@ -308,6 +432,8 @@ impl<T: Parameter> Param<T> {
             initialization: None,
             param_mapper,
             require_grad,
+            transform,
+            transform_record,
         }
     }
 
@@ -315,14 +441,16 @@ impl<T: Parameter> Param<T> {
     ///
     /// This is a helper method for creating parameters while preserving the param mapper,
     /// typically used in ModuleMapper implementations.
-    pub fn from_mapped_value(id: ParamId, value: T, param_mapper: ParamMapper<T>) -> Self {
-        let require_grad = value.is_require_grad();
+    pub fn from_mapped_value(id: ParamId, value: T, mut param_mapper: ParamMapper<T>) -> Self {
+        let require_grad = param_mapper.mapped_require_grad.take().unwrap_or_else(|| value.is_require_grad());
         Self {
             id,
             state: SyncOnceCell::initialized(value),
             initialization: None,
             param_mapper,
             require_grad,
+            transform: None,
+            transform_record: None,
         }
     }
 
@@ -354,12 +482,16 @@ impl<T: Parameter> Param<T> {
 
         match init.as_mut() {
             Some(value) => {
+                if value.init.is_initialized() {
+                    core::mem::drop(init);
+                    return self.map(func);
+                }
                 let prev = value.init.clone();
 
-                value.init = new_init_fn(move |a, b| {
-                    let tensor = prev(a, b);
+                value.init = SharedInitializer::new(new_init_fn(move |a, b| {
+                    let tensor = prev.initialize(a, b);
                     func(tensor)
-                });
+                }));
                 core::mem::drop(init);
                 self
             }
@@ -417,12 +549,27 @@ impl<T: Parameter> Param<T> {
         }
     }
 
+    pub(crate) fn lazy_autodiff_context(&self) -> Option<ruda_tensor::AutodiffContext> {
+        if let Some(value) = self.state.get() { return value.autodiff_context(); }
+        let context = self.initialization.as_ref().and_then(|init| {
+            init.read().unwrap().as_ref().map(|init| init.context)
+        });
+        match context {
+            Some(context) => context,
+            None => self.deref().autodiff_context(),
+        }
+    }
+
     /// Override the gradient requirement for the current parameter.
     pub fn set_require_grad(mut self, require_grad: bool) -> Self {
         self.require_grad = require_grad;
         let initialization = match &self.initialization {
             Some(init) => init,
-            None => return self.map(|tensor| tensor.set_require_grad(require_grad)),
+            None => {
+                let mut param = self.map(|tensor| tensor.set_require_grad(require_grad));
+                param.require_grad = require_grad;
+                return param;
+            }
         };
 
         let mut init = initialization.write().unwrap();
@@ -439,7 +586,9 @@ impl<T: Parameter> Param<T> {
             return self;
         }
 
-        self.map(|tensor| tensor.set_require_grad(require_grad))
+        let mut param = self.map(|tensor| tensor.set_require_grad(require_grad));
+        param.require_grad = require_grad;
+        param
     }
 }
 
@@ -448,8 +597,7 @@ impl<T: Parameter> Clone for Param<T> {
         // If uninitialized, clone the lazy state without triggering initialization.
         // This avoids allocating tensor memory for params that may never be used
         // (e.g., when cloning a module just to load weights into it).
-        // The clone gets its own SyncOnceCell and RwLock, so initializing one
-        // does not affect the other.
+        // The local value and metadata are independent; the initializer result is shared.
         if let Some(init_lock) = &self.initialization {
             let init_guard = init_lock.read().unwrap();
             if let Some(uninit) = init_guard.as_ref() {
@@ -459,14 +607,18 @@ impl<T: Parameter> Clone for Param<T> {
                     initialization: Some(RwLock::new(Some(uninit.clone()))),
                     param_mapper: self.param_mapper.clone(),
                     require_grad: self.require_grad,
+                    transform: self.transform.clone(),
+                    transform_record: self.transform_record.clone(),
                 };
             }
         }
 
         // Already initialized (or init was already consumed): clone the value.
-        let mut param = Param::initialized(self.id, self.val());
+        let mut param = Param::initialized(self.id, self.base());
         param.param_mapper = self.param_mapper.clone();
         param.require_grad = self.require_grad;
+        param.transform = self.transform.clone();
+        param.transform_record = self.transform_record.clone();
         param
     }
 }
@@ -503,7 +655,7 @@ mod tests {
         fn check<B: Backend>() {
             _assert_sync::<Param<Tensor<B, 2>>>();
         }
-        check::<ruda_tensor_host::Host>();
+        check::<crate::TestBackend>();
     }
 
     /// Concurrent lazy initialization must not panic.
@@ -516,7 +668,7 @@ mod tests {
     fn param_concurrent_lazy_init() {
         use alloc::vec::Vec;
 
-        type B = ruda_tensor_host::Host;
+        type B = crate::TestBackend;
         let device = Default::default();
 
         let param: Param<Tensor<B, 2>> = Param::uninitialized(
@@ -539,5 +691,135 @@ mod tests {
                 assert_eq!(result.to_data(), expected);
             }
         });
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn param_clones_initialize_once_across_threads() {
+        use alloc::vec::Vec;
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        type B = crate::TestBackend;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let param: Param<Tensor<B, 1>> = Param::uninitialized(
+            ParamId::new(),
+            move |device, _| {
+                let value = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                Tensor::full([4], value as f32, device)
+            },
+            Default::default(),
+            false,
+            [4].into(),
+        );
+        let clones: Vec<_> = (0..8).map(|_| param.clone()).collect();
+        assert!(!param.is_initialized());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = clones
+                .iter()
+                .map(|clone| scope.spawn(move || clone.val().to_data()))
+                .collect();
+            for handle in handles {
+                assert_eq!(handle.join().unwrap().to_vec::<f32>().unwrap(), [1.; 4]);
+            }
+        });
+        assert!(param.is_initialized());
+        assert_eq!(param.val().to_data().to_vec::<f32>().unwrap(), [1.; 4]);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn param_lazy_mapping_shares_base_but_not_transformation() {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        type B = crate::TestBackend;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let param: Param<Tensor<B, 1>> = Param::uninitialized(
+            ParamId::new(),
+            move |device, _| {
+                let value = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                Tensor::full([4], value as f32, device)
+            },
+            Default::default(),
+            false,
+            [4].into(),
+        );
+        let mapped = param.clone().init_mapper(|tensor| tensor * 2.);
+        let mapped_clone = mapped.clone();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!param.is_initialized());
+        assert!(!mapped.is_initialized());
+        assert_eq!(
+            mapped_clone.val().to_data().to_vec::<f32>().unwrap(),
+            [2.; 4]
+        );
+        assert_eq!(mapped.val().to_data().to_vec::<f32>().unwrap(), [2.; 4]);
+        assert!(param.is_initialized());
+        assert_eq!(param.val().to_data().to_vec::<f32>().unwrap(), [1.; 4]);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let mapped = param.clone().init_mapper(|tensor| tensor + 3.);
+        assert!(mapped.is_initialized());
+        assert_eq!(mapped.val().to_data().to_vec::<f32>().unwrap(), [4.; 4]);
+        assert_eq!(param.val().to_data().to_vec::<f32>().unwrap(), [1.; 4]);
+    }
+
+    #[test]
+    fn param_lazy_clone_gradient_settings_are_independent() {
+        type B = crate::TestAutodiffBackend;
+        for clone_first in [false, true] {
+            let param: Param<Tensor<B, 1>> = Param::uninitialized(
+                ParamId::new(),
+                |device, require_grad| {
+                    Tensor::random([4], Default::default(), device).set_require_grad(require_grad)
+                },
+                Default::default(),
+                true,
+                [4].into(),
+            );
+            let detached = param.clone().set_require_grad(false);
+            assert!(!param.is_initialized());
+            assert!(!detached.is_initialized());
+            assert!(param.planned_is_require_grad());
+            assert!(!detached.planned_is_require_grad());
+            if clone_first {
+                let _ = detached.val();
+            } else {
+                let _ = param.val();
+            }
+            assert!(param.val().is_require_grad());
+            assert!(!detached.val().is_require_grad());
+            assert_eq!(param.val().to_data(), detached.val().to_data());
+        }
+    }
+
+    #[test]
+    fn param_loading_a_lazy_clone_does_not_initialize_or_replace_its_peer() {
+        use crate::module::Module;
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        type B = crate::TestBackend;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let param: Param<Tensor<B, 1>> = Param::uninitialized(
+            ParamId::new(),
+            move |device, _| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Tensor::ones([4], device)
+            },
+            Default::default(),
+            false,
+            [4].into(),
+        );
+        let loaded = param.clone().load_record(Param::initialized(
+            param.id,
+            Tensor::full([4], 7., &Default::default()),
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!param.is_initialized());
+        assert_eq!(loaded.val().to_data().to_vec::<f32>().unwrap(), [7.; 4]);
+        assert_eq!(param.val().to_data().to_vec::<f32>().unwrap(), [1.; 4]);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

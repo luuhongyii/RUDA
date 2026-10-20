@@ -12,6 +12,12 @@ pub trait TensorMetadata: Clone + Send + Sync + core::fmt::Debug {
     fn rank(&self) -> usize {
         self.shape().num_dims()
     }
+
+    /// Whether the backend considers this tensor's storage eligible for in-place mutation.
+    /// Implementations without ownership information return `false`.
+    fn can_mut(&self) -> bool {
+        false
+    }
 }
 
 /// Quantized tensor primitive.

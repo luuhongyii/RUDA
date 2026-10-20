@@ -177,6 +177,7 @@ fn average_excluding_explicit_padding<B: Backend, const D: usize, const N: usize
     visible_shape[0] = 1;
     visible_shape[1] = 1;
     let visible = Tensor::<B, D>::ones(visible_shape, (&input.device(), compute))
+        .with_context_of(&input)
         .pad(padding, PadMode::Constant(0.0));
     let values = pool(input.cast(compute).pad(padding, PadMode::Constant(0.0)));
     let coverage = pool(visible);

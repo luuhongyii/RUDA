@@ -15,17 +15,17 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
                 self.control_barrier(scope, scope, semantics).unwrap();
             }
             Synchronization::SyncPlane => {
-                // Adopting wgpu semantics
                 let scope = self.const_u32(Scope::Subgroup as u32);
-                let semantics = MemorySemantics::RELAXED;
+                let semantics = MemorySemantics::ACQUIRE_RELEASE | MemorySemantics::SUBGROUP_MEMORY;
                 let semantics = self.const_u32(semantics.bits());
                 self.control_barrier(scope, scope, semantics).unwrap();
             }
             Synchronization::SyncStorage => {
-                // Adopting wgpu semantics
                 let scope_exec = self.const_u32(Scope::Workgroup as u32);
                 let scope_mem = self.const_u32(Scope::Device as u32);
-                let semantics = MemorySemantics::ACQUIRE_RELEASE | MemorySemantics::UNIFORM_MEMORY;
+                let semantics = MemorySemantics::ACQUIRE_RELEASE | MemorySemantics::UNIFORM_MEMORY
+                    | MemorySemantics::WORKGROUP_MEMORY | MemorySemantics::MAKE_AVAILABLE
+                    | MemorySemantics::MAKE_VISIBLE;
                 let semantics = self.const_u32(semantics.bits());
                 self.control_barrier(scope_exec, scope_mem, semantics)
                     .unwrap();

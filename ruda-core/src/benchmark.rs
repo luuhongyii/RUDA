@@ -244,7 +244,8 @@ pub trait Benchmark {
                     Ok(val) => val,
                     Err(err) => return Err(err),
                 };
-                Ok(crate::future::block_on(profile.resolve()))
+                crate::future::block_on(profile.resolve())
+                    .ok_or_else(|| String::from("Profiling window contained no measurement"))
             };
             let args = self.prepare();
 

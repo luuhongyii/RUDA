@@ -64,7 +64,7 @@ macro_rules! mhc_model_execution {
                 let weight = self.embedding.weight.$gather::<C, 2>(communicator)?;
                 let width = weight.dims()[1];
                 // Every rank gathers, including zero-token ranks; the loss scope handles locally unused table paths.
-                if length == 0 { return Ok(Tensor::zeros([0, width], (&weight.device(), weight.dtype()))); }
+                if length == 0 { return Ok(Tensor::zeros([0, width], (&weight.device(), weight.dtype())).with_autodiff_context(weight.autodiff_context().merge(tokens.autodiff_context()))); }
                 Ok(embedding(weight, tokens.reshape([1, length])).reshape([length, width]))
             }
 

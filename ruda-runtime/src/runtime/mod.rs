@@ -14,8 +14,23 @@ pub mod stream;
 /// Compute client module.
 pub mod client;
 
+/// Runtime-independent device selectors and their stable IDs.
+pub mod device;
+
+/// Compile workloads without dispatching them, while retaining real tuning measurements.
+pub mod dry_run;
+
+/// Stream-captured executable graphs and device-service lifetime management.
+pub mod capture;
+
 /// Autotune module
 pub mod tune;
+
+/// Device throughput measurements and resource ceilings.
+pub mod throughput;
+
+/// Device utilization counters from the driver or host platform.
+pub mod monitoring;
 
 /// Memory management module.
 pub mod memory_management;
@@ -28,6 +43,8 @@ pub mod storage;
 pub mod config;
 
 pub use ruda_core::benchmark;
+pub use ruda_core::environment;
+pub use ruda_core::poison;
 
 /// Logging utilities to be used by a compute server.
 pub mod logging;

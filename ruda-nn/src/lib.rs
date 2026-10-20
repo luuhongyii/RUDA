@@ -17,6 +17,8 @@ pub use activation::{
     celu::*, elu::*, gelu::*, glu::*, hard_shrink::*, hard_sigmoid::*, leaky_relu::*, prelu::*,
     relu::*, selu::*, shrink::*, sigmoid::*, soft_shrink::*, softplus::*, softsign::*, swiglu::*,
     tanh::*, thresholded_relu::*, silu::*,
+    hardtanh::*, log_sigmoid::*, mish::*, relu6::*, tanhshrink::*, threshold::*,
+    rrelu::*,
 };
 
 mod padding;
@@ -26,6 +28,27 @@ pub use padding::*;
 pub use ruda_model::module::Initializer;
 
 extern crate alloc;
+
+#[cfg(test)]
+mod tensor_activation_tests;
+
+#[cfg(test)]
+mod loss_spatial_tests;
+
+#[cfg(test)]
+mod spatial_parity_tests;
+
+#[cfg(test)]
+mod hypot_tests;
+
+#[cfg(all(test, feature = "std"))]
+mod batch_norm_tests;
+
+#[cfg(all(test, feature = "std"))]
+mod tape_tests;
+
+#[cfg(all(test, feature = "std"))]
+mod lifecycle_tests;
 
 /// Backend for test cases
 #[cfg(all(
@@ -45,9 +68,13 @@ pub type TestBackend = ruda_tensor_tch::LibTorch<f32>;
 /// Backend for test cases
 pub type TestBackend = ruda_tensor_wgpu::Wgpu;
 
-#[cfg(all(test, feature = "test-cuda"))]
+#[cfg(all(test, feature = "test-cuda", not(feature = "test-cuda-native")))]
 /// Backend for test cases
 pub type TestBackend = ruda_tensor_device::cuda::Cuda;
+
+#[cfg(all(test, feature = "test-cuda-native"))]
+/// Backend for test cases
+pub type TestBackend = ruda_tensor_device::cuda::CudaNative;
 
 #[cfg(all(test, feature = "test-rocm"))]
 /// Backend for test cases

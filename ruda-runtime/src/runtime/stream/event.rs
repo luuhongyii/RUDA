@@ -27,16 +27,36 @@ pub trait EventStreamBackend: 'static {
 
     /// Initializes and returns a new stream associated with the given stream ID.
     fn create_stream(&self) -> Self::Stream;
+    /// A backend creation error must not unwind a device-service command.
+    fn try_create_stream(&self) -> Result<Self::Stream, ServerError> { Ok(self.create_stream()) }
     /// Returns the cursor of the given handle on the given stream.
     fn handle_cursor(stream: &Self::Stream, handle: &Binding) -> u64;
     /// Returns whether the stream can access new tasks.
     fn is_healthy(stream: &Self::Stream) -> bool;
 
+    /// Whether completion fences would be recorded instead of executed.
+    fn is_recording(_stream: &Self::Stream) -> bool { false }
+
     /// Flushes the given stream, ensuring all pending operations are submitted, and returns an event
     /// that can be used for synchronization.
     fn flush(stream: &mut Self::Stream) -> Self::Event;
+    fn dependency_event(stream: &mut Self::Stream) -> Option<Self::Event> {
+        Some(Self::flush(stream))
+    }
+    /// Align an origin with a destination that may be recording rather than executing work.
+    fn dependency_event_for(stream: &mut Self::Stream, _recording: bool) -> Result<Option<Self::Event>, ServerError> {
+        Ok(Self::dependency_event(stream))
+    }
+    /// Retain a failed dependency in backend-specific recording state.
+    fn dependency_failed(_stream: &mut Self::Stream, _error: &ServerError) {}
+    fn dependency_cursor(_stream: &Self::Stream, cursor: u64) -> u64 { cursor }
     /// Makes the stream wait for the specified event to complete before proceeding with further operations.
     fn wait_event(stream: &mut Self::Stream, event: Self::Event);
+    /// Fallible dependency submission. Older backends retain their existing implementation.
+    fn wait_event_checked(stream: &mut Self::Stream, event: Self::Event) -> Result<(), ServerError> {
+        Self::wait_event(stream, event);
+        Ok(())
+    }
     /// Wait for the given event synching the CPU.
     fn wait_event_sync(event: Self::Event) -> Result<(), ServerError>;
 }
@@ -109,11 +129,15 @@ impl<B: EventStreamBackend> StreamFactory for EventStreamBackendWrapper<B> {
     type Stream = StreamWrapper<B>;
 
     fn create(&mut self) -> Self::Stream {
-        StreamWrapper {
-            stream: self.backend.create_stream(),
+        self.try_create().unwrap_or_else(|error| panic!("Stream creation failed: {error}"))
+    }
+
+    fn try_create(&mut self) -> Result<Self::Stream, ServerError> {
+        Ok(StreamWrapper {
+            stream: self.backend.try_create_stream()?,
             cursor: 0,
             last_synced: Default::default(),
-        }
+        })
     }
 }
 
@@ -128,8 +152,10 @@ impl<B: EventStreamBackend> GcThread<B> {
 
         std::thread::spawn(move || {
             while let Ok(event) = recv.recv() {
-                B::wait_event_sync(event.event).unwrap();
-                core::mem::drop(event.to_drop);
+                match B::wait_event_sync(event.event) {
+                    Ok(()) => core::mem::drop(event.to_drop),
+                    Err(error) => release_or_leak(event.to_drop, &error),
+                }
             }
         });
 
@@ -140,11 +166,24 @@ impl<B: EventStreamBackend> GcThread<B> {
     }
 }
 
+fn release_or_leak<T>(memory: T, error: &ServerError) {
+    if error.is_device_poisoned() {
+        core::mem::drop(memory);
+    } else {
+        core::mem::forget(memory);
+        log::error!("Keeping memory the device may still access after a failed wait: {error}");
+    }
+}
+
 fn stream_index(stream_id: &StreamId, max_streams: usize) -> usize {
     stream_id.value as usize % max_streams
 }
 
 impl<'a, B: EventStreamBackend> ResolvedStreams<'a, B> {
+    /// Visit existing streams without creating or aligning new ones.
+    pub fn for_each_initialized(&mut self, mut visit: impl FnMut(&mut B::Stream)) {
+        for stream in self.streams.initialized_mut() { visit(&mut stream.stream); }
+    }
     /// Get the stream associated to the given [`stream_id`](StreamId).
     pub fn get(&mut self, stream_id: &StreamId) -> &mut B::Stream {
         let stream = self.streams.get_mut(stream_id);
@@ -170,11 +209,8 @@ impl<'a, B: EventStreamBackend> Drop for ResolvedStreams<'a, B> {
         }
 
         let stream = self.streams.get_mut(&self.current);
+        if B::is_recording(&stream.stream) { return; }
         let event_origin = B::flush(&mut stream.stream);
-
-        let stream_gc = &mut unsafe { self.streams.get_special(0) }.stream;
-        B::wait_event(stream_gc, event_origin);
-        let event = B::flush(stream_gc);
 
         let mut ids = Vec::new();
         self.analysis
@@ -182,11 +218,28 @@ impl<'a, B: EventStreamBackend> Drop for ResolvedStreams<'a, B> {
             .drain()
             .for_each(|item| ids.extend(item.1));
 
+        let stream_gc = match self.streams.get_or_create_special(0) {
+            Ok(stream) => &mut stream.stream,
+            Err(error) => { release_or_leak(ids, &error); return; }
+        };
+        if let Err(error) = B::wait_event_checked(stream_gc, event_origin) {
+            release_or_leak(ids, &error);
+            return;
+        }
+        let event = B::flush(stream_gc);
         self.gc.register(GcTask::new(ids, event));
     }
 }
 
 impl<B: EventStreamBackend> MultiStream<B> {
+    /// Whether two logical stream IDs map to the same physical stream.
+    pub fn shares_physical_stream(&self, left: StreamId, right: StreamId) -> bool {
+        stream_index(&left, self.max_streams) == stream_index(&right, self.max_streams)
+    }
+    /// Visit existing streams without creating or aligning new ones.
+    pub fn for_each_initialized(&mut self, mut visit: impl FnMut(&mut B::Stream)) {
+        for stream in self.streams.initialized_mut() { visit(&mut stream.stream); }
+    }
     /// Initialize an unused physical stream without discarding synchronization
     /// state or replacing a stream used by existing allocations.
     pub fn try_initialize_with<E>(
@@ -227,9 +280,17 @@ impl<B: EventStreamBackend> MultiStream<B> {
         handles: impl Iterator<Item = &'a Binding>,
         enforce_healthy: bool,
     ) -> Result<ResolvedStreams<'_, B>, ServerError> {
-        let analysis = self.align_streams(stream_id, handles);
+        let analysis = match self.align_streams(stream_id, handles) {
+            Ok(analysis) => analysis,
+            Err(error) => {
+                if let Ok(stream) = self.streams.get_or_create(&stream_id) {
+                    B::dependency_failed(&mut stream.stream, &error);
+                }
+                return Err(error);
+            }
+        };
 
-        let stream = self.streams.get_mut(&stream_id);
+        let stream = self.streams.get_or_create(&stream_id)?;
         stream.cursor += 1;
 
         if enforce_healthy && !B::is_healthy(&stream.stream) {
@@ -256,8 +317,8 @@ impl<B: EventStreamBackend> MultiStream<B> {
         &mut self,
         stream_id: StreamId,
         handles: impl Iterator<Item = &'a Binding>,
-    ) -> SharedBindingAnalysis {
-        let analysis = self.update_shared_bindings(stream_id, handles);
+    ) -> Result<SharedBindingAnalysis, ServerError> {
+        let analysis = self.update_shared_bindings(stream_id, handles)?;
 
         self.apply_analysis(stream_id, analysis)
     }
@@ -270,18 +331,18 @@ impl<B: EventStreamBackend> MultiStream<B> {
         &mut self,
         stream_id: StreamId,
         handles: impl Iterator<Item = &'a Binding>,
-    ) -> SharedBindingAnalysis {
+    ) -> Result<SharedBindingAnalysis, ServerError> {
         // We reset the memory pool for the info.
         self.shared_bindings_pool.clear();
 
         for handle in handles {
             let index = stream_index(&handle.stream, self.max_streams);
-            let stream = unsafe { self.streams.get_mut_index(index) };
+            let stream = self.streams.get_or_create_index(index)?;
             let cursor_handle = B::handle_cursor(&stream.stream, handle);
 
             // We only add the info to be consider if the handle stream is different from the current
             // stream.
-            if handle.stream != stream_id {
+            if index != stream_index(&stream_id, self.max_streams) {
                 self.shared_bindings_pool.push((
                     handle.memory.descriptor().id,
                     handle.stream,
@@ -291,7 +352,7 @@ impl<B: EventStreamBackend> MultiStream<B> {
         }
 
         let mut analysis = SharedBindingAnalysis::default();
-        let current = self.streams.get_mut(&stream_id);
+        let current = self.streams.get_or_create(&stream_id)?;
 
         for (handle_id, stream, cursor) in self.shared_bindings_pool.iter() {
             let index = stream_index(stream, self.max_streams);
@@ -323,43 +384,43 @@ impl<B: EventStreamBackend> MultiStream<B> {
             }
         }
 
-        analysis
+        Ok(analysis)
     }
 
     pub(crate) fn apply_analysis(
         &mut self,
         stream_id: StreamId,
         analysis: SharedBindingAnalysis,
-    ) -> SharedBindingAnalysis {
+    ) -> Result<SharedBindingAnalysis, ServerError> {
         if analysis.slices.is_empty() {
-            return analysis;
+            return Ok(analysis);
         }
 
         let mut events = Vec::with_capacity(analysis.slices.len());
+        let recording = B::is_recording(&self.streams.get_mut(&stream_id).stream);
 
         unsafe {
             for origin in analysis.slices.keys() {
                 let stream = self.streams.get_mut_index(*origin);
-                let event = B::flush(&mut stream.stream);
+                let event = B::dependency_event_for(&mut stream.stream, recording)?;
 
-                events.push(((origin, stream.cursor), event));
+                events.push(((origin, B::dependency_cursor(&stream.stream, stream.cursor)), event));
             }
         }
 
         let stream = self.streams.get_mut(&stream_id);
 
         for ((stream_origin, cursor_origin), event) in events {
-            stream.last_synced.insert(*stream_origin, cursor_origin);
-
             self.logger.log_streaming(
                 |level| !matches!(level, StreamingLogLevel::Disabled),
                 || format!("Waiting on {stream_origin} from {stream_id}",),
             );
 
-            B::wait_event(&mut stream.stream, event);
+            if let Some(event) = event { B::wait_event_checked(&mut stream.stream, event)?; }
+            stream.last_synced.insert(*stream_origin, cursor_origin);
         }
 
-        analysis
+        Ok(analysis)
     }
 }
 
@@ -410,7 +471,7 @@ mod tests {
         ms.resolve(stream_1, [].into_iter(), false).unwrap();
         ms.resolve(stream_2, [].into_iter(), false).unwrap();
 
-        let analysis = ms.update_shared_bindings(stream_1, [&binding_1, &binding_2].into_iter());
+        let analysis = ms.update_shared_bindings(stream_1, [&binding_1, &binding_2].into_iter()).unwrap();
 
         let mut expected = SharedBindingAnalysis::default();
         expected.shared(
@@ -436,7 +497,7 @@ mod tests {
         ms.resolve(stream_2, [].into_iter(), false).unwrap();
 
         let analysis =
-            ms.update_shared_bindings(stream_1, [&binding_1, &binding_2, &binding_3].into_iter());
+            ms.update_shared_bindings(stream_1, [&binding_1, &binding_2, &binding_3].into_iter()).unwrap();
 
         let mut expected = SharedBindingAnalysis::default();
         expected.shared(
@@ -462,7 +523,7 @@ mod tests {
         ms.resolve(stream_2, [].into_iter(), false).unwrap();
 
         let analysis =
-            ms.update_shared_bindings(stream_1, [&binding_1, &binding_2, &binding_3].into_iter());
+            ms.update_shared_bindings(stream_1, [&binding_1, &binding_2, &binding_3].into_iter()).unwrap();
 
         let expected = SharedBindingAnalysis::default();
 
@@ -501,7 +562,10 @@ mod tests {
     }
 
     fn handle(stream: StreamId) -> Binding {
-        Handle::new(stream, 10).binding()
+        Handle::new(
+            ruda_core::device::ServiceId::of::<TestBackend>(ruda_core::device::DeviceId::new(0, 0)),
+            stream, 10,
+        ).binding()
     }
 
     struct TestBackend;

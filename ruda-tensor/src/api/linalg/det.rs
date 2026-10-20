@@ -140,7 +140,7 @@ pub fn det<B: Backend, const D: usize, const D1: usize, const D2: usize>(
     let squeezed_pivots = pivots.squeeze_dim::<D1>(D - 1);
     let n_pivots = squeezed_pivots.dims()[D1 - 1] as i64;
     let range_1d: Tensor<B, 1> =
-        Tensor::arange(0..n_pivots, &tensor.device()).cast(working_float_dtype);
+        Tensor::<B, 1, crate::Int>::arange(0..n_pivots, &tensor.device()).with_context_of(&tensor).cast(working_float_dtype);
     let mut reshape_dims = [1; D1];
     reshape_dims[D1 - 1] = n_pivots;
     let range = range_1d.reshape(reshape_dims);

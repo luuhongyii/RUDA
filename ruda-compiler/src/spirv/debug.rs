@@ -195,7 +195,33 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
     pub fn declare_main(&mut self, kernel_name: &str) -> (Word, impl Fn(&mut Self) + 'static) {
         let void = self.type_void();
         let voidf = self.type_function(void, vec![]);
+        self.declare_device_function(kernel_name, None, void, voidf)
+    }
 
+    pub(super) fn init_function_debug(&mut self, return_type: Word, parameters: &[Word]) {
+        self.debug_info = None;
+        if self.debug_symbols {
+            let function_ty = self.debug_type_function(0, return_type, parameters.iter().copied());
+            let previous_loc = self.opt.root_scope.debug.entry_loc.clone();
+            self.debug_info = Some(DebugInfo {
+                function_ty,
+                stack: Default::default(),
+                definitions: Default::default(),
+                previous_loc,
+            });
+            if self.debug_enabled() {
+                self.collect_sources();
+            }
+        }
+    }
+
+    pub(super) fn declare_device_function(
+        &mut self,
+        name: &str,
+        id: Option<Word>,
+        return_type: Word,
+        function_type: Word,
+    ) -> (Word, impl Fn(&mut Self) + 'static) {
         let definition = self
             .debug_info
             .as_ref()
@@ -212,9 +238,9 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
         }
 
         let main = self
-            .begin_function(void, None, FunctionControl::NONE, voidf)
+            .begin_function(return_type, id, FunctionControl::NONE, function_type)
             .unwrap();
-        self.debug_name(main, kernel_name);
+        self.debug_name(main, name);
 
         let func_id = definition.map(|it| it.id);
 

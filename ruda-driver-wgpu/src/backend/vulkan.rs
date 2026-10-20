@@ -39,12 +39,18 @@ pub fn bindings(
 }
 
 pub async fn request_vulkan_device(adapter: &wgpu::Adapter) -> Option<(wgpu::Device, wgpu::Queue)> {
+    try_request_vulkan_device(adapter).await.expect("Unable to request Vulkan device")
+}
+
+pub async fn try_request_vulkan_device(adapter: &wgpu::Adapter) -> Result<Option<(wgpu::Device, wgpu::Queue)>, crate::WgpuInitError> {
     let limits = adapter.limits();
     let features = adapter
         .features()
         .difference(Features::MAPPABLE_PRIMARY_BUFFERS);
     unsafe {
-        let hal_adapter = adapter.as_hal::<hal::api::Vulkan>().unwrap();
+        let hal_adapter = adapter.as_hal::<hal::api::Vulkan>().ok_or_else(|| crate::WgpuInitError::InvalidConfiguration {
+            message: "Native Vulkan initialization requires a Vulkan adapter".into(),
+        })?;
         request_device(adapter, &hal_adapter, features, limits)
     }
 }
@@ -71,7 +77,7 @@ fn request_device(
     adapter: &vulkan::Adapter,
     features: Features,
     mut limits: Limits,
-) -> Option<(wgpu::Device, wgpu::Queue)> {
+) -> Result<Option<(wgpu::Device, wgpu::Queue)>, crate::WgpuInitError> {
     let ash = adapter.shared_instance();
 
     // Can't even query for required features without `PhysicalDeviceFeatures2`
@@ -80,13 +86,13 @@ fn request_device(
             .extensions()
             .contains(&KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME)
     {
-        return None;
+        return Ok(None);
     }
 
     let mut extended_feat = ExtendedFeatures::from_adapter(ash.raw_instance(), adapter, features);
 
     if !extended_feat.has_required_features() {
-        return None;
+        return Ok(None);
     }
 
     let extensions = adapter.required_device_extensions(features);
@@ -128,18 +134,20 @@ fn request_device(
     let vk_device = unsafe {
         ash.raw_instance()
             .create_device(adapter.raw_physical_device(), &info, None)
-            .expect("Failed to create Vulkan device")
+            .map_err(|err| crate::WgpuInitError::RequestDevice { message: format!("Vulkan device: {err}") })?
     };
 
     // The default is MemoryHints::Performance, which tries to do some bigger
     // block allocations. However, we already batch allocations, so we
     // can use MemoryHints::MemoryUsage to lower memory usage.
     let memory_hints = wgpu::MemoryHints::MemoryUsage;
+    let owned_device = vk_device.clone();
+    let drop_device: hal::DropCallback = Box::new(move || unsafe { owned_device.destroy_device(None) });
     let device = unsafe {
         adapter
             .device_from_raw(
                 vk_device,
-                None,
+                Some(drop_device),
                 &extensions,
                 features,
                 &limits,
@@ -147,7 +155,7 @@ fn request_device(
                 family_info.queue_family_index,
                 0,
             )
-            .expect("Failed to create HAL device")
+            .map_err(|err| crate::WgpuInitError::RequestDevice { message: format!("Vulkan HAL device: {err}") })?
     };
 
     let descriptor = DeviceDescriptor {
@@ -161,11 +169,11 @@ fn request_device(
     };
 
     unsafe {
-        Some(
+        Ok(Some(
             wgpu_adapter
                 .create_device_from_hal(device, &descriptor)
-                .expect("Failed to create wgpu device"),
-        )
+                .map_err(|err| crate::WgpuInitError::RequestDevice { message: format!("Vulkan Wgpu device: {err}") })?,
+        ))
     }
 }
 
@@ -178,6 +186,7 @@ fn register_features(
     memory_config: &MemoryConfiguration,
 ) -> bool {
     let ash = adapter.shared_instance();
+    super::memory::register_vulkan_capacity(adapter, &mut props.memory);
 
     // Can't even query for required features without `PhysicalDeviceFeatures2`
     if ash.instance_api_version() < API_VERSION_1_1
@@ -199,6 +208,7 @@ fn register_features(
     register_types(props, &extended_feat);
 
     comp_options.supports_vulkan = true;
+    props.features.device_memory_scope = true;
     comp_options.supports_u64 = extended_feat.core.shader_int64 == TRUE;
     comp_options.vulkan.max_spirv_version = extended_feat.max_spirv_version;
 
@@ -233,17 +243,13 @@ fn register_features(
     {
         comp_options.vulkan.supports_arbitrary_bitwise = true;
     }
+    comp_options.vulkan.supports_variable_pointers = extended_feat.variable_pointers
+        .is_some_and(|features| features.variable_pointers == TRUE);
 
     if let Some(index_64) = &extended_feat.index_64
         && index_64.shader64_bit_indexing == TRUE
     {
-        let instance = adapter.shared_instance().raw_instance();
-        let device = adapter.raw_physical_device();
-        let memory_props = unsafe { instance.get_physical_device_memory_properties(device) };
-        let num_heaps = memory_props.memory_heap_count as usize;
-        let mut heaps = memory_props.memory_heaps.iter().take(num_heaps);
-        if let Some(heap) = heaps.find(|it| it.flags.contains(MemoryHeapFlags::DEVICE_LOCAL)) {
-            let heap_size = heap.size;
+        if let Some(heap_size) = props.memory.max_memory() {
             let max_page_size = if memory_config.uses_subslices() {
                 heap_size / 4
             } else {
@@ -253,8 +259,24 @@ fn register_features(
         }
     }
 
-    if extended_feat.cooperative_matrix.is_some() {
+    if extended_feat.cooperative_matrix.is_some_and(|it| it.cooperative_matrix == TRUE) {
         register_cmma(ash, adapter, props);
+        props.features.matmul.cmma_elementwise =
+            extended_feat.max_spirv_version >= (1, 6)
+                && extended_feat.nv_cooperative_matrix2.is_some_and(|it| {
+                    it.cooperative_matrix_per_element_operations == TRUE
+                });
+        props.features.matmul.cmma_tensor_addressing =
+            extended_feat.max_spirv_version >= (1, 6)
+                && extended_feat.nv_cooperative_matrix2.is_some_and(|it| {
+                    it.cooperative_matrix_tensor_addressing == TRUE
+                });
+        if extended_feat.nv_cooperative_matrix2.is_some_and(|it| {
+            it.cooperative_matrix_workgroup_scope == TRUE
+                && it.cooperative_matrix_flexible_dimensions == TRUE
+        }) {
+            register_ruda_mma(ash, adapter, props);
+        }
     }
 
     true
@@ -481,6 +503,40 @@ fn register_cmma(ash: &InstanceShared, adapter: &vulkan::Adapter, props: &mut De
     }
 }
 
+fn register_ruda_mma(ash: &InstanceShared, adapter: &vulkan::Adapter, props: &mut DeviceProperties) {
+    let configurations = unsafe {
+        extensions::cooperative_matrix_flexible_dimensions(
+            ash.entry(), ash.raw_instance(), adapter.raw_physical_device(),
+        )
+    }.expect("Unable to query workgroup cooperative matrix configurations");
+    let mut properties = extensions::PhysicalDeviceCooperativeMatrix2PropertiesNV::default();
+    let mut query = ash::vk::PhysicalDeviceProperties2::default().push_next(&mut properties);
+    unsafe {
+        ash.raw_instance().get_physical_device_properties2(adapter.raw_physical_device(), &mut query);
+    }
+    let max_dim = properties.cooperative_matrix_flexible_dimensions_max_dimension;
+    props.features.matmul.ruda_mma = configurations.into_iter()
+        .filter(|it| it.scope == ScopeKHR::WORKGROUP
+            && it.c_type == it.result_type
+            && it.saturating_accumulation == 0)
+        .filter_map(|it| Some(RudaMmaConfig {
+            a_type: convert_type(it.a_type)?.into(),
+            b_type: convert_type(it.b_type)?.into(),
+            cd_type: convert_type(it.c_type)?.into(),
+            m_granularity: it.m_granularity,
+            m_max: max_dim,
+            n_granularity: it.n_granularity,
+            n_max: max_dim,
+            k_granularity: it.k_granularity,
+            k_max: max_dim,
+            units_per_block: Some(it.workgroup_invocations),
+        }))
+        .collect();
+    props.hardware.ruda_mma_reserved_shared_memory =
+        properties.cooperative_matrix_workgroup_scope_reserved_shared_memory as usize;
+    log::debug!("Supported workgroup MMA configurations: {:#?}", props.features.matmul.ruda_mma);
+}
+
 fn convert_type(vk_ty: ComponentTypeKHR) -> Option<ElemType> {
     let ty = match vk_ty {
         FLOAT8_E4M3_EXT => ElemType::Float(FloatKind::E4M3),
@@ -515,6 +571,21 @@ pub(crate) fn compile(
         &server.compilation_options,
         mode,
         kernel.address_type(),
+    )?;
+    #[cfg(feature = "spirv-dump")]
+    dump_spirv(&compiled, kernel.name(), kernel.id());
+    Ok(compiled)
+}
+
+pub(crate) fn compile_recorded(
+    compiler: &mut AutoCompiler,
+    server: &mut WgpuServer,
+    kernel: <WgpuServer as ComputeServer>::Kernel,
+    mode: ExecutionMode,
+    recording: &mut ruda::runtime::compiler::CompilationRecording,
+) -> Result<CompiledKernel<AutoCompiler>, CompilationError> {
+    let compiled = kernel.compile_recorded(
+        compiler, &server.compilation_options, mode, kernel.address_type(), recording,
     )?;
     #[cfg(feature = "spirv-dump")]
     dump_spirv(&compiled, kernel.name(), kernel.id());

@@ -170,7 +170,7 @@ package = "ruda-runtime"
 path = "../ruda-runtime"
 version = "0.1.30"
 default-features = false
-features = [ "runtime", "runtime-channel-mutex", "runtime-std",]
+features = [ "runtime", "runtime-channel-mutex", "runtime-std", "monitoring-nvml", "monitoring-gpu-engine-counters",]
 
 [dependencies.ruda-kernel]
 path = "../ruda-kernel"

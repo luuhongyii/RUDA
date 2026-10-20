@@ -53,6 +53,7 @@ impl<B: BackendIr> Runner<B> {
             FloatOperationIr::ArcTan(desc) => unary_float_ops!(handles, desc, B::float_atan),
             FloatOperationIr::ArcTanh(desc) => unary_float_ops!(handles, desc, B::float_atanh),
             FloatOperationIr::ArcTan2(desc) => binary_float_ops!(handles, desc, B::float_atan2),
+            FloatOperationIr::Hypot(desc) => binary_float_ops!(handles, desc, B::float_hypot),
             FloatOperationIr::Round(desc) => {
                 unary_float_ops!(handles, desc, B::float_round)
             }

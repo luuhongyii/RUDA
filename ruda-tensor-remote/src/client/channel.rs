@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use ruda_tensor::Shape;
 use ruda_communication::ProtocolClient;
 use ruda_tensor::graph::TensorIr;
-use ruda_tensor_router::{RouterTensor, RunnerChannel, get_client};
+use ruda_tensor_router::{RouterTensor, RunnerChannel, RunnerClient, get_client};
 
 use super::{
     RemoteClient,
@@ -14,6 +14,11 @@ use super::{
 pub struct RemoteChannel<C: ProtocolClient> {
     _p: PhantomData<C>,
 }
+
+#[cfg(feature = "distributed")]
+pub type ActiveChannel<C> = ruda_tensor_router::NativeDistributedChannel<RemoteChannel<C>>;
+#[cfg(not(feature = "distributed"))]
+pub type ActiveChannel<C> = RemoteChannel<C>;
 
 impl<C: ProtocolClient> RunnerChannel for RemoteChannel<C> {
     type Device = RemoteDevice;
@@ -43,15 +48,15 @@ impl<C: ProtocolClient> RunnerChannel for RemoteChannel<C> {
     }
 
     fn register_tensor(
-        _client: &Self::Client,
-        _handle: RemoteTensorHandle<C>,
-        _shape: Shape,
-        _dtype: ruda_tensor::DType,
+        client: &Self::Client,
+        handle: RemoteTensorHandle<C>,
+        shape: Shape,
+        dtype: ruda_tensor::DType,
     ) -> RouterTensor<Self::Client> {
-        // This function is normally only used to move a tensor from a device to another.
-        //
-        // In other words, to change the client.
-        panic!("Can't register manually a tensor on a remote channel.");
+        assert_eq!(client.context_id(), handle.client.context_id(), "Transferred handle belongs to another remote session");
+        assert_eq!(shape, handle.tensor.shape, "Transferred tensor shape changed");
+        assert_eq!(dtype, handle.tensor.dtype, "Transferred tensor dtype changed");
+        RouterTensor::new(handle.tensor.id, shape, dtype, client.clone())
     }
 
     fn change_client_backend(
@@ -67,7 +72,7 @@ impl<C: ProtocolClient> RunnerChannel for RemoteChannel<C> {
 
         let id = handle.tensor.id;
 
-        let target_client = get_client::<Self>(target_device);
+        let target_client = get_client::<ActiveChannel<C>>(target_device);
         let router_tensor: RouterTensor<RemoteClient> =
             RouterTensor::new(id, handle.tensor.shape, handle.tensor.dtype, target_client);
 
@@ -78,5 +83,27 @@ impl<C: ProtocolClient> RunnerChannel for RemoteChannel<C> {
 impl<C: ProtocolClient> Clone for RemoteChannel<C> {
     fn clone(&self) -> Self {
         RemoteChannel { _p: PhantomData }
+    }
+}
+
+#[cfg(feature = "distributed")]
+impl<C: ProtocolClient> ruda_tensor_router::NativeCollectiveChannel for RemoteChannel<C> {
+    fn init_native_client(device: &RemoteDevice) -> RemoteClient { Self::init_client(device) }
+
+    fn sync_native(client: &RemoteClient) {
+        client.sync_native_collective().unwrap_or_else(|error| panic!("Remote collective synchronization failed: {error:?}"));
+    }
+
+    fn native_group(device: &RemoteDevice, devices: &[ruda_tensor::DeviceId]) -> Vec<ruda_tensor::DeviceId> {
+        use ruda_core::device::Device;
+        let info = get_client::<ActiveChannel<C>>(device).device_info()
+            .unwrap_or_else(|error| panic!("Remote collective device discovery failed: {error:?}"));
+        assert!(info.native_collectives, "The selected remote runner has no native collective capability");
+        devices.iter().map(|id| {
+            let participant = RemoteDevice::from_id(*id);
+            assert!(participant.address.same_peer(&device.address), "Native remote collectives must use one server");
+            assert!(participant.device_index < info.device_count, "Remote collective participant is not hosted");
+            ruda_tensor::DeviceId::new(0, u16::try_from(participant.device_index).expect("Remote collective index exceeds u16"))
+        }).collect()
     }
 }

@@ -4,77 +4,48 @@ use crate::{
     collections::{HashMap, HashSet},
     graph::Parent,
 };
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
-/// Breadth for search algorithm.
-pub struct BreadthFirstSearch;
+/// Non-consuming validation of the backward ancestry.
+pub struct GraphTraversal;
 
 pub trait TraversalItem {
-    fn id(&self) -> NodeId;
     fn parents(&self) -> &[Parent];
-    fn parent_nodes(&self) -> Vec<NodeId> {
-        self.parents().iter().map(|p| p.id).collect()
-    }
-    fn extend_parent_nodes(&self, nodes: &mut Vec<NodeId>) {
-        nodes.extend(self.parent_nodes());
-    }
 }
 
-impl BreadthFirstSearch {
-    /// Traverse the graph of backward steps from a root node.
-    pub fn traverse<F, I>(
+impl GraphTraversal {
+    /// Collect available steps once, rejecting missing non-leaf ancestry before mutation.
+    pub fn collect_steps<I: TraversalItem>(
         &self,
         root_id: NodeId,
-        root_step: I,
-        steps: &mut HashMap<NodeId, I>,
-        mut callback: F,
-    ) where
-        F: FnMut(NodeId, I),
-        I: TraversalItem,
-    {
+        steps: &HashMap<NodeId, I>,
+    ) -> Result<Vec<NodeId>, NodeId> {
+        let root = steps.get(&root_id).ok_or(root_id)?;
+        let mut nodes = vec![root_id];
         let mut visited = HashSet::new();
-        let mut parents = Vec::new();
-        let mut step_parents = Vec::new();
-
+        let mut parents = root.parents().to_vec();
         visited.insert(root_id);
-        root_step.extend_parent_nodes(&mut parents);
 
-        callback(root_id, root_step);
-
-        while let Some(id) = parents.pop() {
-            let step = match steps.remove(&id) {
-                Some(step) => step,
-                None => continue,
-            };
-
-            let step_node = step.id();
-            if !visited.insert(step_node) {
+        while let Some(parent) = parents.pop() {
+            if !visited.insert(parent.id) {
                 continue;
             }
-
-            step.extend_parent_nodes(&mut step_parents);
-
-            for id in step_parents.drain(..) {
-                if !visited.contains(&id) {
-                    parents.push(id);
+            match steps.get(&parent.id) {
+                Some(step) => {
+                    nodes.push(parent.id);
+                    parents.extend_from_slice(step.parents());
                 }
+                None if parent.is_leaf => {}
+                None => return Err(parent.id),
             }
-
-            callback(step_node, step);
         }
+
+        Ok(nodes)
     }
 }
 
 impl TraversalItem for StepBoxed {
-    fn id(&self) -> NodeId {
-        Step::node(self.as_ref())
-    }
-
     fn parents(&self) -> &[Parent] {
         Step::parents(self.as_ref())
-    }
-
-    fn extend_parent_nodes(&self, nodes: &mut Vec<NodeId>) {
-        nodes.extend(self.parents().iter().map(|parent| parent.id));
     }
 }

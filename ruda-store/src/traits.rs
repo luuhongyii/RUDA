@@ -16,6 +16,24 @@ use ruda_tensor::api::backend::Backend;
 /// Collection operations create lightweight tensor snapshots without immediately copying data.
 /// Apply operations apply tensor data from snapshots to the corresponding tensors in the module.
 pub trait ModuleSnapshot<B: Backend>: Module<B> {
+    /// Collect all parameter paths and IDs without changing the existing typed Record API.
+    fn into_snapshot_record(self) -> crate::ModuleRecord
+    where Self: Sized {
+        crate::ModuleRecord::from_module(&self, None)
+    }
+
+    /// Record only parameters selected by ID/path, without initializing unselected parameters.
+    fn into_record_group(self, group: ruda_model::module::ParamGroup) -> crate::ModuleRecord
+    where Self: Sized {
+        crate::ModuleRecord::from_module(&self, Some(group))
+    }
+
+    /// Load a path-addressed record with its dtype, partial-load and unused-entry policies.
+    fn try_load_snapshot_record(self, record: crate::ModuleRecord) -> Result<Self, crate::ModuleRecordError>
+    where Self: Sized {
+        record.apply(self)
+    }
+
     /// Collects tensor snapshots for inspection without copying data.
     ///
     /// Returns a vector of `TensorSnapshot` objects that can lazily materialize the tensor data.
@@ -95,19 +113,7 @@ pub trait ModuleSnapshot<B: Backend>: Module<B> {
     {
         let mut applier = Applier::new(snapshots, filter, adapter, skip_enum_variants);
 
-        // Use unsafe to avoid cloning the entire module, which would double the memory usage
-        // We read the module out, map it, then write it back
-        // See https://github.com/shuqi2077/RUDA/blob/main/THIRD_PARTY_NOTICES.md
-        unsafe {
-            // Read the module out of self (moves it, leaving self in undefined state)
-            let module = core::ptr::read(self as *const Self);
-
-            // Map the module to create a new one with updated tensors
-            let new_module = module.map(&mut applier);
-
-            // Write the new module back to self
-            core::ptr::write(self as *mut Self, new_module);
-        }
+        *self = self.clone().map(&mut applier);
 
         applier.into_result()
     }
@@ -286,3 +292,7 @@ pub trait ModuleStore {
 
 // Blanket implementation for all modules
 impl<B: Backend, M: Module<B>> ModuleSnapshot<B> for M {}
+
+#[cfg(all(test, feature = "std", panic = "unwind"))]
+#[path = "apply_recovery_tests.rs"]
+mod apply_recovery_tests;

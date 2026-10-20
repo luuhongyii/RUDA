@@ -14,14 +14,16 @@ pub(crate) struct StructModuleRecordCodegen {
 }
 
 impl ModuleRecordCodegen for StructModuleRecordCodegen {
-    fn gen_record_type(&self, record_name: &Ident, generics: &Generics, paths: &crate::DerivePaths) -> (TokenStream, Generics) {
+    fn gen_record_type(&self, record_name: &Ident, module_name: &Ident, generics: &Generics, paths: &crate::DerivePaths) -> (TokenStream, Generics) {
         let model = &paths.model;
+        let module_name = module_name.to_string();
         let mut fields = quote! {};
         let vis = &self.vis;
 
         let mut used_generics = HashSet::new();
 
         for field in self.fields.iter() {
+            if field.field_type.is_flag { continue; }
             let ty = &field.field.ty;
             let name = &field.field.ident;
 
@@ -93,6 +95,7 @@ impl ModuleRecordCodegen for StructModuleRecordCodegen {
 
                 /// The record type for the module.
                 #[derive(#model::record::Record)]
+                #[ruda_record(module = #module_name)]
                 #vis struct #record_name #impl_generics #generics_where {
                     #fields
                 }

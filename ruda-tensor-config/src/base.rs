@@ -17,6 +17,9 @@ pub struct RudaTensorConfig {
     /// Configuration for autodiff.
     #[serde(default)]
     pub autodiff: AutodiffConfig,
+    /// Configuration for remote execution.
+    #[serde(default)]
+    pub remote: super::remote::RemoteConfig,
 }
 
 impl RuntimeConfig for RudaTensorConfig {
@@ -55,6 +58,18 @@ impl RuntimeConfig for RudaTensorConfig {
             if level != FusionLogLevel::Disabled {
                 self.fusion.logger.stderr = true;
             }
+        }
+
+        if let Ok(value) = std::env::var("RUDA_REMOTE_LOG") {
+            use super::remote::RemoteLogLevel;
+            let level = match value.to_ascii_lowercase().as_str() {
+                "disabled" | "off" | "0" => RemoteLogLevel::Disabled,
+                "basic" => RemoteLogLevel::Basic,
+                "full" | "1" => RemoteLogLevel::Full,
+                _ => self.remote.logger.level,
+            };
+            self.remote.logger.level = level;
+            if level != RemoteLogLevel::Disabled { self.remote.logger.stderr = true; }
         }
 
         self

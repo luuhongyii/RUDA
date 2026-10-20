@@ -429,6 +429,10 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
             gpu::Operator::NativeAddress(op) => instructions.push(Instruction::NativeAddress(self.compile_binary(op, out))),
             gpu::Operator::NativeLoad(op) => instructions.push(Instruction::NativeLoad(self.compile_unary(op, out))),
             gpu::Operator::NativeStore(_) => unreachable!("native store handled before output resolution"),
+            gpu::Operator::WorkgroupUniformLoad(op) => {
+                assert!(matches!(op.list.kind, gpu::VariableKind::SharedArray { .. } | gpu::VariableKind::Shared { .. }));
+                instructions.push(Instruction::WorkgroupUniformLoad(self.compile_index(op, out)));
+            }
             gpu::Operator::Index(op) | gpu::Operator::UncheckedIndex(op) => {
                 instructions.push(Instruction::Index(self.compile_index(op, out)));
             }
@@ -461,9 +465,11 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
             gpu::Operator::CopyMemoryBulk(op) => instructions.push(Instruction::CopyBulk {
                 input: self.compile_variable(op.input),
                 in_index: self.compile_variable(op.in_index),
+                offset_input: self.compile_variable(op.offset_input),
                 out: self.compile_variable(out),
                 out_index: self.compile_variable(op.out_index),
-                len: op.len as u32,
+                offset_out: self.compile_variable(op.offset_out),
+                len: op.len,
             }),
             gpu::Operator::Select(op) => instructions.push(Instruction::Select {
                 cond: self.compile_variable(op.cond),

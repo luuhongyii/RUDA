@@ -168,8 +168,8 @@ impl<const D: usize, B: Backend, K: BasicOps<B>> Module<B> for Tensor<B, D, K> {
 
     fn visit<V: ModuleVisitor<B>>(&self, _visitor: &mut V) {}
 
-    fn map<M: ModuleMapper<B>>(self, _mapper: &mut M) -> Self {
-        self
+    fn map<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        mapper.map_tensor(self)
     }
 
     fn into_record(self) -> Self::Record {

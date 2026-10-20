@@ -25,7 +25,7 @@ impl<R: FusionRuntime> OperationQueue<R> {
         self.execute_block_optimization(&mut plan.optimization, handles, stream_id);
     }
 
-    fn execute_block_optimization(
+    pub(crate) fn execute_block_optimization(
         &mut self,
         step: &mut BlockOptimization<R::Optimization>,
         handles: &mut HandleContainer<R::FusionHandle>,
@@ -52,7 +52,7 @@ impl<R: FusionRuntime> OperationQueue<R> {
                 if tensor.status == TensorStatus::ReadWrite {
                     self.variables.remove(&tensor.id);
                 };
-                handles.free(tensor)
+                R::free_handle(handles, tensor, crate::OperationRan::Yes)
             });
 
         self.global.drain(0..num_drained);

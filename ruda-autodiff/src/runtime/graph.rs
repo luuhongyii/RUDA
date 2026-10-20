@@ -10,7 +10,6 @@ use crate::{
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-#[cfg(not(feature = "distributed"))]
 use ruda_tensor::Backend;
 
 #[cfg(feature = "distributed")]
@@ -117,8 +116,7 @@ impl AutodiffClient for GraphMutexClient {
         state.server.register(node_id_ref, step, actions);
     }
 
-    #[cfg(not(feature = "distributed"))]
-    fn backward<B: Backend>(&self, root: AutodiffTensor<B>) -> Gradients {
+    fn backward_local<B: Backend>(&self, root: AutodiffTensor<B>) -> Gradients {
         let node_id = root.node.id;
         let graph = GraphMutexClient::graph(root.node.id, &[]);
 
@@ -126,12 +124,17 @@ impl AutodiffClient for GraphMutexClient {
             let mut state = graph.state.lock();
             state
                 .server
-                .backward::<GraphCleaner, B>(root.node, root.primitive, node_id)
+                .backward_local::<GraphCleaner, B>(root.node, root.primitive, node_id)
         }; // lock released
 
         GraphCleaner::cleanup_orphaned_entries();
 
         grads
+    }
+
+    #[cfg(not(feature = "distributed"))]
+    fn backward<B: Backend>(&self, root: AutodiffTensor<B>) -> Gradients {
+        self.backward_local(root)
     }
 
     #[cfg(feature = "distributed")]

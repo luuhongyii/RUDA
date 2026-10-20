@@ -24,6 +24,8 @@ pub(crate) trait StreamSegment<O> {
     fn operations(&self) -> &[OperationIr];
     /// Execute part of the segment using the given plan id.
     fn execute(&mut self, id: ExecutionPlanId, store: &mut ExecutionPlanStore<O>);
+    /// Execute without adding a plan to the cache.
+    fn execute_unfused(&mut self, optimization: BlockOptimization<O>);
 }
 
 impl<O: NumOperations> Processor<O> {
@@ -152,6 +154,11 @@ impl<O: NumOperations> Processor<O> {
                 if let ExecutionMode::Sync = mode {
                     panic!("Can't continue exploring when sync.")
                 }
+            }
+            ExplorationAction::Unfused(optim) => {
+                *sync_capture = None;
+                item.execute_unfused(optim);
+                self.reset(store, item.operations());
             }
         }
     }

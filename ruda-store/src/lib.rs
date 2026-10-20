@@ -82,6 +82,7 @@ mod applier;
 mod apply_result;
 mod collector;
 mod filter;
+mod module_record;
 mod tensor_snapshot;
 mod traits;
 
@@ -93,6 +94,7 @@ pub use applier::Applier;
 pub use apply_result::{ApplyError, ApplyResult};
 pub use collector::Collector;
 pub use filter::PathFilter;
+pub use module_record::{DTypePolicy, ModuleRecord, ModuleRecordError};
 pub use tensor_snapshot::{TensorSnapshot, TensorSnapshotError};
 pub use traits::{ModuleSnapshot, ModuleStore};
 

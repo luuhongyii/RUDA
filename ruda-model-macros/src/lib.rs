@@ -59,7 +59,7 @@ pub fn module_derive(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro for the record.
-#[proc_macro_derive(Record)]
+#[proc_macro_derive(Record, attributes(ruda_record))]
 pub fn record_derive(input: TokenStream) -> TokenStream {
     let input = syn::parse(input).unwrap();
     ruda_model_codegen::derive_record_native(&input).into()

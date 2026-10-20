@@ -171,7 +171,7 @@ fn carrier<O: Numeric, P: Float, S: Numeric>(
         sync_ruda();
         let aa = cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::A, 16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor, &left.to_slice(), 16u32);
         let bb = cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::B, 16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor, &right.to_slice(), 16u32);
-        cmma::execute::<f16, f16, f32, f32>(&aa, &bb, &acc, &acc); sync_ruda();
+        cmma::execute::<f16, f16, f32, f32, _>(&aa, &bb, &acc, &acc); sync_ruda();
         let mut end_group = k - base <= 16usize;
         if comptime!(mode_a >= 2) { end_group = end_group || (base + 16usize) % 128usize == 0usize; }
         if comptime!(mode_a == 6) { end_group = k - base <= 16usize || (base + 16usize) % 32usize == 0usize; }

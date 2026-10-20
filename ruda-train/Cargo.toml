@@ -1,0 +1,49 @@
+[package]
+name = "ruda-train"
+version = "0.1.0"
+edition.workspace = true
+description = "Backend-generic supervised training and evaluation for Ruda."
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+test-cuda = ["dep:ruda-tensor-device", "ruda-tensor-device/cuda-default", "dep:ruda-fusion"]
+test-cuda-native = ["test-cuda"]
+mnist = ["ruda-model/vision"]
+vision = ["dep:ruda-nn", "dep:ruda-store", "ruda-model/network", "dep:dirs", "dep:log"]
+rl = ["dep:rand"]
+sys-metrics = ["dep:sysinfo", "dep:systemstat", "dep:nvml-wrapper", "dep:log"]
+tui = ["dep:ratatui", "dep:unicode-width", "dep:derive-new", "dep:log"]
+
+[[example]]
+name = "mnist"
+path = "examples/mnist.rs"
+required-features = ["mnist"]
+
+[dependencies]
+ruda-model = { path = "../ruda-model", default-features = false, features = ["std", "dataset"] }
+ruda-optim = { path = "../ruda-optim", default-features = false, features = ["std"] }
+ruda-nn = { path = "../ruda-nn", optional = true, default-features = false, features = ["std"] }
+ruda-store = { path = "../ruda-store", optional = true, default-features = false, features = ["std", "pytorch"] }
+dirs = { version = "=6.0.0", optional = true }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.148"
+rand = { version = "=0.10.3", optional = true }
+sysinfo = { version = "=0.39.6", optional = true }
+systemstat = { version = "=0.2.7", optional = true }
+nvml-wrapper = { version = "=0.13.0", optional = true }
+log = { version = "=0.4.34", optional = true }
+ratatui = { version = "=0.30.2", optional = true }
+unicode-width = { version = "0.2", optional = true }
+derive-new = { version = "=0.7.0", optional = true }
+ruda-tensor-device = { path = "../ruda-tensor-device", optional = true, default-features = false, features = ["cuda"] }
+ruda-fusion = { path = "../ruda-fusion", optional = true, default-features = false, features = ["test-util"] }
+
+[dev-dependencies]
+ruda-tensor-host = { path = "../ruda-tensor-host" }
+ruda-autodiff = { path = "../ruda-autodiff" }
+ruda-nn = { path = "../ruda-nn", default-features = false, features = ["std"] }
+ruda-tensor-router = { path = "../ruda-tensor-router" }
+
+[lints.rust]
+unsafe_code = "forbid"

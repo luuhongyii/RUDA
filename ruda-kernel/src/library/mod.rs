@@ -14,6 +14,7 @@ pub use trigonometry::*;
 /// Quantization functionality required in views
 pub mod quant;
 pub mod tensor;
+pub mod throughput;
 
 /// Event utilities.
 pub mod event;

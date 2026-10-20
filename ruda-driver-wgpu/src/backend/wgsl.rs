@@ -28,6 +28,10 @@ pub fn bindings(
 }
 
 pub async fn request_device(adapter: &wgpu::Adapter) -> (wgpu::Device, wgpu::Queue) {
+    try_request_device(adapter).await.expect("Unable to request WGSL device")
+}
+
+pub async fn try_request_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue), crate::WgpuInitError> {
     let limits = adapter.limits();
     adapter
         .request_device(&wgpu::DeviceDescriptor {
@@ -45,14 +49,13 @@ pub async fn request_device(adapter: &wgpu::Adapter) -> (wgpu::Device, wgpu::Que
             experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
         })
         .await
-        .map_err(|err| {
-            format!(
+        .map_err(|err| crate::WgpuInitError::RequestDevice {
+            message: format!(
                 "Unable to request the device with the adapter {:?}, err {:?}",
                 adapter.get_info(),
                 err
-            )
+            ),
         })
-        .unwrap()
 }
 
 pub fn register_wgsl_features(

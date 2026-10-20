@@ -37,8 +37,8 @@ where
     flat_shape[D - 1] = 1;
     let flat: Tensor<B, D, K> = tensor.reshape(flat_shape);
 
-    let range = Tensor::<B, 1, Int>::arange(0..diag_len as i64, &device);
-    let step_tensor = Tensor::<B, 1, Int>::from_data([cols as i64 + 1], &device);
+    let range = Tensor::<B, 1, Int>::arange(0..diag_len as i64, &device).with_context_of(&flat);
+    let step_tensor = Tensor::<B, 1, Int>::from_data([cols as i64 + 1], &device).with_context_of(&flat);
     let indices = range * step_tensor;
     flat.take::<1, D>(D - 2, indices).squeeze_dim(D - 1)
 }

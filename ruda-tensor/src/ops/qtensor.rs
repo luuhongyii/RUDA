@@ -230,6 +230,34 @@ pub trait QTensorOps<B: Backend> {
         false
     }
 
+    /// Graph participation of a differentiable quantized surrogate, if supported.
+    fn q_is_tracked(tensor: &QuantizedTensor<B>) -> bool { Self::q_is_require_grad(tensor) }
+
+    /// The checkpointing policy attached to this quantized tensor.
+    fn q_gradient_checkpointing_strategy(_tensor: &QuantizedTensor<B>) -> Option<crate::GradientCheckpointingStrategy> { None }
+
+    /// Runtime autodiff association of quantized storage and its optional surrogate.
+    fn q_autodiff_context(tensor: &QuantizedTensor<B>) -> crate::AutodiffContext {
+        if B::ad_enabled(&Self::q_device(tensor)) {
+            crate::AutodiffContext::Enabled(Self::q_gradient_checkpointing_strategy(tensor)
+                .unwrap_or(crate::GradientCheckpointingStrategy::Disabled))
+        } else { crate::AutodiffContext::Disabled }
+    }
+
+    /// Change runtime association without converting the quantized payload.
+    fn q_with_autodiff_context(tensor: QuantizedTensor<B>, context: crate::AutodiffContext) -> QuantizedTensor<B> {
+        assert_eq!(Self::q_autodiff_context(&tensor), context,
+            "Backend cannot change autodiff association; use Tensor::into_autodiff to select an autodiff backend");
+        tensor
+    }
+
+    /// Override checkpointing without changing quantized storage or surrogate history.
+    fn q_with_gradient_checkpointing_strategy(
+        _tensor: QuantizedTensor<B>, _strategy: crate::GradientCheckpointingStrategy,
+    ) -> QuantizedTensor<B> {
+        panic!("Tensor::with_gradient_checkpointing_strategy requires a supporting autodiff backend")
+    }
+
     /// Broadcasts the `tensor` to the given `shape`.
     fn q_expand(tensor: QuantizedTensor<B>, shape: Shape) -> QuantizedTensor<B>;
 

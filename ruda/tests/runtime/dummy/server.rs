@@ -66,6 +66,7 @@ impl RudaTask<DummyCompiler> for KernelTask {
         _addr_type: StorageType,
     ) -> Result<ruda::runtime::kernel::CompiledKernel<DummyCompiler>, CompilationError> {
         Ok(CompiledKernel {
+            io: None,
             entrypoint_name: self.kernel.name().to_string(),
             debug_name: None,
             source: String::new(),
@@ -193,7 +194,7 @@ impl ComputeServer for DummyServer {
             })
             .collect();
         let data = bytemuck::cast_slice(&bindings.info.data);
-        let metadata = Handle::new(stream_id, data.len() as u64);
+        let metadata = Handle::new(self.utilities.service, stream_id, data.len() as u64);
         self.bind_with_data(data, metadata.clone(), stream_id);
 
         resources.push({
@@ -245,11 +246,13 @@ impl ComputeServer for DummyServer {
 
 impl DummyServer {
     pub fn new(
+        device_id: ruda_core::device::DeviceId,
         memory_management: MemoryManagement<BytesStorage>,
         mem_props: MemoryDeviceProperties,
     ) -> Self {
         let hardware = HardwareProperties {
             load_width: 128,
+            vector_register_count: None,
             plane_size_min: 32,
             plane_size_max: 32,
             max_bindings: 32,
@@ -261,7 +264,9 @@ impl DummyServer {
             num_tensor_cores: None,
             min_tensor_cores_dim: None,
             num_cpu_cores: None,
+            last_level_cache_size: None,
             max_vector_size: VectorSize::MAX,
+            ruda_mma_reserved_shared_memory: 0,
         };
         let features = Features::default();
         let timing_method = ruda_core::profile::TimingMethod::System;
@@ -269,6 +274,7 @@ impl DummyServer {
         let logger = Arc::new(ServerLogger::default());
 
         let utilities = Arc::new(ServerUtilities::new(
+            ruda_core::device::ServiceId::of::<Self>(device_id),
             props,
             logger,
             (),

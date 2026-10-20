@@ -8,7 +8,6 @@ use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
 use ruda_core::{e2m1, e2m1x2, e2m3, e3m2, e4m3, e5m2, flex32, tf32, ue8m0};
 use ruda_core::ir::{ManagedVariable, VectorSize};
-use ruda::runtime::backend::Runtime;
 use half::{bf16, f16};
 use variadics_please::{all_tuples, all_tuples_enumerated};
 
@@ -63,9 +62,16 @@ impl<T: RudaPrimitive> Assign for T {
 
 impl<T: NativeAssign> Assign for NativeExpand<T> {
     fn expand_assign(&mut self, scope: &mut Scope, value: Self) {
+        if scope.reference_target(*self.expand).is_some() {
+            scope.reference_assign(*self.expand, *value.expand).expect("compatible reference assignment");
+            return;
+        }
         assign::expand(scope, value, self.clone());
     }
     fn init_mut(&self, scope: &mut Scope) -> Self {
+        if let Some(reference) = scope.reference_copy(*self.expand, true) {
+            return reference.into();
+        }
         T::elem_init_mut(scope, self.expand.clone()).into()
     }
 }
@@ -131,6 +137,15 @@ impl<T: Sized> IntoComptime for T {}
 pub trait IntoMut: Sized {
     /// Convert the variable into a potentially new mutable variable in `scope`, copying if needed.
     fn into_mut(self, scope: &mut Scope) -> Self;
+
+    fn expand_reference(self, _scope: &mut Scope, _writable: bool) -> Self { self }
+    fn expand_reference_value(self, _scope: &mut Scope) -> Self { self }
+    fn expand_reborrow(self, _scope: &mut Scope, _writable: bool) -> Self { self }
+    fn expand_deref(self, _scope: &mut Scope) -> Self { self }
+    fn expand_deref_assign(mut self, scope: &mut Scope, value: Self)
+    where Self: Assign {
+        self.expand_assign(scope, value);
+    }
 }
 
 pub fn into_mut_assign<T: Assign>(value: T, scope: &mut Scope) -> T {
@@ -187,6 +202,13 @@ impl<T: Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + Send + Sy
 {
 }
 
+/// A compatibility tag for launch arguments, independent of any device or compiler.
+///
+/// `()` is used for runtime-erased launches; existing runtime types remain valid tags.
+pub trait LaunchMarker: Clone + core::fmt::Debug + Send + Sync + 'static {}
+
+impl<T: Clone + core::fmt::Debug + Send + Sync + 'static> LaunchMarker for T {}
+
 /// Defines how a [launch argument](LaunchArg) can be expanded.
 ///
 /// TODO Verify the accuracy of the next comment.
@@ -198,11 +220,11 @@ impl<T: Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + Send + Sy
 #[diagnostic::on_unimplemented(note = "Consider using `#[derive(RudaLaunch)]` on `{Self}`")]
 pub trait LaunchArg: RudaType + Send + Sync + 'static {
     /// The runtime argument for the kernel.
-    type RuntimeArg<R: Runtime>: Send + Sync;
+    type RuntimeArg<R: LaunchMarker>: Send + Sync;
     /// Compilation argument.
     type CompilationArg: CompilationArg;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg;
@@ -225,10 +247,10 @@ pub trait LaunchArg: RudaType + Send + Sync + 'static {
 macro_rules! launch_tuple {
     ($(($T:ident, $t:ident)),*) => {
         impl<$($T: LaunchArg),*> LaunchArg for ($($T),*) {
-            type RuntimeArg<R: Runtime> = ($($T::RuntimeArg<R>),*);
+            type RuntimeArg<R: LaunchMarker> = ($($T::RuntimeArg<R>),*);
             type CompilationArg = ($($T::CompilationArg),*);
 
-            fn register<R: Runtime>(runtime_arg: Self::RuntimeArg<R>, launcher: &mut KernelLauncher<R>) -> Self::CompilationArg {
+            fn register<R: LaunchMarker>(runtime_arg: Self::RuntimeArg<R>, launcher: &mut KernelLauncher<R>) -> Self::CompilationArg {
                 let ($($t),*) = runtime_arg;
                 ($($T::register($t, launcher)),*)
             }
@@ -343,6 +365,13 @@ macro_rules! tuple_init {
                     $P.into_mut(scope),
                 )*)
             }
+            #[allow(non_snake_case, unused, clippy::unused_unit)]
+            fn expand_reference_value(self, scope: &mut Scope) -> Self {
+                let ($($P,)*) = self;
+                ($(
+                    $P.expand_reference_value(scope),
+                )*)
+            }
         }
     }
 }
@@ -402,7 +431,40 @@ pub trait NativeAssign: RudaType {
 
 impl<T: NativeAssign> IntoMut for NativeExpand<T> {
     fn into_mut(self, scope: &mut Scope) -> Self {
+        if let Some(reference) = scope.reference_copy(*self.expand, true) {
+            return reference.into();
+        }
         into_mut_assign(self, scope)
+    }
+
+    fn expand_reference(self, scope: &mut Scope, writable: bool) -> Self {
+        scope.reference_borrow(self.expand, writable).expect("addressable reference").into()
+    }
+
+    fn expand_reference_value(self, scope: &mut Scope) -> Self {
+        match scope.reference_copy(*self.expand, false) {
+            Some(value) => value.into(),
+            None => self,
+        }
+    }
+
+    fn expand_reborrow(self, scope: &mut Scope, writable: bool) -> Self {
+        if self.expand.is_array() || self.expand.ty.is_semantic() || self.expand.ty.is_pointer() {
+            return self;
+        }
+        scope.reference_reborrow(*self.expand, writable).expect("valid reborrow").into()
+    }
+
+    fn expand_deref(self, scope: &mut Scope) -> Self {
+        scope.reference_read(*self.expand).expect("valid dereference").into()
+    }
+
+    fn expand_deref_assign(self, scope: &mut Scope, value: Self) {
+        if scope.reference_target(*self.expand).is_some() {
+            scope.reference_write(*self.expand, *value.expand).expect("writable reference");
+        } else {
+            assign::expand(scope, value, self);
+        }
     }
 }
 
@@ -498,6 +560,9 @@ impl<T: IntoMut> IntoMut for Option<T> {
     fn into_mut(self, scope: &mut Scope) -> Self {
         self.map(|o| IntoMut::into_mut(o, scope))
     }
+    fn expand_reference_value(self, scope: &mut Scope) -> Self {
+        self.map(|value| value.expand_reference_value(scope))
+    }
 }
 
 impl<T: RudaType> RudaType for Vec<T> {
@@ -511,6 +576,9 @@ impl<T: RudaType> RudaType for &mut Vec<T> {
 impl<T: IntoMut> IntoMut for Vec<T> {
     fn into_mut(self, scope: &mut Scope) -> Self {
         self.into_iter().map(|e| e.into_mut(scope)).collect()
+    }
+    fn expand_reference_value(self, scope: &mut Scope) -> Self {
+        self.into_iter().map(|value| value.expand_reference_value(scope)).collect()
     }
 }
 impl<T: RudaDebug> RudaDebug for Vec<T> {}
@@ -526,10 +594,10 @@ pub(crate) fn __expand_new<C: Numeric, Out: Numeric>(
 }
 
 impl LaunchArg for () {
-    type RuntimeArg<R: Runtime> = ();
+    type RuntimeArg<R: LaunchMarker> = ();
     type CompilationArg = ();
 
-    fn register<R: Runtime>(_runtime_arg: Self::RuntimeArg<R>, _launcher: &mut KernelLauncher<R>) {
+    fn register<R: LaunchMarker>(_runtime_arg: Self::RuntimeArg<R>, _launcher: &mut KernelLauncher<R>) {
         // nothing to do
     }
 

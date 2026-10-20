@@ -101,7 +101,7 @@ pub fn lu<B: Backend, const D: usize, const D1: usize>(
         temp_l = lu_tensor.clone().tril(0);
         u = lu_tensor.slice_dim(D - 2, 0..n_cols).triu(0);
     }
-    let mask = Tensor::<B, D, Bool>::diag_mask(temp_l.shape(), 0, &device).bool_not();
+    let mask = Tensor::<B, D, Bool>::diag_mask(temp_l.shape(), 0, &device).with_context_of(&temp_l).bool_not();
     let l = temp_l.mask_fill(mask, 1.0);
     let p = construct_full_permutation_tensor(p_compact, n_rows, &device).transpose();
 
@@ -146,7 +146,7 @@ fn block_lu_with_partial_piv<B: Backend, const D: usize, const D1: usize>(
     let n_cols = dims[D - 1];
     let piv_nums = n_rows.min(n_cols);
     let dtype = tensor.dtype().into();
-    let mut global_piv = create_permutation_tensor::<B, D>(piv_nums, dims, dtype, &device);
+    let mut global_piv = create_permutation_tensor::<B, D>(piv_nums, dims, dtype, &device).with_context_of(&tensor);
     let block_size = 128;
 
     // Computes the total number of blocks including incomplete blocks
@@ -256,7 +256,7 @@ fn standard_lu_with_partial_piv<B: Backend, const D: usize, const D1: usize>(
     let n_cols = dims[D - 1];
     let piv_nums = n_rows.min(n_cols);
     let dtype = tensor.dtype().into();
-    let mut permutations = create_permutation_tensor::<B, D>(piv_nums, dims, dtype, device);
+    let mut permutations = create_permutation_tensor::<B, D>(piv_nums, dims, dtype, device).with_context_of(&tensor);
 
     for k in 0..piv_nums {
         // Find the index of the maximum absolute value in the k-th column (from row k downwards)
@@ -296,7 +296,7 @@ fn construct_full_permutation_tensor<B: Backend, const D: usize>(
     device: &B::Device,
 ) -> Tensor<B, D> {
     let dims = piv.dims();
-    let identity_2d_uncasted: Tensor<B, 2, Float> = Tensor::eye(n_rows, device);
+    let identity_2d_uncasted: Tensor<B, 2, Float> = Tensor::<B, 2, Float>::eye(n_rows, device).with_context_of(&piv);
     let identity_2d = identity_2d_uncasted.cast(piv.dtype());
 
     // Reshape the `identity` tensor from 2 dims to D dims
@@ -444,6 +444,8 @@ fn apply_permutations_to_tensor<B: Backend, const D: usize>(
     let tensor_dims = tensor.dims();
     let n_rows = tensor_dims[D - 2];
     let n_pivots = piv.dims()[D - 2];
+    let context = tensor.autodiff_context().merge(piv.autodiff_context());
+    let tensor = tensor.with_autodiff_context(context);
     let piv_data: Vec<f32> = piv.into_data().convert::<f32>().into_vec::<f32>().unwrap();
 
     // Compute total batch size (product of all batch dimensions)
@@ -455,7 +457,7 @@ fn apply_permutations_to_tensor<B: Backend, const D: usize>(
             let j = piv_val.elem::<u32>() as usize;
             perm.swap(i, j);
         }
-        let perm_tensor = Tensor::<B, 1, Int>::from_data(&perm[..], device);
+        let perm_tensor = Tensor::<B, 1, Int>::from_data(&perm[..], device).with_autodiff_context(context);
         return tensor.select(D - 2, perm_tensor);
     }
 
@@ -474,7 +476,7 @@ fn apply_permutations_to_tensor<B: Backend, const D: usize>(
             let j = piv_data[offset + i].elem::<u32>() as usize;
             perm.swap(i, j);
         }
-        let perm_tensor = Tensor::<B, 1, Int>::from_data(&perm[..], device);
+        let perm_tensor = Tensor::<B, 1, Int>::from_data(&perm[..], device).with_autodiff_context(context);
 
         // Extract this batch element [1, rows, cols], select rows, collect
         let batch_elem = flat_tensor.clone().slice_dim(0, b); // [1, rows, cols]  

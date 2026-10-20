@@ -20,19 +20,19 @@ pub enum FastDivmod<I: FastDivmodInt> {
 }
 
 pub trait FastDivmodInt: Int + MulHi + ScalarArgSettings {
-    fn size<R: Runtime>(launcher: &KernelLauncher<R>) -> usize;
+    fn size<R: LaunchMarker>(launcher: &KernelLauncher<R>) -> usize;
 }
 
 // Could potentially support signed, but that needs more handling
 
 impl FastDivmodInt for u32 {
-    fn size<R: Runtime>(_launcher: &KernelLauncher<R>) -> usize {
+    fn size<R: LaunchMarker>(_launcher: &KernelLauncher<R>) -> usize {
         size_of::<u32>()
     }
 }
 
 impl FastDivmodInt for usize {
-    fn size<R: Runtime>(launcher: &KernelLauncher<R>) -> usize {
+    fn size<R: LaunchMarker>(launcher: &KernelLauncher<R>) -> usize {
         launcher.settings.address_type.unsigned_type().size()
     }
 }
@@ -109,10 +109,10 @@ mod launch {
     }
 
     impl<I: FastDivmodInt> LaunchArg for FastDivmod<I> {
-        type RuntimeArg<R: Runtime> = I;
+        type RuntimeArg<R: LaunchMarker> = I;
         type CompilationArg = FastDivmodCompilationArg;
 
-        fn register<R: Runtime>(
+        fn register<R: LaunchMarker>(
             divisor: Self::RuntimeArg<R>,
             launcher: &mut KernelLauncher<R>,
         ) -> Self::CompilationArg {

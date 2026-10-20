@@ -21,6 +21,10 @@ pub trait Step: Send + core::fmt::Debug {
     #[cfg(feature = "distributed")]
     /// Returns the [`DistributedParams`] of the node's tensor associated to the step.
     fn distributed_params(&self) -> Option<DistributedParams>;
+
+    #[cfg(feature = "distributed")]
+    /// Native backend owning a distributed parameter's gradient storage.
+    fn distributed_backend(&self) -> Option<core::any::TypeId> { None }
 }
 
 pub type StepBoxed = Box<dyn Step>;

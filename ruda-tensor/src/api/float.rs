@@ -67,6 +67,15 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
         Self::new(TensorPrimitive::Float(B::float_rsqrt(self.primitive.tensor())))
     }
 
+    /// Computes the element-wise hypotenuse, with broadcasting.
+    pub fn hypot(self, other: Self) -> Self {
+        check!(TensorCheck::binary_ops_ew("Hypot", &self, &other));
+        Self::new(TensorPrimitive::Float(B::float_hypot(
+            self.primitive.tensor(),
+            other.primitive.tensor(),
+        )))
+    }
+
     /// Converts each of the elements of the input tensor from angles in degrees to radians.
     ///
     /// # Example
@@ -157,7 +166,7 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
             distribution,
             &self.device(),
             self.dtype().into(),
-        )))
+        ))).with_autodiff_context(self.autodiff_context())
     }
 
     /// Calculate the variance along the given dimension.
@@ -323,9 +332,10 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
     /// This can be used in batchers or elsewhere to ensure that previous operations are not
     /// considered in the autodiff graph.
     pub fn detach(self) -> Self {
-        Self::new(TensorPrimitive::Float(B::float_detach(
-            self.primitive.tensor(),
-        )))
+        Self::new(match self.primitive {
+            TensorPrimitive::Float(tensor) => TensorPrimitive::Float(B::float_detach(tensor)),
+            TensorPrimitive::QFloat(tensor) => TensorPrimitive::QFloat(B::q_detach(tensor)),
+        })
     }
 
     /// Mark the tensor to keep gradients during the backward pass.
@@ -340,6 +350,68 @@ $$\text{erf}\(x\) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt$$
         match &self.primitive {
             TensorPrimitive::Float(tensor) => B::float_is_require_grad(tensor),
             TensorPrimitive::QFloat(tensor) => B::q_is_require_grad(tensor),
+        }
+    }
+
+    /// Whether this tensor belongs to a recorded graph. This does not report tape availability.
+    pub fn is_tracked(&self) -> bool {
+        match &self.primitive {
+            TensorPrimitive::Float(tensor) => B::float_is_tracked(tensor),
+            TensorPrimitive::QFloat(tensor) => B::q_is_tracked(tensor),
+        }
+    }
+
+    /// Whether autodiff is enabled for this tensor, independently of tracking or gradient retention.
+    pub fn is_autodiff(&self) -> bool { !matches!(self.autodiff_context(), crate::AutodiffContext::Disabled) }
+
+    /// Return the tensor's runtime autodiff association.
+    pub fn autodiff_context(&self) -> crate::AutodiffContext {
+        match &self.primitive {
+            TensorPrimitive::Float(tensor) => B::float_autodiff_context(tensor),
+            TensorPrimitive::QFloat(tensor) => B::q_autodiff_context(tensor),
+        }
+    }
+
+    /// Enable an autodiff-capable backend's runtime association without requiring gradients.
+    /// To lift an ordinary backend tensor, use `into_autodiff` instead.
+    pub fn autodiff(self) -> Self {
+        if self.is_autodiff() { return self; }
+        self.with_autodiff_context(crate::AutodiffContext::Enabled(crate::GradientCheckpointingStrategy::Disabled))
+    }
+
+    /// Drop graph association while retaining the tensor's backend type and storage.
+    pub fn without_autodiff(self) -> Self { self.with_autodiff_context(crate::AutodiffContext::Disabled) }
+
+    /// Lift a tensor into an explicitly selected autodiff backend without a host copy.
+    pub fn into_autodiff<A: crate::AutodiffBackend<InnerBackend = B>>(self) -> Tensor<A, D> {
+        Tensor::<A, D>::from_inner(self)
+    }
+
+    /// Set runtime association without changing the tensor's dtype or storage representation.
+    pub fn with_autodiff_context(self, context: crate::AutodiffContext) -> Self {
+        Self::new(match self.primitive {
+            TensorPrimitive::Float(tensor) => TensorPrimitive::Float(B::float_with_autodiff_context(tensor, context)),
+            TensorPrimitive::QFloat(tensor) => TensorPrimitive::QFloat(B::q_with_autodiff_context(tensor, context)),
+        })
+    }
+
+    /// Return the checkpointing policy carried by an autodiff tensor.
+    pub fn gradient_checkpointing_strategy(&self) -> Option<crate::GradientCheckpointingStrategy> {
+        match &self.primitive {
+            TensorPrimitive::Float(tensor) => B::float_gradient_checkpointing_strategy(tensor),
+            TensorPrimitive::QFloat(tensor) => B::q_gradient_checkpointing_strategy(tensor),
+        }
+    }
+
+    /// Override an autodiff tensor's checkpointing policy without severing its graph.
+    pub fn with_gradient_checkpointing_strategy(self, strategy: crate::GradientCheckpointingStrategy) -> Self {
+        match self.primitive {
+            TensorPrimitive::Float(tensor) => Self::new(TensorPrimitive::Float(
+                B::float_with_gradient_checkpointing_strategy(tensor, strategy),
+            )),
+            TensorPrimitive::QFloat(tensor) => Self::new(TensorPrimitive::QFloat(
+                B::q_with_gradient_checkpointing_strategy(tensor, strategy),
+            )),
         }
     }
 
@@ -879,7 +951,7 @@ impl<const D: usize, B: Backend> Tensor<B, D> {
             [batch_size, num_samples],
             Distribution::Uniform(0.0, 1.0),
             &device,
-        ); // [batch, num_samples]
+        ).with_context_of(&cumsum); // [batch, num_samples]
 
         // Expand dimensions for broadcasting:
         //   cumsum: [batch, categories, 1]
@@ -933,14 +1005,6 @@ where
     B: Backend,
     K: FloatMathOps<B>,
 {
-    /// Applies element wise square operation.
-    ///
-    #[cfg_attr(doc, doc = r#"$y_i = x_i * x_i$"#)]
-    #[cfg_attr(not(doc), doc = "`y_i = x_i * x_i`")]
-    pub fn square(self) -> Self {
-        Self::new(K::square(self.primitive))
-    }
-
     /// Applies element wise exponential operation.
     ///
     #[cfg_attr(doc, doc = r#"$y_i = e^{x_i}$"#)]

@@ -29,6 +29,7 @@ impl<C: Compiler, K: KernelSource> RudaTask<C> for SourceKernel<K> {
         let source = source_template.complete();
 
         Ok(CompiledKernel {
+            io: None,
             entrypoint_name: "main".to_string(),
             debug_name: Some(core::any::type_name::<K>()),
             source,

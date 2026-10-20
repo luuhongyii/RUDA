@@ -21,7 +21,7 @@ use crate::api::{
     Bool, ElementConversion, Float, Int, Shape, TensorData, TensorKind, TensorMetadata,
     backend::Backend, check,
 };
-use crate::api::{DType, Element};
+use crate::api::{DType, Element, TensorReadError};
 use crate::api::{IndexingUpdateOp, TensorCreationOptions};
 use crate::api::{cast::ToElement, check::TensorCheck};
 use serde::{Serialize, Serializer};
@@ -98,6 +98,13 @@ where
     K: BasicOps<B>,
     K::Elem: Element,
 {
+    /// Take the owned tensor, leaving a zero-shape placeholder on the same device.
+    pub fn extract(&mut self) -> Self {
+        let mut tensor = Tensor::<B, D, K>::empty([0; D], &self.device()).with_context_of(self);
+        core::mem::swap(self, &mut tensor);
+        tensor
+    }
+
     /// Executes an operation on the tensor and modifies its value.
     ///
     /// # Notes
@@ -109,10 +116,7 @@ where
     /// want to mutate a tensor by using owned operations. A plausible usage would be to
     /// update the weights of a mutable model reference.
     pub fn inplace<F: FnOnce(Self) -> Self>(&mut self, func: F) {
-        let mut tensor_owned = Tensor::empty([0; D], &self.device());
-        core::mem::swap(&mut tensor_owned, self);
-
-        let mut tensor_new = func(tensor_owned);
+        let mut tensor_new = func(self.extract());
         core::mem::swap(&mut tensor_new, self);
     }
 
@@ -140,6 +144,12 @@ where
         self.primitive.dtype()
     }
 
+    /// Report the backend's storage ownership eligibility for in-place mutation.
+    /// Individual operations may impose additional layout or dtype requirements.
+    pub fn can_mut(&self) -> bool {
+        self.primitive.can_mut()
+    }
+
     /// Create an empty tensor of the given shape.
     ///
     /// # Arguments
@@ -163,7 +173,19 @@ where
         let shape = shape.into();
         let dtype = opt.resolve_dtype::<K>();
         check!(TensorCheck::creation_ops::<D>("Empty", &shape));
-        Self::new(K::empty(shape, &opt.device, dtype))
+        Self::new(opt.apply_context::<K>(K::empty(shape, &opt.device, dtype)))
+    }
+
+    /// Create an empty tensor with the same shape, dtype and device.
+    /// Panics for quantized tensors, which cannot be created directly in their dtype.
+    pub fn empty_like(&self) -> Self {
+        let dtype = self.dtype();
+        check!(TensorCheck::quantized_unsupported("Empty Like", dtype));
+        Self::new(K::inherit_context(K::empty(self.shape(), &self.device(), dtype), &self.primitive))
+    }
+
+    pub(crate) fn with_context_of<const D2: usize, K2: BasicOps<B>>(self, reference: &Tensor<B, D2, K2>) -> Self {
+        Self::new(K::with_autodiff_context(self.primitive, K2::autodiff_context(&reference.primitive)))
     }
 
     /// Create a tensor of the given shape where each element is zero.
@@ -186,7 +208,7 @@ where
         let shape = shape.into();
         let dtype = opt.resolve_dtype::<K>();
         check!(TensorCheck::creation_ops::<D>("Zeros", &shape));
-        Self::new(K::zeros(shape, &opt.device, dtype))
+        Self::new(opt.apply_context::<K>(K::zeros(shape, &opt.device, dtype)))
     }
 
     /// Returns a new tensor with the same shape, dtype, and device as the current tensor filled with zeros.
@@ -206,7 +228,7 @@ where
     /// }
     /// ```
     pub fn zeros_like(&self) -> Self {
-        Self::new(K::zeros(self.shape(), &self.device(), self.dtype()))
+        Self::new(K::inherit_context(K::zeros(self.shape(), &self.device(), self.dtype()), &self.primitive))
     }
 
     /// Create a tensor of the given shape where each element is one.
@@ -229,7 +251,7 @@ where
         let shape = shape.into();
         let dtype = opt.resolve_dtype::<K>();
         check!(TensorCheck::creation_ops::<D>("Ones", &shape));
-        Self::new(K::ones(shape, &opt.device, dtype))
+        Self::new(opt.apply_context::<K>(K::ones(shape, &opt.device, dtype)))
     }
 
     /// Returns a new tensor with the same shape, dtype, and device as the current tensor filled with ones.
@@ -249,7 +271,7 @@ where
     /// }
     /// ```
     pub fn ones_like(&self) -> Self {
-        Self::new(K::ones(self.shape(), &self.device(), self.dtype()))
+        Self::new(K::inherit_context(K::ones(self.shape(), &self.device(), self.dtype()), &self.primitive))
     }
 
     /// Create a tensor of the given shape where each element is equal to the provided value.
@@ -276,12 +298,12 @@ where
         let shape = shape.into();
         let dtype = opt.resolve_dtype::<K>();
         check!(TensorCheck::creation_ops::<D>("Full", &shape));
-        Self::new(K::full(
+        Self::new(opt.apply_context::<K>(K::full(
             shape,
             Scalar::new(fill_value, &dtype),
             &opt.device,
             dtype,
-        ))
+        )))
     }
 
     /// Returns a new tensor with the same shape, dtype, and device as the current tensor,
@@ -303,12 +325,12 @@ where
     /// ```
     pub fn full_like<E: ElementConversion>(&self, fill_value: E) -> Self {
         let dtype = self.dtype();
-        Self::new(K::full(
+        Self::new(K::inherit_context(K::full(
             self.shape(),
             Scalar::new(fill_value, &dtype),
             &self.device(),
             dtype,
-        ))
+        ), &self.primitive))
     }
 
     /// Returns the dimensions of the current tensor.
@@ -1367,7 +1389,7 @@ where
 
         // Return empty tensor if any dimension is 0 (empty slice)
         if output_dims.contains(&0) {
-            return Self::empty(output_dims, (&self.device(), self.dtype()));
+            return Self::empty(output_dims, (&self.device(), self.dtype())).with_context_of(&self);
         }
         Self::new(K::slice(self.primitive, &slices))
     }
@@ -1534,7 +1556,7 @@ where
 
         let slice_shape = shape.slice(&slices).unwrap();
         let value =
-            Tensor::<B, 1, K>::from_data([value.elem::<K::Elem>()], (&self.device(), self.dtype()));
+            Tensor::<B, 1, K>::from_data([value.elem::<K::Elem>()], (&self.device(), self.dtype())).with_context_of(&self);
         let value = value.expand(slice_shape);
         self.slice_assign(&slices, value)
     }
@@ -1606,6 +1628,16 @@ where
         self.slice(&slices)
     }
 
+    /// Select one index and remove the selected dimension. Both indices may be negative.
+    pub fn select_dim<const D2: usize>(
+        self,
+        dim: impl AsIndex,
+        index: impl AsIndex,
+    ) -> Tensor<B, D2, K> {
+        let dim = dim.expect_dim_index(D);
+        self.slice_dim(dim, index.as_index()).squeeze_dim(dim)
+    }
+
     /// Returns the device of the current tensor.
     pub fn device(&self) -> B::Device {
         K::device(&self.primitive)
@@ -1642,6 +1674,23 @@ where
         let dim = dim.expect_dim_index(D);
         check!(TensorCheck::select::<D>(dim));
         Self::new(K::select(self.primitive, dim, indices.primitive))
+    }
+
+    /// Selects values where the equal-shaped boolean mask is true, in row-major order.
+    /// Returns a one-dimensional tensor. Use [`Self::mask_select_async`] on asynchronous backends.
+    pub fn mask_select(self, mask: Tensor<B, D, Bool>) -> Tensor<B, 1, K> {
+        crate::api::try_read_sync(self.mask_select_async(mask)).expect(
+            "Failed to read tensor data synchronously. Try using mask_select_async instead.",
+        )
+    }
+
+    /// Asynchronously selects values where the equal-shaped boolean mask is true.
+    pub async fn mask_select_async(self, mask: Tensor<B, D, Bool>) -> Tensor<B, 1, K> {
+        assert_eq!(self.dims(), mask.dims(), "mask_select requires equal tensor and mask shapes");
+        let elements = self.shape().num_elements();
+        let indices = mask.reshape([elements]).argwhere_async().await;
+        let count = indices.dims()[0];
+        self.reshape([elements]).select(0, indices.reshape([count]))
     }
 
     /// Assign the selected elements along the given dimension corresponding to the given indices
@@ -1800,7 +1849,8 @@ where
     /// Otherwise, out of bounds indices could lead to unexpected results instead of panicking.
     ///
     /// # Panics
-    /// If the `update` is not `IndexingUpdateOp::Add`. Other operations are currently not implemented.
+    /// Bool tensors only support `IndexingUpdateOp::Add` (logical OR).
+    /// Float and integer tensors support every update operation.
     pub fn scatter(
         self,
         dim: usize,
@@ -1928,6 +1978,69 @@ where
         self.clone().into_data()
     }
 
+    /// Read host data without consuming the tensor, returning execution errors.
+    pub fn try_to_data(&self) -> Result<TensorData, ExecutionError> {
+        self.clone().try_into_data()
+    }
+
+    /// Read host data converted to `E`; panics on execution or conversion errors.
+    #[track_caller]
+    pub fn to_data_as<E: Element>(&self) -> TensorData {
+        self.try_to_data_as::<E>()
+            .unwrap_or_else(|error| panic!("Failed to read tensor data: {error}"))
+    }
+
+    /// Read host data converted to `E`, returning execution, storage or conversion errors.
+    pub fn try_to_data_as<E: Element>(&self) -> Result<TensorData, TensorReadError> {
+        Ok(self.try_to_data()?.try_cast_as::<E>()?)
+    }
+
+    /// Copy the tensor into a host vector, converting to `E`.
+    pub fn try_to_vec_as<E: Element>(&self) -> Result<Vec<E>, TensorReadError> {
+        Ok(self.try_to_data_as::<E>()?.try_to_vec()?)
+    }
+
+    /// Read host data in the requested dtype; panics on read or conversion errors.
+    #[track_caller]
+    pub fn to_data_dtype(&self, dtype: DType) -> TensorData {
+        self.try_to_data_dtype(dtype)
+            .unwrap_or_else(|error| panic!("Failed to read tensor data as {dtype:?}: {error}"))
+    }
+
+    /// Read host data in the requested dtype, returning read or conversion errors.
+    pub fn try_to_data_dtype(&self, dtype: DType) -> Result<TensorData, TensorReadError> {
+        Ok(self.try_to_data()?.try_cast(dtype)?)
+    }
+
+    /// Consume the tensor and read host data as `E`; panics on read or conversion errors.
+    #[track_caller]
+    pub fn into_data_as<E: Element>(self) -> TensorData {
+        self.try_into_data_as::<E>()
+            .unwrap_or_else(|error| panic!("Failed to read tensor data: {error}"))
+    }
+
+    /// Consume the tensor and read host data converted to `E`.
+    pub fn try_into_data_as<E: Element>(self) -> Result<TensorData, TensorReadError> {
+        Ok(self.try_into_data()?.try_cast_as::<E>()?)
+    }
+
+    /// Consume the tensor and read a host vector converted to `E`.
+    pub fn try_into_vec_as<E: Element>(self) -> Result<Vec<E>, TensorReadError> {
+        Ok(self.try_into_data_as::<E>()?.try_into_vec::<E>()?)
+    }
+
+    /// Consume the tensor and read host data in `dtype`; panics on read or conversion errors.
+    #[track_caller]
+    pub fn into_data_dtype(self, dtype: DType) -> TensorData {
+        self.try_into_data_dtype(dtype)
+            .unwrap_or_else(|error| panic!("Failed to read tensor data as {dtype:?}: {error}"))
+    }
+
+    /// Consume the tensor and read host data in the requested dtype.
+    pub fn try_into_data_dtype(self, dtype: DType) -> Result<TensorData, TensorReadError> {
+        Ok(self.try_into_data()?.try_cast(dtype)?)
+    }
+
     /// Returns the data of the current tensor.
     pub async fn into_data_async(self) -> Result<TensorData, ExecutionError> {
         K::into_data_async(self.primitive).await
@@ -1952,7 +2065,7 @@ where
         // Use the given dtype when provided, otherwise default device dtype
         let opt = options.into();
         let dtype = opt.resolve_dtype::<K>();
-        Self::new(K::from_data(data, &opt.device, dtype))
+        Self::new(opt.apply_context::<K>(K::from_data(data, &opt.device, dtype)))
     }
 
     /// Repeat the tensor along the given dimension.
@@ -1990,7 +2103,7 @@ where
             Self::new(K::repeat_dim(self.primitive, dim, times))
         } else {
             let shape = self.shape().repeat(dim, times).unwrap();
-            Self::empty(shape, &self.device())
+            Self::empty(shape, &self.device()).with_context_of(&self)
         }
     }
 
@@ -2031,7 +2144,7 @@ where
                 shape = shape.repeat(dim, times).unwrap();
             }
 
-            return Self::empty(shape, &self.device());
+            return Self::empty(shape, &self.device()).with_context_of(&self);
         }
 
         let mut tensor = self;
@@ -2128,6 +2241,11 @@ where
         Tensor::new(K::equal_elem(self.primitive, other))
     }
 
+    /// Applies element-wise equality comparison with a scalar.
+    pub fn equal_scalar<E: Element>(self, other: E) -> Tensor<B, D, Bool> {
+        self.equal_elem(other)
+    }
+
     /// Applies element wise non-equality comparison and returns a boolean tensor.
     ///
     /// # Arguments
@@ -2151,6 +2269,11 @@ where
     pub fn not_equal_elem<E: Element>(self, other: E) -> Tensor<B, D, Bool> {
         let other = Scalar::new(other, &self.dtype());
         Tensor::new(K::not_equal_elem(self.primitive, other))
+    }
+
+    /// Applies element-wise non-equality comparison with a scalar.
+    pub fn not_equal_scalar<E: Element>(self, other: E) -> Tensor<B, D, Bool> {
+        self.not_equal_elem(other)
     }
 
     /// Concatenates all tensors into a new one along the given dimension.
@@ -2181,6 +2304,8 @@ where
     /// ```
     pub fn cat(tensors: Vec<Self>, dim: usize) -> Self {
         check!(TensorCheck::cat(&tensors, dim));
+        let context = tensors.iter().fold(crate::AutodiffContext::Disabled,
+            |context, tensor| context.merge(K::autodiff_context(&tensor.primitive)));
 
         // Filter out tensors with size 0 along the concatenation dimension.
         // Empty tensors don't contribute to the output and would cause issues
@@ -2199,10 +2324,10 @@ where
         // If all tensors were empty, return an empty tensor with size 0 on concat dim
         if non_empty_primitives.is_empty() {
             shape[dim] = 0;
-            return Self::empty(shape, &device);
+            return Self::new(K::with_autodiff_context(Self::empty(shape, &device).primitive, context));
         }
 
-        Self::new(K::cat(non_empty_primitives, dim))
+        Self::new(K::with_autodiff_context(K::cat(non_empty_primitives, dim), context))
     }
 
     /// Concatenates all tensors into a new one along a new dimension.
@@ -2679,6 +2804,30 @@ where
             "Failed to read tensor data synchronously. This can happen on platforms
             that don't support blocking futures like WASM. Try into_scalar_async instead.",
         )
+    }
+
+    /// Read a single element as `E`, returning execution, storage and shape errors.
+    /// Synchronous readback must be supported by the platform.
+    pub fn try_into_scalar_as<E: Element>(self) -> Result<E, TensorReadError> {
+        Self::unpack_read_scalar(self.try_into_data()?)
+    }
+
+    /// Asynchronously read a single element as `E`, returning read and shape errors.
+    pub async fn try_into_scalar_async<E: Element>(self) -> Result<E, TensorReadError> {
+        Self::unpack_read_scalar(self.into_data_async().await?)
+    }
+
+    fn unpack_read_scalar<E: Element>(data: TensorData) -> Result<E, TensorReadError> {
+        let actual = data.num_elements();
+        if actual != 1 {
+            return Err(TensorReadError::InvalidShape { expected: 1, actual });
+        }
+        let mut values = data.try_into_vec_as::<E>()?;
+        let actual = values.len();
+        if actual != 1 {
+            return Err(TensorReadError::InvalidShape { expected: 1, actual });
+        }
+        Ok(values.pop().expect("scalar element count was validated"))
     }
 
     /// Convert the tensor into a scalar.

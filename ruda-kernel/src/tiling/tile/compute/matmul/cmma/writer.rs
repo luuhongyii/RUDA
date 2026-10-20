@@ -8,9 +8,9 @@ pub struct CmmaStageWriter {}
 
 #[ruda]
 impl CmmaStageWriter {
-    pub fn store_fragment<E: Numeric, V: Numeric, N: Size>(
+    pub fn store_fragment<E: Numeric, V: Numeric, N: Size, S: cmma::MatrixScope>(
         tile: &mut StridedTile<V, N, ReadWrite>,
-        fragment: &cmma::Matrix<E>,
+        fragment: &cmma::Matrix<E, S>,
     ) {
         let layout = as_cmma_layout(tile.layout);
         let stride = tile.unvectorized_stride();

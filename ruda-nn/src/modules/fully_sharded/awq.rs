@@ -37,7 +37,7 @@ impl<B: Backend> ShardedPackedParameter<B> {
         let size = elements.div_ceil(world_size);
         size.checked_mul(world_size).expect("packed padded size overflows");
         let start = rank * size; let end = (start + size).min(elements);
-        let mut local = Tensor::<B, 1, Int>::zeros([size], (&value.device(), value.dtype()));
+        let mut local = Tensor::<B, 1, Int>::zeros([size], (&value.device(), value.dtype())).with_autodiff_context(value.autodiff_context());
         if start < end { local = local.slice_assign([0..end-start], value.reshape([elements]).slice([start..end])); }
         Self::from_local(Param::initialized(parameter.id, local), shape, rank, world_size)
     }
@@ -49,11 +49,12 @@ impl<B: Backend> ShardedPackedParameter<B> {
         assert_eq!(communicator.world_size() as usize, self.world_size, "packed gather world differs");
         let shape: [usize; D] = self.logical_shape.clone().try_into().expect("packed logical tensor rank differs");
         let local = self.local.val(); let dtype = local.dtype(); let device = local.device();
+        let context = local.autodiff_context();
         let elements = self.logical_shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d)).expect("packed size overflows");
         let size = elements.div_ceil(self.world_size);
         assert_eq!(local.dims(), [size], "loaded packed local word count differs");
         let padded = size.checked_mul(self.world_size).expect("packed gather size overflows");
-        let full = Tensor::<B, 1, Int>::from_primitive(communicator.all_gather_int(local.into_primitive())?);
+        let full = Tensor::<B, 1, Int>::from_primitive(communicator.all_gather_int(local.into_primitive())?).with_autodiff_context(context);
         assert_eq!(full.dims(), [padded], "packed transport shape differs");
         assert_eq!(full.dtype(), dtype, "packed transport changed word dtype");
         assert_eq!(full.device(), device, "packed transport changed device");
@@ -65,10 +66,11 @@ impl<B: Backend, S: CheckpointStrategy> ShardedPackedParameter<Autodiff<B, S>> {
     /// Gather immutable words using the actual inner transport, with no integer AD surrogate.
     pub fn gather<C: IntegerTensorCollective<B>, const D: usize>(&self, communicator: C)
         -> Result<Tensor<Autodiff<B, S>, D, Int>, C::Error> {
+        let context = self.local.val().autodiff_context();
         let native = ShardedPackedParameter::from_local(
             Param::initialized(self.local.id, self.local.val().inner()), self.logical_shape.clone(), self.rank, self.world_size,
         );
-        native.gather_inference::<C, D>(communicator).map(Tensor::from_inner)
+        native.gather_inference::<C, D>(communicator).map(|value| Tensor::from_inner(value).with_autodiff_context(context))
     }
 }
 
@@ -190,7 +192,7 @@ impl<B: Backend> FullyShardedAwqLoRALinear<B> {
             let value=parameter.local.val();
             assert_eq!(value.device(),device,"AWQ adapter/base devices differ");
             assert!(matches!(value.dtype(),DType::F16|DType::BF16|DType::F32),"unsupported AWQ adapter storage");
-            assert!(!B::ad_enabled(&device) || value.is_require_grad(),"AWQ adapters must be trainable on the AD backend");
+            assert!(!value.is_autodiff() || value.is_require_grad(),"AWQ adapters must be trainable on the AD backend");
             let _=ShardedParameter::from_local(parameter.local.clone(),parameter.logical_shape.clone(),parameter.rank,parameter.world_size);
         }
     }

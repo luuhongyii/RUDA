@@ -6,6 +6,7 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
         value: KernelDefinition,
         address_type: StorageType,
     ) -> ComputeKernel<D> {
+        let io = ruda_core::kernel::KernelIo::analyze(&value);
         let metadata = self.build_metadata(&value);
         self.info = ruda_core::arguments::Info::new(&value.scalars, metadata, address_type);
 
@@ -96,6 +97,7 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
         }
 
         ComputeKernel {
+            io,
             tensor_maps,
             buffers,
             scalars,

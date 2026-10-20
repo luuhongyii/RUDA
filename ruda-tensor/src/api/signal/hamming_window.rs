@@ -62,7 +62,9 @@ pub fn hamming_window<B: Backend>(
     let alpha = 25.0_f64 / 46.0_f64;
     let beta = 1.0 - alpha;
 
-    Tensor::<B, 1, Int>::arange(0..size_i64, &opt.device)
+    let mut opt = opt;
+    opt.dtype = None;
+    Tensor::<B, 1, Int>::arange(0..size_i64, opt)
         .float()
         .mul_scalar(angular_increment)
         .cos()

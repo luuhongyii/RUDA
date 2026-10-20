@@ -35,8 +35,10 @@ use ruda::runtime::{
     stream::scheduler::{SchedulerMultiStream, SchedulerMultiStreamOptions, SchedulerStrategy},
     validation::{validate_ruda_dim, validate_units},
 };
-use hashbrown::HashMap;
-use wgpu::ComputePipeline;
+use ruda::runtime::compiler::{CompilationCache as PipelineCache, CompilationRecording};
+#[cfg(feature = "spirv")]
+use ruda::runtime::compiler::CompilationArtifacts;
+use crate::compilation::PreparedPipeline;
 
 /// Wgpu compute server.
 #[derive(Debug)]
@@ -44,11 +46,13 @@ pub struct WgpuServer {
     pub(crate) device: wgpu::Device,
     // A buffer that can be used to store stream id without extra allocations.
     streams_pool: Vec<StreamId>,
-    pipelines: HashMap<KernelId, Arc<ComputePipeline>>,
+    pipelines: PipelineCache<KernelId, Arc<PreparedPipeline>>,
     scheduler: SchedulerMultiStream<ScheduledWgpuBackend>,
     #[cfg(feature = "spirv")]
     pub(crate) spirv_cache:
         Option<CompilationCache<(u64, StableHash), ruda_compiler::spirv::SpirvCacheEntry>>,
+    #[cfg(feature = "spirv")]
+    spirv_artifacts: CompilationArtifacts<ruda_compiler::spirv::SpirvCacheEntry>,
     pub compilation_options: WgpuCompilationOptions,
     pub(crate) backend: wgpu::Backend,
     pub(crate) utilities: Arc<ServerUtilities<Self>>,
@@ -70,26 +74,44 @@ impl WgpuServer {
         tasks_max: usize,
         backend: wgpu::Backend,
         timing_method: TimingMethod,
-        utilities: ServerUtilities<Self>,
+        mut utilities: ServerUtilities<Self>,
     ) -> Self {
+        utilities.runtime_name = Some(match compiler(backend, &compilation_options) {
+            AutoCompiler::Wgsl(_) => "wgpu<wgsl>",
+            #[cfg(feature = "spirv")]
+            AutoCompiler::SpirV(_) => "wgpu<spirv>",
+            #[cfg(feature = "msl")]
+            AutoCompiler::Msl(_) => "wgpu<msl>",
+        });
         let backend_scheduler = ScheduledWgpuBackend::new(
             device.clone(),
             queue.clone(),
             memory_properties,
             memory_config,
             timing_method,
+            backend,
             tasks_max,
             utilities.logger.clone(),
         );
 
         let config = RudaRuntimeConfig::get();
         let max_streams = config.streaming.max_streams;
+        #[cfg(feature = "spirv")]
+        let spirv_artifacts = CompilationArtifacts::primary_only(
+            "wgpu-spirv",
+            &format!("{}-properties-{:016x}",
+                utilities.properties.identity.fingerprint, utilities.properties_hash),
+        );
+        #[cfg(feature = "spirv")]
+        let pipelines = PipelineCache::bound(spirv_artifacts.enabled());
+        #[cfg(not(feature = "spirv"))]
+        let pipelines = PipelineCache::unbound();
 
         Self {
             compilation_options,
             streams_pool: Vec::new(),
             device,
-            pipelines: HashMap::new(),
+            pipelines,
             scheduler: SchedulerMultiStream::new(
                 utilities.logger.clone(),
                 backend_scheduler,
@@ -102,16 +124,20 @@ impl WgpuServer {
             #[cfg(feature = "spirv")]
             spirv_cache: {
                 let config = ruda::runtime::config::RudaRuntimeConfig::get();
-                if let Some(cache) = &config.compilation.cache {
+                if let Some(cache) = &config.compilation.cache
+                    && !spirv_artifacts.enabled()
+                {
                     let root = cache.root();
                     Some(CompilationCache::new(
                         "spirv",
-                        CacheOption::default().name("vulkan").root(root),
+                        CacheOption::default().name(utilities.properties.identity.fingerprint.clone()).root(root),
                     ))
                 } else {
                     None
                 }
             },
+            #[cfg(feature = "spirv")]
+            spirv_artifacts,
             backend,
             utilities: Arc::new(utilities),
         }
@@ -139,7 +165,7 @@ impl WgpuServer {
         kernel: <Self as ComputeServer>::Kernel,
         bindings: &KernelArguments,
         mode: ExecutionMode,
-    ) -> Result<Arc<ComputePipeline>, LaunchError> {
+    ) -> Result<Arc<PreparedPipeline>, LaunchError> {
         let mut kernel_id = kernel.id();
         kernel_id.mode(mode);
 
@@ -147,6 +173,16 @@ impl WgpuServer {
             return Ok(pipeline.clone());
         }
 
+        let mut recording = CompilationRecording::new(&kernel_id);
+        #[cfg(feature = "spirv")]
+        if let Some(entry) = self.spirv_artifacts.get(&kernel_id) {
+            let repr = crate::AutoRepresentationRef::SpirV(&entry.kernel);
+            let module = self.create_module(&entry.entrypoint_name, crate::backend::ModuleSource::SpirV(&entry.kernel), mode)?;
+            let pipeline = self.create_pipeline(&entry.entrypoint_name, Some(repr), module, bindings);
+            self.pipelines.insert(kernel_id, pipeline.clone());
+            recording.loaded();
+            return Ok(pipeline);
+        }
         let cached = self.load_cached_pipeline(&kernel_id, bindings, mode)?;
 
         if let Some(Ok(pipeline)) = cached {
@@ -158,7 +194,7 @@ impl WgpuServer {
         validate_units(&self.utilities.properties, &kernel_id)?;
 
         let mut compiler = compiler(self.backend, &self.compilation_options);
-        let mut compiled = compiler.compile(self, kernel, mode)?;
+        let mut compiled = compiler.compile_recorded(self, kernel, mode, &mut recording)?;
 
         if self.scheduler.logger.compilation_activated() {
             compiled.debug_info = Some(DebugInformation::new(
@@ -167,6 +203,7 @@ impl WgpuServer {
             ));
         }
         self.scheduler.logger.log_compilation(&compiled);
+        recording.source(&compiled.source);
 
         self.validate_shared(&compiled.repr)?;
 
@@ -194,23 +231,28 @@ impl WgpuServer {
         //     // std::process::exit(status.code().unwrap());
         // }
         let repr = compiled.repr.as_ref().map(|it| it.as_ref());
-        let module = self.create_module(&compiled.entrypoint_name, repr, &compiled.source, mode)?;
+        let source = crate::backend::ModuleSource::resolve(
+            repr, compiler.lang_tag(), &compiled.source, compiled.ruda_dim,
+        )?;
+        let module = self.create_module(&compiled.entrypoint_name, source, mode)?;
         let pipeline = self.create_pipeline(&compiled.entrypoint_name, repr, module, bindings);
         self.pipelines.insert(kernel_id.clone(), pipeline.clone());
 
+        let mut stored = false;
         #[cfg(feature = "spirv")]
-        if let Some(Err(key)) = cached
+        if (self.spirv_artifacts.enabled() || matches!(cached, Some(Err(_))))
             && let Some(crate::AutoRepresentation::SpirV(kernel)) = compiled.repr
         {
-            let cache = self.spirv_cache.as_mut().unwrap();
-            let result = cache.insert(
-                key,
-                ruda_compiler::spirv::SpirvCacheEntry::new(compiled.entrypoint_name, kernel),
-            );
-            if let Err(err) = result {
-                log::warn!("Unable to save the SPIR-V {err:?}");
+            let entry = ruda_compiler::spirv::SpirvCacheEntry::new(compiled.entrypoint_name, kernel);
+            if self.spirv_artifacts.enabled() {
+                stored = self.spirv_artifacts.insert(&kernel_id, &compiled.source, entry);
+            } else if let Some(Err(key)) = cached {
+                if let Err(err) = self.spirv_cache.as_mut().unwrap().insert(key, entry) {
+                    log::warn!("Unable to save the SPIR-V {err:?}");
+                }
             }
         }
+        recording.compiled(stored);
 
         Ok(pipeline)
     }
@@ -267,7 +309,15 @@ impl ComputeServer for WgpuServer {
 
     fn initialize_memory(&mut self, memory: ManagedMemoryHandle, size: u64, stream_id: StreamId) {
         let stream = self.scheduler.stream(&stream_id);
-        let reserved = stream.empty(size).unwrap();
+        let reserved = match stream.empty(size) {
+            Ok(reserved) => reserved,
+            Err(error) => {
+                let error: ServerError = error.into();
+                memory.binding().set_failure(0, size, error.clone());
+                stream.error(error);
+                return;
+            }
+        };
         stream.mem_manage.bind(reserved, memory);
     }
 
@@ -276,6 +326,10 @@ impl ComputeServer for WgpuServer {
         descriptors: Vec<CopyDescriptor>,
         stream_id: StreamId,
     ) -> DynFut<Result<Vec<Bytes>, ServerError>> {
+        if let Err(error) = Binding::check_all(descriptors.iter().map(|descriptor| &descriptor.handle)) {
+            return Box::pin(async move { Err(error) });
+        }
+        let bindings: Vec<_> = descriptors.iter().map(|descriptor| descriptor.handle.clone()).collect();
         let mut streams = vec![stream_id];
         let mut resources = Vec::with_capacity(descriptors.len());
         for desc in descriptors {
@@ -300,34 +354,38 @@ impl ComputeServer for WgpuServer {
 
         self.scheduler.execute_streams(streams);
 
+        if let Err(error) = Binding::check_all(bindings.iter()) {
+            return Box::pin(async move { Err(error) });
+        }
         let stream = self.scheduler.stream(&stream_id);
         stream.read_resources(resources)
     }
 
     fn write(&mut self, descriptors: Vec<(CopyDescriptor, Bytes)>, stream_id: StreamId) {
         for (desc, data) in descriptors {
+            if data.is_empty() || desc.shape.contains(&0) { continue; }
+            let destination = desc.handle.clone();
+            let mut scope = ruda::runtime::server::WriteScope::deferred(vec![destination.clone()]);
+            let owner = desc.handle.stream;
             let stream = self.scheduler.stream(&desc.handle.stream);
-
-            if contiguous_strides(&desc.shape) != desc.strides {
-                stream.error(ServerError::Io(IoError::UnsupportedStrides {
+            let resource = if contiguous_strides(&desc.shape) != desc.strides {
+                Err(IoError::UnsupportedStrides {
                     backtrace: BackTrace::capture(),
-                }));
-                return;
-            }
-
-            let resource = match stream.mem_manage.get_resource(desc.handle) {
-                Ok(r) => r,
-                Err(err) => {
-                    stream.error(ServerError::Io(err));
-                    return;
+                })
+            } else {
+                stream.mem_manage.get_resource(desc.handle)
+            };
+            let task = match resource {
+                Ok(buffer) => ScheduleTask::Write { data, buffer, destination },
+                Err(error) => {
+                    let error = scope.fail(ServerError::Io(error));
+                    self.scheduler.stream(&stream_id).error(error);
+                    continue;
                 }
             };
-            let task = ScheduleTask::Write {
-                data,
-                buffer: resource,
-            };
-
-            self.scheduler.register(stream_id, task, &[]);
+            scope.enter();
+            self.scheduler.register(stream_id, task, &[owner]);
+            scope.complete();
         }
     }
 
@@ -356,37 +414,93 @@ impl ComputeServer for WgpuServer {
         mode: ExecutionMode,
         stream_id: StreamId,
     ) {
-        let pipeline = match self.pipeline(kernel, &args, mode) {
+        unsafe {
+            self.launch_with_mode(kernel, count, args, mode, stream_id, ruda::runtime::dry_run::LaunchMode::Execute)
+        };
+    }
+
+    unsafe fn launch_with_mode(
+        &mut self,
+        kernel: Self::Kernel,
+        count: RudaCount,
+        args: KernelArguments,
+        mode: ExecutionMode,
+        stream_id: StreamId,
+        launch_mode: ruda::runtime::dry_run::LaunchMode,
+    ) {
+        let mut kernel_id = kernel.id();
+        kernel_id.mode(mode);
+        let mut execution = ruda::runtime::server::KernelExecution::new(kernel_id, &args, &count);
+        if launch_mode.is_skipped() { execution.skip(); }
+        self.streams_pool.clear();
+        self.streams_pool.extend(args.buffers.iter().map(|binding| binding.stream));
+        self.streams_pool.extend(args.tensor_maps.iter().map(|map| map.binding.stream));
+        if let RudaCount::Dynamic(binding) = &count {
+            self.streams_pool.push(binding.stream);
+        }
+        let pipeline = match self.scheduler.stream(&stream_id).check_device()
+            .and_then(|()| self.pipeline(kernel, &args, mode).map_err(ServerError::Launch)) {
             Ok(val) => val,
-            Err(err) => {
-                // We make the stream that would execute the kernel in error.
-                let stream = self.scheduler.stream(&stream_id);
-                stream.errors.push(ServerError::Launch(err));
+            Err(error) => {
+                let error = execution.fail(error);
+                self.scheduler.stream(&stream_id).error(error);
                 return;
             }
         };
 
-        self.streams_pool.clear();
-        args.buffers
-            .iter()
-            .for_each(|b| self.streams_pool.push(b.stream));
+        if launch_mode.is_skipped() {
+            return;
+        }
+        execution.set_io(pipeline.io.as_ref());
+        if let Err(error) = execution.check() {
+            self.scheduler.stream(&stream_id).error(error);
+            return;
+        }
+        if count.is_empty() {
+            execution.cancel();
+            return;
+        }
+
+        let count_resource = match &count {
+            RudaCount::Dynamic(binding) => {
+                let stream = self.scheduler.stream(&binding.stream);
+                match stream.mem_manage.get_resource(binding.clone()) {
+                    Ok(resource) => Some(resource),
+                    Err(error) => {
+                        let error = execution.fail(ServerError::Io(error));
+                        self.scheduler.stream(&stream_id).error(error);
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
 
         let resources = match self.prepare_bindings(args) {
             Ok(val) => val,
             Err(err) => {
-                // We make the stream that would execute the kernel in error.
-                let stream = self.scheduler.stream(&stream_id);
-                stream.errors.push(ServerError::Io(err));
+                let error = execution.fail(ServerError::Io(err));
+                self.scheduler.stream(&stream_id).error(error);
+                return;
+            }
+        };
+        let scope = match execution.begin_submission() {
+            Ok(scope) => scope,
+            Err(error) => {
+                self.scheduler.stream(&stream_id).error(error);
                 return;
             }
         };
         let task = ScheduleTask::Execute {
-            pipeline,
+            pipeline: pipeline.pipeline.clone(),
             count,
+            count_resource,
             resources,
+            execution,
         };
 
         self.scheduler.register(stream_id, task, &self.streams_pool);
+        if let Some(scope) = scope { scope.complete(); }
     }
 
     fn flush(&mut self, stream_id: StreamId) -> Result<(), ServerError> {
@@ -425,6 +539,10 @@ impl ComputeServer for WgpuServer {
         stream.end_profile(token)
     }
 
+    fn abandon_profile(&mut self, stream_id: StreamId, token: ProfilingToken) {
+        self.scheduler.stream(&stream_id).abandon_profile(token);
+    }
+
     fn memory_usage(&mut self, stream_id: StreamId) -> Result<MemoryUsage, ServerError> {
         self.scheduler.execute_streams(vec![stream_id]);
         let stream = self.scheduler.stream(&stream_id);
@@ -458,7 +576,7 @@ fn compiler(backend: wgpu::Backend, options: &WgpuCompilationOptions) -> AutoCom
         #[cfg(feature = "spirv")]
         wgpu::Backend::Vulkan if options.supports_vulkan => AutoCompiler::SpirV(ruda_kernel::dsl::lowering::spirv::compiler()),
         #[cfg(feature = "msl")]
-        wgpu::Backend::Metal => AutoCompiler::Msl(Default::default()),
+        wgpu::Backend::Metal if options.supports_msl => AutoCompiler::Msl(Default::default()),
         _ => AutoCompiler::Wgsl(Default::default()),
     }
 }

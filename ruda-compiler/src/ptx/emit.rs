@@ -57,6 +57,7 @@ impl Emitter {
         if !errors.is_empty() {
             return Err(invalid(errors.join("\n")));
         }
+        let io = ruda_core::kernel::KernelIo::analyze(&kernel);
         let cluster_directive = super::cluster::directive(kernel.options.cluster_dim, target)?;
         if !kernel.tensor_maps.is_empty() && (target.sm < 90 || target.version < (8, 0)) {
             return Err(unsupported("tensor maps require SM >= 90 and PTX >= 8.0"));
@@ -195,6 +196,7 @@ impl Emitter {
             emitter.body,
         );
         Ok(PtxKernel {
+            io,
             source,
             entrypoint: name.clone(),
             ruda_dim: dim,
@@ -250,6 +252,12 @@ impl Emitter {
     pub fn value(&mut self, var: Variable) -> Result<String> {
         let ty = Scalar::of(var.ty)?;
         self.half_target(ty)?;
+        if matches!(var.kind, VariableKind::Shared { .. }) {
+            let pointer = self.shared_array(var)?;
+            let register = self.reg(ty);
+            self.load_memory_scalar("shared", ty, &register, &pointer);
+            return Ok(register);
+        }
         if let VariableKind::Constant(value) = var.kind {
             if Scalar::is_packed_fp4(var.ty) {
                 return Ok(super::packed::constant(value));

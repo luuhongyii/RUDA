@@ -10,6 +10,8 @@ use crate::runtime::{
     server::ComputeServer,
 };
 
+pub use super::monitoring::{DeviceUtilization, UtilizationUnavailable};
+
 /// Runtime for the `Ruda`.
 pub trait Runtime: Sized + Send + Sync + 'static + core::fmt::Debug + Clone {
     /// The compiler used to compile the inner representation into tokens.
@@ -81,5 +83,10 @@ pub trait Runtime: Sized + Send + Sync + 'static + core::fmt::Debug + Clone {
     /// Returns all devices that can be handled by the runtime.
     fn enumerate_all_devices(info: &<Self::Server as ComputeServer>::Info) -> Vec<DeviceId> {
         Self::enumerate_devices(0, info)
+    }
+
+    /// Read the device's driver/platform utilization counter without waiting for its work.
+    fn utilization(_device: &Self::Device) -> Result<DeviceUtilization, UtilizationUnavailable> {
+        Err(UtilizationUnavailable::RuntimeReadsNoCounter)
     }
 }

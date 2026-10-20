@@ -24,6 +24,8 @@ pub enum Branch {
     Loop(Box<Loop>),
     /// A return statement.
     Return,
+    /// Return a value from a device function.
+    ReturnValue(Variable),
     /// A break statement.
     Break,
     /// Unreachable block end (equivalent to `unreachable_unchecked()`)
@@ -68,6 +70,7 @@ impl Display for Branch {
             ),
             Branch::Loop(loop_) => write!(f, "loop {}", loop_.scope),
             Branch::Return => write!(f, "return"),
+            Branch::ReturnValue(value) => write!(f, "return {value}"),
             Branch::Break => write!(f, "break"),
             Branch::Unreachable => write!(f, "unreachable"),
         }

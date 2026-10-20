@@ -7,6 +7,8 @@ extern crate alloc;
 pub mod autodiff;
 /// Fusion config module.
 pub mod fusion;
+/// Remote execution configuration.
+pub mod remote;
 
 mod base;
 mod logger;

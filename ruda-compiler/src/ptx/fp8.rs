@@ -33,6 +33,7 @@ impl Emitter {
             | Operation::Operator(Operator::Cast(_) | Operator::Reinterpret(_) | Operator::Select(_)
                 | Operator::NativeAddress(_) | Operator::NativeLoad(_) | Operator::NativeStore(_)
                 | Operator::InitVector(_) | Operator::Index(_) | Operator::UncheckedIndex(_)
+                | Operator::WorkgroupUniformLoad(_)
                 | Operator::IndexAssign(_) | Operator::UncheckedIndexAssign(_)
                 | Operator::CopyMemory(_) | Operator::CopyMemoryBulk(_))
         );

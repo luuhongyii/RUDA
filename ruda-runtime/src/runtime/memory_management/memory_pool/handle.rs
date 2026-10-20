@@ -1,5 +1,5 @@
 use crate::runtime::memory_management::MemoryHandle;
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use core::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(target_has_atomic = "64")]
 use core::sync::atomic::AtomicU64;
@@ -20,6 +20,19 @@ pub struct ManagedMemoryBinding {
     descriptor: Arc<ManagedMemoryDescriptor>,
 }
 
+/// An allocation identity that does not prevent reuse of an otherwise free slice.
+#[derive(Clone, Debug)]
+pub struct WeakMemoryBinding {
+    descriptor: Weak<ManagedMemoryDescriptor>,
+}
+
+impl WeakMemoryBinding {
+    /// Recover a binding only while the original allocation still exists.
+    pub fn upgrade(&self) -> Option<ManagedMemoryBinding> {
+        self.descriptor.upgrade().map(|descriptor| ManagedMemoryBinding { descriptor })
+    }
+}
+
 impl Clone for ManagedMemoryHandle {
     fn clone(&self) -> Self {
         Self {
@@ -38,6 +51,7 @@ pub(crate) struct ManagedMemoryDescriptor {
     pub(crate) id: ManagedMemoryId,
     pins: AtomicUsize,
     pin_revision: AtomicUsize,
+    failures: spin::Mutex<crate::runtime::memory_management::taint::Taint>,
     #[cfg(target_has_atomic = "64")]
     location: AtomicU64,
     #[cfg(not(target_has_atomic = "64"))]
@@ -107,6 +121,9 @@ impl ManagedMemoryDescriptor {
         {
             *self.location.lock() = location;
         }
+        if location.init != 0 {
+            self.failures.lock().clear_unallocated();
+        }
     }
 
     /// Update only the slice position for the given [`ManagedMemoryId`].
@@ -155,6 +172,12 @@ impl ManagedMemoryDescriptor {
 }
 
 impl MemoryLocation {
+    pub(crate) fn dedicated(slice: u32) -> Self {
+        Self { pool: 0, page: 0, slice, init: 2 }
+    }
+
+    pub(crate) fn is_dedicated(self) -> bool { self.init == 2 }
+
     #[cfg(target_has_atomic = "64")]
     fn to_bits(self) -> u64 {
         self.pool as u64
@@ -204,6 +227,7 @@ impl ManagedMemoryHandle {
                 id: ManagedMemoryId { value },
                 pins: AtomicUsize::new(0),
                 pin_revision: AtomicUsize::new(0),
+                failures: spin::Mutex::new(Default::default()),
                 #[cfg(target_has_atomic = "64")]
                 location: AtomicU64::new(MemoryLocation::uninit().to_bits()),
                 #[cfg(not(target_has_atomic = "64"))]
@@ -250,6 +274,54 @@ impl ManagedMemoryHandle {
 }
 
 impl ManagedMemoryBinding {
+    /// Retain identity without changing allocator liveness or tensor mutability.
+    pub fn downgrade(&self) -> WeakMemoryBinding {
+        WeakMemoryBinding { descriptor: Arc::downgrade(&self.descriptor) }
+    }
+
+    /// Return a failure attached to contents that were never produced.
+    pub fn failure(&self, start: u64, end: u64) -> Option<crate::runtime::server::ServerError> {
+        self.failures(start, end).first().map(|failure| failure.report(self.id()))
+    }
+
+    /// Every distinct failure claiming bytes in this allocation view.
+    pub fn failures(&self, start: u64, end: u64) -> alloc::vec::Vec<crate::runtime::memory_management::ErrorGraph> {
+        let range = if self.is_allocated() { start..end } else { 0..u64::MAX };
+        self.descriptor.failures.lock().failures(range)
+    }
+
+    /// Attach an existing root without copying it or retaining an upstream allocation.
+    pub fn claim(&self, start: u64, end: u64, failure: crate::runtime::memory_management::ErrorGraph) {
+        let mut failures = self.descriptor.failures.lock();
+        if self.is_allocated() {
+            failures.claim(start..end, failure);
+        } else {
+            failures.claim_unallocated(failure);
+        }
+    }
+
+    /// Whether a reservation has supplied a logical memory location.
+    pub fn is_allocated(&self) -> bool {
+        self.descriptor.location().init != 0
+    }
+
+    /// Mark contents invalid after a refused recording or replay.
+    pub fn set_failure(&self, start: u64, end: u64, error: crate::runtime::server::ServerError) {
+        if start < end || !self.is_allocated() {
+            self.claim(start, end, crate::runtime::memory_management::ErrorGraph::new(error));
+        }
+    }
+
+    /// Clear a failure after the contents have been replaced successfully.
+    pub fn clear_failure(&self, start: u64, end: u64) {
+        self.descriptor.failures.lock().written(start..end);
+    }
+
+    /// Release only the producer that completed, not a newer overlapping writer.
+    pub fn release_failure(&self, start: u64, end: u64, failure: crate::runtime::memory_management::FailureId) {
+        self.descriptor.failures.lock().release(start..end, failure);
+    }
+
     /// Keep this allocation's address fixed until the returned pin is dropped.
     pub fn pin(&self) -> MemoryResourcePin {
         self.descriptor.pins.fetch_add(1, core::sync::atomic::Ordering::AcqRel);

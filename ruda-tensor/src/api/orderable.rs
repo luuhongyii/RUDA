@@ -267,7 +267,7 @@ where
     /// ```
     pub fn topk_with_indices(self, k: usize, dim: usize) -> (Self, Tensor<B, D, Int>) {
         assert!(self.shape()[dim] >= k);
-        let k_indices = Tensor::arange(0..k as i64, &self.device());
+        let k_indices = Tensor::<B, 1, Int>::arange(0..k as i64, &self.device()).with_context_of(&self);
         let (values, indices) = self.sort_descending_with_indices(dim);
         (
             values.select(dim, k_indices.clone()),
@@ -351,7 +351,7 @@ where
         }
         // Convert the input tensor to integer indices
         let indices: Tensor<B, D, Int> =
-            Tensor::from_data(self.to_data().convert::<i64>(), &device);
+            Tensor::<B, D, Int>::from_data(self.to_data().convert::<i64>(), &device).with_context_of(&self);
         // Insert the new dimension for the one-hot representation
         shape.insert(axis as usize, num_classes);
         // Adjust indices to valid range and handle invalid indices
@@ -363,11 +363,11 @@ where
         let indices_unsqueezed: Tensor<B, D2, Int> = adjusted_indices.unsqueeze_dim(axis as usize);
 
         // Initialize the output tensor with the off_value
-        let output = Tensor::full(shape.clone(), off_value, &device);
+        let output = Tensor::<B, D2, K>::full(shape.clone(), off_value, &device).with_context_of(&self);
 
         // Prepare scatter tensor for on_value and off_value adjustments
-        let scatter_on_values = Tensor::full(indices_unsqueezed.shape(), on_value, &device)
-            - Tensor::full(indices_unsqueezed.shape(), off_value, &self.device());
+        let scatter_on_values = Tensor::<B, D2, K>::full(indices_unsqueezed.shape(), on_value, &device).with_context_of(&self)
+            - Tensor::<B, D2, K>::full(indices_unsqueezed.shape(), off_value, &self.device()).with_context_of(&self);
 
         // Scatter on_value at the appropriate indices to create the one-hot representation
         output.scatter(
@@ -507,6 +507,11 @@ where
         Tensor::new(K::greater_elem(self.primitive, other))
     }
 
+    /// Applies element-wise greater-than comparison with a scalar.
+    pub fn greater_scalar<E: ElementConversion>(self, other: E) -> Tensor<B, D, Bool> {
+        self.greater_elem(other)
+    }
+
     /// Applies greater-equal than `other` comparison and returns a boolean tensor.
     ///
     /// # Arguments
@@ -530,6 +535,11 @@ where
     pub fn greater_equal_elem<E: ElementConversion>(self, other: E) -> Tensor<B, D, Bool> {
         let other = Scalar::new(other, &self.dtype());
         Tensor::new(K::greater_equal_elem(self.primitive, other))
+    }
+
+    /// Applies element-wise greater-than-or-equal comparison with a scalar.
+    pub fn greater_equal_scalar<E: ElementConversion>(self, other: E) -> Tensor<B, D, Bool> {
+        self.greater_equal_elem(other)
     }
 
     /// Applies lower than `other` comparison and returns a boolean tensor.
@@ -557,6 +567,11 @@ where
         Tensor::new(K::lower_elem(self.primitive, other))
     }
 
+    /// Applies element-wise less-than comparison with a scalar.
+    pub fn lower_scalar<E: ElementConversion>(self, other: E) -> Tensor<B, D, Bool> {
+        self.lower_elem(other)
+    }
+
     /// Applies lower-equal than `other` comparison and returns a boolean tensor.
     ///
     /// # Arguments
@@ -580,6 +595,11 @@ where
     pub fn lower_equal_elem<E: ElementConversion>(self, other: E) -> Tensor<B, D, Bool> {
         let other = Scalar::new(other, &self.dtype());
         Tensor::new(K::lower_equal_elem(self.primitive, other))
+    }
+
+    /// Applies element-wise less-than-or-equal comparison with a scalar.
+    pub fn lower_equal_scalar<E: ElementConversion>(self, other: E) -> Tensor<B, D, Bool> {
+        self.lower_equal_elem(other)
     }
 
     /// Applies the argmax function along the given dimension and returns an integer tensor.

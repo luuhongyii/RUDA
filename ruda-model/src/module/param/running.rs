@@ -85,6 +85,10 @@ impl<const D: usize, B: Backend> Module<B> for RunningState<Tensor<B, D>> {
     }
 
     fn map<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        let mut pending = self.values.lock().unwrap();
+        if !pending.is_empty() {
+            self.update_value(&mut pending);
+        }
         let mut tensor = self.value.lock().unwrap();
         let param = Param::initialized(self.id, tensor.clone());
         let param_out = mapper.map_float(param);
@@ -92,6 +96,7 @@ impl<const D: usize, B: Backend> Module<B> for RunningState<Tensor<B, D>> {
 
         *tensor = tensor_out;
         core::mem::drop(tensor);
+        core::mem::drop(pending);
 
         self
     }
@@ -103,7 +108,8 @@ impl<const D: usize, B: Backend> Module<B> for RunningState<Tensor<B, D>> {
     fn load_record(mut self, record: Self::Record) -> Self {
         let mut pending = self.values.lock().unwrap();
         let mut tensor = self.value.lock().unwrap();
-        *tensor = record.val().to_device(&tensor.device());
+        *tensor = record.val().to_device(&tensor.device())
+            .with_autodiff_context(tensor.autodiff_context());
         pending.clear();
         self.id = record.id;
 
@@ -259,4 +265,10 @@ impl<const D: usize, B: AutodiffBackend> AutodiffModule<B> for RunningState<Tens
 
         RunningState::with_id(module.id, Tensor::from_inner(value))
     }
+}
+
+impl<const D: usize, B: AutodiffBackend> crate::module::HasAutodiffModule<B>
+    for RunningState<Tensor<B::InnerBackend, D>>
+{
+    type TrainModule = RunningState<Tensor<B, D>>;
 }

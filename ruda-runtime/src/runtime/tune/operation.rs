@@ -12,7 +12,7 @@ use super::{
     AutotuneError, input_generator::InputGenerator, key_generator::KeyGenerator,
     tune_inputs::TuneInputs,
 };
-use super::{Tunable, TunePlan};
+use super::{Bounds, BoundsGenerator, Eviction, Evictor, Tunable, TunePlan};
 
 /// A type-erased delegate for a tunable function.
 ///
@@ -38,10 +38,13 @@ impl<I: TuneInputs, Out: 'static> TuneFn<I, Out> {
 
 /// A set of candidate tunable functions for autotune, sharing a key generator and an
 /// input generator. See [`TuneInputs`] for the `F` parameter.
-pub struct TunableSet<K: AutotuneKey, F: TuneInputs, Output: 'static> {
-    tunables: Vec<Tunable<K, F, Output>>,
+pub struct TunableSet<K: AutotuneKey, F: TuneInputs, Output: 'static, Id = ()> {
+    tunables: Vec<Tunable<K, F, Output, Id>>,
     key_gen: Arc<dyn KeyGenerator<K, F> + Send + Sync>,
     input_gen: Arc<dyn InputGenerator<K, F> + Send + Sync>,
+    bounds_gen: Option<Arc<dyn BoundsGenerator<K, F> + Send + Sync>>,
+    eviction: Option<Arc<dyn Eviction<K, F> + Send + Sync>>,
+    short_circuit: bool,
     stack_reference: Option<usize>,
     stack_revision: String,
     stack_workload: Option<Arc<dyn for<'a> Fn(&F::At<'a>) -> String + Send + Sync>>,
@@ -58,7 +61,7 @@ pub(crate) struct StaticStackPlan {
     pub(crate) key: String,
 }
 
-impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
+impl<K: AutotuneKey, F: TuneInputs, Output: 'static, Id> TunableSet<K, F, Output, Id> {
     /// The number of tunables in the set.
     pub fn len(&self) -> usize {
         self.tunables.len()
@@ -75,6 +78,9 @@ impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
             tunables: Default::default(),
             input_gen: Arc::new(input_gen),
             key_gen: Arc::new(key_gen),
+            bounds_gen: None,
+            eviction: None,
+            short_circuit: true,
             stack_reference: None,
             stack_revision: String::new(),
             stack_workload: None,
@@ -139,8 +145,36 @@ impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
         Self::new(key_gen, super::CloneInputGenerator)
     }
 
+    pub fn with_bounds(mut self, bounds: Arc<dyn BoundsGenerator<K, F> + Send + Sync>) -> Self {
+        self.bounds_gen = Some(bounds);
+        self
+    }
+
+    pub fn with_eviction(mut self, eviction: Arc<dyn Eviction<K, F> + Send + Sync>) -> Self {
+        self.eviction = Some(eviction);
+        self
+    }
+
+    pub fn with_short_circuit(mut self, enabled: bool) -> Self {
+        self.short_circuit = enabled;
+        self
+    }
+
+    pub fn is_short_circuit_enabled(&self) -> bool { self.short_circuit }
+
+    pub fn bounds(&self, key: &K, inputs: &F::At<'_>) -> Option<Bounds> {
+        self.bounds_gen.as_ref().map(|bounds| bounds.generate(key, inputs))
+    }
+
+    pub(crate) fn evictor<'i>(&self, key: &K, inputs: &F::At<'i>) -> Option<Box<Evictor<'i>>> {
+        let eviction = self.eviction.clone()?;
+        let key = key.clone();
+        let inputs = inputs.clone();
+        Some(Box::new(move || eviction.evict(&key, &inputs)))
+    }
+
     /// Register a tunable with this tunable set.
-    pub fn with(mut self, tunable: Tunable<K, F, Output>) -> Self {
+    pub fn with(mut self, tunable: Tunable<K, F, Output, Id>) -> Self {
         self.tunables.push(tunable);
         self.checksum = Once::new();
         self.stack_manifest = Once::new();
@@ -163,6 +197,11 @@ impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
     /// `autotunables`. Tunables are tried in order, so index 0 should be a good default.
     pub fn fastest(&self, fastest_index: usize) -> &TuneFn<F, Output> {
         &self.tunables[fastest_index].function
+    }
+
+    /// The identity of the candidate selected by the tuner.
+    pub(crate) fn identity(&self, index: usize) -> &Id {
+        self.tunables[index].identity()
     }
 
     /// Compute a checksum that invalidates outdated cached auto-tune results when the
@@ -202,7 +241,7 @@ impl<K: AutotuneKey, F: TuneInputs, Output: 'static> TunableSet<K, F, Output> {
     }
 }
 
-#[cfg(std_io)]
+#[cfg(serializable)]
 /// Trait alias with support for persistent caching
 pub trait AutotuneKey:
     Clone
@@ -218,7 +257,7 @@ pub trait AutotuneKey:
     + 'static
 {
 }
-#[cfg(not(std_io))]
+#[cfg(not(serializable))]
 /// Trait alias
 pub trait AutotuneKey:
     Clone + Debug + PartialEq + Eq + Hash + Display + Send + Sync + 'static

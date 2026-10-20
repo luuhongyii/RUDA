@@ -29,6 +29,10 @@ pub struct FusionTensor<R: FusionRuntime> {
 
 impl<R: FusionRuntime> Clone for FusionTensor<R> {
     fn clone(&self) -> Self {
+        let current = StreamId::current();
+        if self.stream != current {
+            return self.shared_view(current);
+        }
         self.count.fetch_add(1, Ordering::Acquire);
 
         Self {
@@ -67,6 +71,13 @@ impl<R: FusionRuntime> TensorMetadata for FusionTensor<R> {
 
     fn rank(&self) -> usize {
         self.shape.num_dims()
+    }
+
+    fn can_mut(&self) -> bool {
+        matches!(
+            self.status(self.count.load(Ordering::Acquire)),
+            TensorStatus::ReadWrite
+        )
     }
 }
 
@@ -108,6 +119,10 @@ impl<R: FusionRuntime> FusionTensor<R> {
 
     /// Intermediate representation to be used when using an initialized tensor used as input.
     pub fn into_ir(mut self) -> TensorIr {
+        let current = StreamId::current();
+        if self.stream != current {
+            self = self.shared_view(current);
+        }
         let count = self.count.load(Ordering::Acquire);
         let status = self.status(count);
 
@@ -172,6 +187,18 @@ impl<R: FusionRuntime> FusionTensor<R> {
         let client = self.client.clone();
         let desc = self.into_ir();
         client.read_tensor_bool::<B>(desc, id).await
+    }
+
+    fn shared_view(&self, current: StreamId) -> Self {
+        let id = self.client.create_empty_handle();
+        self.client.tag_shared_view(self.stream, self.id, id);
+        Self::new(
+            id,
+            self.shape.clone(),
+            self.dtype,
+            self.client.clone(),
+            current,
+        )
     }
 }
 

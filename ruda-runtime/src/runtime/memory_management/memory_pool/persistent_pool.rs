@@ -1,4 +1,4 @@
-use super::{ManagedMemoryHandle, MemoryPool, Slice, calculate_padding};
+use super::{ManagedMemoryHandle, MemoryPool, PageMapping, Slice, calculate_padding};
 use crate::runtime::memory_management::{BytesFormat, MemoryLocation};
 use crate::runtime::storage::StorageUtilization;
 use crate::runtime::{memory_management::MemoryUsage, server::IoError};
@@ -101,6 +101,15 @@ impl MemoryPool for PersistentPool {
         None
     }
 
+    fn materialize<Storage: crate::runtime::storage::ComputeStorage>(
+        &mut self, storage: &mut Storage, binding: &super::ManagedMemoryBinding,
+    ) -> Result<(), IoError> {
+        self.find(binding)?;
+        let slice = &mut self.slices[binding.descriptor().slice()];
+        let size = slice.effective_size();
+        slice.materialize(storage, size)
+    }
+
     fn alloc<Storage: crate::runtime::storage::ComputeStorage>(
         &mut self,
         storage: &mut Storage,
@@ -109,8 +118,10 @@ impl MemoryPool for PersistentPool {
         let padding = calculate_padding(size, self.alignment);
         let effective_size = size + padding;
 
-        let storage_handle = storage.alloc(effective_size)?;
+        let mapping = PageMapping::current();
+        let storage_handle = mapping.allocate(storage, effective_size)?;
         let mut slice = Slice::new(storage_handle, padding);
+        slice.mapped = mapping.is_mapped();
         slice.storage.utilization = StorageUtilization { offset: 0, size };
         let slice_id = slice.descriptor();
         let slice_pos = self.slices.len();
@@ -161,7 +172,7 @@ impl MemoryPool for PersistentPool {
 
             for slice in self.slices.drain(..) {
                 if slice.is_free() {
-                    storage.dealloc(slice.storage.id);
+                    if slice.mapped { storage.dealloc(slice.storage.id); }
                 } else {
                     let slice_pos = slices.len();
                     let effective_size = slice.effective_size();

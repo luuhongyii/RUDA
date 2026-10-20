@@ -165,6 +165,14 @@ where
 {
     type Item<P: PrecisionSettings> = (u32, R::Item<P>, <TrainableParameterContract as Record<B>>::Item<P>,
         G::Item<P>, <S::Record<B> as Record<B>>::Item<P>, <GradientsParamsRecord as Record<B>>::Item<P>, U::Item<P>);
+    fn map_parameters<Mapper: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut Mapper) -> Self {
+        self.model_state = Record::<B>::map_parameters(self.model_state, mapper);
+        self.groups = Record::<B>::map_parameters(self.groups, mapper);
+        self.scheduler = Record::<B>::map_parameters(self.scheduler, mapper);
+        self.gradients = Record::<B>::map_parameters(self.gradients, mapper);
+        self.state = Record::<B>::map_parameters(self.state, mapper);
+        self
+    }
     fn into_item<P: PrecisionSettings>(self) -> Self::Item<P> {
         (self.version, self.model_state.into_item::<P>(), <TrainableParameterContract as Record<B>>::into_item::<P>(self.contract),
             self.groups.into_item::<P>(), self.scheduler.into_item::<P>(),

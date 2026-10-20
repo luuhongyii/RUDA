@@ -39,6 +39,7 @@ impl<P: WgslLowering> WgslCompiler<P> {
         let metadata = Metadata::new(num_meta as u32, num_ext);
         self.info = Info::new(&value.scalars, metadata, address_type);
 
+        let io = ruda_core::kernel::KernelIo::analyze(&value);
         let address_type = self.compile_storage_type(address_type);
         let instructions = self.compile_scope(&mut value.body);
         let extensions = register_extensions(&instructions);
@@ -49,6 +50,7 @@ impl<P: WgslLowering> WgslCompiler<P> {
         };
 
         Ok(wgsl::ComputeShader {
+            io,
             address_type,
             buffers: value
                 .buffers

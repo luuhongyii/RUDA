@@ -1,20 +1,31 @@
 #[macro_use]
 extern crate derive_new;
+mod credential;
+pub use credential::Credential;
+pub mod telemetry;
+#[cfg(any(feature = "client", feature = "server"))]
+mod metrics;
+pub use shared::{ConnectionId, SessionId};
+#[cfg(feature = "iroh")]
+pub use ruda_communication::iroh::{Endpoint, EndpointAddr, EndpointId, Iroh, IrohHost, IrohIdentity, IrohNode, IrohRelays, RUDA_REMOTE_ALPN};
+#[cfg(all(feature = "iroh", not(target_family = "wasm")))]
+pub use ruda_communication::iroh::{IrohServer, IrohTransport};
 
 #[cfg(feature = "client")]
 pub(crate) mod client;
 
-#[cfg(feature = "server")]
+#[cfg(all(feature = "server", not(target_family = "wasm")))]
 pub mod server;
 
 pub(crate) mod shared;
-pub use ruda_tensor_router::{GraphBindings, GraphId, GraphIr, RunnerClient};
+pub use shared::RemoteDeviceInfo;
+pub use ruda_tensor_router::{GraphBindings, GraphId, GraphIr, QueuedGraphId, RunnerClient};
 
 #[cfg(feature = "client")]
 mod __client {
     use super::*;
 
-    use crate::{client::RemoteChannel, shared::RemoteProtocol};
+    use crate::{client::ActiveChannel, shared::RemoteProtocol};
     use ruda_communication::Protocol;
     use ruda_tensor_router::BackendRouter;
 
@@ -31,13 +42,17 @@ mod __client {
     ///     ruda::server::start::<ruda::backend::Wgpu>(device, port);
     /// }
     ///```
-    pub type RemoteBackend = BackendRouter<RemoteChannel<<RemoteProtocol as Protocol>::Client>>;
+    #[cfg(not(feature = "fusion"))]
+    pub type RemoteBackend = BackendRouter<ActiveChannel<<RemoteProtocol as Protocol>::Client>>;
 
-    pub use client::{RemoteClient, RemoteDevice};
+    #[cfg(feature = "fusion")]
+    pub type RemoteBackend = ruda_fusion::Fusion<BackendRouter<ActiveChannel<<RemoteProtocol as Protocol>::Client>>>;
+
+    pub use client::{ConnectError, RemoteClient, RemoteDevice, RemoteHost};
 
     /// Obtain the same device client used by RemoteBackend for explicit graph operations.
     pub fn remote_client(device: &RemoteDevice) -> RemoteClient {
-        ruda_tensor_router::get_client::<RemoteChannel<<RemoteProtocol as Protocol>::Client>>(device)
+        ruda_tensor_router::get_client::<ActiveChannel<<RemoteProtocol as Protocol>::Client>>(device)
     }
 }
 #[cfg(feature = "client")]

@@ -323,7 +323,8 @@ pub trait ActivationOps<B: Backend> {
         );
 
         // Derivative of max(-x, 0) is 1 if x < 0 or 0 if x >= 0
-        let ones = B::float_ones(shape, &device, dtype.into());
+        let ones = B::float_with_autodiff_context(B::float_ones(shape, &device, dtype.into()),
+            B::float_autodiff_context(&z).merge(B::float_autodiff_context(&grad)));
         let max_derive = B::float_mask_fill(ones.clone(), mask.clone(), 0f32.into());
         let sign = B::float_mask_fill(ones.clone(), mask, (-1f32).into());
 

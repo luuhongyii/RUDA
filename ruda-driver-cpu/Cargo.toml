@@ -139,3 +139,10 @@ features = [ "frontend", "frontend-std", "library", "lowering-mlir",]
 path = "../ruda-kernel"
 default-features = false
 features = [ "frontend", "frontend-default", "frontend-tests", "library", "library-tests",]
+
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))'.dependencies.libc]
+version = "0.2"
+
+[target.'cfg(windows)'.dependencies.winapi]
+version = "0.3.9"
+features = ["sysinfoapi", "winnt", "processthreadsapi", "processtopologyapi", "winbase"]

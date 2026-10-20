@@ -32,9 +32,22 @@ pub struct RudaRuntimeConfig {
     /// Configuration for memory settings.
     #[serde(default)]
     pub memory: MemoryConfig,
+
+    #[serde(default)]
+    pub throughput: super::throughput::ThroughputConfig,
+
+    #[serde(default)]
+    pub environment: super::environment::EnvironmentConfig,
 }
 
 impl RuntimeConfig for RudaRuntimeConfig {
+    fn on_loaded(&self) {
+        ruda_core::environment::records::configure(self.environment.records);
+        ruda_core::environment::activate(&self.environment.name);
+        #[cfg(std_io)]
+        ruda_core::environment::set_root(self.environment.path.root());
+    }
+
     fn storage() -> &'static spin::Mutex<Option<Arc<Self>>> {
         &RUDA_GLOBAL_CONFIG
     }
@@ -133,6 +146,18 @@ impl RuntimeConfig for RudaRuntimeConfig {
             }
         }
 
+        if let Ok(name) = std::env::var("RUDA_ENVIRONMENT") {
+            self.environment.name = name;
+        }
+        if let Ok(level) = std::env::var("RUDA_ENVIRONMENT_RECORDS") {
+            use ruda_core::environment::records::RecordLevel;
+            match level.as_str() {
+                "off" | "0" => self.environment.records.level = RecordLevel::Off,
+                "basic" | "1" => self.environment.records.level = RecordLevel::Basic,
+                "full" | "2" => self.environment.records.level = RecordLevel::Full,
+                _ => {}
+            }
+        }
         self
     }
 }

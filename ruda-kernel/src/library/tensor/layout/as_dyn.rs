@@ -60,10 +60,10 @@ pub struct IntoDynLayout<L: Layout<SourceCoordinates: IntoDyn> + ViewLayoutLaunc
 impl<L: Layout<SourceCoordinates: IntoDyn> + ViewLayoutLaunchArg> ViewLayoutLaunchArg
     for IntoDynLayout<L>
 {
-    type RuntimeArg<R: Runtime> = L::RuntimeArg<R>;
+    type RuntimeArg<R: LaunchMarker> = L::RuntimeArg<R>;
     type CompilationArg = L::CompilationArg;
 
-    fn register<R: Runtime, B: BufferArg>(
+    fn register<R: LaunchMarker, B: BufferArg>(
         arg: Self::RuntimeArg<R>,
         buffer: &B,
         ty: Type,
@@ -103,10 +103,10 @@ pub struct IntoDyn2Layout<
 impl<L: Layout<SourceCoordinates = (P, O)> + ViewLayoutLaunchArg, P: IntoDyn, O: IntoDyn>
     ViewLayoutLaunchArg for IntoDyn2Layout<L, P, O>
 {
-    type RuntimeArg<R: Runtime> = L::RuntimeArg<R>;
+    type RuntimeArg<R: LaunchMarker> = L::RuntimeArg<R>;
     type CompilationArg = L::CompilationArg;
 
-    fn register<R: Runtime, B: BufferArg>(
+    fn register<R: LaunchMarker, B: BufferArg>(
         arg: Self::RuntimeArg<R>,
         buffer: &B,
         ty: Type,

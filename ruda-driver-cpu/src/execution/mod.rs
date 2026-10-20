@@ -1,3 +1,6 @@
+pub(crate) mod affinity;
+pub(crate) mod barrier;
+mod progress;
 pub mod compute_task;
 pub mod runner;
 pub mod server;

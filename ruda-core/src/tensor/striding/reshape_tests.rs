@@ -55,3 +55,29 @@ fn test_reshape_analysis_split() {
 
     assert_eq!(analysis, ReshapeAnalysis::Split)
 }
+
+#[test]
+fn split_with_original_singleton_axes_preserves_offsets() {
+    fn offset(mut linear: usize, shape: &[usize], strides: &[usize]) -> usize {
+        let mut offset = 0;
+        for (&dim, &stride) in shape.iter().zip(strides).rev() {
+            offset += (linear % dim) * stride;
+            linear /= dim;
+        }
+        offset
+    }
+    for (shape, strides, target) in [
+        (&[3, 1][..], &[1, 128][..], &[1, 3, 1, 1][..]),
+        (&[1, 3][..], &[128, 1][..], &[3, 1, 1][..]),
+        (&[2, 1, 3][..], &[128, 128, 1][..], &[1, 2, 1, 3, 1][..]),
+        (&[1, 6, 1, 4, 1][..], &[768, 128, 128, 1, 1][..], &[2, 3, 1, 2, 2, 1][..]),
+    ] {
+        let ReshapeAction::UpdateStrides { strides: new_strides } =
+            reshape_action(&shape.into(), &strides.into(), &target.into()) else {
+                panic!("Expected a stride-only reshape");
+            };
+        for linear in 0..shape.iter().product() {
+            assert_eq!(offset(linear, shape, strides), offset(linear, target, &new_strides));
+        }
+    }
+}

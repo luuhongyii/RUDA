@@ -1,21 +1,21 @@
 use core::marker::PhantomData;
 
 use ruda_core::ir::AddressType;
-use ruda::runtime::{backend::Runtime, server::CopyDescriptor};
+use ruda::runtime::server::CopyDescriptor;
 use ruda_core::tensor::{Shape, Strides};
 use serde::{Deserialize, Serialize};
 
 use crate::dsl::{
     compute::{KernelBuilder, KernelLauncher},
     ir::Id,
-    prelude::{ArrayArg, ArrayBinding, RudaPrimitive, LaunchArg, NativeExpand},
+    prelude::{ArrayArg, ArrayBinding, RudaPrimitive, LaunchArg, LaunchMarker, NativeExpand},
 };
 
 use super::Tensor;
 
 /// Argument to be used for [tensors](Tensor) passed as arguments to kernels.
 #[derive(Debug)]
-pub enum TensorArg<R: Runtime> {
+pub enum TensorArg<R: LaunchMarker = ()> {
     /// The tensor is passed with a tensor handle.
     Handle {
         /// The tensor handle.
@@ -32,14 +32,14 @@ pub enum TensorArg<R: Runtime> {
 
 /// Tensor representation with a reference to the [server handle](ruda::runtime::server::Handle),
 /// the strides and the shape.
-pub struct TensorBinding<R: Runtime> {
+pub struct TensorBinding<R: LaunchMarker = ()> {
     pub handle: ruda::runtime::server::Binding,
     pub strides: Strides,
     pub shape: Shape,
     pub runtime: PhantomData<R>,
 }
 
-impl<R: Runtime> Clone for TensorBinding<R> {
+impl<R: LaunchMarker> Clone for TensorBinding<R> {
     fn clone(&self) -> Self {
         Self {
             handle: self.handle.clone(),
@@ -50,7 +50,7 @@ impl<R: Runtime> Clone for TensorBinding<R> {
     }
 }
 
-impl<R: Runtime> TensorBinding<R> {
+impl<R: LaunchMarker> TensorBinding<R> {
     pub fn size(&self) -> usize {
         self.shape.iter().product()
     }
@@ -61,7 +61,7 @@ impl<R: Runtime> TensorBinding<R> {
     }
 }
 
-impl<R: Runtime> core::fmt::Debug for TensorBinding<R> {
+impl<R: LaunchMarker> core::fmt::Debug for TensorBinding<R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(
             f,
@@ -78,10 +78,10 @@ pub struct TensorCompilationArg {
 }
 
 impl<C: RudaPrimitive> LaunchArg for Tensor<C> {
-    type RuntimeArg<R: Runtime> = TensorArg<R>;
+    type RuntimeArg<R: LaunchMarker> = TensorArg<R>;
     type CompilationArg = TensorCompilationArg;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {
@@ -110,7 +110,7 @@ impl<C: RudaPrimitive> LaunchArg for Tensor<C> {
     }
 }
 
-impl<R: Runtime> TensorArg<R> {
+impl<R: LaunchMarker> TensorArg<R> {
     /// Create a new tensor argument specified with its vectorization factor.
     ///
     /// # Safety
@@ -167,7 +167,7 @@ impl<R: Runtime> TensorArg<R> {
     }
 }
 
-impl<R: Runtime> TensorArg<R> {
+impl<R: LaunchMarker> TensorArg<R> {
     pub fn into_array_arg(self) -> ArrayArg<R> {
         match self {
             TensorArg::Handle { handle } => {
@@ -187,7 +187,7 @@ impl<R: Runtime> TensorArg<R> {
     }
 }
 
-impl<R: Runtime> TensorBinding<R> {
+impl<R: LaunchMarker> TensorBinding<R> {
     /// Convert the handle into a [tensor argument](TensorArg).
     pub fn into_tensor_arg(self) -> TensorArg<R> {
         unsafe { TensorArg::from_raw_parts_binding(self.handle, self.strides, self.shape) }

@@ -31,6 +31,8 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
         let [tokens, width] = input.dims();
         assert_eq!((layout.tokens(), width), (tokens, self.width), "packed compression layout/input geometry differs");
         let device = input.device();
+        let mut context = input.autodiff_context();
+        if let Some(valid) = &valid { context = context.merge(valid.autodiff_context()); }
         let storage = input.dtype();
         let compute = work_dtype(storage);
         assert_eq!(device, self.parts.query_down.device(), "packed compression device differs");
@@ -43,7 +45,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
         for bounds in layout.boundaries().windows(2) {
             let (start, end) = (bounds[0], bounds[1]);
             if start == end {
-                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)));
+                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)).with_autodiff_context(context));
                 continue;
             }
             let length = end - start;
@@ -55,13 +57,14 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> CompressedAttention<B, P> 
                 losses.push(result.indexer_loss);
             } else {
                 outputs.push(self.forward(document, valid).reshape([length, width]));
-                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)));
+                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)).with_autodiff_context(context));
             }
         }
         let output = if outputs.is_empty() {
-            Tensor::<B, 2>::zeros([tokens, width], (&device, storage)) + input.sum().mul_scalar(0).reshape([1, 1])
+            Tensor::<B, 2>::zeros([tokens, width], (&device, storage)).with_autodiff_context(context)
+                + input.sum().mul_scalar(0).reshape([1, 1])
         } else { Tensor::cat(outputs, 0) };
-        let document_indexer_losses = if losses.is_empty() { Tensor::zeros([0], (&device, compute)) }
+        let document_indexer_losses = if losses.is_empty() { Tensor::zeros([0], (&device, compute)).with_autodiff_context(context) }
             else { Tensor::cat(losses, 0) };
         PackedCompressedAttentionOutput { output, document_indexer_losses }
     }

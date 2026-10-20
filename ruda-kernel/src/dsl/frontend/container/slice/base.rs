@@ -338,6 +338,30 @@ impl<E: RudaPrimitive, IO: SliceVisibility> RudaIndexExpand for SliceExpand<E, I
     fn expand_index_unchecked(self, scope: &mut Scope, index: NativeExpand<usize>) -> Self::Output {
         self.__expand_read_unchecked_method(scope, index)
     }
+    fn expand_index_reference(self, scope: &mut Scope, index: NativeExpand<usize>, writable: bool) -> Self::Output {
+        use ruda_core::ir::{AddressSpace, Arithmetic, BinaryOperator, Instruction, PointerAccess, PointerType, TypedPointer, VariableKind};
+        let (base, offset) = self.__to_raw_parts();
+        let position = scope.create_local(offset.ty);
+        scope.register(Instruction::new(Arithmetic::Add(BinaryOperator {
+            lhs: offset, rhs: *index.expand,
+        }), *position));
+        let (address_space, unroll_factor) = match base.kind {
+            VariableKind::GlobalInputArray(_) | VariableKind::GlobalOutputArray(_) => (AddressSpace::Global, 1),
+            VariableKind::SharedArray { unroll_factor, .. } => (AddressSpace::Shared, unroll_factor),
+            VariableKind::LocalArray { unroll_factor, .. } | VariableKind::ConstantArray { unroll_factor, .. } => {
+                (AddressSpace::Local, unroll_factor)
+            }
+            _ => panic!("slice reference requires array storage"),
+        };
+        let pointee = base.ty.with_vector_size(self.vector_size.unwrap_or(base.vector_size()));
+        scope.reference_address(TypedPointer {
+            base, index: *position, ty: PointerType {
+                pointee, address_space,
+                access: if writable || pointee.is_atomic() { PointerAccess::ReadWrite } else { PointerAccess::ReadOnly },
+            },
+            checked: true, unroll_factor,
+        }).expect("valid slice reference").into()
+    }
 }
 
 impl<E: RudaPrimitive, IO: SliceVisibility> List<E> for Slice<E, IO> {}

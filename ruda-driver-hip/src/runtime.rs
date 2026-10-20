@@ -61,6 +61,14 @@ impl Runtime for HipRuntime {
         "hip"
     }
 
+    fn utilization(
+        device: &Self::Device,
+    ) -> Result<ruda::runtime::backend::DeviceUtilization, ruda::runtime::backend::UtilizationUnavailable> {
+        ruda::runtime::monitoring::gpu_utilization::CardCounters::read(
+            Self::client(device).properties().identity.physical.as_ref(),
+        )
+    }
+
     fn autotune_driver_fingerprint(client: &ComputeClient<Self>) -> Option<String> {
         use std::{collections::BTreeMap, sync::{Mutex, OnceLock}};
         static IDS: OnceLock<Mutex<BTreeMap<u16, Option<String>>>> = OnceLock::new();

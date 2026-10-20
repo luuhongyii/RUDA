@@ -45,6 +45,7 @@ pub struct RuntimeOptions {
 pub struct CudaRuntime;
 
 mod device_service;
+mod identity;
 
 pub type CudaCompiler = ruda_kernel::dsl::lowering::cpp::CudaCompiler<WmmaCompiler>;
 pub type CudaComputeKernel = ComputeKernel<CudaDialect<WmmaCompiler>>;
@@ -68,6 +69,14 @@ impl Runtime for CudaRuntime {
 
     fn name(_client: &ComputeClient<Self>) -> &'static str {
         "cuda"
+    }
+
+    fn utilization(
+        device: &Self::Device,
+    ) -> Result<ruda::runtime::backend::DeviceUtilization, ruda::runtime::backend::UtilizationUnavailable> {
+        ruda::runtime::monitoring::gpu_utilization::CardCounters::read(
+            Self::client(device).properties().identity.physical.as_ref(),
+        )
     }
 
     fn autotune_driver_fingerprint(client: &ComputeClient<Self>) -> Option<String> {

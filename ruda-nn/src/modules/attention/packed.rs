@@ -79,7 +79,8 @@ impl Default for PackedAttentionOptions {
 }
 
 fn connected_zero<B: Backend>(tensor: Tensor<B, 3>) -> Tensor<B, 1> {
-    let mask = Tensor::<B, 3, Bool>::zeros(tensor.dims(), &tensor.device()).bool_not();
+    let mask = Tensor::<B, 3, Bool>::zeros(tensor.dims(), &tensor.device())
+        .with_autodiff_context(tensor.autodiff_context()).bool_not();
     tensor.cast(DType::F32).mask_fill(mask, 0).sum()
 }
 
@@ -111,9 +112,12 @@ pub fn packed_scaled_dot_product_attention<B: Backend>(
     if let Some((left, right)) = options.window { assert!(left >= -1 && right >= -1, "window distances must be nonnegative or -1"); }
     if let Some(dropout) = dropout { assert!(dropout.prob.is_finite() && (0.0..=1.0).contains(&dropout.prob), "invalid dropout probability"); }
     let device = query.device();
-    if queries == 0 || dropout.is_some_and(|dropout|dropout.prob == 1.0 && B::ad_enabled(&device)) {
+    let context = query.autodiff_context().merge(key.autodiff_context()).merge(value.autodiff_context());
+    if queries == 0 || dropout.is_some_and(|dropout|dropout.prob == 1.0 && dropout.training.is_enabled()
+        && matches!(context, ruda_model::tensor::AutodiffContext::Enabled(_))) {
         let zero = connected_zero(query) + connected_zero(key) + connected_zero(value);
-        return (Tensor::<B, 3>::zeros([queries, heads, value_features], (&device, DType::F32)) + zero.reshape([1, 1, 1])).cast(dtype);
+        return (Tensor::<B, 3>::zeros([queries, heads, value_features], (&device, DType::F32))
+            .with_autodiff_context(context) + zero.reshape([1, 1, 1])).cast(dtype);
     }
     let query = query.cast(DType::F32);
     let key = key.cast(DType::F32);
@@ -127,7 +131,8 @@ pub fn packed_scaled_dot_product_attention<B: Backend>(
         let v = value.clone().slice_dim(0, krange[0]..krange[1]).swap_dims(0, 1);
         if qlen == 0 || klen == 0 {
             let zero = connected_zero(q) + connected_zero(k) + connected_zero(v);
-            outputs.push(Tensor::<B, 3>::zeros([qlen, heads, value_features], (&device, DType::F32)) + zero.reshape([1, 1, 1]));
+            outputs.push(Tensor::<B, 3>::zeros([qlen, heads, value_features], (&device, DType::F32))
+                .with_autodiff_context(context) + zero.reshape([1, 1, 1]));
             continue;
         }
         let groups = heads / kv_heads;
@@ -137,9 +142,11 @@ pub fn packed_scaled_dot_product_attention<B: Backend>(
         let qlen_i64 = i64::try_from(qlen).expect("query length exceeds integer range");
         let klen_i64 = i64::try_from(klen).expect("key length exceeds integer range");
         let offset = match options.alignment { PackedCausalAlignment::UpperLeft => 0, PackedCausalAlignment::LowerRight => klen_i64 - qlen_i64 };
-        let rows = Tensor::<B, 1, Int>::arange(0..qlen_i64, (&device, DType::I64)).add_scalar(offset).reshape([qlen, 1]).repeat_dim(1, klen);
-        let columns = Tensor::<B, 1, Int>::arange(0..klen_i64, (&device, DType::I64)).reshape([1, klen]).repeat_dim(0, qlen);
-        let mut excluded = Tensor::<B, 2, Bool>::zeros([qlen, klen], &device);
+        let rows = Tensor::<B, 1, Int>::arange(0..qlen_i64, (&device, DType::I64)).with_autodiff_context(context)
+            .add_scalar(offset).reshape([qlen, 1]).repeat_dim(1, klen);
+        let columns = Tensor::<B, 1, Int>::arange(0..klen_i64, (&device, DType::I64)).with_autodiff_context(context)
+            .reshape([1, klen]).repeat_dim(0, qlen);
+        let mut excluded = Tensor::<B, 2, Bool>::zeros([qlen, klen], &device).with_autodiff_context(context);
         if options.causal { excluded = excluded.bool_or(columns.clone().greater(rows.clone())); }
         if let Some((left, right)) = options.window {
             if left >= 0 && (left as usize) < qlen.max(klen) { excluded = excluded.bool_or(columns.clone().lower(rows.clone().sub_scalar(left as i64))); }

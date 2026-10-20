@@ -31,13 +31,13 @@
 //!         16,
 //!         cmma::MatrixLayout::Undefined,
 //!     );
-//!     cmma::fill::<F32>(&c, F32::new(0.0));
-//!     cmma::load::<F16>(&a, lhs.as_slice(), u32::new(16));
-//!     cmma::load::<F16>(&b, rhs.as_slice(), u32::new(16));
+//!     cmma::fill::<F32, _>(&c, F32::new(0.0));
+//!     cmma::load::<F16, _, _>(&a, lhs.as_slice(), u32::new(16));
+//!     cmma::load::<F16, _, _>(&b, rhs.as_slice(), u32::new(16));
 //!
-//!     cmma::execute::<F16, F16, F32, F32>(&a, &b, &c, &c);
+//!     cmma::execute::<F16, F16, F32, F32, _>(&a, &b, &c, &c);
 //!
-//!     cmma::store::<F32>(
+//!     cmma::store::<F32, _, _>(
 //!         out.as_slice_mut(),
 //!         &c,
 //!         u32::new(16),
@@ -55,19 +55,42 @@ use crate::dsl::{
     ir::{self, Instruction},
     unexpanded,
 };
+use alloc::{boxed::Box, vec};
 use core::marker::PhantomData;
 use ruda_kernel_macros::{comptime_type, ruda, intrinsic};
 
 use ruda_core::ir::{CoopMma, ManagedVariable, Scope, StorageType, VectorSize};
 pub use ir::{MatrixIdent, MatrixLayout};
 
+/// A matrix shared by a subgroup.
+#[derive(Clone, Copy)]
+pub struct Plane;
+
+/// A matrix shared by every invocation in a workgroup.
+#[derive(Clone, Copy)]
+pub struct Ruda;
+
+/// Compile-time scope of cooperative matrix operations.
+pub trait MatrixScope: Copy {
+    const SCOPE: ir::MatrixScope;
+}
+
+impl MatrixScope for Plane {
+    const SCOPE: ir::MatrixScope = ir::MatrixScope::Plane;
+}
+
+impl MatrixScope for Ruda {
+    const SCOPE: ir::MatrixScope = ir::MatrixScope::Ruda;
+}
+
 /// A matrix represent a 2D grid of numbers.
 ///
 /// They can either be in a [row major](MatrixLayout::RowMajor) or a
 /// [column major](MatrixLayout::ColMajor) format.
 #[derive(Copy, Clone)]
-pub struct Matrix<C: RudaType> {
+pub struct Matrix<C: RudaType, S: MatrixScope = Plane> {
     _c: PhantomData<C>,
+    _s: PhantomData<S>,
 }
 
 /// Defines a matrix multiplication operation, including the input and output type, and the shape.
@@ -85,10 +108,11 @@ impl<A: RudaType, B: RudaType, CD: RudaType> RudaDebug for &MmaDefinitionExpand<
 }
 
 /// Expand type of [Matrix].
-pub struct MatrixExpand<C: RudaType> {
+pub struct MatrixExpand<C: RudaType, S: MatrixScope = Plane> {
     elem: ManagedVariable,
     ident: MatrixIdent,
     _c: PhantomData<C>,
+    _s: PhantomData<S>,
 }
 
 /// Expand type of [`MmaDefinition`].
@@ -107,12 +131,13 @@ pub struct MmaDefinitionExpand<A: RudaType, B: RudaType, CD: RudaType> {
     _cd: PhantomData<CD>,
 }
 
-impl<C: RudaType> Clone for MatrixExpand<C> {
+impl<C: RudaType, S: MatrixScope> Clone for MatrixExpand<C, S> {
     fn clone(&self) -> Self {
         Self {
             elem: self.elem.clone(),
             ident: self.ident,
             _c: self._c,
+            _s: self._s,
         }
     }
 }
@@ -135,21 +160,21 @@ impl<A: RudaType, B: RudaType, CD: RudaType> Clone for MmaDefinitionExpand<A, B,
     }
 }
 
-impl<C: RudaType> RudaType for Matrix<C> {
-    type ExpandType = MatrixExpand<C>;
+impl<C: RudaType, S: MatrixScope> RudaType for Matrix<C, S> {
+    type ExpandType = MatrixExpand<C, S>;
 }
 
 impl<A: RudaType, B: RudaType, CD: RudaType> RudaType for MmaDefinition<A, B, CD> {
     type ExpandType = MmaDefinitionExpand<A, B, CD>;
 }
 
-impl<C: RudaType> IntoMut for MatrixExpand<C> {
+impl<C: RudaType, S: MatrixScope> IntoMut for MatrixExpand<C, S> {
     fn into_mut(self, _scope: &mut Scope) -> Self {
         self
     }
 }
 
-impl<C: RudaType> RudaDebug for MatrixExpand<C> {
+impl<C: RudaType, S: MatrixScope> RudaDebug for MatrixExpand<C, S> {
     fn set_debug_name(&self, scope: &mut Scope, name: &'static str) {
         scope.update_variable_name(*self.elem, name);
     }
@@ -164,7 +189,7 @@ impl<A: RudaType, B: RudaType, CD: RudaType> IntoMut for MmaDefinitionExpand<A, 
 impl<A: RudaType, B: RudaType, CD: RudaType> RudaDebug for MmaDefinitionExpand<A, B, CD> {}
 
 #[ruda]
-impl<C: RudaPrimitive> Matrix<C> {
+impl<C: RudaPrimitive, S: MatrixScope> Matrix<C, S> {
     /// Create a new uninitialized matrix that is going to be used in the
     /// [matrix-multiply and accumulate](execute()) function.
     ///
@@ -192,11 +217,14 @@ impl<C: RudaPrimitive> Matrix<C> {
     ) -> Self {
         intrinsic!(|scope| {
             let elem = C::as_type(scope).storage_type();
-            let elem = scope.create_matrix(ir::Matrix::new(ident, m, n, k, elem, layout));
+            let elem = scope.create_matrix(
+                ir::Matrix::new(ident, m, n, k, elem, layout).with_scope(S::SCOPE),
+            );
             MatrixExpand {
                 elem,
                 ident,
                 _c: PhantomData,
+                _s: PhantomData,
             }
         })
     }
@@ -260,7 +288,26 @@ impl<C: RudaPrimitive> Matrix<C> {
         let mat = unsafe { Self::uninitialized(ident, m, n, k, layout) };
 
         intrinsic!(|scope| {
-            load::expand(scope, mat.clone(), value, stride);
+            if mat.ident == MatrixIdent::Accumulator {
+                load_with_layout::expand(scope, mat.clone(), value, stride, layout);
+            } else {
+                load::expand(scope, mat.clone(), value, stride);
+            }
+            mat
+        })
+    }
+
+    /// Load a matrix from a tensor-addressed view.
+    pub fn from_tensor(
+        #[comptime] ident: MatrixIdent,
+        #[comptime] m: usize,
+        #[comptime] n: usize,
+        #[comptime] k: usize,
+        value: &TensorView<C>,
+    ) -> Self {
+        let mat = unsafe { Self::uninitialized(ident, m, n, k, MatrixLayout::Undefined) };
+        intrinsic!(|scope| {
+            load_tensor::expand(scope, mat.clone(), value);
             mat
         })
     }
@@ -424,6 +471,7 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                 k: self.k,
                 storage: storage,
                 layout: MatrixLayout::ColMajor,
+                scope: ir::MatrixScope::Plane,
             };
             scope
                 .runtime_properties
@@ -468,6 +516,7 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                 k: self.k,
                 storage: ty,
                 layout,
+                scope: ir::MatrixScope::Plane,
             };
 
             let row = scope.create_local(u32::as_type(scope));
@@ -655,6 +704,7 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                 k: self.k,
                 storage: self.a_type,
                 layout: MatrixLayout::ColMajor,
+                scope: ir::MatrixScope::Plane,
             };
 
             scope.register(Instruction::new(
@@ -699,6 +749,7 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                 k: self.k,
                 storage: self.a_type,
                 layout: MatrixLayout::ColMajor,
+                scope: ir::MatrixScope::Plane,
             };
 
             scope.register(Instruction::new(
@@ -747,6 +798,7 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                 k: self.k,
                 storage: self.a_type,
                 layout: MatrixLayout::ColMajor,
+                scope: ir::MatrixScope::Plane,
             };
 
             scope.register(Instruction::new(
@@ -771,7 +823,7 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
 
 /// Fill the matrix with the provided value.
 #[allow(unused_variables)]
-pub fn fill<C: Scalar>(mat: &Matrix<C>, value: C) {
+pub fn fill<C: Scalar, S: MatrixScope>(mat: &Matrix<C, S>, value: C) {
     unexpanded!()
 }
 
@@ -780,7 +832,11 @@ pub mod fill {
     use super::*;
 
     /// Expand method of [`fill()`].
-    pub fn expand<C: Scalar>(scope: &mut Scope, mat: MatrixExpand<C>, value: NativeExpand<C>) {
+    pub fn expand<C: Scalar, S: MatrixScope>(
+        scope: &mut Scope,
+        mat: MatrixExpand<C, S>,
+        value: NativeExpand<C>,
+    ) {
         let value: ManagedVariable = value.into();
         scope.register(Instruction::new(
             ir::CoopMma::Fill { value: *value },
@@ -791,7 +847,11 @@ pub mod fill {
 
 /// Load the matrix with the provided array using the stride.
 #[allow(unused_variables)]
-pub fn load<C: RudaPrimitive, V: RudaPrimitive>(mat: &Matrix<C>, value: &Slice<V>, stride: u32) {
+pub fn load<C: RudaPrimitive, V: RudaPrimitive, S: MatrixScope>(
+    mat: &Matrix<C, S>,
+    value: &Slice<V>,
+    stride: u32,
+) {
     unexpanded!()
 }
 
@@ -801,9 +861,9 @@ pub mod load {
 
     /// Expand method of [`load()`].
     #[allow(unused_variables)]
-    pub fn expand<C: RudaPrimitive, V: RudaPrimitive>(
+    pub fn expand<C: RudaPrimitive, V: RudaPrimitive, S: MatrixScope>(
         scope: &mut Scope,
-        mat: MatrixExpand<C>,
+        mat: MatrixExpand<C, S>,
         value: SliceExpand<V, ReadOnly>,
         stride: NativeExpand<u32>,
     ) {
@@ -828,11 +888,69 @@ pub mod load {
     }
 }
 
+/// Load a cooperative matrix using the view's tensor layout and permutation.
+#[allow(unused_variables)]
+pub fn load_tensor<C: RudaPrimitive, V: RudaPrimitive, S: MatrixScope>(
+    mat: &Matrix<C, S>,
+    value: &TensorView<V>,
+) {
+    unexpanded!()
+}
+
+pub mod load_tensor {
+    use super::*;
+
+    pub fn expand<C: RudaPrimitive, V: RudaPrimitive, S: MatrixScope>(
+        scope: &mut Scope,
+        mat: MatrixExpand<C, S>,
+        value: TensorViewExpand<V>,
+    ) {
+        assert_ne!(mat.ident, MatrixIdent::Accumulator,
+            "Loading accumulator requires explicit layout. Use load_with_layout instead.");
+        let (buffer, offset) = value.buffer.__to_raw_parts();
+        let view = match value.view {
+            ComptimeOptionExpand::None => None,
+            ComptimeOptionExpand::Some(view) => Some(*view.variable),
+        };
+        scope.register(Instruction::new(CoopMma::LoadTensor {
+            buffer, offset, layout: *value.layout.variable, view,
+        }, *mat.elem));
+    }
+}
+
+/// Store a cooperative matrix using the view's tensor layout and permutation.
+#[allow(unused_variables)]
+pub fn store_tensor<C: RudaPrimitive, O: RudaPrimitive, S: MatrixScope>(
+    output: &mut TensorView<O>,
+    mat: &Matrix<C, S>,
+) {
+    unexpanded!()
+}
+
+pub mod store_tensor {
+    use super::*;
+
+    pub fn expand<C: RudaPrimitive, O: RudaPrimitive, S: MatrixScope>(
+        scope: &mut Scope,
+        output: TensorViewExpand<O>,
+        mat: MatrixExpand<C, S>,
+    ) {
+        let (buffer, offset) = output.buffer.__to_raw_parts();
+        let view = match output.view {
+            ComptimeOptionExpand::None => None,
+            ComptimeOptionExpand::Some(view) => Some(*view.variable),
+        };
+        scope.register(Instruction::new(CoopMma::StoreTensor {
+            mat: *mat.elem, offset, layout: *output.layout.variable, view,
+        }, buffer));
+    }
+}
+
 /// Load the matrix with the provided array using the stride with an explicit layout.
 /// Explicit layouts are required when loading accumulators.
 #[allow(unused_variables)]
-pub fn load_with_layout<C: RudaPrimitive, V: RudaPrimitive>(
-    mat: &Matrix<C>,
+pub fn load_with_layout<C: RudaPrimitive, V: RudaPrimitive, S: MatrixScope>(
+    mat: &Matrix<C, S>,
     value: &Slice<V>,
     stride: u32,
     layout: MatrixLayout,
@@ -846,9 +964,9 @@ pub mod load_with_layout {
 
     /// Expand method of [`load_with_layout()`].
     #[allow(unused_variables)]
-    pub fn expand<C: RudaType, V: RudaPrimitive>(
+    pub fn expand<C: RudaType, V: RudaPrimitive, S: MatrixScope>(
         scope: &mut Scope,
-        mat: MatrixExpand<C>,
+        mat: MatrixExpand<C, S>,
         value: SliceExpand<V, ReadOnly>,
         stride: NativeExpand<u32>,
         layout: MatrixLayout,
@@ -870,9 +988,9 @@ pub mod load_with_layout {
 
 /// Store the matrix in the given array following the given stride and layout.
 #[allow(unused_variables)]
-pub fn store<C: RudaPrimitive, O: RudaPrimitive>(
+pub fn store<C: RudaPrimitive, O: RudaPrimitive, S: MatrixScope>(
     output: &mut SliceMut<O>,
-    mat: &Matrix<C>,
+    mat: &Matrix<C, S>,
     stride: u32,
     layout: MatrixLayout,
 ) {
@@ -887,10 +1005,10 @@ pub mod store {
 
     /// Expand method of [`store()`].
     #[allow(unused_variables)]
-    pub fn expand<C: RudaPrimitive, O: RudaPrimitive>(
+    pub fn expand<C: RudaPrimitive, O: RudaPrimitive, S: MatrixScope>(
         scope: &mut Scope,
         output: SliceExpand<O, ReadWrite>,
-        mat: MatrixExpand<C>,
+        mat: MatrixExpand<C, S>,
         stride: NativeExpand<u32>,
         layout: MatrixLayout,
     ) {
@@ -912,11 +1030,11 @@ pub mod store {
 
 /// Execute the matrix-multiply and accumulate operation on the given [matrices](Matrix).
 #[allow(unused_variables)]
-pub fn execute<A: RudaPrimitive, B: RudaPrimitive, C: RudaPrimitive, D: RudaPrimitive>(
-    mat_a: &Matrix<A>,
-    mat_b: &Matrix<B>,
-    mat_c: &Matrix<C>,
-    mat_d: &Matrix<D>,
+pub fn execute<A: RudaPrimitive, B: RudaPrimitive, C: RudaPrimitive, D: RudaPrimitive, S: MatrixScope>(
+    mat_a: &Matrix<A, S>,
+    mat_b: &Matrix<B, S>,
+    mat_c: &Matrix<C, S>,
+    mat_d: &Matrix<D, S>,
 ) {
     unexpanded!()
 }
@@ -926,12 +1044,12 @@ pub mod execute {
     use super::*;
 
     /// Expand method of [`execute()`].
-    pub fn expand<A: RudaPrimitive, B: RudaPrimitive, C: RudaPrimitive, D: RudaPrimitive>(
+    pub fn expand<A: RudaPrimitive, B: RudaPrimitive, C: RudaPrimitive, D: RudaPrimitive, S: MatrixScope>(
         scope: &mut Scope,
-        mat_a: MatrixExpand<A>,
-        mat_b: MatrixExpand<B>,
-        mat_c: MatrixExpand<C>,
-        mat_d: MatrixExpand<D>,
+        mat_a: MatrixExpand<A, S>,
+        mat_b: MatrixExpand<B, S>,
+        mat_c: MatrixExpand<C, S>,
+        mat_d: MatrixExpand<D, S>,
     ) {
         scope.register(Instruction::new(
             ir::CoopMma::Execute {
@@ -946,8 +1064,59 @@ pub mod execute {
 
 /// Store the matrix in the given array following the given stride and layout.
 #[allow(unused_variables)]
-pub fn cast<C: RudaPrimitive, O: RudaPrimitive>(input: &Matrix<C>) -> Matrix<O> {
+pub fn cast<C: RudaPrimitive, O: RudaPrimitive, S: MatrixScope>(input: &Matrix<C, S>) -> Matrix<O, S> {
     unexpanded!()
+}
+
+/// Apply `op(row, column, element)` to every component of a matrix.
+#[allow(unused_variables)]
+pub fn execute_elementwise_op<A: RudaPrimitive, S: MatrixScope>(
+    matrix_in: &Matrix<A, S>,
+    matrix_out: &Matrix<A, S>,
+    op: impl Fn(u32, u32, A::Scalar) -> A::Scalar,
+) {
+    unexpanded!()
+}
+
+pub mod execute_elementwise_op {
+    use super::*;
+
+    pub fn expand<A: RudaPrimitive, S: MatrixScope>(
+        scope: &mut Scope,
+        matrix_in: MatrixExpand<A, S>,
+        matrix_out: MatrixExpand<A, S>,
+        mut op: impl FnMut(
+            &mut Scope,
+            NativeExpand<u32>,
+            NativeExpand<u32>,
+            NativeExpand<A::Scalar>,
+        ) -> NativeExpand<A::Scalar>,
+    ) {
+        let first_local_id = scope.new_local_index();
+        let mut body = scope.function_child();
+        let uint = u32::as_type(&body);
+        let scalar = A::Scalar::as_type(&body);
+        let row = body.create_local(uint);
+        let col = body.create_local(uint);
+        let value = body.create_local(scalar);
+        let parameters = vec![*row, *col, *value];
+        let result = op(&mut body, row.into(), col.into(), value.into());
+        let result: ManagedVariable = result.into();
+        assert_eq!(result.ty, scalar, "matrix callback return type must match its component type");
+        match ir::ScalarFunction::capture(body, parameters, *result, first_local_id) {
+            Ok((function, captures)) => {
+                scope.register(Instruction::new(
+                    CoopMma::Elementwise {
+                        input: *matrix_in.elem,
+                        function: Box::new(function),
+                        captures,
+                    },
+                    *matrix_out.elem,
+                ));
+            }
+            Err(error) => scope.push_error(error),
+        }
+    }
 }
 
 /// Module containing the expand function for [`store()`].
@@ -956,17 +1125,38 @@ pub mod cast {
 
     /// Expand method of [`store()`].
     #[allow(unused_variables)]
-    pub fn expand<C: RudaPrimitive, O: RudaPrimitive>(
+    pub fn expand<C: RudaPrimitive, O: RudaPrimitive, S: MatrixScope>(
         scope: &mut Scope,
-        input: MatrixExpand<C>,
-    ) -> MatrixExpand<O> {
+        input: MatrixExpand<C, S>,
+    ) -> MatrixExpand<O, S> {
         let ident = input.ident;
+        cast_with_ident::expand(scope, input, ident)
+    }
+}
 
-        if core::any::TypeId::of::<C>() == core::any::TypeId::of::<O>() {
+/// Cast a matrix's component type and its role in a matrix multiplication.
+#[allow(unused_variables)]
+pub fn cast_with_ident<C: RudaPrimitive, O: RudaPrimitive, S: MatrixScope>(
+    input: &Matrix<C, S>,
+    ident: MatrixIdent,
+) -> Matrix<O, S> {
+    unexpanded!()
+}
+
+pub mod cast_with_ident {
+    use super::*;
+
+    pub fn expand<C: RudaPrimitive, O: RudaPrimitive, S: MatrixScope>(
+        scope: &mut Scope,
+        input: MatrixExpand<C, S>,
+        ident: MatrixIdent,
+    ) -> MatrixExpand<O, S> {
+        if core::any::TypeId::of::<C>() == core::any::TypeId::of::<O>() && ident == input.ident {
             return MatrixExpand {
                 elem: input.elem,
                 ident,
                 _c: PhantomData,
+                _s: PhantomData,
             };
         }
         let input = *input.elem;
@@ -983,12 +1173,13 @@ pub mod cast {
             input_mat.k,
             elem,
             MatrixLayout::Undefined,
-        ));
+        ).with_scope(input_mat.scope));
 
         let output = MatrixExpand {
             ident,
             elem,
             _c: PhantomData,
+            _s: PhantomData,
         };
         scope.register(Instruction::new(ir::CoopMma::Cast { input }, *output.elem));
 

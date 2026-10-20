@@ -54,6 +54,7 @@ pub struct Visitor<'a> {
     pub location: Location<'a>,
 
     pub str_counter: usize,
+    pub(super) needs_parallelism: bool,
 
     pub(self) variables: Variables<'a>,
     pub(self) args_manager: ArgsManager<'a>,
@@ -88,6 +89,7 @@ impl<'a> Visitor<'a> {
             str_counter,
             args_manager,
             variables,
+            needs_parallelism: false,
         }
     }
 
@@ -156,8 +158,10 @@ impl<'a> Visitor<'a> {
         opt: &Optimizer,
         shared_memories: &SharedMemories,
         addr_type: StorageType,
-    ) {
+    ) -> bool {
         let name = StringAttribute::new(context, "kernel");
+        let needs_parallelism;
+        let fence_rudas = kernel.ruda_dim.num_elems() > 1 && !shared_memories.0.is_empty();
 
         let attributes = &[(
             Identifier::new(context, "llvm.emit_c_interface"),
@@ -170,12 +174,20 @@ impl<'a> Visitor<'a> {
         for const_array in opt.const_arrays() {
             let global = const_array.id;
             let name = global.to_string();
-            let r#type = const_array.item.to_type(context);
-            let memref = MemRefType::new(r#type, &[const_array.length as i64], None, None);
+            let r#type = const_array.item.storage_type().to_type(context);
+            let width = const_array.item.vector_size();
+            let length = const_array.length.checked_mul(width)
+                .and_then(|length| i64::try_from(length).ok())
+                .expect("constant array length exceeds the CPU index range");
+            let memref = MemRefType::new(r#type, &[length], None, None);
             let values: Vec<Attribute<'a>> = const_array
                 .values
                 .iter()
-                .filter_map(|var| Visitor::into_attribute(context, *var, const_array.item))
+                .flat_map(|var| {
+                    let value = Visitor::into_attribute(context, *var, const_array.item)
+                        .expect("constant array values must be constants");
+                    std::iter::repeat_n(value, width)
+                })
                 .collect();
             module.body().append_operation(memref::global(
                 context,
@@ -184,7 +196,7 @@ impl<'a> Visitor<'a> {
                 memref,
                 Some(
                     DenseElementsAttribute::new(
-                        RankedTensorType::new(&[const_array.length as u64], r#type, None).into(),
+                        RankedTensorType::new(&[length as u64], r#type, None).into(),
                         &values,
                     )
                     .unwrap()
@@ -205,7 +217,9 @@ impl<'a> Visitor<'a> {
                 let args = args.create_top_block(&region, context, location);
                 let block = region.first_block().unwrap();
 
-                Self::insert_builtin_loop(block, module, opt, context, location, args).unwrap();
+                needs_parallelism = Self::insert_builtin_loop(
+                    block, module, opt, context, location, args, fence_rudas,
+                ).unwrap();
 
                 block.append_operation(func::r#return(&[], location));
 
@@ -214,6 +228,7 @@ impl<'a> Visitor<'a> {
             attributes,
             location,
         ));
+        needs_parallelism
     }
 
     pub(self) fn insert_builtin_loop(
@@ -223,7 +238,9 @@ impl<'a> Visitor<'a> {
         context: &'a Context,
         location: Location<'a>,
         mut args: ArgsManager<'a>,
-    ) -> Result<(), Error> {
+        fence_rudas: bool,
+    ) -> Result<bool, Error> {
+        let needs_parallelism;
         let basic_block_id = opt.entry();
         let integer_type = IntegerType::new(context, 32).into();
         let start = block.const_int_from_type(context, location, 0, integer_type)?;
@@ -389,6 +406,11 @@ impl<'a> Visitor<'a> {
                                     opt,
                                 );
                                 visitor.visit_basic_block(basic_block_id, opt);
+                                if fence_rudas {
+                                    visitor.block = current_block;
+                                    visitor.visit_synchronization(&ruda_core::ir::Synchronization::SyncRuda);
+                                }
+                                needs_parallelism = visitor.needs_parallelism;
 
                                 current_block.append_operation(scf::r#yield(&[], location));
                                 region
@@ -409,6 +431,6 @@ impl<'a> Visitor<'a> {
             },
             location,
         ));
-        Ok(())
+        Ok(needs_parallelism)
     }
 }

@@ -38,6 +38,7 @@ use std::{ffi::c_void, ops::DerefMut, sync::Arc};
 /// interface for executing GPU-related operations such as memory allocation, data transfers, kernel
 /// registration, and task execution.
 pub struct Command<'a> {
+    service: ruda_core::device::ServiceId,
     ctx: &'a mut CudaContext,
     pub(crate) streams: ResolvedStreams<'a, CudaStreamBackend>,
 }
@@ -54,6 +55,10 @@ impl<'a> Command<'a> {
     /// * `Ok(GpuResource)` - The GPU resource associated with the binding.
     /// * `Err(IoError::InvalidHandle)` - If the binding does not correspond to a valid resource.
     pub fn resource(&mut self, binding: Binding) -> Result<GpuResource, IoError> {
+        if self.streams.current().capture.recording {
+            let owner = self.streams.current().capture.root.expect("recording root");
+            self.streams.get(&binding.stream).memory_management_gpu.touch_capture(owner, binding.memory.clone())?;
+        }
         self.streams
             .get(&binding.stream)
             .memory_management_gpu
@@ -111,7 +116,7 @@ impl<'a> Command<'a> {
 
     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip(self)))]
     pub fn empty(&mut self, size: u64) -> Result<Handle, IoError> {
-        let handle = Handle::new(self.streams.current, size);
+        let handle = Handle::new(self.service, self.streams.current, size);
         let reserved = self.reserve(size)?;
         self.bind(reserved, handle.memory.clone());
 
@@ -159,6 +164,8 @@ impl<'a> Command<'a> {
 
     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip(self)))]
     fn reserve_pinned(&mut self, size: usize, origin: Option<StreamId>) -> Option<Bytes> {
+        let recording = self.streams.current().capture.recording
+            .then(|| self.streams.current().capture.root.expect("recording root"));
         let stream = match origin {
             Some(id) => self.streams.get(&id),
             None => self.streams.current(),
@@ -166,6 +173,8 @@ impl<'a> Command<'a> {
         let handle = stream.memory_management_cpu.reserve(size as u64).ok()?;
 
         let binding = MemoryHandle::binding(handle);
+        if stream.capture.warming { stream.capture.primed.push(binding.clone()); }
+        if let Some(owner) = recording { stream.memory_management_cpu.touch_capture(owner, binding.clone()).ok()?; }
         let resource = stream
             .memory_management_cpu
             .get_resource(binding.clone(), None, None)
@@ -196,11 +205,16 @@ impl<'a> Command<'a> {
             .map(|b| b.handle.clone())
             .collect::<Vec<_>>();
 
-        let result = self.copies_to_bytes(descriptors, true);
-        let fence = Fence::new(self.streams.current().sys);
+        let (result, fence) = if self.streams.current().capture.recording {
+            let error = crate::execution::graph::error("Host readback cannot synchronize a recording stream");
+            self.error(error.clone());
+            (Err(error), None)
+        } else {
+            (self.copies_to_bytes(descriptors, true).map_err(ServerError::from), Some(Fence::new(self.streams.current().sys)))
+        };
 
         async move {
-            let sync = fence.wait_sync();
+            let sync = fence.map(Fence::wait_sync).unwrap_or(Ok(()));
             // Release memory handle.
             core::mem::drop(descriptors_moved);
 
@@ -216,14 +230,18 @@ impl<'a> Command<'a> {
     pub fn read_async_origin(
         &mut self,
         descriptors: Vec<CopyDescriptor>,
-    ) -> impl Future<Output = Result<Vec<Bytes>, IoError>> + Send + use<> {
-        let results = self.copies_to_bytes_origin(descriptors, true);
+    ) -> impl Future<Output = Result<Vec<Bytes>, ServerError>> + Send + use<> {
+        let results = if self.streams.current().capture.recording {
+            let error = crate::execution::graph::error("Host readback cannot synchronize a recording stream");
+            self.error(error.clone());
+            Err(error)
+        } else { self.copies_to_bytes_origin(descriptors, true).map_err(ServerError::from) };
 
         async move {
             let (bytes, fences) = results?;
 
             for fence in fences {
-                fence.wait_sync();
+                fence.wait_sync()?;
             }
             Ok(bytes)
         }
@@ -305,6 +323,10 @@ impl<'a> Command<'a> {
             elem_size,
         } = descriptor;
 
+        if let Some(error) = binding.failure() {
+            return Err(IoError::Unknown { description: format!("{error:?}"), backtrace: BackTrace::capture() });
+        }
+
         let (shape, strides) = if shape.is_empty() && strides.is_empty() {
             (Shape::from([1]), Strides::from([1]))
         } else {
@@ -338,10 +360,13 @@ impl<'a> Command<'a> {
         Ok(())
     }
 
-    /// Registers an error on the stream.
+    /// Notify active profiling/capture windows; buffer claims own the failure.
     pub fn error(&mut self, error: ServerError) {
+        self.ctx.timestamps.error(ProfileError::Server(Box::new(error.clone())));
         let stream = self.streams.current();
-        stream.errors.push(error);
+        if stream.capture.recording && stream.capture.failed.is_none() {
+            stream.capture.failed = Some(error.clone());
+        }
     }
 
     /// Writes data from the host to GPU memory as specified by the copy descriptor.
@@ -360,21 +385,21 @@ impl<'a> Command<'a> {
         tracing::instrument(level = "trace", skip(self, descriptor, data))
     )]
     pub fn write_to_gpu(&mut self, descriptor: CopyDescriptor, data: Bytes) -> Result<(), IoError> {
+        if data.is_empty() || descriptor.shape.contains(&0) { return Ok(()); }
+        let scope = ruda::runtime::server::WriteScope::new(vec![descriptor.handle.clone()]);
+        let result = (|| -> Result<(), IoError> {
         let CopyDescriptor {
             handle,
             shape,
             strides,
             elem_size,
         } = descriptor;
+        self.streams.current().capture.record_write(&handle);
         let (shape, strides) = if shape.is_empty() && strides.is_empty() {
             (Shape::from([1]), Strides::from([1]))
         } else {
             (shape, strides)
         };
-        if shape.contains(&0) {
-            self.resource(handle)?;
-            return Ok(());
-        }
         if !has_pitched_row_major_strides(&shape, &strides) {
             return Err(IoError::UnsupportedStrides {
                 backtrace: BackTrace::capture(),
@@ -386,7 +411,8 @@ impl<'a> Command<'a> {
         let size = data.len();
         let data = match data.property() {
             AllocationProperty::File => {
-                let mut buffer = self.reserve_pinned(size, None).unwrap();
+                let mut buffer = self.reserve_pinned(size, None)
+                    .unwrap_or_else(|| Bytes::from_bytes_vec(vec![0; size]));
                 data.copy_into(&mut buffer);
                 buffer
             }
@@ -408,9 +434,21 @@ impl<'a> Command<'a> {
             )
         }?;
 
-        current.drop_queue.push(data);
+        if current.capture.recording { current.capture.host.push(data); }
+        else {
+            current.drop_queue.push(data);
+        }
 
         Ok(())
+        })();
+        match result {
+            Ok(()) => { scope.complete(); Ok(()) }
+            Err(error) => {
+                self.ctx.timestamps.error(ProfileError::Server(Box::new(ServerError::Io(error.clone()))));
+                scope.fail(ServerError::Io(error.clone()));
+                Err(error)
+            }
+        }
     }
 
     /// Copy to an existing device allocation with managed page-locked staging.
@@ -429,7 +467,7 @@ impl<'a> Command<'a> {
         // Graph updates bypass Command::kernel, which normally drains this queue.
         // Bound staging retention during long runs with no host synchronization.
         let current = self.streams.current();
-        if current.drop_queue.should_flush() {
+        if !current.capture.recording && current.drop_queue.should_flush() {
             current.drop_queue.flush(|| Fence::new(current.sys));
         }
         Ok(())
@@ -446,6 +484,17 @@ impl<'a> Command<'a> {
     /// * `Ok(Handle)` - A handle to the newly allocated and populated GPU memory.
     /// * `Err(IoError)` - If the allocation or data copy fails.
     pub fn create_with_data(&mut self, data: &[u8]) -> Result<Handle, IoError> {
+        let state = &self.streams.current().capture;
+        let cache = state.warming || state.recording;
+        if cache {
+            if let Some(handle) = state.metadata.get(data) { return Ok(handle.clone()); }
+            if state.recording {
+                return Err(IoError::Unknown {
+                    description: "Graph metadata was not populated during warmup".into(),
+                    backtrace: BackTrace::capture(),
+                });
+            }
+        }
         let mut staging =
             self.reserve_pinned(data.len(), None)
                 .ok_or_else(|| IoError::Unknown {
@@ -467,6 +516,7 @@ impl<'a> Command<'a> {
             staging,
         )?;
 
+        if cache { self.streams.current().capture.metadata.insert(data.to_vec(), handle.clone()); }
         Ok(handle)
     }
 
@@ -476,6 +526,11 @@ impl<'a> Command<'a> {
     ///
     /// * A `DynFut<()>` future that resolves when the stream is synchronized.
     pub fn sync(&mut self) -> DynFut<Result<(), ServerError>> {
+        if self.streams.current().capture.recording {
+            let error = crate::execution::graph::error("Cannot synchronize a stream during capture");
+            self.error(error.clone());
+            return Box::pin(async move { Err(error) });
+        }
         let fence = Fence::new(self.streams.current().sys);
 
         Box::pin(async { fence.wait_sync() })
@@ -497,23 +552,30 @@ impl<'a> Command<'a> {
     /// # Panics
     ///
     /// * If the execution fails, with an error message or profiling error.
+    pub fn prepare_kernel(
+        &mut self,
+        kernel_id: &KernelId,
+        kernel: Box<dyn RudaTask<CudaCompiler>>,
+        mode: ExecutionMode,
+        logger: Arc<ServerLogger>,
+    ) -> Result<Option<ruda_core::kernel::KernelIo>, LaunchError> {
+        self.ctx.refresh_compilation_environment();
+        if !self.ctx.module_names.contains_key(kernel_id) {
+            self.ctx.compile_kernel(kernel_id, kernel, mode, logger)?;
+        }
+        Ok(self.ctx.module_names[kernel_id].io.clone())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn kernel(
         &mut self,
         kernel_id: KernelId,
-        kernel: Box<dyn RudaTask<CudaCompiler>>,
-        mode: ExecutionMode,
         dispatch_count: (u32, u32, u32),
         tensor_maps: &[CUtensorMap],
         resources: &[GpuResource],
         const_info: Option<*mut c_void>,
-        logger: Arc<ServerLogger>,
         graph: Option<&mut crate::execution::graph::KernelGraph>,
     ) -> Result<(), LaunchError> {
-        if !self.ctx.module_names.contains_key(&kernel_id) {
-            self.ctx.compile_kernel(&kernel_id, kernel, mode, logger)?;
-        }
-
         let stream = self.streams.current();
 
         let result = self.ctx.execute_task(
@@ -526,15 +588,15 @@ impl<'a> Command<'a> {
             graph,
         );
 
-        if stream.drop_queue.should_flush() {
+        if !stream.capture.recording && stream.drop_queue.should_flush() {
             stream.drop_queue.flush(|| Fence::new(stream.sys));
         }
 
         if let Err(err) = result {
-            match self.ctx.timestamps.is_empty() {
-                true => return Err(err),
-                false => self.ctx.timestamps.error(ProfileError::Launch(err)),
+            if !self.ctx.timestamps.is_empty() {
+                self.ctx.timestamps.error(ProfileError::Launch(err.clone()));
             }
+            return Err(err);
         };
         Ok(())
     }
@@ -573,12 +635,8 @@ pub(crate) unsafe fn write_to_gpu(
         // SAFETY: For rank <= 1 data is contiguous. `dst_ptr` is a valid device pointer
         // and `data` is a valid host slice.
         unsafe {
-            cudarc::driver::result::memcpy_htod_async(dst_ptr, data, stream).map_err(|e| {
-                IoError::Unknown {
-                    description: format!("CUDA memcpy_htod failed: {e}"),
-                    backtrace: BackTrace::capture(),
-                }
-            })
+            cudarc::driver::result::memcpy_htod_async(dst_ptr, data, stream)
+                .map_err(|error| super::status::io("cuMemcpyHtoDAsync", error))
         }
     } else {
         // As we've enforced that the strides are contiguous row-major,
@@ -616,10 +674,7 @@ pub(crate) unsafe fn write_to_gpu(
         unsafe {
             cuMemcpy2DAsync_v2(&cpy, stream)
                 .result()
-                .map_err(|e| IoError::Unknown {
-                    description: format!("CUDA memcpy failed: {e}"),
-                    backtrace: BackTrace::capture(),
-                })
+                .map_err(|error| super::status::io("cuMemcpy2DAsync", error))
         }
     }
 }
@@ -659,12 +714,8 @@ pub(crate) unsafe fn write_to_cpu(
         // SAFETY: For rank <= 1 data is contiguous. `resource_ptr` is a valid device pointer
         // and `bytes` has sufficient capacity.
         unsafe {
-            cudarc::driver::result::memcpy_dtoh_async(bytes, resource_ptr, stream).map_err(|e| {
-                IoError::Unknown {
-                    description: format!("CUDA memcpy_dtoh failed: {e}"),
-                    backtrace: BackTrace::capture(),
-                }
-            })
+            cudarc::driver::result::memcpy_dtoh_async(bytes, resource_ptr, stream)
+                .map_err(|error| super::status::io("cuMemcpyDtoHAsync", error))
         }
     } else {
         // As we've enforced that the strides are contiguous row-major,
@@ -702,10 +753,7 @@ pub(crate) unsafe fn write_to_cpu(
         unsafe {
             cuMemcpy2DAsync_v2(&cpy, stream)
                 .result()
-                .map_err(|e| IoError::Unknown {
-                    description: format!("CUDA 2D memcpy failed: {e}"),
-                    backtrace: BackTrace::capture(),
-                })
+                .map_err(|error| super::status::io("cuMemcpy2DAsync", error))
         }
     }
 }

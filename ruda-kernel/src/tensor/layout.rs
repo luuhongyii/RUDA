@@ -53,7 +53,11 @@ pub fn broadcast_shape<R: Runtime>(tensors: &[&RudaTensor<R>]) -> Shape {
     );
 
     let dims = (0..rank).map(|dim| {
-        let max = tensors.iter().map(|it| it.meta.shape()[dim]).max();
+        let max = tensors
+            .iter()
+            .map(|it| it.meta.shape()[dim])
+            .filter(|&size| size != 1)
+            .max();
         let max = max.unwrap_or(1);
         debug_assert!(
             tensors

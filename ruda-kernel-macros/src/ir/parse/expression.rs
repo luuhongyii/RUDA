@@ -391,6 +391,7 @@ impl Expression {
             Expr::Verbatim(verbatim) => Expression::Verbatim { tokens: verbatim },
             Expr::Reference(reference) => Expression::Reference {
                 inner: Box::new(Expression::from_expr(*reference.expr, context)?),
+                writable: reference.mutability.is_some(),
             },
             Expr::Closure(expr) => {
                 let (body, scope) = context.in_scope(|ctx| {

@@ -87,6 +87,11 @@ optional = true
 [build-dependencies.cc]
 version = "1.2.61"
 
+[dev-dependencies.ruda-tensor]
+path = "../ruda-tensor"
+default-features = false
+features = ["api-std"]
+
 [lints.clippy]
 
 [lints.rustdoc]

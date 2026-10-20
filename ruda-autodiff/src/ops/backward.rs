@@ -39,6 +39,7 @@ where
         self,
         nodes: [NodeRef; N],
     ) -> OpsPrep<Self, B, Self::State, C, N> {
+        crate::checkpoint::strategy::merged_policy::<C>(&nodes);
         let requirement = Requirement::from_nodes(&nodes);
         OpsPrep::new(
             nodes,

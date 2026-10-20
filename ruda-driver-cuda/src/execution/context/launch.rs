@@ -55,9 +55,7 @@ impl CudaContext {
         unsafe {
             cudarc::driver::result::launch_kernel(
                 kernel.func, dispatch_count, block, shared, stream.sys, bindings,
-            ).map_err(|err| LaunchError::Unknown {
-                reason: format!("{err:?}"), backtrace: BackTrace::capture(),
-            })?;
+            ).map_err(|err| crate::execution::status::launch("cuLaunchKernel", err))?;
         }
         Ok(())
     }

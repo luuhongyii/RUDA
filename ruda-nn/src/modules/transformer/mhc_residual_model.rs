@@ -59,7 +59,8 @@ impl<B: Backend, P: CompressedAttentionProjection<B>, F: MhcResidualBranchShape<
         assert_eq!(tokens.device(), self.embedding.weight.val().device(), "mHC packed token device differs");
         let weight = self.embedding.weight.val();
         let width = weight.dims()[1];
-        if length == 0 { return Tensor::zeros([0, width], (&weight.device(), weight.dtype())); }
+        if length == 0 { return Tensor::zeros([0, width], (&weight.device(), weight.dtype()))
+            .with_autodiff_context(weight.autodiff_context().merge(tokens.autodiff_context())); }
         self.embedding.forward(tokens.reshape([1, length])).reshape([length, width])
     }
 

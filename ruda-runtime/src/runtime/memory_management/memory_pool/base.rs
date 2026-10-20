@@ -2,8 +2,31 @@ use super::{ManagedMemoryBinding, ManagedMemoryDescriptor, ManagedMemoryHandle};
 use crate::runtime::{
     memory_management::MemoryUsage,
     server::IoError,
-    storage::{ComputeStorage, StorageHandle},
+    storage::{ComputeStorage, StorageHandle, StorageId, StorageUtilization},
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageMapping {
+    Eager,
+    Lazy,
+}
+
+impl PageMapping {
+    pub(crate) fn current() -> Self {
+        if crate::runtime::dry_run::dry_run() { Self::Lazy } else { Self::Eager }
+    }
+
+    pub(crate) fn allocate<Storage: ComputeStorage>(
+        self, storage: &mut Storage, size: u64,
+    ) -> Result<StorageHandle, IoError> {
+        match self {
+            Self::Eager => storage.alloc(size),
+            Self::Lazy => Ok(StorageHandle::new(StorageId::new(), StorageUtilization { offset: 0, size })),
+        }
+    }
+
+    pub(crate) fn is_mapped(self) -> bool { self == Self::Eager }
+}
 
 /// Declares how memory is allocated in a reusable pool.
 pub trait MemoryPool {
@@ -31,6 +54,11 @@ pub trait MemoryPool {
 
     /// Retrieves the slice for the binding.
     fn find(&self, binding: &ManagedMemoryBinding) -> Result<&Slice, IoError>;
+
+    /// Give a lazily reserved page real backing before resolving its resource.
+    fn materialize<Storage: ComputeStorage>(
+        &mut self, storage: &mut Storage, binding: &ManagedMemoryBinding,
+    ) -> Result<(), IoError>;
 
     /// Try to reserve a memory slice of the given size.
     ///
@@ -75,6 +103,8 @@ pub trait MemoryPool {
 #[derive(Debug)]
 /// Slice of data with its associated storage.
 pub(crate) struct Slice {
+    pub(crate) mapped: bool,
+    pub(crate) page: super::super::page_guard::PageRef,
     pub storage: StorageHandle,
     pub handle: ManagedMemoryHandle,
     pub padding: u64,
@@ -84,15 +114,27 @@ pub(crate) struct Slice {
 impl Slice {
     pub fn new(storage: StorageHandle, padding: u64) -> Self {
         Self {
+            mapped: true,
+            page: Default::default(),
             storage,
             handle: ManagedMemoryHandle::new(),
             padding,
             cursor: 0,
         }
     }
+    pub(crate) fn materialize<Storage: ComputeStorage>(
+        &mut self, storage: &mut Storage, allocation_size: u64,
+    ) -> Result<(), IoError> {
+        if !self.mapped {
+            let real = storage.alloc(allocation_size)?;
+            self.storage.id = real.id;
+            self.mapped = true;
+        }
+        Ok(())
+    }
     /// If the slice is free to be reused.
     pub(crate) fn is_free(&self) -> bool {
-        self.handle.is_free()
+        self.handle.is_free() && !self.page.guarded()
     }
 
     /// The total size of the slice including padding.

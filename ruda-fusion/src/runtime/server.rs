@@ -5,9 +5,9 @@ use crate::{
     stream::{MultiStream, OperationStreams, StreamId},
 };
 use ruda_tensor::{TensorData, backend::ExecutionError};
-use ruda_tensor::graph::{HandleContainer, OperationIr, TensorIr};
+use ruda_tensor::graph::{HandleContainer, OperationIr, TensorId, TensorIr};
 use ruda_core::{device::CommunicationId, stub::RwLock};
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 
 pub(crate) struct FusionUtilities {
     // Used in client using a downcast.
@@ -19,6 +19,8 @@ pub struct FusionServer<R: FusionRuntime> {
     streams: MultiStream<R>,
     pub(crate) handles: HandleContainer<R::FusionHandle>,
     pub(crate) utilities: Arc<FusionUtilities>,
+    pub(super) profile_windows: HashMap<u64, super::profile::Window>,
+    pub(super) profile_counter: u64,
 }
 
 impl<R> FusionServer<R>
@@ -30,6 +32,8 @@ where
             streams: MultiStream::new(device.clone()),
             handles: HandleContainer::new(),
             utilities: Arc::new(utilities),
+            profile_windows: HashMap::new(),
+            profile_counter: 0,
         }
     }
 
@@ -45,6 +49,23 @@ where
 
     pub fn drain_stream(&mut self, id: StreamId) {
         self.streams.drain(&mut self.handles, id)
+    }
+
+    pub(crate) fn discard_stream(&mut self, id: StreamId) {
+        self.streams.discard(&mut self.handles, id)
+    }
+
+    pub(crate) fn shutdown(&mut self) {
+        self.profile_windows.clear();
+        self.streams.drain_all(&mut self.handles);
+    }
+
+    pub(crate) fn tag_shared_view(&mut self, stream: StreamId, source: TensorId, destination: TensorId) {
+        if self.handles.get_handle_ref(&source).is_none() {
+            self.drain_stream(stream);
+        }
+        let handle = self.handles.get_handle_ref(&source).expect("Shared tensor is materialized");
+        self.handles.register_handle(destination, R::alias_handle(handle));
     }
 
     pub fn read_float<B>(&mut self, tensor: TensorIr, id: StreamId) -> B::FloatTensorPrimitive

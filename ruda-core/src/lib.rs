@@ -48,6 +48,10 @@ pub mod stream_id;
 #[cfg(feature = "cache")]
 pub mod cache;
 
+/// Named environments, typed persistence, bundles and execution records.
+#[cfg(feature = "environment")]
+pub mod environment;
+
 #[cfg(feature = "cache")]
 pub(crate) mod cache_file;
 
@@ -63,6 +67,9 @@ pub mod config;
 
 /// Module for profiling any executable part
 pub mod profile;
+
+/// Minimum compute and memory work of a problem.
+pub mod work;
 
 /// Useful when you need to read async data without having to decorate each function with async
 /// notation.
@@ -99,6 +106,9 @@ pub mod tensor;
 
 #[cfg(feature = "compiler")]
 pub mod compiler;
+/// Shared unrecoverable device-fault payload.
+#[cfg(feature = "compiler")]
+pub mod poison;
 
 #[cfg(feature = "compiler")]
 pub mod kernel;

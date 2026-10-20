@@ -57,6 +57,15 @@ pub enum SharedTensorAnalysis {
 }
 
 impl SharedTensors {
+    pub(crate) fn discard_stream(&mut self, id: StreamId) -> Vec<TensorId> {
+        let mut cleared = Vec::new();
+        for (tensor, shared) in &mut self.shared_tensors {
+            shared.drop(id);
+            if shared.streams.is_empty() { cleared.push(*tensor); }
+        }
+        cleared
+    }
+
     /// Function to call when a drop operation is registered on the given stream and tensor.
     pub fn on_drop(
         &mut self,

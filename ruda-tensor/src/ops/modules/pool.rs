@@ -47,12 +47,13 @@ pub(crate) fn max_pool3d_with_indices_from_2d<B: Backend>(input: FloatTensor<B>,
 
 pub(crate) fn max_pool3d_backward_from_indices<B: Backend>(input: FloatTensor<B>, grad: FloatTensor<B>,
     indices: IntTensor<B>) -> FloatTensor<B> {
+    let context = B::float_autodiff_context(&input).merge(B::float_autodiff_context(&grad));
     let [batch, channels, depth, height, width] = input.shape().dims();
     let volume = depth.checked_mul(height).and_then(|size| size.checked_mul(width)).expect("pooling volume overflow");
     let storage = input.dtype();
     let device = B::float_device(&input);
-    if volume == 0 { return B::float_zeros(Shape::new([batch, channels, depth, height, width]),
-        &device, storage.into()); }
+    if volume == 0 { return B::float_with_autodiff_context(B::float_zeros(Shape::new([batch, channels, depth, height, width]),
+        &device, storage.into()), context); }
     assert!(volume <= i64::MAX as usize, "pooling positions exceed I64");
     assert_eq!(indices.shape(), grad.shape(), "pooling gradient and positions differ");
     let [gb, gc, gd, gh, gw] = grad.shape().dims();
@@ -65,7 +66,7 @@ pub(crate) fn max_pool3d_backward_from_indices<B: Backend>(input: FloatTensor<B>
         B::int_greater_equal_elem(indices.clone(), (volume as i64).into(), bool_dtype));
     let grad = if grad.dtype() == compute.into() { grad } else { B::float_cast(grad, compute) };
     let values = B::float_mask_fill(B::float_reshape(grad, Shape::new([batch, channels, count])), invalid, 0f32.into());
-    let output = B::float_scatter_add(2, B::float_zeros(Shape::new([batch, channels, volume]), &device, compute),
+    let output = B::float_scatter_add(2, B::float_with_autodiff_context(B::float_zeros(Shape::new([batch, channels, volume]), &device, compute), context),
         B::int_clamp(indices, 0i64.into(), (volume as i64 - 1).into()), values);
     let output = if output.dtype() == storage { output } else { B::float_cast(output, storage.into()) };
     B::float_reshape(output, Shape::new([batch, channels, depth, height, width]))

@@ -40,7 +40,7 @@ fn tile<F:Float+RudaElement>(a:&Tensor<F>,b:&Tensor<F>,out:&mut Tensor<F>,m:u32,
         sync_ruda();
         let aa=cmma::Matrix::<F>::from_slice(cmma::MatrixIdent::A,16usize,16usize,16usize,cmma::MatrixLayout::RowMajor,&left.to_slice(),16u32);
         let bb=cmma::Matrix::<F>::from_slice(cmma::MatrixIdent::B,16usize,16usize,16usize,cmma::MatrixLayout::RowMajor,&right.to_slice(),16u32);
-        cmma::execute::<F,F,f32,f32>(&aa,&bb,&acc,&acc);sync_ruda();
+        cmma::execute::<F,F,f32,f32, _>(&aa,&bb,&acc,&acc);sync_ruda();
         if k-base<=16 {base=k;} else {base+=16;}
     }
     cmma::store(&mut result.to_slice_mut(),&acc,16,cmma::MatrixLayout::RowMajor);sync_ruda();

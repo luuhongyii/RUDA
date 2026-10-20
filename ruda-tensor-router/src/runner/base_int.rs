@@ -68,10 +68,7 @@ impl<B: BackendIr> Runner<B> {
                 let indices = handles.get_int_tensor::<B>(&desc.indices);
                 let value = handles.get_int_tensor::<B>(&desc.value);
 
-                let output = match desc.update {
-                    IndexingUpdateOp::Add => B::int_scatter_add(desc.dim, tensor, indices, value),
-                    _ => unimplemented!(),
-                };
+                let output = B::int_scatter(desc.dim, tensor, indices, value, desc.update);
                 handles.register_int_tensor::<B>(&desc.out.id, output);
             }
             BaseOperationIr::ScatterNd(desc) => {
@@ -101,10 +98,7 @@ impl<B: BackendIr> Runner<B> {
                 let indices = handles.get_int_tensor::<B>(&desc.indices);
                 let value = handles.get_int_tensor::<B>(&desc.value);
 
-                let output = match desc.update {
-                    IndexingUpdateOp::Add => B::int_select_add(tensor, desc.dim, indices, value),
-                    _ => unimplemented!(),
-                };
+                let output = B::int_select_assign(tensor, desc.dim, indices, value, desc.update);
                 handles.register_int_tensor::<B>(&desc.out.id, output);
             }
             BaseOperationIr::MaskWhere(desc) => {
@@ -144,7 +138,11 @@ impl<B: BackendIr> Runner<B> {
                 let output = B::int_cat(tensors, desc.dim);
                 handles.register_int_tensor::<B>(&desc.out.id, output);
             }
-            BaseOperationIr::Cast(_) => unreachable!(),
+            BaseOperationIr::Cast(desc) => {
+                let tensor = handles.get_int_tensor::<B>(&desc.input);
+                let output = B::int_cast(tensor, desc.out.dtype.into());
+                handles.register_int_tensor::<B>(&desc.out.id, output);
+            }
             BaseOperationIr::Empty(desc) => {
                 let shape = desc.out.shape.clone();
                 let output = B::int_empty(shape, &self.device, desc.out.dtype.into());

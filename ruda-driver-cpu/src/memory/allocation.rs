@@ -19,6 +19,17 @@ pub struct CpuAllocController {
 }
 
 impl AllocationController for CpuAllocController {
+    fn memory_with_policy(&self, _: ruda_core::bytes::AccessPolicy) -> Result<&[std::mem::MaybeUninit<u8>], ruda_core::bytes::AccessError> {
+        Ok(self.memory())
+    }
+
+    unsafe fn memory_mut_with_policy(&mut self, policy: ruda_core::bytes::AccessPolicy) -> Result<&mut [std::mem::MaybeUninit<u8>], ruda_core::bytes::AccessError> {
+        if !policy.copy_allowed() && matches!(&self.backing, ReadbackBacking::Shared(_)) {
+            return Err(ruda_core::bytes::AccessError::WouldCopy);
+        }
+        Ok(unsafe { self.memory_mut() })
+    }
+
     fn alloc_align(&self) -> usize { align_of::<u8>() }
 
     fn property(&self) -> AllocationProperty { AllocationProperty::Other }
@@ -86,7 +97,10 @@ mod tests {
         let mut first = unsafe { Bytes::from_controller(Box::new(controller()), 4) };
         let second = unsafe { Bytes::from_controller(Box::new(controller()), 4) };
         storage.dealloc(handle.id);
+        assert_eq!(first.read(ruda_core::bytes::Reader::new().no_copy()).unwrap(), [1, 2, 3, 4]);
+        assert!(matches!(first.write(ruda_core::bytes::Writer::new().no_copy()), Err(ruda_core::bytes::AccessError::WouldCopy)));
         first[0] = 99;
+        assert!(first.write(ruda_core::bytes::Writer::new().no_copy()).is_ok());
         assert_eq!(&first[..], &[99, 2, 3, 4]);
         assert_eq!(&second[..], &[1, 2, 3, 4]);
         assert_eq!(&resource.read()[..], &[1, 2, 3, 4]);

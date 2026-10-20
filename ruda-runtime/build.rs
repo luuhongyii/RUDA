@@ -14,6 +14,8 @@ fn main() {
         // Some features like autotune caching, compilation caching, and config loading
         // require std with OS-level filesystem and environment access.
         std_io: { all(feature = "runtime-std", any(target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android")) },
+        persistence: { feature = "runtime-persistence" },
+        serializable: { any(std_io, persistence) },
         exclusive_memory_only: { any(feature = "runtime-exclusive-memory-only", target_family = "wasm") },
         multi_threading: { all(feature = "runtime-std", not(target_family = "wasm")) },
     }

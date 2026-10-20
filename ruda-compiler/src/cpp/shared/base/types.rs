@@ -226,6 +226,10 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
     }
 
     pub(super) fn compile_matrix(&mut self, matrix: gpu::Matrix) -> Fragment<D> {
+        assert_eq!(
+            matrix.scope, gpu::MatrixScope::Plane,
+            "Workgroup cooperative matrices are not supported by this C++ backend",
+        );
         Fragment {
             ident: self.compile_matrix_ident(matrix.ident),
             m: matrix.m as u32,

@@ -15,6 +15,12 @@ use crate::{WgpuServer, WgslCompiler};
 
 use ruda_compiler::wgsl;
 
+#[derive(Debug)]
+pub struct PreparedPipeline {
+    pub pipeline: std::sync::Arc<wgpu::ComputePipeline>,
+    pub io: Option<ruda_core::kernel::KernelIo>,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum AutoCompiler {
@@ -115,7 +121,13 @@ impl Compiler for AutoCompiler {
             AutoCompiler::Msl(msl_compiler) => {
                 // override compilation options with cpp compiler options for metal
                 use ruda_compiler::cpp;
-                let compilation_options = ruda_compiler::cpp::shared::CompilationOptions::default();
+                let compilation_options = cpp::shared::CompilationOptions {
+                    supports_features: cpp::shared::CppSupportedFeatures {
+                        device_memory_scope: compilation_options.supports_msl_device_memory_scope,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
                 Compiler::compile(msl_compiler, kernel, &compilation_options, mode, addr_type)?
                     .into()
             }
@@ -134,6 +146,16 @@ impl Compiler for AutoCompiler {
         }
     }
 
+    fn buffer_io(&self, repr: &Self::Representation) -> Option<ruda_core::kernel::KernelIo> {
+        match repr {
+            AutoRepresentation::Wgsl(repr) => Some(repr.io.clone()),
+            #[cfg(feature = "spirv")]
+            AutoRepresentation::SpirV(repr) => repr.io.clone(),
+            #[cfg(feature = "msl")]
+            AutoRepresentation::Msl(repr) => Some(repr.io.clone()),
+        }
+    }
+
     fn extension(&self) -> &'static str {
         match self {
             AutoCompiler::Wgsl(_) => "wgsl",
@@ -146,6 +168,22 @@ impl Compiler for AutoCompiler {
 }
 
 impl AutoCompiler {
+    pub fn compile_recorded(
+        &mut self,
+        server: &mut WgpuServer,
+        kernel: <WgpuServer as ComputeServer>::Kernel,
+        mode: ExecutionMode,
+        recording: &mut ruda::runtime::compiler::CompilationRecording,
+    ) -> Result<CompiledKernel<Self>, CompilationError> {
+        match self {
+            #[cfg(feature = "spirv")]
+            AutoCompiler::SpirV(_) => crate::vulkan::compile_recorded(self, server, kernel, mode, recording),
+            _ => kernel.compile_recorded(
+                self, &server.compilation_options, mode, kernel.address_type(), recording,
+            ),
+        }
+    }
+
     pub fn compile(
         &mut self,
         server: &mut WgpuServer,

@@ -49,6 +49,18 @@ fn search_loop(opt: &mut Optimizer) -> bool {
 
         for idx in ops {
             let op = opt.program[node].ops.borrow()[idx].clone();
+            let same_matrix_descriptor = match &op.operation {
+                Operation::CoopMma(CoopMma::Cast { input }) => {
+                    match (input.kind, op.out().kind) {
+                        (
+                            ruda_core::ir::VariableKind::Matrix { mat: source, .. },
+                            ruda_core::ir::VariableKind::Matrix { mat: target, .. },
+                        ) => source == target,
+                        _ => false,
+                    }
+                }
+                _ => true,
+            };
             match op.operation {
                 Operation::Copy(input)
                 | Operation::Operator(Operator::Cast(UnaryOperator { input }))
@@ -56,7 +68,8 @@ fn search_loop(opt: &mut Optimizer) -> bool {
                 | Operation::CoopMma(CoopMma::Cast { input })
                     if (input.is_immutable() || input.is_array())
                         && (op.out().is_immutable() || op.out().is_array())
-                        && input.ty == op.ty() =>
+                        && input.ty == op.ty()
+                        && same_matrix_descriptor =>
                 {
                     opt.visit_all(
                         |_, var| {

@@ -1,7 +1,7 @@
 use crate::tensor::Ordered;
 
 use crate::api::backend::Backend;
-use crate::api::{BasicOps, Tensor};
+use crate::api::{AsIndex, BasicOps, Tensor};
 use crate::api::{ElementConversion, Numeric};
 #[allow(unused_imports)]
 use num_traits::float::Float;
@@ -146,10 +146,27 @@ pub fn lp_norm<B: Backend, const D: usize>(x: Tensor<B, D>, p: f64, dim: usize) 
         0.0 => l0_norm(x, dim),
         1.0 => l1_norm(x, dim),
         2.0 => l2_norm(x, dim),
-        p if is_even_integer(p) => lp_signed_norm(x, p as u32, dim),
+        p if is_even_integer(p) => lp_signed_norm(x, p as i32, dim),
         f64::INFINITY => max_abs_norm(x, dim),
         f64::NEG_INFINITY => min_abs_norm(x, dim),
         _ => lp_norm_base(x, p, dim),
+    }
+}
+
+/// Compute an Lp norm over signed axes, retaining reduced dimensions.
+pub fn lp_norm_dims<B: Backend, const D: usize, I: AsIndex>(
+    x: Tensor<B, D>, p: f64, dims: &[I],
+) -> Tensor<B, D> {
+    let dims: alloc::vec::Vec<_> = dims.iter().map(|&axis| axis.expect_dim_index(D)).collect();
+    match p {
+        0.0 => x.zeros_like().mask_fill(x.not_equal_elem(0), 1).sum_dims(&dims),
+        1.0 => x.abs().sum_dims(&dims),
+        2.0 => x.square().sum_dims(&dims).sqrt(),
+        f64::INFINITY => x.abs().max_dims(&dims),
+        f64::NEG_INFINITY => x.abs().min_dims(&dims),
+        p if p >= i32::MIN as f64 && p <= i32::MAX as f64 && p.fract() == 0.0 && (p as i32) % 2 == 0 =>
+            x.powi_scalar(p as i32).sum_dims(&dims).powf_scalar(1.0 / p),
+        _ => x.abs().powf_scalar(p).sum_dims(&dims).powf_scalar(1.0 / p),
     }
 }
 
@@ -230,13 +247,13 @@ pub fn l2_norm<B: Backend, const D: usize>(x: Tensor<B, D>, dim: usize) -> Tenso
 }
 
 fn is_even_integer(x: f64) -> bool {
-    x.fract() == 0.0 && (x as i64) % 2 == 0
+    x >= i32::MIN as f64 && x <= i32::MAX as f64 && x.fract() == 0.0 && (x as i32) % 2 == 0
 }
 
 /// Computes ``L(2*n)`` for even integer ``n``.
 ///
 /// This lets us skip the abs.
-fn lp_signed_norm<B: Backend, const D: usize>(x: Tensor<B, D>, p: u32, dim: usize) -> Tensor<B, D> {
+fn lp_signed_norm<B: Backend, const D: usize>(x: Tensor<B, D>, p: i32, dim: usize) -> Tensor<B, D> {
     x.powi_scalar(p).sum_dim(dim).powf_scalar(1. / (p as f64))
 }
 

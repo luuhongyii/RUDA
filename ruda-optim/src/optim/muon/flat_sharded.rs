@@ -125,6 +125,10 @@ impl<B:Backend> MuonFlatShardedState<B> {
     }
 }
 impl<B:Backend> Record<B> for MuonFlatShardedState<B> {
+    fn map_parameters<M: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut M) -> Self {
+        self.local = self.local.map_parameters(mapper);
+        self
+    }
     type Item<P:PrecisionSettings>=(u32,u32,u32,MuonFlatShardLayout,DType,<MuonState<B,1> as Record<B>>::Item<P>);
     fn into_item<P:PrecisionSettings>(self) -> Self::Item<P> {
         let dtype=self.momentum().dtype();(self.version,self.rank,self.world,self.layout,dtype,self.local.into_item::<P>())

@@ -444,6 +444,9 @@ impl TraceOperationFuser {
             FloatOperationIr::Powf(desc) => self.fuse_binary_ops(desc, |lhs, rhs, out| {
                 FuseOp::Powf(BinaryFuseArgs { lhs, rhs, out })
             }),
+            FloatOperationIr::Hypot(desc) => self.fuse_binary_ops(desc, |lhs, rhs, out| {
+                FuseOp::Hypot(BinaryFuseArgs { lhs, rhs, out })
+            }),
             FloatOperationIr::Log1p(desc) => self.fuse_unary_ops(desc, |input, out| {
                 FuseOp::Log1p(UnaryFuseArgs { input, out })
             }),

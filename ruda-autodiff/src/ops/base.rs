@@ -88,11 +88,12 @@ where
         self,
         retro_forward: R,
     ) -> OpsPrep<BO, B, S, C, N, MemoryBoundRetroForward> {
+        let policy = crate::checkpoint::strategy::merged_policy::<C>(&self.nodes);
         OpsPrep::new(
             self.nodes,
             self.requirement,
             self.backward,
-            C::compute_property(retro_forward),
+            crate::checkpoint::strategy::compute_property::<C, R>(policy, retro_forward),
             self.checkpointer_builder,
         )
     }
@@ -110,7 +111,8 @@ where
         B2: Backend,
         A: IntoIterator<Item = &'a AutodiffTensor<B2>>,
     {
-        let compute_property = match C::checkpoint_parents(parents, &mut self.checkpointer_builder)
+        let policy = crate::checkpoint::strategy::merged_policy::<C>(&self.nodes);
+        let compute_property = match crate::checkpoint::strategy::checkpoint_parents::<C, B2, A>(policy, parents, &mut self.checkpointer_builder)
         {
             Ok(..) => self.compute_property,
             Err(..) => ComputingProperty::ComputeBound,
@@ -181,6 +183,7 @@ where
             self.requirement,
             self.compute_property,
         );
+        if !output.node.autodiff_enabled { return output; }
         let parents = self.nodes.map(|node| node.clone_if_require_grad());
         let ops = Ops::new(parents, output.node.clone(), ());
 
@@ -281,6 +284,9 @@ where
     fn distributed_params(&self) -> Option<DistributedParams> {
         self.ops.node.distributed_params.clone()
     }
+
+    #[cfg(feature = "distributed")]
+    fn distributed_backend(&self) -> Option<core::any::TypeId> { self.ops.node.native_backend }
 }
 
 #[derive(new, Debug)]
@@ -308,6 +314,9 @@ impl<const N: usize> Step for UntrackedOpsStep<N> {
     fn distributed_params(&self) -> Option<DistributedParams> {
         self.ops.node.distributed_params.clone()
     }
+
+    #[cfg(feature = "distributed")]
+    fn distributed_backend(&self) -> Option<core::any::TypeId> { self.ops.node.native_backend }
 }
 
 /// Make sure the grad tensor has the given shape.

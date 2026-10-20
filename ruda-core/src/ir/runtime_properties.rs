@@ -35,13 +35,13 @@ pub struct MmaProperties {
 
 #[derive(Clone)]
 pub struct ContiguousElements {
-    inner: alloc::rc::Rc<dyn Fn(MatrixIdent, Matrix) -> VectorSize>,
+    inner: alloc::sync::Arc<dyn Fn(MatrixIdent, Matrix) -> VectorSize + Send + Sync>,
 }
 
 impl ContiguousElements {
-    pub fn new(func: impl Fn(MatrixIdent, Matrix) -> VectorSize + 'static) -> Self {
+    pub fn new(func: impl Fn(MatrixIdent, Matrix) -> VectorSize + Send + Sync + 'static) -> Self {
         Self {
-            inner: alloc::rc::Rc::new(func),
+            inner: alloc::sync::Arc::new(func),
         }
     }
 
@@ -53,7 +53,7 @@ impl ContiguousElements {
 impl Default for ContiguousElements {
     fn default() -> Self {
         Self {
-            inner: alloc::rc::Rc::new(|_, _| 2),
+            inner: alloc::sync::Arc::new(|_, _| 2),
         }
     }
 }
@@ -67,7 +67,7 @@ impl core::fmt::Debug for ContiguousElements {
 impl Eq for ContiguousElements {}
 impl PartialEq for ContiguousElements {
     fn eq(&self, other: &Self) -> bool {
-        alloc::rc::Rc::ptr_eq(&self.inner, &other.inner)
+        alloc::sync::Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 

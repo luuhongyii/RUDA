@@ -1,4 +1,5 @@
 use super::*;
+use ruda_core::ir::{IntKind, UIntKind};
 
 impl DeviceService for CudaServer {
     fn init(device_id: ruda_core::device::DeviceId) -> Self {
@@ -57,14 +58,13 @@ impl DeviceService for CudaServer {
                 "cuDeviceTotalMem_v2 failed; total memory is unknown");
             bytes as u64
         };
-        let mem_properties = MemoryDeviceProperties {
-            max_page_size: max_memory / 4,
-            alignment: mem_alignment as u64,
-        };
+        let mem_properties = MemoryDeviceProperties::new(max_memory / 4, mem_alignment as u64)
+            .with_max_memory(max_memory);
 
         let mut comp_opts = CompilationOptions {
             supports_features: CppSupportedFeatures {
                 fast_math: true,
+                device_memory_scope: true,
                 ..Default::default()
             },
             ..Default::default()
@@ -105,6 +105,7 @@ impl DeviceService for CudaServer {
 
             HardwareProperties {
                 load_width: 128,
+                vector_register_count: None,
                 plane_size_min: warp_size,
                 plane_size_max: warp_size,
                 max_bindings: crate::device::CUDA_MAX_BINDINGS,
@@ -120,32 +121,52 @@ impl DeviceService for CudaServer {
                     Some(8)
                 },
                 num_cpu_cores: None,
+                last_level_cache_size: None,
                 max_vector_size: VectorSize::MAX,
+                ruda_mma_reserved_shared_memory: 0,
             }
         };
 
+        let compiler_backend = crate::compiler_backend::CompilerBackend::from_environment()
+            .expect("invalid Ruda CUDA compiler configuration");
+        let mut identity = super::identity::probe(device_ptr);
+        identity.fingerprint = compiler_backend.cache_namespace(arch_version);
         let mut device_props = DeviceProperties::new(
             Default::default(),
             mem_properties.clone(),
             hardware_props,
-            TimingMethod::System,
-        );
+            TimingMethod::Device,
+        ).with_identity(identity);
         register_supported_types(&mut device_props);
+        for elem in [
+            ElemType::Int(IntKind::I32), ElemType::Int(IntKind::I64),
+            ElemType::UInt(UIntKind::U32), ElemType::UInt(UIntKind::U64),
+        ] {
+            device_props.register_atomic_type_usage(
+                Type::new(StorageType::Atomic(elem)), AtomicUsage::Exchange,
+            );
+            if elem.size() <= 4 || arch_version >= 32 {
+                device_props.register_atomic_type_usage(Type::new(StorageType::Atomic(elem)), AtomicUsage::MinMax);
+            }
+        }
+        device_props.register_atomic_type_usage(
+            Type::new(StorageType::Atomic(ElemType::Float(FloatKind::F32))), AtomicUsage::Exchange,
+        );
         device_props.register_type_usage(ElemType::Float(FloatKind::TF32), TypeUsage::Conversion);
         if arch_version >= 60 {
             device_props.register_atomic_type_usage(
                 Type::new(StorageType::Atomic(ElemType::Float(FloatKind::F64))),
-                AtomicUsage::Add | AtomicUsage::LoadStore,
+                AtomicUsage::Add | AtomicUsage::LoadStore | AtomicUsage::Exchange,
             );
         }
         if arch_version >= 70 {
             device_props.register_atomic_type_usage(
                 Type::new(StorageType::Atomic(ElemType::Float(FloatKind::F16))),
-                AtomicUsage::Add | AtomicUsage::LoadStore,
+                AtomicUsage::Add | AtomicUsage::LoadStore | AtomicUsage::Exchange,
             );
             device_props.register_atomic_type_usage(
                 Type::new(StorageType::Atomic(ElemType::Float(FloatKind::F16))).with_vector_size(2),
-                AtomicUsage::Add | AtomicUsage::LoadStore,
+                AtomicUsage::Add | AtomicUsage::LoadStore | AtomicUsage::Exchange,
             );
             device_props.register_semantic_type(SemanticType::Pipeline);
             device_props
@@ -174,11 +195,6 @@ impl DeviceService for CudaServer {
             device_props.features.copy_async = true;
         }
 
-        // NOTE: I commented that since I observed synchronisation issues with atomic add for bf16.
-        // if arch.get_version() >= 80 {
-        //     device_props.register_feature(Feature::Type(Elem::AtomicFloat(FloatKind::BF16)));
-        // }
-
         if arch_version >= 89 {
             device_props.register_type_usage(
                 ElemType::Float(FloatKind::E4M3),
@@ -190,6 +206,21 @@ impl DeviceService for CudaServer {
             );
         }
         if arch_version >= 90 {
+            device_props.register_atomic_type_usage(
+                Type::new(StorageType::Atomic(ElemType::Float(FloatKind::BF16))),
+                AtomicUsage::Add | AtomicUsage::LoadStore | AtomicUsage::Exchange,
+            );
+            for kind in [FloatKind::F16, FloatKind::BF16] {
+                for width in [2, 4, 8] {
+                    let ty = Type::new(StorageType::Atomic(ElemType::Float(kind))).with_vector_size(width);
+                    device_props.register_atomic_type_usage(
+                        ty, AtomicUsage::Add | AtomicUsage::LoadStore | AtomicUsage::Exchange,
+                    );
+                    if width >= 4 {
+                        device_props.register_atomic_type_usage(ty, AtomicUsage::MinMax);
+                    }
+                }
+            }
             device_props.features.tma.insert(Tma::Base);
             device_props.register_semantic_type(SemanticType::TensorMap);
             device_props.features.ruda_cluster = true;
@@ -207,11 +238,11 @@ impl DeviceService for CudaServer {
                 .insert(ElemType::Float(FloatKind::BF16).into());
             device_props.register_atomic_type_usage(
                 Type::new(StorageType::Atomic(ElemType::Float(FloatKind::F32))).with_vector_size(2),
-                AtomicUsage::LoadStore | AtomicUsage::Add,
+                AtomicUsage::LoadStore | AtomicUsage::Add | AtomicUsage::Exchange,
             );
             device_props.register_atomic_type_usage(
                 Type::new(StorageType::Atomic(ElemType::Float(FloatKind::F32))).with_vector_size(4),
-                AtomicUsage::LoadStore | AtomicUsage::Add,
+                AtomicUsage::LoadStore | AtomicUsage::Add | AtomicUsage::Exchange,
             );
         }
 
@@ -253,6 +284,7 @@ impl DeviceService for CudaServer {
 
         device_props.features.memory_reinterpret = true;
         device_props.features.alignment = true;
+        device_props.features.device_memory_scope = true;
         device_props.features.plane.insert(Plane::Ops);
         device_props.features.plane.insert(Plane::Packed);
         device_props
@@ -264,10 +296,12 @@ impl DeviceService for CudaServer {
         register_mma_features(supported_mma_combinations, &mut device_props);
         register_scaled_mma_features(supported_scaled_mma_combinations, &mut device_props);
 
-        let cuda_ctx = CudaContext::new(comp_opts, device_props.clone(), ctx, arch);
+        let cuda_ctx = CudaContext::new(comp_opts, device_props.clone(), ctx, arch, compiler_backend);
         let logger = Arc::new(ServerLogger::default());
         let policy = PitchedMemoryLayoutPolicy::new(device_props.memory.alignment as usize);
-        let utilities = ServerUtilities::new(device_props, logger, (), policy);
+        let utilities = ServerUtilities::new(
+            ruda_core::device::ServiceId::of::<Self>(device_id), device_props, logger, (), policy,
+        );
 
         CudaServer::new(
             cuda_ctx,
@@ -281,5 +315,9 @@ impl DeviceService for CudaServer {
 
     fn utilities(&self) -> ServerUtilitiesHandle {
         self.utilities() as ServerUtilitiesHandle
+    }
+
+    fn shutdown(&mut self) {
+        self.finish_for_shutdown();
     }
 }

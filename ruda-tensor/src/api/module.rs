@@ -19,6 +19,63 @@ pub use super::spatial_pool::{
     max_pool3d_with_indices_padded,
 };
 
+/// Normalize channels using explicitly supplied statistics, without updating them.
+pub fn batch_norm<B: Backend, const D: usize>(
+    input: Tensor<B, D>, gamma: Tensor<B, 1>, beta: Tensor<B, 1>,
+    mean: Tensor<B, 1>, variance: Tensor<B, 1>, epsilon: f64,
+) -> Tensor<B, D> {
+    assert!(D >= 2, "batch norm requires an input rank of at least 2");
+    let channels = input.dims()[1];
+    assert_eq!(gamma.dims(), [channels], "invalid batch norm gamma shape");
+    assert_eq!(beta.dims(), [channels], "invalid batch norm beta shape");
+    assert_eq!(mean.dims(), [channels], "invalid batch norm mean shape");
+    assert_eq!(variance.dims(), [channels], "invalid batch norm variance shape");
+    Tensor::new(TensorPrimitive::Float(B::batch_norm(
+        input.into_primitive().tensor(), gamma.into_primitive().tensor(),
+        beta.into_primitive().tensor(), mean.into_primitive().tensor(),
+        variance.into_primitive().tensor(), epsilon,
+    )))
+}
+
+/// Batch-normalized output and statistics; statistics are detached on autodiff backends.
+pub struct BatchNormTrainOutput<B: Backend, const D: usize> {
+    /// Normalized input with its original shape.
+    pub output: Tensor<B, D>,
+    /// Per-channel batch mean.
+    pub mean: Tensor<B, 1>,
+    /// Per-channel biased batch variance, excluding epsilon.
+    pub variance: Tensor<B, 1>,
+}
+
+/// Normalize using batch statistics without updating running statistics or enabling tracking.
+pub fn batch_norm_train<B: Backend, const D: usize>(
+    input: Tensor<B, D>, gamma: Tensor<B, 1>, beta: Tensor<B, 1>, epsilon: f64,
+) -> BatchNormTrainOutput<B, D> {
+    assert!(D >= 2, "batch norm requires an input rank of at least 2");
+    let channels = input.dims()[1];
+    assert_eq!(gamma.dims(), [channels], "invalid batch norm gamma shape");
+    assert_eq!(beta.dims(), [channels], "invalid batch norm beta shape");
+    let result = B::batch_norm_train(
+        input.into_primitive().tensor(), gamma.into_primitive().tensor(),
+        beta.into_primitive().tensor(), epsilon,
+    );
+    BatchNormTrainOutput {
+        output: Tensor::new(TensorPrimitive::Float(result.output)),
+        mean: Tensor::new(TensorPrimitive::Float(result.mean)),
+        variance: Tensor::new(TensorPrimitive::Float(result.variance)),
+    }
+}
+
+/// Apply layer normalization over the last axis.
+pub fn layer_norm<B: Backend, const D: usize>(
+    input: Tensor<B, D>, gamma: Tensor<B, 1>, beta: Option<Tensor<B, 1>>, epsilon: f64,
+) -> Tensor<B, D> {
+    Tensor::new(TensorPrimitive::Float(B::layer_norm(
+        input.into_primitive().tensor(), gamma.into_primitive().tensor(),
+        beta.map(|value| value.into_primitive().tensor()), epsilon,
+    )))
+}
+
 /// Last-axis RMSNorm with working arithmetic and one output-storage cast.
 /// F32/F16/BF16 activations use FP32 statistics; F64 activations retain FP64.
 pub fn rms_norm<B: Backend, const D: usize>(input: Tensor<B, D>, gamma: Tensor<B, 1>, epsilon: f64) -> Tensor<B, D> {
@@ -402,6 +459,16 @@ where
         x.primitive.tensor(),
         kernel_size,
         options,
+    )))
+}
+
+/// Fold `[batch, channels * kernel_area, blocks]` into an NCHW tensor, summing overlaps.
+/// Uses the stride, padding and dilation of the matching [`unfold4d`].
+pub fn fold4d<B: Backend>(
+    x: Tensor<B, 3>, output_size: [usize; 2], kernel_size: [usize; 2], options: UnfoldOptions,
+) -> Tensor<B, 4> {
+    Tensor::new(TensorPrimitive::Float(B::fold4d(
+        x.primitive.tensor(), output_size, kernel_size, options,
     )))
 }
 

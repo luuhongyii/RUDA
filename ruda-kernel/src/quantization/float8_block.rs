@@ -395,7 +395,7 @@ fn carrier_block(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Array<f32>,
             sync_ruda();
             let aa = cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::A, 16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor, &left.to_slice(), 16u32);
             let bb = cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::B, 16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor, &right.to_slice(), 16u32);
-            cmma::execute::<f16, f16, f32, f32>(&aa, &bb, &acc, &acc); sync_ruda();
+            cmma::execute::<f16, f16, f32, f32, _>(&aa, &bb, &acc, &acc); sync_ruda();
         }
         cmma::store(&mut result.to_slice_mut(), &acc, 16, cmma::MatrixLayout::RowMajor); sync_ruda();
         #[unroll] for i in 0usize..8usize {

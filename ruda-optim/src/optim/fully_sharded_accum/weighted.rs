@@ -37,6 +37,11 @@ pub struct FullyShardedWeightedGradientsRecord<B:Backend> {
     global_weight:Tensor<B,1>,
 }
 impl<B:Backend> Record<B> for FullyShardedWeightedGradientsRecord<B> {
+    fn map_parameters<M: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut M) -> Self {
+        self.window = Record::<B>::map_parameters(self.window, mapper);
+        self.global_weight = mapper.map_tensor(self.global_weight);
+        self
+    }
     type Item<S:PrecisionSettings>=(<FullyShardedGradientsRecord as Record<B>>::Item<S>,TensorData);
     fn into_item<S:PrecisionSettings>(self) -> Self::Item<S> {
         (<FullyShardedGradientsRecord as Record<B>>::into_item::<S>(self.window),self.global_weight.into_data())

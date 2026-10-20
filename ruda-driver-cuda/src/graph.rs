@@ -279,6 +279,7 @@ impl CudaGraph {
     fn update_many(&self, nodes: Vec<(usize, PreparedKernel<CudaRuntime>)>, replay: bool)
         -> Result<(), ServerError>
     {
+        let replay = replay && !ruda::runtime::dry_run::launch_mode().is_skipped();
         let id = self.id.ok_or_else(|| error("graph is already closed"))?;
         let indices: Vec<_> = nodes.iter().map(|(index, _)| *index).collect();
         crate::execution::graph_batch::check_indices::<()>(self.nodes, &indices)
@@ -301,6 +302,7 @@ impl CudaGraph {
     fn update(&self, index: usize, node: PreparedKernel<CudaRuntime>, replay: bool)
         -> Result<(), ServerError>
     {
+        let replay = replay && !ruda::runtime::dry_run::launch_mode().is_skipped();
         let id = self.id.ok_or_else(|| error("graph is already closed"))?;
         if index >= self.nodes { return Err(error("graph node out of range")); }
         let scalar_words = node.scalar_words();
@@ -323,6 +325,9 @@ impl CudaGraph {
     }
     fn command(&self, operation: GraphCommand) -> Result<bool, ServerError> {
         let id = self.id.ok_or_else(|| error("graph is already closed"))?;
+        if matches!(operation, GraphCommand::Replay) && ruda::runtime::dry_run::launch_mode().is_skipped() {
+            return Ok(true);
+        }
         DeviceHandle::<CudaServer>::new(self.client.device_id())
             .submit_blocking(move |server| server.graph_command(id, operation))
             .map_err(|e| error(format!("graph device queue: {e:?}")))?

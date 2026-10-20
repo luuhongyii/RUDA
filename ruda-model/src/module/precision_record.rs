@@ -109,13 +109,13 @@ impl<B: Backend> ModuleVisitor<B> for Capture {
     }
 }
 
-struct Apply {
+struct Apply<B: Backend> {
     targets: HashMap<(ParamId, bool), DType>,
     seen: HashSet<(ParamId, bool)>,
-    mappers: HashMap<FloatDType, DtypeMapper>,
+    mappers: HashMap<FloatDType, DtypeMapper<B>>,
     error: Option<RecorderError>,
 }
-impl<B: Backend> ModuleMapper<B> for Apply {
+impl<B: Backend> ModuleMapper<B> for Apply<B> {
     fn map_float<const D: usize>(&mut self, param: Param<Tensor<B, D>>) -> Param<Tensor<B, D>> {
         let key = (param.id, param.val().is_require_grad());
         let Some(&dtype) = self.targets.get(&key) else {
@@ -134,6 +134,6 @@ impl<B: Backend> ModuleMapper<B> for Apply {
             .mappers
             .entry(dtype)
             .or_insert_with(|| DtypeMapper::new(dtype));
-        <DtypeMapper as ModuleMapper<B>>::map_float(mapper, param)
+        <DtypeMapper<B> as ModuleMapper<B>>::map_float(mapper, param)
     }
 }

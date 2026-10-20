@@ -115,6 +115,7 @@ impl RudaTypeStruct {
 
     fn register_impl(&self) -> proc_macro2::TokenStream {
         let kernel_launcher = prelude_type("KernelLauncher");
+        let launch_marker = prelude_type("LaunchMarker");
         let launch_arg = prelude_type("LaunchArg");
         let compilation_ty = self.compilation_ty_ident();
         let fields =
@@ -126,7 +127,7 @@ impl RudaTypeStruct {
             );
 
         quote! {
-            fn register<R: Runtime>(arg: Self::RuntimeArg<R>, launcher: &mut #kernel_launcher<R>) -> Self::CompilationArg {
+            fn register<R: #launch_marker>(arg: Self::RuntimeArg<R>, launcher: &mut #kernel_launcher<R>) -> Self::CompilationArg {
                 #compilation_ty {
                     #(#fields),*
                 }

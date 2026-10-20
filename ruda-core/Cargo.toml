@@ -32,13 +32,15 @@ communication = ["dep:ahash"]
 argument-layout = ["compiler", "tensor"]
 cache = [ "std", "serde_json", "dirs", "sanitize-filename",]
 compilation-cache = [ "cache", "dep:ciborium",]
+environment = ["serde", "dep:serde_json", "dep:ciborium"]
+environment-persistence = ["environment", "std", "dep:turso", "dep:async-channel", "dep:web-sys", "dep:js-sys", "dep:wasm-bindgen"]
 default = [ "std",]
 fp4 = [ "float4",]
 fp8 = [ "float8",]
 hash = [ "xxhash-rust",]
 serde = [ "serde_bytes",]
 shared-bytes = [ "dep:bytes",]
-std = [ "rand/std", "futures-lite", "rand/thread_rng", "serde_json?/std", "parking_lot", "backtrace", "oneshot/std", "dep:toml",]
+std = [ "rand/std", "futures-lite", "rand/thread_rng", "serde_json?/std", "ciborium?/std", "async-channel?/std", "parking_lot", "backtrace", "oneshot/std", "dep:toml", "dep:etcetera",]
 tracing = [ "dep:tracing",]
 ir = [ "fp4", "fp8", "derive_more/from", "dep:ruda-ir-macros", "dep:enumset", "dep:float-ord", "dep:fnv", "dep:foldhash", "dep:portable-atomic", "dep:variadics_please",]
 ir-std = [ "ir",]
@@ -77,9 +79,35 @@ version = "1.0.0"
 
 [dependencies.ciborium]
 version = "0.2.2"
-features = [ "std",]
 optional = true
 default-features = false
+
+[dependencies.turso]
+version = "0.8.2"
+optional = true
+default-features = false
+
+[dependencies.async-channel]
+version = "2.3.0"
+optional = true
+default-features = false
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies.etcetera]
+version = "0.11.0"
+optional = true
+
+[target.'cfg(target_family = "wasm")'.dependencies.js-sys]
+version = "0.3"
+optional = true
+
+[target.'cfg(target_family = "wasm")'.dependencies.wasm-bindgen]
+version = "0.2"
+optional = true
+
+[target.'cfg(target_family = "wasm")'.dependencies.web-sys]
+version = "0.3"
+optional = true
+features = ["FileSystemDirectoryHandle", "FileSystemFileHandle", "FileSystemGetFileOptions", "FileSystemReadWriteOptions", "FileSystemSyncAccessHandle"]
 
 [dependencies.derive-new]
 version = "0.7.0"

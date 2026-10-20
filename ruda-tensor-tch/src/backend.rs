@@ -122,6 +122,10 @@ impl<E: TchElement> BackendTypes for LibTorch<E> {
 }
 
 impl<E: TchElement> Backend for LibTorch<E> {
+    fn flush(_device: &Self::Device) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
     fn seed(_device: &Self::Device, seed: u64) {
         tch::manual_seed(seed as i64);
     }

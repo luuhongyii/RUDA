@@ -15,6 +15,19 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
         self.capabilities.insert(Capability::CooperativeMatrixKHR);
         let out = out.unwrap();
         match cmma {
+            CoopMma::CreateTensorLayout { shape, strides } => {
+                self.compile_tensor_layout(out, shape, strides);
+            }
+            CoopMma::CreateTensorView => self.compile_tensor_view(out),
+            CoopMma::SliceTensorLayout { layout, offsets, shape } => {
+                self.compile_tensor_slice(out, layout, offsets, shape);
+            }
+            CoopMma::LoadTensor { buffer, offset, layout, view } => {
+                self.compile_load_tensor(out, buffer, offset, layout, view);
+            }
+            CoopMma::StoreTensor { mat, offset, layout, view } => {
+                self.compile_store_tensor(mat, out, offset, layout, view);
+            }
             CoopMma::Fill { value } => self.compile_fill(out, value),
             CoopMma::Load {
                 value,
@@ -34,6 +47,9 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
                 offset,
             } => self.compile_store(mat, out, stride, offset, layout),
             CoopMma::Cast { input } => self.compile_cast(input, out),
+            CoopMma::Elementwise { input, function, captures } => {
+                self.compile_matrix_elementwise(input, out, *function, captures);
+            }
             CoopMma::RowIndex { .. }
             | CoopMma::ColIndex { .. }
             | CoopMma::LoadMatrix { .. }
@@ -200,12 +216,53 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
 
         let fragment_id = self.load(input_ty, None, input.id, None, vec![]).unwrap();
 
-        let frag_new = self.f_convert(output_ty, None, fragment_id).unwrap();
+        let changes_role = input.ident != output.ident;
+        if changes_role {
+            assert!(self.compilation_options.vulkan.max_spirv_version >= (1, 6),
+                "Matrix role conversions require SPIR-V 1.6");
+            self.capabilities.insert(Capability::CooperativeMatrixConversionsNV);
+        }
+        let same_component_type = input.elem.id(self) == output.elem.id(self);
+        let frag_new = if same_component_type && changes_role {
+            let result = self.id();
+            self.insert_into_block(rspirv::dr::InsertPoint::End, rspirv::dr::Instruction::new(
+                rspirv::spirv::Op::CooperativeMatrixConvertNV,
+                Some(output_ty), Some(result), vec![rspirv::dr::Operand::IdRef(fragment_id)],
+            )).unwrap();
+            result
+        } else if same_component_type {
+            self.copy_object(output_ty, None, fragment_id).unwrap()
+        } else {
+            match (input.elem, output.elem) {
+                (Elem::Float(..) | Elem::Relaxed, Elem::Float(..) | Elem::Relaxed) => {
+                    self.f_convert(output_ty, None, fragment_id).unwrap()
+                }
+                (Elem::Int(_, true), Elem::Float(..) | Elem::Relaxed) => {
+                    self.convert_s_to_f(output_ty, None, fragment_id).unwrap()
+                }
+                (Elem::Int(_, false), Elem::Float(..) | Elem::Relaxed) => {
+                    self.convert_u_to_f(output_ty, None, fragment_id).unwrap()
+                }
+                (Elem::Float(..) | Elem::Relaxed, Elem::Int(_, true)) => {
+                    self.convert_f_to_s(output_ty, None, fragment_id).unwrap()
+                }
+                (Elem::Float(..) | Elem::Relaxed, Elem::Int(_, false)) => {
+                    self.convert_f_to_u(output_ty, None, fragment_id).unwrap()
+                }
+                (Elem::Int(_, true), Elem::Int(_, true)) => {
+                    self.s_convert(output_ty, None, fragment_id).unwrap()
+                }
+                (Elem::Int(..), Elem::Int(..)) => {
+                    self.u_convert(output_ty, None, fragment_id).unwrap()
+                }
+                _ => panic!("Unsupported cooperative matrix component conversion"),
+            }
+        };
 
         self.store(output.id, frag_new, None, vec![]).unwrap();
     }
 
-    fn matrix_var(&mut self, var: &Variable) -> (Id, Matrix) {
+    pub(super) fn matrix_var(&mut self, var: &Variable) -> (Id, Matrix) {
         let id = match var {
             Variable::CoopMatrix(id, _) => *id,
             _ => unreachable!(),
@@ -238,6 +295,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             rows: self.rows(mat),
             columns: self.columns(mat),
             ident: mat.ident,
+            scope: mat.scope,
         }
     }
 
@@ -261,6 +319,10 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             core::MatrixIdent::Accumulator => CooperativeMatrixUse::MatrixAccumulatorKHR,
         };
         let layout = compile_layout(mat.layout);
+        let scope = match mat.scope {
+            core::MatrixScope::Plane => rspirv::spirv::Scope::Subgroup,
+            core::MatrixScope::Ruda => rspirv::spirv::Scope::Workgroup,
+        };
 
         let mut mat = Matrix {
             id: 0,
@@ -270,6 +332,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             k: mat.k as u32,
             elem,
             layout,
+            scope,
         };
 
         let item = Item::Pointer(StorageClass::Function, Box::new(self.item(&mat)));

@@ -72,7 +72,7 @@ impl<D: IntoDyn> Layout for FixedDimLayout<D> {
     }
 }
 
-impl<D: IntoDyn, R: Runtime> FixedDimLayoutLaunch<D, R> {
+impl<D: IntoDyn, R: LaunchMarker> FixedDimLayoutLaunch<D, R> {
     pub fn from_shape_handle(
         handle: &TensorBinding<R>,
         shape: D::RuntimeArg<R>,

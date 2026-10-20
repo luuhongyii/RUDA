@@ -13,6 +13,19 @@ use core::ops::Range;
 #[cfg_attr(not(doc), doc = "`Tensor`")]
 /// for documentation on each function.
 pub trait IntTensorOps<B: Backend> {
+    /// Runtime association used when combining integer and floating-point values.
+    fn int_autodiff_context(tensor: &IntTensor<B>) -> crate::AutodiffContext {
+        if B::ad_enabled(&B::int_device(tensor)) {
+            crate::AutodiffContext::Enabled(crate::GradientCheckpointingStrategy::Disabled)
+        } else { crate::AutodiffContext::Disabled }
+    }
+
+    /// Change the runtime association without changing integer storage.
+    fn int_with_autodiff_context(tensor: IntTensor<B>, context: crate::AutodiffContext) -> IntTensor<B> {
+        assert_eq!(B::int_autodiff_context(&tensor), context, "Backend does not support this runtime autodiff context; use Tensor::into_autodiff");
+        tensor
+    }
+
     /// Creates a new int tensor.
     ///
     /// # Arguments
@@ -187,6 +200,25 @@ pub trait IntTensorOps<B: Backend> {
         value: IntTensor<B>,
     ) -> IntTensor<B>;
 
+    /// Scatter with the specified update operation.
+    fn int_scatter(
+        dim: usize,
+        tensor: IntTensor<B>,
+        indices: IntTensor<B>,
+        value: IntTensor<B>,
+        update: crate::tensor::IndexingUpdateOp,
+    ) -> IntTensor<B> {
+        let count = indices.shape().num_elements();
+        if count == 0 { return tensor; }
+        match update {
+            crate::tensor::IndexingUpdateOp::Add => B::int_scatter_add(dim, tensor, indices, value),
+            _ => B::int_scatter_nd(
+                tensor, crate::tensor::scatter_coordinates::<B>(dim, indices),
+                B::int_reshape(value, Shape::from([count])), update,
+            ),
+        }
+    }
+
     /// Multi-dimensional scatter for int tensors.
     fn int_scatter_nd(
         _data: IntTensor<B>,
@@ -234,6 +266,21 @@ pub trait IntTensorOps<B: Backend> {
         indices: IntTensor<B>,
         value: IntTensor<B>,
     ) -> IntTensor<B>;
+
+    /// Update selected slices using the specified operation.
+    fn int_select_assign(
+        tensor: IntTensor<B>,
+        dim: usize,
+        indices: IntTensor<B>,
+        value: IntTensor<B>,
+        update: crate::tensor::IndexingUpdateOp,
+    ) -> IntTensor<B> {
+        if value.shape().num_elements() == 0 { return tensor; }
+        match update {
+            crate::tensor::IndexingUpdateOp::Add => B::int_select_add(tensor, dim, indices, value),
+            _ => B::int_scatter(dim, tensor, crate::tensor::select_indices::<B>(dim, indices, value.shape()), value, update),
+        }
+    }
 
     /// Repeats the tensor along the given dimension the given number of times.
     ///
@@ -509,7 +556,8 @@ pub trait IntTensorOps<B: Backend> {
     fn int_powi_scalar(lhs: IntTensor<B>, rhs: Scalar) -> IntTensor<B> {
         let exp = rhs.elem::<i32>();
         match exp {
-            0 => Self::int_ones(lhs.shape(), &B::int_device(&lhs), lhs.dtype().into()),
+            0 => B::int_with_autodiff_context(
+                Self::int_ones(lhs.shape(), &B::int_device(&lhs), lhs.dtype().into()), B::int_autodiff_context(&lhs)),
             1 => lhs,
             2 => Self::int_mul(lhs.clone(), lhs),
             _ => Self::int_powi_scalar_impl(lhs, rhs),
@@ -932,7 +980,8 @@ pub trait IntTensorOps<B: Backend> {
     fn int_topk(tensor: IntTensor<B>, dim: usize, k: usize) -> IntTensor<B> {
         let device = Self::int_device(&tensor);
         let dtype = get_device_settings::<B>(&device).int_dtype;
-        let k_indices = Self::int_arange(0..k as i64, &device, dtype);
+        let k_indices = B::int_with_autodiff_context(
+            Self::int_arange(0..k as i64, &device, dtype), B::int_autodiff_context(&tensor));
         Self::int_select(Self::int_sort(tensor, dim, true), dim, k_indices)
     }
 
@@ -1288,7 +1337,8 @@ pub trait IntTensorOps<B: Backend> {
         let dtype = tensor.dtype();
         let device = B::int_device(&tensor);
         let bool_dtype = get_device_settings::<B>(&B::int_device(&tensor)).bool_dtype;
-        let zeros = B::int_zeros(tensor.shape(), &device, dtype.into());
+        let zeros = B::int_with_autodiff_context(
+            B::int_zeros(tensor.shape(), &device, dtype.into()), B::int_autodiff_context(&tensor));
         let less_than_zero = B::int_lower_elem(tensor.clone(), 0.into(), bool_dtype);
         let greater_than_zero = B::int_greater_elem(tensor, 0.into(), bool_dtype);
 

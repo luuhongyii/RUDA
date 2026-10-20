@@ -41,6 +41,31 @@ pub fn relu<const D: usize, B: Backend>(tensor: Tensor<B, D>) -> Tensor<B, D> {
     tensor.relu()
 }
 
+/// Applies ReLU6 element-wise, clamping each element to `[0, 6]`.
+pub fn relu6<const D: usize, B: Backend>(tensor: Tensor<B, D>) -> Tensor<B, D> {
+    tensor.clamp(0.0, 6.0)
+}
+
+/// Applies HardTanh element-wise, clamping each element to `[min_val, max_val]`.
+pub fn hardtanh<const D: usize, B: Backend>(
+    tensor: Tensor<B, D>, min_val: f64, max_val: f64,
+) -> Tensor<B, D> {
+    tensor.clamp(min_val, max_val)
+}
+
+/// Applies `x - tanh(x)` element-wise.
+pub fn tanhshrink<const D: usize, B: Backend>(tensor: Tensor<B, D>) -> Tensor<B, D> {
+    tensor.clone().sub(tensor.tanh())
+}
+
+/// Replaces values at or below `threshold` with `value`.
+pub fn threshold<const D: usize, B: Backend>(
+    tensor: Tensor<B, D>, threshold: f64, value: f64,
+) -> Tensor<B, D> {
+    let mask = tensor.clone().lower_equal_elem(threshold);
+    tensor.mask_fill(mask, value)
+}
+
 /// Applies the leaky rectified linear unit function element-wise.
 ///
 #[cfg_attr(
@@ -270,8 +295,27 @@ $$
 ///
 /// The SoftPlus function is a smooth approximation of the ReLU function.
 pub fn softplus<const D: usize, B: Backend>(tensor: Tensor<B, D>, beta: f64) -> Tensor<B, D> {
-    let tensor = (tensor.mul_scalar(beta).exp() + 1).log();
-    tensor.div_scalar(beta)
+    softplus_with_threshold(tensor, beta, DEFAULT_SOFTPLUS_THRESHOLD)
+}
+
+/// Default value of `beta * x` above which [`softplus`] returns the input directly.
+pub const DEFAULT_SOFTPLUS_THRESHOLD: f64 = 20.0;
+
+/// Softplus with an explicit stability threshold, bounded by the dtype's finite exp range.
+pub fn softplus_with_threshold<const D: usize, B: Backend>(
+    tensor: Tensor<B, D>, beta: f64, threshold: f64,
+) -> Tensor<B, D> {
+    use crate::api::DType;
+    let max_exp = match tensor.dtype() {
+        DType::F64 => 709.0,
+        DType::F32 | DType::BF16 => 88.0,
+        _ => 11.0,
+    };
+    let threshold = threshold.min(max_exp);
+    let scaled = tensor.clone().mul_scalar(beta);
+    let mask = scaled.clone().greater_elem(threshold);
+    let nonlinear = scaled.mask_fill(mask.clone(), threshold).exp().log1p().div_scalar(beta);
+    nonlinear.mask_where(mask, tensor)
 }
 
 /// Applies the "quiet softmax" function on the input tensor along the given dimension.

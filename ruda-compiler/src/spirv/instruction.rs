@@ -2,12 +2,12 @@ use ruda_core::ir::{
     self as core, BinaryOperator, Comparison, Instruction, InstructionModes, Operation, Operator,
     UnaryOperator,
 };
-use rspirv::spirv::{Capability, Decoration, Word};
+use rspirv::spirv::{Decoration, Word};
 
 use crate::spirv::{
     SpirvCompiler, SpirvTarget,
     item::{Elem, Item},
-    variable::IndexedVariable,
+    variable::{IndexedVariable, Variable},
 };
 
 impl<T: SpirvTarget> SpirvCompiler<T> {
@@ -197,6 +197,7 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
         let out = out.unwrap();
         match op {
             Operator::NativeAddress(_) | Operator::NativeLoad(_) | Operator::NativeStore(_) => unreachable!(),
+            Operator::WorkgroupUniformLoad(op) => self.compile_workgroup_uniform_load(op, out, uniform),
             Operator::Index(op) | Operator::UncheckedIndex(op) => {
                 let is_atomic = op.list.ty.is_atomic();
                 let value = self.compile_variable(op.list);
@@ -293,18 +294,38 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
                     .unwrap();
             }
             Operator::CopyMemoryBulk(op) => {
-                self.capabilities.insert(Capability::Addresses);
+                if op.len == 0 {
+                    return;
+                }
+                assert_eq!(op.input.ty, out.ty, "memory copy requires matching element types and vector widths");
                 let input = self.compile_variable(op.input);
                 let in_index = self.compile_variable(op.in_index);
+                let offset_input = self.compile_variable(op.offset_input);
                 let out = self.compile_variable(out);
                 let out_index = self.compile_variable(op.out_index);
-                let len = op.len;
+                let offset_out = self.compile_variable(op.offset_out);
+                let in_item = in_index.item();
+                let out_item = out_index.item();
+                let in_type = in_item.id(self);
+                let out_type = out_item.id(self);
+                let in_index = self.read(&in_index);
+                let offset_input = self.read_as(&offset_input, &in_item);
+                let out_index = self.read(&out_index);
+                let offset_out = self.read_as(&offset_out, &out_item);
+                let mut source_index = self.i_add(in_type, None, in_index, offset_input).unwrap();
+                let mut target_index = self.i_add(out_type, None, out_index, offset_out).unwrap();
+                let source_step = in_item.const_u32(self, 1);
+                let target_step = out_item.const_u32(self, 1);
 
-                let source = self.index_ptr(&input, &in_index);
-                let target = self.index_ptr(&out, &out_index);
-                let size = self.const_u32(len as u32 * out.item().size());
-                self.copy_memory_sized(target, source, size, None, None, vec![])
-                    .unwrap();
+                for line in 0..op.len {
+                    let source = self.index_ptr(&input, &Variable::Raw(source_index, in_item.clone()));
+                    let target = self.index_ptr(&out, &Variable::Raw(target_index, out_item.clone()));
+                    self.copy_memory(target, source, None, None, vec![]).unwrap();
+                    if line + 1 < op.len {
+                        source_index = self.i_add(in_type, None, source_index, source_step).unwrap();
+                        target_index = self.i_add(out_type, None, target_index, target_step).unwrap();
+                    }
+                }
             }
             Operator::Select(op) => self.compile_select(op.cond, op.then, op.or_else, out, uniform),
         }

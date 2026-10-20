@@ -19,6 +19,7 @@ impl Emitter {
             | Operation::CoopMma(CoopMma::ExecuteScaled { .. })
             | Operation::Operator(Operator::Reinterpret(_) | Operator::Select(_)
                 | Operator::InitVector(_) | Operator::Index(_) | Operator::UncheckedIndex(_)
+                | Operator::WorkgroupUniformLoad(_)
                 | Operator::IndexAssign(_) | Operator::UncheckedIndexAssign(_)
                 | Operator::CopyMemory(_) | Operator::CopyMemoryBulk(_))
         ) {

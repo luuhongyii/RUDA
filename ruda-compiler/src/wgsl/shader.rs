@@ -78,6 +78,7 @@ impl LocalArray {
 
 #[derive(Debug, Clone)]
 pub struct ComputeShader {
+    pub io: ruda_core::kernel::KernelIo,
     pub buffers: Vec<KernelArg>,
     pub scalars: Vec<(Elem, usize)>,
     pub shared_arrays: Vec<SharedArray>,

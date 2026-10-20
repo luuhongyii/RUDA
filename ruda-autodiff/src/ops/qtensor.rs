@@ -70,6 +70,7 @@ fn learned_quantize<B: Backend, C: CheckpointStrategy>(
     tensor: AutodiffTensor<B>, scheme: &QuantScheme, scales: AutodiffTensor<B>,
 ) -> AutodiffQTensor<B> {
     use ruda_core::tensor::{QuantParam, QuantValue};
+    let checkpointing = Some(crate::checkpoint::strategy::merged_policy::<C>(&[tensor.node.clone(), scales.node.clone()]));
     type A<B, C> = Autodiff<B, C>;
     assert!(matches!(scheme.value, QuantValue::Q8F | QuantValue::Q8S |
         QuantValue::Q4F | QuantValue::Q4S | QuantValue::Q2F | QuantValue::Q2S)
@@ -91,12 +92,12 @@ fn learned_quantize<B: Backend, C: CheckpointStrategy>(
     // Detached integer codes match the BACKEND's actual rounding, not an
     // independently reimplemented rounding rule. Zero-valued correction supplies
     // d(code)/d(input/scale)=1 inside bounds, 0 outside.
-    let codes = AutodiffTensor::new(B::float_div(value.clone(), scales.primitive.clone()));
-    let correction = A::<B,C>::float_sub(clipped.clone(), AutodiffTensor::new(clipped.primitive));
+    let codes = AutodiffTensor::new(B::float_div(value.clone(), scales.primitive.clone())).with_checkpointing(checkpointing);
+    let correction = A::<B,C>::float_sub(clipped.clone(), AutodiffTensor::new(clipped.primitive).with_checkpointing(checkpointing));
     let surrogate = A::<B,C>::float_mul(scales, A::<B,C>::float_add(codes, correction));
     let surrogate = A::<B,C>::float_cast(surrogate, dtype);
     let exact_value = B::dequantize(primitive.clone(), dtype);
-    AutodiffQTensor { primitive, surrogate: Some(ste::<B,C>(surrogate, exact_value)) }
+    AutodiffQTensor { primitive, surrogate: Some(ste::<B,C>(surrogate, exact_value)), checkpointing, autodiff_enabled: true }
 }
 
 impl<B: Backend, C: CheckpointStrategy> QTensorOps<Self> for Autodiff<B, C> {
@@ -123,6 +124,7 @@ impl<B: Backend, C: CheckpointStrategy> QTensorOps<Self> for Autodiff<B, C> {
                     }
                 }
                 let storage = input.dtype().into();
+                let context = input.context::<C>().merge(weight.context::<C>());
                 let project = |input, weight| match B::q_matmul(TensorPrimitive::Float(input), TensorPrimitive::QFloat(weight)) {
                     TensorPrimitive::Float(output) => output,
                     TensorPrimitive::QFloat(output) => B::dequantize(output, storage),
@@ -134,17 +136,20 @@ impl<B: Backend, C: CheckpointStrategy> QTensorOps<Self> for Autodiff<B, C> {
                     }
                     OpsKind::UnTracked(prep) => prep.finish(project(input.primitive, weight.primitive)),
                 };
-                TensorPrimitive::Float(output)
+                TensorPrimitive::Float(output.with_context::<C>(context))
             }
             (lhs, rhs) => Self::q_matmul_default(lhs, rhs),
         }
     }
 
     fn q_from_data(data: TensorData, device: &Device<Self>) -> QuantizedTensor<Self> {
-        AutodiffQTensor::untracked(B::q_from_data(data, device))
+        AutodiffQTensor::untracked(B::q_from_data(data, device)).with_context::<C>(Self::autodiff_creation_context(device))
     }
     fn quantize(tensor: FloatTensor<Self>, scheme: &QuantScheme,
         qparams: QuantizationParametersPrimitive<Self>) -> QuantizedTensor<Self> {
+        let context = tensor.context::<C>().merge(qparams.scales.context::<C>());
+        let checkpointing = match context { ruda_tensor::AutodiffContext::Disabled => None,
+            ruda_tensor::AutodiffContext::Enabled(policy) => Some(policy) };
         if qparams.scales.is_tracked() {
             return learned_quantize::<B, C>(tensor, scheme, qparams.scales);
         }
@@ -154,34 +159,40 @@ impl<B: Backend, C: CheckpointStrategy> QTensorOps<Self> for Autodiff<B, C> {
             let value = B::dequantize(primitive.clone(), tensor.dtype().into());
             ste::<B, C>(tensor, value)
         });
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing,
+            autodiff_enabled: !matches!(context, ruda_tensor::AutodiffContext::Disabled) }.with_context::<C>(context)
     }
     fn quantize_dynamic(tensor: FloatTensor<Self>, scheme: &QuantScheme) -> QuantizedTensor<Self> {
+        let checkpointing = tensor.node.checkpointing;
+        let autodiff_enabled = tensor.node.autodiff_enabled;
         // Backend calibration deliberately runs outside the autodiff graph.
         let primitive = B::quantize_dynamic(tensor.primitive.clone(), scheme);
         let surrogate = tensor.is_tracked().then(|| {
             let value = B::dequantize(primitive.clone(), tensor.dtype().into());
             ste::<B, C>(tensor, value)
         });
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing, autodiff_enabled }
     }
 
     fn quantize_dynamic_with_precision(tensor: FloatTensor<Self>, scheme: &QuantScheme,
         calibration_dtype: FloatDType) -> QuantizedTensor<Self> {
+        let checkpointing = tensor.node.checkpointing;
+        let autodiff_enabled = tensor.node.autodiff_enabled;
         let primitive = B::quantize_dynamic_with_precision(tensor.primitive.clone(), scheme, calibration_dtype);
         let surrogate = tensor.is_tracked().then(|| {
             let value = B::dequantize(primitive.clone(), tensor.dtype().into());
             ste::<B, C>(tensor, value)
         });
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing, autodiff_enabled }
     }
     fn dequantize(tensor: QuantizedTensor<Self>, dtype: FloatDType) -> FloatTensor<Self> {
+        let context = tensor.context::<C>();
         let value = B::dequantize(tensor.primitive, dtype);
         match tensor.surrogate {
             // Block layout operations may requantize. Always return the actual
             // stored forward value, not an older surrogate's float value.
             Some(parent) => ste::<B, C>(Self::float_cast(parent, dtype), value),
-            None => AutodiffTensor::new(value),
+            None => AutodiffTensor::new(value).with_context::<C>(context),
         }
     }
     fn q_device(tensor: &QuantizedTensor<Self>) -> Device<Self> {
@@ -193,70 +204,104 @@ impl<B: Backend, C: CheckpointStrategy> QTensorOps<Self> for Autodiff<B, C> {
     fn q_detach(tensor: QuantizedTensor<Self>) -> QuantizedTensor<Self> {
         // Match float_detach: sever history but preserve the leaf-grad setting.
         let surrogate = tensor.surrogate.map(Self::float_detach);
-        AutodiffQTensor { primitive: tensor.primitive, surrogate }
+        AutodiffQTensor { primitive: tensor.primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_set_require_grad(tensor: QuantizedTensor<Self>, require_grad: bool) -> QuantizedTensor<Self> {
-        if !require_grad { return AutodiffQTensor::untracked(tensor.primitive); }
+        let context = tensor.context::<C>();
+        if !require_grad { return AutodiffQTensor::untracked(tensor.primitive).with_context::<C>(context); }
+        assert!(tensor.autodiff_enabled, "Tensor::require_grad requires autodiff; call Tensor::autodiff first");
         let surrogate = match tensor.surrogate {
             Some(value) => Self::float_set_require_grad(value, true),
             None => AutodiffTensor::new(B::dequantize(tensor.primitive.clone(), FloatDType::F32))
+                .with_checkpointing(tensor.checkpointing)
                 .require_grad(),
         };
-        AutodiffQTensor { primitive: tensor.primitive, surrogate: Some(surrogate) }
+        AutodiffQTensor { primitive: tensor.primitive, surrogate: Some(surrogate), checkpointing: tensor.checkpointing, autodiff_enabled: true }
     }
     fn q_is_require_grad(tensor: &QuantizedTensor<Self>) -> bool {
         tensor.surrogate.as_ref().is_some_and(Self::float_is_require_grad)
     }
+
+    fn q_is_tracked(tensor: &QuantizedTensor<Self>) -> bool {
+        tensor.surrogate.as_ref().is_some_and(AutodiffTensor::is_tracked)
+    }
+    fn q_gradient_checkpointing_strategy(tensor: &QuantizedTensor<Self>) -> Option<ruda_tensor::GradientCheckpointingStrategy> {
+        match tensor.context::<C>() {
+            ruda_tensor::AutodiffContext::Disabled => None,
+            ruda_tensor::AutodiffContext::Enabled(policy) => Some(policy),
+        }
+    }
+    fn q_autodiff_context(tensor: &QuantizedTensor<Self>) -> ruda_tensor::AutodiffContext { tensor.context::<C>() }
+    fn q_with_autodiff_context(tensor: QuantizedTensor<Self>, context: ruda_tensor::AutodiffContext) -> QuantizedTensor<Self> {
+        tensor.with_context::<C>(context)
+    }
+    fn q_with_gradient_checkpointing_strategy(tensor: QuantizedTensor<Self>, strategy: ruda_tensor::GradientCheckpointingStrategy) -> QuantizedTensor<Self> {
+        assert!(tensor.autodiff_enabled, "Tensor::with_gradient_checkpointing_strategy requires autodiff; call Tensor::autodiff first");
+        if matches!(strategy, ruda_tensor::GradientCheckpointingStrategy::Custom(_)) {
+            assert_eq!(strategy, C::policy(), "Checkpointing strategy is not provided by this backend");
+        }
+        tensor.with_checkpointing(Some(strategy))
+    }
     fn q_to_device(tensor: QuantizedTensor<Self>, device: &Device<Self>) -> QuantizedTensor<Self> {
+        let tensor = match crate::context::scoped::<B, C>(device) {
+            Some(context) => tensor.with_context::<C>(context),
+            None => tensor,
+        };
         let surrogate = tensor.surrogate.map(|t| Self::float_to_device(t, device));
         let primitive = B::q_to_device(tensor.primitive, device);
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_reshape(tensor: QuantizedTensor<Self>, shape: Shape) -> QuantizedTensor<Self> {
         let surrogate = tensor.surrogate.map(|t| Self::float_reshape(t, shape.clone()));
         let primitive = B::q_reshape(tensor.primitive, shape);
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_swap_dims(tensor: QuantizedTensor<Self>, dim1: usize, dim2: usize) -> QuantizedTensor<Self> {
         let surrogate = tensor.surrogate.map(|t| Self::float_swap_dims(t, dim1, dim2));
         let primitive = B::q_swap_dims(tensor.primitive, dim1, dim2);
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_permute(tensor: QuantizedTensor<Self>, axes: &[usize]) -> QuantizedTensor<Self> {
         let surrogate = tensor.surrogate.map(|t| Self::float_permute(t, axes));
         let primitive = B::q_permute(tensor.primitive, axes);
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_flip(tensor: QuantizedTensor<Self>, axes: &[usize]) -> QuantizedTensor<Self> {
         let surrogate = tensor.surrogate.map(|t| Self::float_flip(t, axes));
         let primitive = B::q_flip(tensor.primitive, axes);
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_select(tensor: QuantizedTensor<Self>, dim: usize, indices: IntTensor<Self>) -> QuantizedTensor<Self> {
+        let context = tensor.context::<C>().merge(indices.context);
+        let tensor = tensor.with_context::<C>(context);
         let surrogate = tensor.surrogate.map(|t| Self::float_select(t, dim, indices.clone()));
-        let primitive = B::q_select(tensor.primitive, dim, indices);
-        AutodiffQTensor { primitive, surrogate }
+        let primitive = B::q_select(tensor.primitive, dim, indices.primitive);
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_slice(tensor: QuantizedTensor<Self>, slices: &[ruda_core::tensor::Slice]) -> QuantizedTensor<Self> {
         let surrogate = tensor.surrogate.map(|t| Self::float_slice(t, slices));
         let primitive = B::q_slice(tensor.primitive, slices);
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_expand(tensor: QuantizedTensor<Self>, shape: Shape) -> QuantizedTensor<Self> {
         let surrogate = tensor.surrogate.map(|t| Self::float_expand(t, shape.clone()));
         let primitive = B::q_expand(tensor.primitive, shape);
-        AutodiffQTensor { primitive, surrogate }
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_gather(dim: usize, tensor: QuantizedTensor<Self>, indices: IntTensor<Self>) -> QuantizedTensor<Self> {
+        let context = tensor.context::<C>().merge(indices.context);
+        let tensor = tensor.with_context::<C>(context);
         let surrogate = tensor.surrogate.map(|t| Self::float_gather(dim, t, indices.clone()));
-        let primitive = B::q_gather(dim, tensor.primitive, indices);
-        AutodiffQTensor { primitive, surrogate }
+        let primitive = B::q_gather(dim, tensor.primitive, indices.primitive);
+        AutodiffQTensor { primitive, surrogate, checkpointing: tensor.checkpointing, autodiff_enabled: tensor.autodiff_enabled }
     }
     fn q_argmax(tensor: QuantizedTensor<Self>, dim: usize, dtype: IntDType) -> IntTensor<Self> {
-        B::q_argmax(tensor.primitive, dim, dtype)
+        let context = tensor.context::<C>();
+        crate::AutodiffValue::with_context(B::q_argmax(tensor.primitive, dim, dtype), context)
     }
     fn q_argmin(tensor: QuantizedTensor<Self>, dim: usize, dtype: IntDType) -> IntTensor<Self> {
-        B::q_argmin(tensor.primitive, dim, dtype)
+        let context = tensor.context::<C>();
+        crate::AutodiffValue::with_context(B::q_argmin(tensor.primitive, dim, dtype), context)
     }
 }
 

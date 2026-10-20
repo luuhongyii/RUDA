@@ -1,6 +1,7 @@
 //! A version of [`bytemuck::BoxBytes`] that is cloneable and allows trailing uninitialized elements.
 
 use crate::bytes::default_controller::{self, NativeAllocationController};
+use super::{AccessError, AccessPolicy, Reader, Writer};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::alloc::LayoutError;
@@ -45,6 +46,13 @@ pub enum SplitError {
     Unsupported,
 }
 
+/// Failure to construct an independently owned, zero-copy window.
+#[derive(Debug, Clone, Copy)]
+pub enum ViewError {
+    InvalidRange,
+    Unsupported,
+}
+
 /// Defines how an ``Allocation`` can be controlled.
 ///
 /// This trait enables type erasure of the allocator after an ``Allocation`` is created, while still
@@ -66,6 +74,34 @@ pub trait AllocationController {
     /// Returns a view of the memory of the whole allocation
     fn memory(&self) -> &[MaybeUninit<u8>];
 
+    /// Access storage with an explicit copying policy. Legacy controllers must
+    /// override this method to support no-copy access or recoverable read errors.
+    fn memory_with_policy(&self, policy: AccessPolicy) -> Result<&[MaybeUninit<u8>], AccessError> {
+        if !policy.copy_allowed() {
+            return Err(AccessError::WouldCopy);
+        }
+        Ok(self.memory())
+    }
+
+    /// Mutably access storage with an explicit copying policy.
+    ///
+    /// # Safety
+    /// Only initialized bytes may be written, as with [`Self::memory_mut`].
+    unsafe fn memory_mut_with_policy(
+        &mut self,
+        policy: AccessPolicy,
+    ) -> Result<&mut [MaybeUninit<u8>], AccessError> {
+        if !policy.copy_allowed() {
+            return Err(AccessError::WouldCopy);
+        }
+        Ok(unsafe { self.memory_mut() })
+    }
+
+    /// The allocation capacity. Lazy controllers must avoid materializing storage.
+    fn capacity(&self) -> usize {
+        self.memory().len()
+    }
+
     /// Splits the current allocation in multiple separate allocations.
     #[allow(clippy::type_complexity)]
     fn split(
@@ -78,6 +114,11 @@ pub trait AllocationController {
     /// Duplicates the current allocation with a clone on write strategy if the allocation
     /// controller supports it.
     fn duplicate(&self) -> Option<Box<dyn AllocationController>> {
+        None
+    }
+
+    /// Returns a controller for the initialized byte range without copying.
+    fn view(&self, _start: usize, _end: usize) -> Option<Box<dyn AllocationController>> {
         None
     }
 
@@ -147,6 +188,25 @@ pub enum AllocationError {
 }
 
 impl Bytes {
+    /// Returns an independently owned zero-copy window, when the controller supports it.
+    pub fn view(&self, start: usize, end: usize) -> Result<Self, ViewError> {
+        if start > end || end > self.len {
+            return Err(ViewError::InvalidRange);
+        }
+        let controller = self.controller.view(start, end).ok_or(ViewError::Unsupported)?;
+        // SAFETY: the range is contained in this allocation's initialized bytes.
+        Ok(unsafe { Self::from_controller(controller, end - start) })
+    }
+
+    /// Share this allocation without copying, with copy-on-write mutation and cheap views.
+    pub fn shared(self) -> Self {
+        let len = self.len;
+        let controller = super::shared_arc::SharedAllocationController::new(
+            crate::stub::Arc::new(self), 0, len,
+        );
+        Self { controller: Box::new(controller), len }
+    }
+
     /// Splits the current allocation at the given offset.
     pub fn split(mut self, offset: usize) -> Result<(Bytes, Bytes), (Bytes, SplitError)> {
         let right_len = self.len - offset;
@@ -294,7 +354,23 @@ impl Bytes {
 
     /// Get the total capacity, in bytes, of the wrapped allocation.
     pub fn capacity(&self) -> usize {
-        self.controller.memory().len()
+        self.controller.capacity()
+    }
+
+    /// Read initialized bytes, propagating access errors reported by the controller.
+    pub fn read(&self, reader: Reader) -> Result<&[u8], AccessError> {
+        let memory = &self.controller.memory_with_policy(reader.policy)?[..self.len];
+        // SAFETY: The first len bytes are initialized by the Bytes invariant.
+        Ok(unsafe { core::slice::from_raw_parts(memory.as_ptr().cast(), memory.len()) })
+    }
+
+    /// Mutably access initialized bytes subject to the requested copying policy.
+    pub fn write(&mut self, writer: Writer) -> Result<&mut [u8], AccessError> {
+        let len = self.len;
+        // SAFETY: The returned u8 slice only permits initialized writes.
+        let memory = unsafe { self.controller.memory_mut_with_policy(writer.policy)? };
+        let memory = &mut memory[..len];
+        Ok(unsafe { core::slice::from_raw_parts_mut(memory.as_mut_ptr().cast(), memory.len()) })
     }
 
     /// Convert the bytes back into a vector. This requires that the type has the same alignment as the element

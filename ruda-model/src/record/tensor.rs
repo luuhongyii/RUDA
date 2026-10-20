@@ -114,6 +114,10 @@ impl<'de> Deserialize<'de> for BoolTensorSerde {
 impl<B: Backend, const D: usize> Record<B> for Tensor<B, D> {
     type Item<S: PrecisionSettings> = FloatTensorSerde<S>;
 
+    fn map_parameters<M: crate::module::ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        mapper.map_tensor(self)
+    }
+
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         let data = self.into_data();
         let data = if let DType::QFloat(_) = data.dtype {
@@ -137,6 +141,10 @@ impl<B: Backend, const D: usize> Record<B> for Tensor<B, D> {
 impl<B: Backend, const D: usize> Record<B> for Tensor<B, D, Int> {
     type Item<S: PrecisionSettings> = IntTensorSerde<S>;
 
+    fn map_parameters<M: crate::module::ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        mapper.map_tensor(self)
+    }
+
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         IntTensorSerde::new(self.into_data().convert::<S::IntElem>())
     }
@@ -148,6 +156,10 @@ impl<B: Backend, const D: usize> Record<B> for Tensor<B, D, Int> {
 
 impl<B: Backend, const D: usize> Record<B> for Tensor<B, D, Bool> {
     type Item<S: PrecisionSettings> = BoolTensorSerde;
+
+    fn map_parameters<M: crate::module::ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        mapper.map_tensor(self)
+    }
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         BoolTensorSerde::new(self.into_data())

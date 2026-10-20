@@ -139,6 +139,10 @@ impl<R: Runtime> TensorMetadata for RudaTensor<R> {
     fn rank(&self) -> usize {
         self.meta.rank()
     }
+
+    fn can_mut(&self) -> bool {
+        RudaTensor::can_mut(self)
+    }
 }
 
 impl<R: Runtime> QTensorPrimitive for RudaTensor<R> {
@@ -317,7 +321,7 @@ where
             let shape_rhs = rhs.meta.shape()[i];
 
             // Output tensor will be different from the mutable tensor.
-            if shape_lhs < shape_rhs {
+            if shape_lhs != shape_rhs && shape_rhs != 1 {
                 return false;
             }
         }

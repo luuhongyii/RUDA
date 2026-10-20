@@ -12,9 +12,47 @@ pub struct CompilationConfig {
     #[serde(default)]
     #[cfg(std_io)]
     pub cache: Option<CacheConfig>,
+    /// Cache compiled artifacts in the active named environment. The legacy
+    /// `cache` path remains unchanged when this option is false.
+    #[serde(default)]
+    pub environment_cache: bool,
     /// Controls whether kernel launches enforce bounds checks.
     #[serde(default)]
     pub check_mode: BoundsCheckMode,
+    /// CPU half-precision evaluation policy. `None` selects by native f16 support.
+    #[serde(default)]
+    pub f16_evaluation: Option<F16Evaluation>,
+}
+
+/// Rounding boundaries for CPU f16 arithmetic; external storage stays f16.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum F16Evaluation {
+    /// Round each arithmetic result to f16.
+    #[serde(rename = "per-operation")]
+    PerOperation,
+    /// Keep arithmetic intermediates in f32 until a storage or non-arithmetic use.
+    #[default]
+    #[serde(rename = "chain")]
+    Chain,
+    /// Also widen private accumulators when doing so removes more conversions.
+    #[serde(rename = "accumulators")]
+    Accumulators,
+}
+
+impl F16Evaluation {
+    pub fn for_native_f16(native: bool) -> Self {
+        if native { Self::PerOperation } else { Self::Chain }
+    }
+}
+
+impl core::fmt::Display for F16Evaluation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::PerOperation => "per-operation",
+            Self::Chain => "chain",
+            Self::Accumulators => "accumulators",
+        })
+    }
 }
 
 /// Bounds checks options.

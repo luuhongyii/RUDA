@@ -256,6 +256,7 @@ fn fuse(
             FuseOp::Sub(op) => sub::<E, N>(inputs, outputs, locals, pos, op, config),
             FuseOp::Mul(op) => mul::<E, N>(inputs, outputs, locals, pos, op, config),
             FuseOp::Powf(op) => powf::<E, N>(inputs, outputs, locals, pos, op, config),
+            FuseOp::Hypot(op) => hypot::<E, N>(inputs, outputs, locals, pos, op, config),
             FuseOp::Powi(op) => {
                 let define!(I) = comptime![StorageType::from(op.rhs.precision().into_elem())];
                 powi::<E, I, N>(inputs, outputs, locals, pos, op, config);
@@ -945,6 +946,7 @@ comparison_op!(lower, <);
 comparison_op!(lower_equal, <=);
 
 binary_func!(powf, Vector::<C, N>::powf, Float);
+binary_func!(hypot, Vector::<C, N>::hypot, Float);
 binary_func!(rem, Vector::<C, N>::rem, Float);
 
 unary_func!(exp, Vector::<C, N>::exp, Float);

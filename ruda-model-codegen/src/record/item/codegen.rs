@@ -20,4 +20,5 @@ pub(crate) trait RecordItemCodegen {
     fn gen_into_item(&self, item_name: &Ident, _paths: &crate::DerivePaths) -> TokenStream;
     /// Generate the from item function.
     fn gen_from_item(&self, _paths: &crate::DerivePaths) -> TokenStream;
+    fn gen_map_parameters(&self, paths: &crate::DerivePaths) -> TokenStream;
 }

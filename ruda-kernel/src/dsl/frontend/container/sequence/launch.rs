@@ -1,7 +1,7 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::cell::RefCell;
 
-use ruda::runtime::backend::Runtime;
+use crate::dsl::frontend::LaunchMarker;
 use ruda_core::tensor::SmallVec;
 
 use crate::dsl::{
@@ -11,17 +11,17 @@ use crate::dsl::{
 
 use super::{Sequence, SequenceExpand};
 
-pub struct SequenceArg<R: Runtime, T: LaunchArg> {
+pub struct SequenceArg<R: LaunchMarker, T: LaunchArg> {
     pub values: SmallVec<[T::RuntimeArg<R>; 5]>,
 }
 
-impl<R: Runtime, T: LaunchArg> Default for SequenceArg<R, T> {
+impl<R: LaunchMarker, T: LaunchArg> Default for SequenceArg<R, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<R: Runtime, T: LaunchArg> SequenceArg<R, T> {
+impl<R: LaunchMarker, T: LaunchArg> SequenceArg<R, T> {
     pub fn new() -> Self {
         Self {
             values: SmallVec::new(),
@@ -65,10 +65,10 @@ impl<C: LaunchArg> core::fmt::Debug for SequenceCompilationArg<C> {
 impl<C: LaunchArg> core::cmp::Eq for SequenceCompilationArg<C> {}
 
 impl<C: LaunchArg> LaunchArg for Sequence<C> {
-    type RuntimeArg<R: Runtime> = SequenceArg<R, C>;
+    type RuntimeArg<R: LaunchMarker> = SequenceArg<R, C>;
     type CompilationArg = SequenceCompilationArg<C>;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {
@@ -103,7 +103,7 @@ impl<C: LaunchArg> LaunchArg for Sequence<C> {
     }
 }
 
-impl<R: Runtime, E: LaunchArg> FromIterator<E::RuntimeArg<R>> for SequenceArg<R, E> {
+impl<R: LaunchMarker, E: LaunchArg> FromIterator<E::RuntimeArg<R>> for SequenceArg<R, E> {
     fn from_iter<T: IntoIterator<Item = E::RuntimeArg<R>>>(iter: T) -> Self {
         SequenceArg {
             values: iter.into_iter().collect(),

@@ -187,16 +187,22 @@ impl Launch {
 
     pub fn arg_registers(&self) -> (TokenStream, TokenStream) {
         let launch_arg = prelude_type("LaunchArg");
+        let io_attr = prelude_type("BufferIOAttr");
         let mut defined = quote! {};
         let mut args = quote! {};
 
         self.runtime_params().enumerate().for_each(|(i, input)| {
+            let declared = match &input.ty {
+                syn::Type::Reference(reference) if reference.mutability.is_none() => quote![#io_attr::ReadOnly],
+                _ => quote![#io_attr::ReadWrite],
+            };
             let ty = &input.ty_owned();
             let ident = &input.name;
             let var = Ident::new(format!("comp_arg_{i}").as_str(), ident.span());
 
             args.extend(quote! {#var,});
             defined.extend(quote! {
+                launcher.declare_io(#declared);
                 let #var = <#ty as #launch_arg>::register(#ident, &mut launcher);
             });
         });
@@ -268,7 +274,7 @@ impl Launch {
 
         quote! {
             let mut builder = #kernel_builder::default();
-            builder.runtime_properties(__R::target_properties());
+            builder.runtime_properties(self.client.target_properties());
             builder.device_properties(self.client.properties());
 
             #register_type
@@ -385,7 +391,7 @@ impl Launch {
             let kernel_metadata = prelude_type("KernelMetadata");
             let ruda_kernel = prelude_type("RudaKernel");
             let kernel_settings = prelude_type("KernelSettings");
-            let compute_client = prelude_type("ComputeClient");
+            let kernel_context = prelude_type("KernelContext");
             let kernel_definition: syn::Path = prelude_type("KernelDefinition");
             let kernel_id = prelude_type("KernelId");
             let storage_ty = prelude_type("StorageType");
@@ -425,7 +431,7 @@ impl Launch {
                 #[doc = #kernel_doc]
                 pub struct #kernel_name #generics #where_clause {
                     settings: #kernel_settings,
-                    client: #compute_client<__R>,
+                    client: #kernel_context,
                     #(#compilation_args,)*
                     #(#const_params,)*
                     #phantom_data
@@ -437,12 +443,12 @@ impl Launch {
                 impl #generics #kernel_name #generic_names #where_clause {
                     pub fn new(
                         settings: #kernel_settings,
-                        client: #compute_client<__R>,
+                        client: impl Into<#kernel_context>,
                         #(#compilation_args,)*
                         #(#const_params),*) -> Self {
                         Self {
                             settings: #settings,
-                            client,
+                            client: client.into(),
                             #(#args,)*
                             #(#param_names,)*
                             #phantom_data_init

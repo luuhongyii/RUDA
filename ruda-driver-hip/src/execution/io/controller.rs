@@ -33,6 +33,14 @@ impl PinnedMemoryManagedAllocController {
 }
 
 impl AllocationController for PinnedMemoryManagedAllocController {
+    fn memory_with_policy(&self, _: ruda_core::bytes::AccessPolicy) -> Result<&[std::mem::MaybeUninit<u8>], ruda_core::bytes::AccessError> {
+        Ok(self.memory())
+    }
+
+    unsafe fn memory_mut_with_policy(&mut self, _: ruda_core::bytes::AccessPolicy) -> Result<&mut [std::mem::MaybeUninit<u8>], ruda_core::bytes::AccessError> {
+        Ok(unsafe { self.memory_mut() })
+    }
+
     fn alloc_align(&self) -> usize {
         PINNED_MEMORY_ALIGNMENT
     }

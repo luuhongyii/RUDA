@@ -19,12 +19,13 @@ resolver = "2"
 data-service = [ "ruda-tensor",]
 tracing = [ "ruda-core/tracing", "ruda-tensor-config/tracing", "ruda-tensor?/api-tracing",]
 websocket = [ "axum", "tokio-tungstenite", "futures",]
+iroh = ["dep:iroh", "dep:tempfile"]
 
 [lib]
 name = "ruda_communication"
 path = "src/lib.rs"
 
-[dependencies.axum]
+[target.'cfg(not(target_family = "wasm"))'.dependencies.axum]
 version = "0.8.8"
 features = [ "ws",]
 optional = true
@@ -32,6 +33,14 @@ optional = true
 [dependencies.bytes]
 version = "1.11.1"
 default-features = false
+
+[dependencies.iroh]
+version = "1.3.0"
+optional = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies.tempfile]
+version = "3.27.0"
+optional = true
 
 [dependencies.derive-new]
 version = "0.7.0"
@@ -64,9 +73,13 @@ default-features = false
 
 [dependencies.tokio]
 version = "1.51.1"
-features = [ "rt", "macros", "rt-multi-thread", "sync", "signal", "tracing",]
+features = [ "rt", "macros", "sync",]
 
-[dependencies.tokio-tungstenite]
+[target.'cfg(not(target_family = "wasm"))'.dependencies.tokio]
+version = "1.51.1"
+features = ["rt-multi-thread", "time", "net", "signal", "tracing"]
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies.tokio-tungstenite]
 version = "0.29"
 optional = true
 

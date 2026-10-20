@@ -9,6 +9,9 @@ pub struct CustomOpIr {
     pub inputs: Vec<TensorIr>,
     /// Output tensors used in the custom operation.
     pub outputs: Vec<TensorIr>,
+    /// Non-tensor arguments in declaration order.
+    #[serde(default)]
+    pub scalars: Vec<ScalarIr>,
 }
 
 /// Swap dim operation intermediate representation.

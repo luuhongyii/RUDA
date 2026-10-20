@@ -8,6 +8,9 @@ mod backend;
 mod element;
 mod ops;
 mod tensor;
+
+#[cfg(test)]
+mod ownership_tests;
 #[cfg(feature = "distributed")]
 pub mod distributed;
 

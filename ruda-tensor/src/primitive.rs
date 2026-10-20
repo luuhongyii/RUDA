@@ -1,6 +1,14 @@
 use crate::{Backend, get_device_settings};
 use ruda_core::tensor::{DType, Shape};
 
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub enum ErasedTensorPrimitive<B: Backend> {
+    Float(TensorPrimitive<B>),
+    Int(B::IntTensorPrimitive),
+    Bool(B::BoolTensorPrimitive),
+}
+
 #[derive(Debug, Clone)]
 /// A primitive tensor representation.
 pub enum TensorPrimitive<B: Backend> {
@@ -50,6 +58,13 @@ impl<B: Backend> TensorMetadata for TensorPrimitive<B> {
         match self {
             TensorPrimitive::Float(tensor) => tensor.rank(),
             TensorPrimitive::QFloat(tensor) => tensor.rank(),
+        }
+    }
+
+    fn can_mut(&self) -> bool {
+        match self {
+            TensorPrimitive::Float(tensor) => tensor.can_mut(),
+            TensorPrimitive::QFloat(tensor) => tensor.can_mut(),
         }
     }
 }

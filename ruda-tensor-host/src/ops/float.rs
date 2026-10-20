@@ -500,6 +500,10 @@ impl FloatTensorOps<Host> for Host {
         ruprim_host::binary::dispatch_float::float_atan2(lhs, rhs)
     }
 
+    fn float_hypot(lhs: FloatTensor<Host>, rhs: FloatTensor<Host>) -> FloatTensor<Host> {
+        ruprim_host::binary::dispatch_float::float_hypot(lhs, rhs)
+    }
+
     fn float_round(tensor: FloatTensor<Host>) -> FloatTensor<Host> {
         unary::round(tensor)
     }

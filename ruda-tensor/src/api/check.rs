@@ -39,6 +39,19 @@ pub(crate) enum TensorCheck {
 }
 
 impl TensorCheck {
+    pub(crate) fn quantized_unsupported(ops: &str, dtype: DType) -> Self {
+        let mut check = Self::Ok;
+        if let DType::QFloat(scheme) = dtype {
+            check = check.register(
+                ops,
+                TensorError::new("Quantized tensors are not supported by this operation.").details(
+                    format!("Got dtype QFloat({scheme:?}). Dequantize the tensor first."),
+                ),
+            );
+        }
+        check
+    }
+
     /// Checks device and shape compatibility for element wise binary operations.
     pub(crate) fn binary_ops_ew<B: Backend, const D: usize, K: BasicOps<B>>(
         ops: &str,

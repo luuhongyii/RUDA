@@ -455,6 +455,10 @@ impl TensorMetadata for HostTensor {
     fn rank(&self) -> usize {
         self.layout.num_dims()
     }
+
+    fn can_mut(&self) -> bool {
+        self.is_unique()
+    }
 }
 
 /// Max rank we're willing to handle without falling back to the

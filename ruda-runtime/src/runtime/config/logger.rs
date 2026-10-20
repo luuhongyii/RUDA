@@ -16,6 +16,7 @@ pub struct Logger {
     compilation_index: Vec<usize>,
     profiling_index: Vec<usize>,
     autotune_index: Vec<usize>,
+    autotune_decision_index: Vec<usize>,
     streaming_index: Vec<usize>,
     memory_index: Vec<usize>,
     /// Global configuration for logging settings.
@@ -54,6 +55,9 @@ impl Logger {
             &config.autotune.logger,
             !matches!(config.autotune.logger.level, AutotuneLogLevel::Disabled),
         );
+        let autotune_decision_index = register_enabled(
+            &mut sinks, &config.autotune.decisions, config.autotune.decisions_enabled(),
+        );
         let streaming_index = register_enabled(
             &mut sinks,
             &config.streaming.logger,
@@ -70,6 +74,7 @@ impl Logger {
             compilation_index,
             profiling_index,
             autotune_index,
+            autotune_decision_index,
             streaming_index,
             memory_index,
             config,
@@ -99,6 +104,16 @@ impl Logger {
     /// Logs a message for autotuning, directing it to all configured autotuning loggers.
     pub fn log_autotune<S: Display>(&mut self, msg: &S) {
         self.sinks.log(&self.autotune_index, msg);
+    }
+
+    /// Whether structured tuning decisions have an independently configured sink.
+    pub fn autotune_decisions_enabled(&self) -> bool {
+        self.config.autotune.decisions_enabled()
+    }
+
+    /// Write one structured tuning decision.
+    pub fn log_autotune_decision<S: Display>(&mut self, msg: &S) {
+        self.sinks.log(&self.autotune_decision_index, msg);
     }
 
     /// Returns the current streaming log level from the global configuration.

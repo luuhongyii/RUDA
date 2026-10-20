@@ -7,6 +7,15 @@ use ruda_core::{
 
 impl Emitter {
     pub fn shared_array(&mut self, variable: Variable) -> Result<String> {
+        if let VariableKind::Shared { id } = variable.kind {
+            Scalar::memory_element(variable.ty)?;
+            if let Some(previous) = self.shared_arrays.insert(id, variable) {
+                if previous != variable {
+                    return Err(invalid("inconsistent shared value declaration"));
+                }
+            }
+            return Ok(format!("%shared_{id}"));
+        }
         let VariableKind::SharedArray {
             id,
             length,

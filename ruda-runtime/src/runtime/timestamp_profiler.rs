@@ -50,6 +50,9 @@ impl TimestampProfiler {
         Ok(ProfileDuration::new_system_time(start, Instant::now()))
     }
 
+    /// Discard an open measurement without synchronizing its stream.
+    pub fn abandon(&mut self, token: ProfilingToken) { self.state.remove(&token); }
+
     /// Register an error during profiling.
     pub fn error(&mut self, error: ProfileError) {
         self.state

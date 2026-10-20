@@ -117,8 +117,8 @@ impl LoRALinearConfig {
         let device = base.qweight.val().device();
         let mut a = LinearConfig::new(input, self.rank).with_bias(false).init(&device);
         let mut b = LinearConfig::new(self.rank, output).with_bias(false).with_initializer(Initializer::Zeros).init(&device);
-        a.weight = a.weight.map(|value| value.cast(adapter_dtype).detach().require_grad());
-        b.weight = b.weight.map(|value| value.cast(adapter_dtype).detach().require_grad());
+        a.weight = a.weight.map(|value| value.cast(adapter_dtype).detach()).set_require_grad(true);
+        b.weight = b.weight.map(|value| value.cast(adapter_dtype).detach()).set_require_grad(true);
         self.from_awq_adapters(base, a, b, use_rslora)
     }
 
@@ -140,7 +140,7 @@ impl LoRALinearConfig {
         for dtype in [a.dtype(), b.dtype()] {
             assert!(matches!(dtype, DType::F16 | DType::BF16 | DType::F32), "unsupported AWQ adapter storage");
         }
-        assert!(!B::ad_enabled(&device) || (a.is_require_grad() && b.is_require_grad()), "loaded AWQ adapters must be trainable");
+        assert!((!a.is_autodiff() || a.is_require_grad()) && (!b.is_autodiff() || b.is_require_grad()), "loaded AWQ adapters must be trainable");
         let denominator = if use_rslora { (self.rank as f64).sqrt() } else { self.rank as f64 };
         AwqLoRALinear { base, adapter_a, adapter_b, dropout: DropoutConfig::new(self.dropout).init(), scale: self.alpha / denominator }
     }

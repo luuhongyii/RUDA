@@ -30,6 +30,9 @@ pub struct Scope {
     pub depth: u8,
     pub instructions: Vec<Instruction>,
     pub locals: Vec<Variable>,
+    /// Values supplied by a caller rather than declared by this scope.
+    #[cfg_attr(feature = "ir-serde", serde(default))]
+    pub parameters: Vec<Variable>,
     matrices: Vec<Variable>,
     pipelines: Vec<Variable>,
     shared: Vec<Variable>,
@@ -37,6 +40,8 @@ pub struct Scope {
     local_arrays: Vec<Variable>,
     index_offset_with_output_layout_position: Vec<usize>,
     pub allocator: Allocator,
+    #[cfg_attr(feature = "ir-serde", serde(default))]
+    pub references: Rc<RefCell<super::ReferenceData>>,
     pub debug: DebugInfo,
     #[type_hash(skip)]
     #[cfg_attr(feature = "ir-serde", serde(skip))]
@@ -79,11 +84,13 @@ impl core::hash::Hash for Scope {
         self.depth.hash(ra_expand_state);
         self.instructions.hash(ra_expand_state);
         self.locals.hash(ra_expand_state);
+        self.parameters.hash(ra_expand_state);
         self.matrices.hash(ra_expand_state);
         self.pipelines.hash(ra_expand_state);
         self.shared.hash(ra_expand_state);
         self.const_arrays.hash(ra_expand_state);
         self.local_arrays.hash(ra_expand_state);
+        self.references.borrow().hash(ra_expand_state);
         self.index_offset_with_output_layout_position
             .hash(ra_expand_state);
     }
@@ -115,6 +122,7 @@ impl Scope {
             depth: 0,
             instructions: Vec::new(),
             locals: Vec::new(),
+            parameters: Vec::new(),
             matrices: Vec::new(),
             pipelines: Vec::new(),
             local_arrays: Vec::new(),
@@ -122,6 +130,7 @@ impl Scope {
             const_arrays: Vec::new(),
             index_offset_with_output_layout_position: Vec::new(),
             allocator: Allocator::default(),
+            references: Default::default(),
             debug: DebugInfo {
                 enabled: debug_enabled,
                 sources: Default::default(),
@@ -252,6 +261,7 @@ impl Scope {
             depth: self.depth + 1,
             instructions: Vec::new(),
             locals: Vec::new(),
+            parameters: Vec::new(),
             matrices: Vec::new(),
             pipelines: Vec::new(),
             shared: Vec::new(),
@@ -259,6 +269,7 @@ impl Scope {
             local_arrays: Vec::new(),
             index_offset_with_output_layout_position: Vec::new(),
             allocator: self.allocator.clone(),
+            references: self.references.clone(),
             debug: self.debug.clone(),
             typemap: self.typemap.clone(),
             sizemap: self.sizemap.clone(),
@@ -266,6 +277,13 @@ impl Scope {
             modes: self.modes.clone(),
             properties: self.properties.clone(),
         }
+    }
+
+    /// Create an independent function body, retaining globally unique variable ids.
+    pub fn function_child(&mut self) -> Self {
+        let mut child = self.child();
+        child.allocator = self.allocator.function_child();
+        child
     }
 
     // Adds a validation error.

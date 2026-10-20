@@ -1,6 +1,6 @@
 use crate::{
     CpuCompiler,
-    compilation::MlirCompilerOptions,
+    compilation::{F16Evaluation, MlirCompilerOptions},
     execution::{
         runner::CpuKernel,
         schedule::{BindingsResource, ScheduleTask, ScheduledCpuBackend},
@@ -35,7 +35,8 @@ use std::{collections::HashMap, sync::Arc};
 pub struct CpuServer {
     scheduler: SchedulerMultiStream<ScheduledCpuBackend>,
     utilities: Arc<ServerUtilities<CpuServer>>,
-    compilation_cache: HashMap<KernelId, CpuKernel>,
+    compilation_cache: HashMap<(KernelId, F16Evaluation), CpuKernel>,
+    compilation_options: MlirCompilerOptions,
     // A buffer that can be used to store stream id without extra allocations.
     streams_pool: Vec<StreamId>,
 }
@@ -65,6 +66,7 @@ impl CpuServer {
             scheduler,
             utilities,
             compilation_cache: HashMap::new(),
+            compilation_options: MlirCompilerOptions::for_host(),
             streams_pool: Vec::new(),
         }
     }
@@ -101,7 +103,15 @@ impl ComputeServer for CpuServer {
 
     fn initialize_memory(&mut self, memory: ManagedMemoryHandle, size: u64, stream_id: StreamId) {
         let stream = self.scheduler.stream(&stream_id);
-        let reserved = stream.empty(size).unwrap();
+        let reserved = match stream.empty(size) {
+            Ok(reserved) => reserved,
+            Err(error) => {
+                let error: ServerError = error.into();
+                memory.binding().set_failure(0, size, error.clone());
+                stream.error(error);
+                return;
+            }
+        };
         stream.bind(reserved, memory);
     }
 
@@ -127,6 +137,9 @@ impl ComputeServer for CpuServer {
                 return Box::pin(async move { Err(err) });
             }
         }
+        if let Err(error) = Binding::check_all(descriptors.iter().map(|descriptor| &descriptor.handle)) {
+            return Box::pin(async move { Err(error) });
+        }
         for desc in descriptors {
             let stream = self.scheduler.stream(&desc.handle.stream);
             results.push(stream.read_async(desc));
@@ -146,32 +159,29 @@ impl ComputeServer for CpuServer {
 
     fn write(&mut self, descriptors: Vec<(CopyDescriptor, Bytes)>, stream_id: StreamId) {
         for (desc, data) in descriptors {
+            if data.is_empty() || desc.shape.contains(&0) { continue; }
+            let destination = desc.handle.clone();
+            let mut scope = ruda::runtime::server::WriteScope::deferred(vec![destination.clone()]);
+            let owner = desc.handle.stream;
             let stream = self.scheduler.stream(&desc.handle.stream);
-
-            if contiguous_strides(&desc.shape) != desc.strides {
-                stream.error(ServerError::Io(IoError::UnsupportedStrides {
+            let resource = if contiguous_strides(&desc.shape) != desc.strides {
+                Err(IoError::UnsupportedStrides {
                     backtrace: BackTrace::capture(),
-                }));
-                return;
-            }
-
-            if !stream.is_healthy() {
-                return;
-            }
-
-            let resource = match stream.get_resource(desc.handle.clone()) {
-                Ok(r) => r,
-                Err(err) => {
-                    stream.error(ServerError::Io(err));
-                    return;
+                })
+            } else {
+                stream.get_resource(desc.handle)
+            };
+            let task = match resource {
+                Ok(buffer) => ScheduleTask::Write { data, buffer, destination },
+                Err(error) => {
+                    let error = scope.fail(ServerError::Io(error));
+                    self.scheduler.stream(&stream_id).error(error);
+                    continue;
                 }
             };
-            let task = ScheduleTask::Write {
-                data,
-                buffer: resource,
-            };
-
-            self.scheduler.register(stream_id, task, &[]);
+            scope.enter();
+            self.scheduler.register(stream_id, task, &[owner]);
+            scope.complete();
         }
     }
 
@@ -201,15 +211,59 @@ impl ComputeServer for CpuServer {
         kind: ExecutionMode,
         stream_id: StreamId,
     ) {
+        unsafe {
+            self.launch_with_mode(kernel, count, bindings, kind, stream_id, ruda::runtime::dry_run::LaunchMode::Execute)
+        };
+    }
+
+    unsafe fn launch_with_mode(
+        &mut self,
+        kernel: Self::Kernel,
+        count: RudaCount,
+        bindings: KernelArguments,
+        kind: ExecutionMode,
+        stream_id: StreamId,
+        launch_mode: ruda::runtime::dry_run::LaunchMode,
+    ) {
+        if launch_mode.is_skipped() {
+            if let Err(error) = self.prepare_kernel(kernel, kind) {
+                self.scheduler.stream(&stream_id).error(
+                    ruda::runtime::server::LaunchError::CompilationError(error).into(),
+                );
+            }
+            return;
+        }
+        let mut kernel_id = kernel.id();
+        kernel_id.mode(kind);
+        let execution = ruda::runtime::server::KernelExecution::new(kernel_id, &bindings, &count);
         self.streams_pool.clear();
         bindings
             .buffers
             .iter()
             .for_each(|b| self.streams_pool.push(b.stream));
-        let bindings = self.prepare_bindings(bindings);
-        let task = self.prepare_task(kernel, count, bindings, kind).unwrap();
-
+        if let RudaCount::Dynamic(binding) = &count {
+            self.streams_pool.push(binding.stream);
+        }
+        let mut task = match self.prepare_task(kernel, count, bindings, kind, execution) {
+            Ok(Some(task)) => task,
+            Ok(None) => return,
+            Err(error) => {
+                self.scheduler.stream(&stream_id).error(error);
+                return;
+            }
+        };
+        let scope = match &mut task {
+            ScheduleTask::Execute { execution, .. } => match execution.begin_submission() {
+                Ok(scope) => scope,
+                Err(error) => {
+                    self.scheduler.stream(&stream_id).error(error);
+                    return;
+                }
+            },
+            ScheduleTask::Write { .. } => unreachable!("prepare_task only constructs kernels"),
+        };
         self.scheduler.register(stream_id, task, &self.streams_pool);
+        if let Some(scope) = scope { scope.complete(); }
     }
 
     fn flush(&mut self, stream_id: StreamId) -> Result<(), ServerError> {
@@ -243,6 +297,10 @@ impl ComputeServer for CpuServer {
         self.scheduler.execute_streams(vec![stream_id]);
         let stream = self.scheduler.stream(&stream_id);
         stream.end_profile(token)
+    }
+
+    fn abandon_profile(&mut self, stream_id: StreamId, token: ProfilingToken) {
+        self.scheduler.stream(&stream_id).timestamps.abandon(token);
     }
 
     fn get_resource(

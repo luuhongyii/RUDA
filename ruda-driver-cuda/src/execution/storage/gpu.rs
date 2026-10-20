@@ -172,7 +172,7 @@ impl ComputeStorage for GpuStorage {
         // still have kernels or interop copies using the old addresses.
         let status = unsafe { cudarc::driver::sys::cuCtxSynchronize() };
         if status == cudarc::driver::sys::CUresult::CUDA_SUCCESS { Ok(()) }
-        else { Err(IoError::Unknown { description: format!("CUDA relocation wait: {status:?}"), backtrace: BackTrace::capture() }) }
+        else { Err(crate::execution::status::io("cuCtxSynchronize relocation", DriverError(status))) }
     }
 
     fn relocation_copy(&mut self, source: &StorageHandle, target: &StorageHandle) -> Result<(), IoError> {
@@ -181,13 +181,13 @@ impl ComputeStorage for GpuStorage {
         // The allocator holds both nonoverlapping reservations until completion.
         let status = unsafe { cudarc::driver::sys::cuMemcpyDtoDAsync_v2(dst, src, source.size() as usize, self.stream) };
         if status == cudarc::driver::sys::CUresult::CUDA_SUCCESS { Ok(()) }
-        else { Err(IoError::Unknown { description: format!("CUDA relocation copy: {status:?}"), backtrace: BackTrace::capture() }) }
+        else { Err(crate::execution::status::io("cuMemcpyDtoDAsync relocation", DriverError(status))) }
     }
 
     fn relocation_complete(&mut self) -> Result<(), IoError> {
         let status = unsafe { cudarc::driver::sys::cuStreamSynchronize(self.stream) };
         if status == cudarc::driver::sys::CUresult::CUDA_SUCCESS { Ok(()) }
-        else { Err(IoError::Unknown { description: format!("CUDA relocation completion: {status:?}"), backtrace: BackTrace::capture() }) }
+        else { Err(crate::execution::status::io("cuStreamSynchronize relocation", DriverError(status))) }
     }
 
     fn get(&mut self, handle: &StorageHandle) -> Self::Resource {
@@ -219,6 +219,9 @@ impl ComputeStorage for GpuStorage {
         let ptr = unsafe { cudarc::driver::result::malloc_async(self.stream, size as usize) };
         let (ptr, kind) = match ptr {
             Ok(ptr) => (ptr, AllocationKind::Async),
+            Err(error) if crate::execution::status::poisons_device(error.0) => {
+                return Err(crate::execution::status::io("cuMemAllocAsync", error));
+            }
             Err(_) => unsafe {
                 match cudarc::driver::result::malloc_sync(size as usize) {
                     Ok(ptr) => (ptr, AllocationKind::Sync),
@@ -229,10 +232,7 @@ impl ComputeStorage for GpuStorage {
                         });
                     }
                     Err(other) => {
-                        return Err(IoError::Unknown {
-                            description: format!("CUDA allocation error: {other}"),
-                            backtrace: BackTrace::capture(),
-                        });
+                        return Err(crate::execution::status::io("cuMemAlloc", other));
                     }
                 }
             },

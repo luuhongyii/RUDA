@@ -109,6 +109,19 @@ pub trait Backend:
         false
     }
 
+    /// Runtime association for new tensors on this device in the current synchronous scope.
+    fn autodiff_creation_context(device: &Self::Device) -> super::AutodiffContext {
+        if Self::ad_enabled(device) {
+            super::AutodiffContext::Enabled(super::GradientCheckpointingStrategy::Disabled)
+        } else { super::AutodiffContext::Disabled }
+    }
+
+    /// Run synchronous tensor creation with an explicit association, restoring it on unwind.
+    fn with_autodiff_creation_context<R>(device: &Self::Device, context: super::AutodiffContext, func: impl FnOnce() -> R) -> R {
+        assert_eq!(Self::autodiff_creation_context(device), context, "Backend does not support overriding the tensor creation context");
+        func()
+    }
+
     /// Sets the current allocation mode to persistent.
     #[allow(unused_variables)]
     fn memory_persistent_allocations<
@@ -141,6 +154,58 @@ pub trait Backend:
     /// Sync the backend, ensure that all computation are finished.
     fn sync(_device: &Self::Device) -> Result<(), ExecutionError> {
         Ok(())
+    }
+
+    /// Measure a closure, preserving the timing method reported by this backend.
+    fn profile<O: Send + 'static>(device: &Self::Device, _options: super::ProfileOptions,
+        func: impl FnOnce() -> O + Send) -> Result<(O, super::ProfileDuration), ExecutionError> {
+        super::profile_system_time::<Self, O>(device, func)
+    }
+
+    /// Open an independent profiling window, or return `None` for system-only timing.
+    fn profile_start(_device: &Self::Device) -> Result<Option<super::ProfileToken>, ExecutionError> { Ok(None) }
+
+    /// Close a window on the stream where it opened, optionally flushing deferred work.
+    fn profile_end(_device: &Self::Device, _token: super::ProfileToken, _options: super::ProfileOptions)
+        -> Result<super::ProfileDuration, ExecutionError> { Err(super::profile::unsupported()) }
+
+    /// Release an abandoned window, including when a profiled closure unwinds.
+    fn profile_abandon(device: &Self::Device, token: super::ProfileToken) {
+        let _ = Self::profile_end(device, token, super::ProfileOptions::default());
+    }
+
+    /// Submit the current stream's buffered work without waiting for device completion.
+    /// Eager backends may return immediately; deferred backends must dispatch their queue.
+    fn flush(_device: &Self::Device) -> Result<(), ExecutionError> {
+        Err(ExecutionError::WithContext {
+            reason: "This backend does not implement nonblocking stream submission".into(),
+        })
+    }
+
+    /// Prepare memory and metadata for graph-capture warmup.
+    fn graph_prepare(_device: &Self::Device) -> Result<(), ExecutionError> {
+        Err(ExecutionError::WithContext { reason: "Hardware graph capture is unsupported".into() })
+    }
+
+    /// Begin recording a warmed computation.
+    fn graph_start_capture(_device: &Self::Device) -> Result<(), ExecutionError> {
+        Err(ExecutionError::WithContext { reason: "Hardware graph capture is unsupported".into() })
+    }
+
+    /// End recording, resetting capture state on failure as well as success.
+    fn graph_stop_capture(_device: &Self::Device) -> Result<super::BackendGraph, ExecutionError> {
+        Err(ExecutionError::WithContext { reason: "Hardware graph capture is unsupported".into() })
+    }
+
+    /// Close an abandoned recording.
+    fn graph_abort_capture(_device: &Self::Device) {}
+
+    /// Replay a recorded computation on its capture stream.
+    ///
+    /// # Safety
+    /// Captured inputs must retain their addresses and have no concurrent accesses.
+    unsafe fn graph_replay(_device: &Self::Device, graph: &super::BackendGraph) -> Result<(), ExecutionError> {
+        unsafe { graph.replay() }
     }
 
     /// Marks the given data as being used as a staging buffer for transfer between CPU and
@@ -241,6 +306,26 @@ pub trait AutodiffBackend: Backend {
         grads: &mut Self::Gradients,
         grad: FloatTensor<Self::InnerBackend>,
     );
+
+    /// Query gradients retained by a differentiable quantized tensor's surrogate.
+    fn q_grad(tensor: &QuantizedTensor<Self>, grads: &Self::Gradients) -> Option<FloatTensor<Self::InnerBackend>> {
+        if !Self::q_is_require_grad(tensor) { return None; }
+        let dtype = crate::get_device_settings::<Self>(&Self::q_device(tensor)).float_dtype;
+        Self::grad(&Self::dequantize(tensor.clone(), dtype), grads)
+    }
+
+    /// Remove gradients retained by a differentiable quantized tensor's surrogate.
+    fn q_grad_remove(tensor: &QuantizedTensor<Self>, grads: &mut Self::Gradients) -> Option<FloatTensor<Self::InnerBackend>> {
+        if !Self::q_is_require_grad(tensor) { return None; }
+        let dtype = crate::get_device_settings::<Self>(&Self::q_device(tensor)).float_dtype;
+        Self::grad_remove(&Self::dequantize(tensor.clone(), dtype), grads)
+    }
+
+    /// Replace a quantized surrogate's retained gradients without modifying its storage.
+    fn q_grad_replace(tensor: &QuantizedTensor<Self>, grads: &mut Self::Gradients, grad: FloatTensor<Self::InnerBackend>) {
+        let dtype = crate::get_device_settings::<Self>(&Self::q_device(tensor)).float_dtype;
+        Self::grad_replace(&Self::dequantize(tensor.clone(), dtype), grads, grad)
+    }
 
     /// Returns the tensor with inner backend type.
     ///

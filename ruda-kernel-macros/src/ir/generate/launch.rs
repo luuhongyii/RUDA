@@ -16,8 +16,12 @@ impl ToTokens for Launch {
         let launch = self.launch();
         let prepare = self.prepare();
         let launch_unchecked = self.launch_unchecked();
+        let launch_erased = self.erased_launch(false, false);
+        let launch_unchecked_erased = self.erased_launch(true, false);
+        let prepare_erased = self.erased_launch(false, true);
         let aliases = self.create_type_alias();
         let dummy = self.create_dummy_kernel();
+        let dummy_erased = self.create_dummy_kernel_for(true);
         let kernel = self.kernel_definition();
         let mut func = self.func.clone();
         func.sig.name = format_ident!("expand");
@@ -36,7 +40,11 @@ impl ToTokens for Launch {
                 #launch
                 #launch_unchecked
                 #prepare
+                #launch_erased
+                #launch_unchecked_erased
+                #prepare_erased
                 #dummy
+                #dummy_erased
             }
         };
 
@@ -62,6 +70,7 @@ impl Launch {
                 self.func.sig.name
             );
             let generics = &self.launch_generics;
+            let where_clause = &generics.where_clause;
             let args = self.launch_args();
             let body = self.launch_body();
 
@@ -79,7 +88,7 @@ impl Launch {
                     __ruda_dim: #ruda_dim,
                     #address_type
                     #(#args),*
-                ) {
+                ) #where_clause {
                     #body
                     launcher.launch(__ruda_count, __kernel, __client)
                 }
@@ -106,6 +115,7 @@ impl Launch {
                 self.func.sig.name
             );
             let generics = &self.launch_generics;
+            let where_clause = &generics.where_clause;
             let args = self.launch_args();
             let body = self.launch_body();
 
@@ -123,7 +133,7 @@ impl Launch {
                     __ruda_dim: #ruda_dim,
                     #address_type
                     #(#args),*
-                ) {
+                ) #where_clause {
                     #body
                     launcher.launch_unchecked(__ruda_count, __kernel, __client)
                 }
@@ -143,6 +153,7 @@ impl Launch {
         let ruda_dim = prelude_type("RudaDim");
         let address_type = prelude_type("AddressType");
         let generics = &self.launch_generics;
+        let where_clause = &generics.where_clause;
         let args = self.launch_args();
         let body = self.launch_body();
         let address_type = match self.args.address_type {
@@ -159,7 +170,7 @@ impl Launch {
                 __ruda_dim: #ruda_dim,
                 #address_type
                 #(#args),*
-            ) -> #prepared<__R> {
+            ) -> #prepared<__R> #where_clause {
                 #body
                 launcher.prepare(__ruda_count, __kernel, __client)
             }
@@ -167,6 +178,100 @@ impl Launch {
     }
 
     fn launch_body(&self) -> TokenStream {
+        self.launch_body_for(quote![__R])
+    }
+
+    fn erased_generics(&self) -> syn::Generics {
+        let mut generics = self.launch_generics.clone();
+        generics.params = generics.params.into_iter().filter(|param| {
+            !matches!(param, syn::GenericParam::Type(ty) if ty.ident == "__R")
+        }).collect();
+        generics
+    }
+
+    fn kernel_type_args(&self, marker: &TokenStream) -> TokenStream {
+        let args = self.kernel_generics.params.iter().map(|param| match param {
+            syn::GenericParam::Type(ty) if ty.ident == "__R" => marker.clone(),
+            syn::GenericParam::Type(ty) => {
+                let name = &ty.ident;
+                quote![#name]
+            }
+            syn::GenericParam::Const(param) => {
+                let name = &param.ident;
+                quote![#name]
+            }
+            syn::GenericParam::Lifetime(param) => {
+                let lifetime = &param.lifetime;
+                quote![#lifetime]
+            }
+        });
+        quote![::<#(#args),*>]
+    }
+
+    fn erased_launch(&self, unchecked: bool, prepare: bool) -> TokenStream {
+        let enabled = if prepare {
+            self.args.launch.is_present() || self.args.launch_unchecked.is_present()
+        } else if unchecked {
+            self.args.launch_unchecked.is_present()
+        } else {
+            self.args.launch.is_present()
+        };
+        if !enabled { return TokenStream::new(); }
+        let client = prelude_type("Client");
+        let count = prelude_type("RudaCount");
+        let dim = prelude_type("RudaDim");
+        let address_type = prelude_type("AddressType");
+        let generics = self.erased_generics();
+        let where_clause = &generics.where_clause;
+        let args = self.launch_args_for(parse_quote![()]);
+        let body = self.launch_body_for(quote![()]);
+        let address_type = match self.args.address_type {
+            AddressType::Dynamic => quote![__address_type: #address_type,],
+            _ => quote![],
+        };
+        let (name, unsafety, output, submit, doc) = if prepare {
+            let prepared = prelude_type("ErasedPreparedKernel");
+            (format_ident!("prepare_erased"), quote![], quote![-> #prepared],
+                quote![launcher.prepare_erased(__ruda_count, __kernel, __client)],
+                "Prepare an owned invocation on a fixed client queue without selecting a Rust runtime type.")
+        } else if unchecked {
+            (format_ident!("launch_unchecked_erased"), quote![unsafe], quote![],
+                quote![unsafe { launcher.launch_unchecked_erased(__ruda_count, __kernel, __client) }],
+                "Launch on the selected client without a Rust runtime type.\n\n# Safety\nThe kernel must have valid memory accesses and terminate.")
+        } else {
+            (format_ident!("launch_erased"), quote![], quote![],
+                quote![launcher.launch_erased(__ruda_count, __kernel, __client)],
+                "Launch on the selected client without selecting a Rust runtime type.")
+        };
+        quote! {
+            #[allow(clippy::too_many_arguments)]
+            #[track_caller]
+            #[doc = #doc]
+            pub #unsafety fn #name #generics(
+                __client: &#client,
+                __ruda_count: #count,
+                __ruda_dim: #dim,
+                #address_type
+                #(#args),*
+            ) #output #where_clause {
+                #body
+                #submit
+            }
+        }
+    }
+
+    fn launch_body_for(&self, marker: TokenStream) -> TokenStream {
+        let kernel_name = self.kernel_name();
+        let kernel_generics = self.kernel_type_args(&marker);
+        let comptime_args = self.comptime_params().map(|it| &it.name);
+        let (setup, args) = self.launcher_setup(marker, quote![__client.properties()]);
+        quote! {
+            #setup
+            let __kernel = #kernel_name #kernel_generics::new(__settings, __client.clone(), #args #(#comptime_args),*);
+        }
+    }
+
+    fn launcher_setup(&self, marker: TokenStream, properties: TokenStream) -> (TokenStream, TokenStream) {
         let kernel_launcher = prelude_type("KernelLauncher");
 
         let mappings = self.func.sig.define_mappings();
@@ -176,24 +281,20 @@ impl Launch {
                 .register_types(mappings, quote![scope], false, true);
 
         let settings = self.configure_settings();
-        let kernel_name = self.kernel_name();
-        let kernel_generics = self.kernel_generics.split_for_impl();
-        let kernel_generics = kernel_generics.1.as_turbofish();
-        let comptime_args = self.comptime_params().map(|it| &it.name);
         let (registers, args) = self.arg_registers();
 
-        quote! {
+        let setup = quote! {
             #settings
 
-            let mut launcher = #kernel_launcher::<__R>::new(__settings.clone());
+            let mut launcher = #kernel_launcher::<#marker>::new(__settings.clone());
             launcher.with_scope(|scope| {
-                scope.device_properties(__client.properties());
+                scope.device_properties(#properties);
                 #generic_registers
             });
 
             #registers
-            let __kernel = #kernel_name #kernel_generics::new(__settings, __client.clone(), #args #(#comptime_args),*);
-        }
+        };
+        (setup, args)
     }
 
     fn configure_settings(&self) -> TokenStream {
@@ -234,23 +335,32 @@ impl Launch {
         aliases
     }
     fn create_dummy_kernel(&self) -> TokenStream {
+        self.create_dummy_kernel_for(false)
+    }
+
+    fn create_dummy_kernel_for(&self, erased: bool) -> TokenStream {
         if self.args.create_dummy_kernel.is_present() {
             let ruda_count = prelude_type("RudaCount");
             let ruda_dim = prelude_type("RudaDim");
             let address_type = prelude_type("AddressType");
+            let private = core_type("__private");
+            let ir = core_type("ir");
+            let context = prelude_type("KernelContext");
 
             let kernel_doc = format!(
                 "Launch the kernel [{}()] on the given runtime",
                 self.func.sig.name
             );
-            let generics = &self.launch_generics;
-            let (_, generic_names, _) = self.kernel_generics.split_for_impl();
+            let generics = if erased { self.erased_generics() } else { self.launch_generics.clone() };
+            let where_clause = &generics.where_clause;
+            let marker = if erased { quote![()] } else { quote![__R] };
+            let generic_names = self.kernel_type_args(&marker);
+            let name = if erased { format_ident!("create_dummy_kernel_erased") } else { format_ident!("create_dummy_kernel") };
 
-            let settings = self.configure_settings();
             let kernel_name = self.kernel_name();
-            let comptime_args = self.launch_args();
+            let comptime_args = self.launch_args_for(if erased { parse_quote![()] } else { parse_quote![__R] });
             let comptime_names = self.comptime_params().map(|it| &it.name);
-            let (compilation_args, args) = self.arg_registers();
+            let (setup, args) = self.launcher_setup(marker, quote![&__device_properties]);
 
             let address_type = match self.args.address_type {
                 AddressType::Dynamic => quote![__address_type: #address_type,],
@@ -260,16 +370,22 @@ impl Launch {
             quote! {
                 #[allow(clippy::too_many_arguments)]
                 #[doc = #kernel_doc]
-                pub fn create_dummy_kernel #generics(
+                pub fn #name #generics(
+                    __device_properties: #private::Arc<#ir::DeviceProperties>,
+                    __target_properties: #private::Arc<#ir::TargetProperties>,
                     __ruda_count: #ruda_count,
                     __ruda_dim: #ruda_dim,
                     #address_type
                     #(#comptime_args),*
-                ) -> #kernel_name #generic_names {
-                    #settings
-                    #compilation_args
+                ) -> #kernel_name #generic_names #where_clause {
+                    #setup
 
-                    #kernel_name::new(__settings, #args #(#comptime_names),*)
+                    launcher.discard();
+                    #kernel_name #generic_names::new(
+                        __settings,
+                        #context::from_properties(__device_properties, __target_properties),
+                        #args #(#comptime_names),*
+                    )
                 }
             }
         } else {
@@ -282,11 +398,15 @@ impl Launch {
     }
 
     fn launch_args(&self) -> Vec<KernelParam> {
+        self.launch_args_for(parse_quote![__R])
+    }
+
+    fn launch_args_for(&self, marker: syn::Type) -> Vec<KernelParam> {
         let mut args = self.func.sig.parameters.clone();
         let runtime_arg = core_type("RuntimeArg");
         for arg in args.iter_mut().filter(|it| !it.is_const) {
             let ty = arg.ty_owned();
-            arg.normalized_ty = parse_quote![#runtime_arg<#ty, __R>];
+            arg.normalized_ty = parse_quote![#runtime_arg<#ty, #marker>];
             arg.mut_token = None;
         }
         args

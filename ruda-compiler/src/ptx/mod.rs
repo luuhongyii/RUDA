@@ -87,6 +87,7 @@ pub struct PtxCompilationOptions {
 /// Compiled PTX and the launch properties of the original kernel.
 #[derive(Clone, Debug)]
 pub struct PtxKernel {
+    pub io: ruda_core::kernel::KernelIo,
     pub source: String,
     pub entrypoint: String,
     pub ruda_dim: RudaDim,
@@ -106,7 +107,7 @@ impl fmt::Display for PtxKernel {
 pub struct PtxCompiler;
 
 impl PtxCompiler {
-    pub const CACHE_VERSION: u32 = 44;
+    pub const CACHE_VERSION: u32 = 48;
 }
 
 impl Compiler for PtxCompiler {
@@ -135,6 +136,10 @@ impl Compiler for PtxCompiler {
 
     fn extension(&self) -> &'static str {
         "ptx"
+    }
+
+    fn buffer_io(&self, repr: &Self::Representation) -> Option<ruda_core::kernel::KernelIo> {
+        Some(repr.io.clone())
     }
 }
 

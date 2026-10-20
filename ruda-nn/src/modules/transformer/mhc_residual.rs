@@ -208,9 +208,10 @@ impl<B: Backend, P: CompressedAttentionProjection<B>, F: MhcResidualBranchShape<
         let (query, mappings) = self.attention_connection.pre(state.clone());
         let query = normalized(query, &self.attention_norm, self.epsilon);
         let valid = visible(&query, valid);
+        let context = query.autodiff_context().merge(valid.autodiff_context());
         let result = if auxiliary { self.attention.forward_with_aux(query, Some(valid.clone()), warmup) }
         else { CompressedAttentionOutput { output: self.attention.forward(query, Some(valid.clone())),
-            indexer_loss: Tensor::zeros([1], (&state.device(), if state.dtype() == DType::F64 { DType::F64 } else { DType::F32 })) } };
+            indexer_loss: Tensor::zeros([1], (&state.device(), if state.dtype() == DType::F64 { DType::F64 } else { DType::F32 })).with_autodiff_context(context) } };
         Ok(MhcTransformerOutput { state: self.finish_with(state, result.output, mappings, valid, branch)?, indexer_loss: result.indexer_loss })
     }
 

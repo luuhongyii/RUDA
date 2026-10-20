@@ -62,6 +62,70 @@ impl UnrollProcessor {
             // Detect unhandled ops that can't be reflected
             match &inst.operation {
                 Operation::CoopMma(op) => match op {
+                    CoopMma::Elementwise { input, function, captures } => {
+                        let mut function = function.clone();
+                        let mut body_mappings = Mappings(Default::default());
+                        let num_arguments = function.num_arguments;
+                        let formals = function.body.parameters.clone();
+                        let mut parameters = formals[..num_arguments].to_vec();
+                        let mut arguments = Vec::new();
+                        for (formal, actual) in formals[num_arguments..].iter().copied().zip(captures) {
+                            let width = formal.vector_size();
+                            if width <= self.max_vector_size {
+                                parameters.push(formal);
+                                arguments.push(*actual);
+                            } else {
+                                let factor = width / self.max_vector_size;
+                                if formal.is_array() {
+                                    parameters.push(unroll_array(formal, self.max_vector_size, factor));
+                                    arguments.push(unroll_array(*actual, self.max_vector_size, factor));
+                                } else {
+                                    parameters.extend(body_mappings.get(
+                                        &function.body.allocator, formal, factor, self.max_vector_size,
+                                    ));
+                                    arguments.extend(mappings.get(
+                                        alloc, *actual, factor, self.max_vector_size,
+                                    ));
+                                }
+                            }
+                        }
+                        function.body.parameters = parameters;
+                        function.body.instructions = self.transform_instructions(
+                            &function.body.allocator,
+                            core::mem::take(&mut function.body.instructions),
+                            &mut body_mappings,
+                        );
+                        return TransformAction::Replace(vec![Instruction::new(
+                            CoopMma::Elementwise { input: *input, function, captures: arguments },
+                            inst.out(),
+                        )]);
+                    }
+                    CoopMma::LoadTensor { buffer, offset, layout, view }
+                        if buffer.vector_size() > self.max_vector_size =>
+                    {
+                        let factor = buffer.vector_size() / self.max_vector_size;
+                        let buffer = unroll_array(*buffer, self.max_vector_size, factor);
+                        let (mul, offset) = mul_index(alloc, *offset, factor);
+                        return TransformAction::Replace(vec![
+                            mul,
+                            Instruction::new(CoopMma::LoadTensor {
+                                buffer, offset: *offset, layout: *layout, view: *view,
+                            }, inst.out()),
+                        ]);
+                    }
+                    CoopMma::StoreTensor { mat, offset, layout, view }
+                        if inst.out().vector_size() > self.max_vector_size =>
+                    {
+                        let factor = inst.out().vector_size() / self.max_vector_size;
+                        let buffer = unroll_array(inst.out(), self.max_vector_size, factor);
+                        let (mul, offset) = mul_index(alloc, *offset, factor);
+                        return TransformAction::Replace(vec![
+                            mul,
+                            Instruction::new(CoopMma::StoreTensor {
+                                mat: *mat, offset: *offset, layout: *layout, view: *view,
+                            }, buffer),
+                        ]);
+                    }
                     // Stride is in scalar elems
                     CoopMma::Load {
                         value,
@@ -151,6 +215,9 @@ impl UnrollProcessor {
                         unroll_factor,
                         mappings,
                     ))
+                }
+                Operation::Operator(Operator::WorkgroupUniformLoad(op)) if op.list.is_array() => {
+                    TransformAction::Replace(self.transform_uniform_load(alloc, inst.out(), op, mappings))
                 }
                 Operation::Operator(Operator::Index(op)) => {
                     TransformAction::Replace(self.transform_composite_index(
@@ -317,6 +384,50 @@ impl UnrollProcessor {
                 out,
             ),
         ]
+    }
+
+    fn transform_uniform_load(
+        &self, alloc: &Allocator, out: Variable, op: &IndexOperator, mappings: &mut Mappings,
+    ) -> Vec<Instruction> {
+        let mut list = op.list;
+        let mut storage_factor = 1;
+        if list.vector_size() > self.max_vector_size {
+            assert_eq!(list.vector_size() % self.max_vector_size, 0, "storage width must split into supported vectors");
+            storage_factor = list.vector_size() / self.max_vector_size;
+            list.ty = list.ty.with_vector_size(self.max_vector_size);
+            match &mut list.kind {
+                VariableKind::SharedArray { unroll_factor, .. }
+                | VariableKind::LocalArray { unroll_factor, .. }
+                | VariableKind::ConstantArray { unroll_factor, .. } => {
+                    *unroll_factor *= storage_factor;
+                }
+                _ => {}
+            }
+        }
+        let width = out.vector_size().min(self.max_vector_size);
+        assert_eq!(out.vector_size() % width, 0, "load width must split into supported vectors");
+        let count = out.vector_size() / width;
+        let outputs = if count == 1 {
+            vec![out]
+        } else {
+            mappings.get(alloc, out, count, width)
+        };
+        let (mul, start) = mul_index(alloc, op.index, count);
+        let mut instructions = vec![mul];
+        for (lane, output) in outputs.into_iter().enumerate() {
+            let (add, index) = add_index(alloc, *start, lane);
+            instructions.push(add);
+            instructions.push(Instruction::new(
+                Operator::WorkgroupUniformLoad(IndexOperator {
+                    list,
+                    index: *index,
+                    vector_size: if width == list.vector_size() { 0 } else { width },
+                    unroll_factor: op.unroll_factor * storage_factor,
+                }),
+                output,
+            ));
+        }
+        instructions
     }
 
     /// Transforms indexing into multiple index operations, each offset by 1 from the base. The base

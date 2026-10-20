@@ -26,10 +26,10 @@ pub struct StridedLayoutCompilationArg {
 }
 
 impl ViewLayoutLaunchArg for StridedLayout {
-    type RuntimeArg<R: Runtime> = ();
+    type RuntimeArg<R: LaunchMarker> = ();
     type CompilationArg = StridedLayoutCompilationArg;
 
-    fn register<R: Runtime, B: BufferArg>(
+    fn register<R: LaunchMarker, B: BufferArg>(
         _: Self::RuntimeArg<R>,
         buffer: &B,
         ty: Type,

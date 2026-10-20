@@ -260,11 +260,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "Same padding with an even kernel size is not supported"]
-    fn same_with_even_kernel_is_invalid() {
+    fn same_with_even_kernel_uses_asymmetric_padding() {
         let device = Default::default();
-        let config = DeformConv2dConfig::new([4, 4], [2, 2]).with_padding(PaddingConfig2d::Same);
-        let _ = config.init::<TestBackend>(&device);
+        let layer = DeformConv2dConfig::new([1, 1], [2, 2])
+            .with_padding(PaddingConfig2d::Same)
+            .with_bias(false)
+            .with_initializer(Initializer::Ones)
+            .init::<TestBackend>(&device);
+        let output = layer.forward(Tensor::ones([1, 1, 2, 2], &device),
+            Tensor::zeros([1, 8, 2, 2], &device), None);
+        output.to_data().assert_eq(&TensorData::from([[[[4.0f32, 2.0], [2.0, 1.0]]]]), false);
     }
 
     #[test]

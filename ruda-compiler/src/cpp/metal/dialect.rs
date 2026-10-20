@@ -854,7 +854,18 @@ impl DialectInstructions<Self> for MslDialect {
     }
 
     fn compile_instruction_sync_warp(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "simdgroup_barrier(mem_flags::mem_none);")
+        writeln!(f, "simdgroup_barrier(mem_flags::mem_threadgroup);")
+    }
+
+    fn compile_instruction_sync_storage(f: &mut std::fmt::Formatter<'_>, device_scope: bool) -> std::fmt::Result {
+        if !device_scope {
+            return writeln!(f, "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);");
+        }
+        f.write_str(
+            "atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, thread_scope_device);\n\
+             threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);\n\
+             atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, thread_scope_device);\n",
+        )
     }
 
     fn compile_instruction_thread_fence(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

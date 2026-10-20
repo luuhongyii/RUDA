@@ -56,7 +56,9 @@ pub fn prelu_native_backward_select<B: Backend>(input: FloatTensor<B>, alpha: Fl
     let alpha_storage: FloatDType = alpha.dtype().into();
     if info.elements == 0 {
         let device = B::float_device(&alpha);
-        return [mask[0].then_some(input), mask[1].then(|| B::float_zeros(alpha_shape, &device, alpha_storage))];
+        let context = B::float_autodiff_context(&input).merge(B::float_autodiff_context(&alpha)).merge(B::float_autodiff_context(&grad));
+        return [mask[0].then(|| B::float_with_autodiff_context(input, context)),
+            mask[1].then(|| B::float_with_autodiff_context(B::float_zeros(alpha_shape, &device, alpha_storage), context))];
     }
     let compute = if [&input, &alpha, &grad].into_iter().any(|value| value.dtype() == DType::F64) { FloatDType::F64 } else { FloatDType::F32 };
     let input = B::float_cast(input, compute);

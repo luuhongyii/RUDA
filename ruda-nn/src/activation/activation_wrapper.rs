@@ -10,11 +10,25 @@ use ruda_model::module::Module;
 use ruda_model::tensor::Tensor;
 use ruda_model::tensor::backend::Backend;
 use super::Silu;
+use super::{RRelu, RReluConfig};
+use super::{Hardtanh, HardtanhConfig, LogSigmoid, Mish, Relu6, Tanhshrink, Threshold, ThresholdConfig};
 
 /// [`Activation`] Configuration.
 #[derive(Config, Debug)]
 #[non_exhaustive]
 pub enum ActivationConfig {
+    /// [`Relu6`] activation layer.
+    Relu6,
+    /// [`Hardtanh`] activation layer.
+    Hardtanh(HardtanhConfig),
+    /// [`LogSigmoid`] activation layer.
+    LogSigmoid,
+    /// [`Mish`] activation layer.
+    Mish,
+    /// [`Tanhshrink`] activation layer.
+    Tanhshrink,
+    /// [`Threshold`] activation layer.
+    Threshold(ThresholdConfig),
     /// [`Gelu`] activation layer.
     Gelu,
 
@@ -74,12 +88,26 @@ pub enum ActivationConfig {
 
     /// [`Silu`] activation layer.
     Silu,
+    /// [`RRelu`] activation layer.
+    RRelu(RReluConfig),
+}
+
+impl From<RReluConfig> for ActivationConfig {
+    fn from(config: RReluConfig) -> Self { Self::RRelu(config) }
 }
 
 impl From<PReluConfig> for ActivationConfig {
     fn from(config: PReluConfig) -> Self {
         Self::PRelu(config)
     }
+}
+
+impl From<HardtanhConfig> for ActivationConfig {
+    fn from(config: HardtanhConfig) -> Self { Self::Hardtanh(config) }
+}
+
+impl From<ThresholdConfig> for ActivationConfig {
+    fn from(config: ThresholdConfig) -> Self { Self::Threshold(config) }
 }
 
 impl From<LeakyReluConfig> for ActivationConfig {
@@ -146,7 +174,14 @@ impl ActivationConfig {
     /// Initialize a wrapped activation layer.
     pub fn init<B: Backend>(&self, device: &B::Device) -> Activation<B> {
         match self {
+            ActivationConfig::Relu6 => Relu6.into(),
+            ActivationConfig::Hardtanh(conf) => conf.init().into(),
+            ActivationConfig::LogSigmoid => LogSigmoid.into(),
+            ActivationConfig::Mish => Mish.into(),
+            ActivationConfig::Tanhshrink => Tanhshrink.into(),
+            ActivationConfig::Threshold(conf) => conf.init().into(),
             ActivationConfig::Relu => Relu.into(),
+            ActivationConfig::RRelu(conf) => conf.init().into(),
             ActivationConfig::Silu => Silu.into(),
             ActivationConfig::LeakyRelu(conf) => conf.init().into(),
             ActivationConfig::Gelu => Gelu::new().into(),
@@ -177,6 +212,18 @@ impl ActivationConfig {
 #[non_exhaustive]
 #[allow(clippy::large_enum_variant)]
 pub enum Activation<B: Backend> {
+    /// [`Relu6`] activation layer.
+    Relu6(Relu6),
+    /// [`Hardtanh`] activation layer.
+    Hardtanh(Hardtanh),
+    /// [`LogSigmoid`] activation layer.
+    LogSigmoid(LogSigmoid),
+    /// [`Mish`] activation layer.
+    Mish(Mish),
+    /// [`Tanhshrink`] activation layer.
+    Tanhshrink(Tanhshrink),
+    /// [`Threshold`] activation layer.
+    Threshold(Threshold),
     /// [`Gelu`] activation layer.
     Gelu(Gelu),
 
@@ -233,10 +280,40 @@ pub enum Activation<B: Backend> {
 
     /// [`Silu`] activation layer.
     Silu(Silu),
+    /// [`RRelu`] activation layer.
+    RRelu(RRelu),
+}
+
+impl<B: Backend> From<RRelu> for Activation<B> {
+    fn from(layer: RRelu) -> Self { Self::RRelu(layer) }
 }
 
 impl<B: Backend> From<Silu> for Activation<B> {
     fn from(layer: Silu) -> Self { Self::Silu(layer) }
+}
+
+impl<B: Backend> From<Relu6> for Activation<B> {
+    fn from(layer: Relu6) -> Self { Self::Relu6(layer) }
+}
+
+impl<B: Backend> From<Hardtanh> for Activation<B> {
+    fn from(layer: Hardtanh) -> Self { Self::Hardtanh(layer) }
+}
+
+impl<B: Backend> From<LogSigmoid> for Activation<B> {
+    fn from(layer: LogSigmoid) -> Self { Self::LogSigmoid(layer) }
+}
+
+impl<B: Backend> From<Mish> for Activation<B> {
+    fn from(layer: Mish) -> Self { Self::Mish(layer) }
+}
+
+impl<B: Backend> From<Tanhshrink> for Activation<B> {
+    fn from(layer: Tanhshrink) -> Self { Self::Tanhshrink(layer) }
+}
+
+impl<B: Backend> From<Threshold> for Activation<B> {
+    fn from(layer: Threshold) -> Self { Self::Threshold(layer) }
 }
 
 impl<B: Backend> From<Gelu> for Activation<B> {
@@ -351,7 +428,14 @@ impl<B: Backend> Activation<B> {
     /// Forward pass.
     pub fn forward<const D: usize>(&self, input: Tensor<B, D>) -> Tensor<B, D> {
         match self {
+            Activation::Relu6(layer) => layer.forward(input),
+            Activation::Hardtanh(layer) => layer.forward(input),
+            Activation::LogSigmoid(layer) => layer.forward(input),
+            Activation::Mish(layer) => layer.forward(input),
+            Activation::Tanhshrink(layer) => layer.forward(input),
+            Activation::Threshold(layer) => layer.forward(input),
             Activation::Relu(layer) => layer.forward(input),
+            Activation::RRelu(layer) => layer.forward(input),
             Activation::Silu(layer) => layer.forward(input),
             Activation::LeakyRelu(layer) => layer.forward(input),
             Activation::Gelu(layer) => layer.forward(input),

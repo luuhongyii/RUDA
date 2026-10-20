@@ -1,6 +1,11 @@
 mod format;
 mod primitive;
+mod param;
 mod containers;
+mod runtime;
+mod runtime_containers;
+pub(crate) mod adapter;
+pub use runtime::{RuntimePrecision, RuntimeRecord, RuntimeRecordValue};
 pub use containers::BoundItem;
 mod tensor;
 mod sparse;
@@ -21,7 +26,7 @@ mod file;
 #[cfg(feature = "std")]
 pub use file::*;
 
-pub use primitive::ParamSerde;
+pub use param::ParamSerde;
 
 #[cfg(feature = "record-item-custom-serde")]
 pub mod serde;

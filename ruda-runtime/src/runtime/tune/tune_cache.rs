@@ -1,11 +1,11 @@
-#[cfg(std_io)]
-use std::vec::Vec;
+#[cfg(serializable)]
+use alloc::vec::Vec;
 
-#[cfg(std_io)]
-use ruda_core::cache::Cache;
-#[cfg(std_io)]
-use ruda_core::cache::CacheError;
-#[cfg(std_io)]
+#[cfg(all(std_io, not(persistence)))]
+use ruda_core::cache::{Cache, CacheError};
+#[cfg(persistence)]
+use ruda_core::environment::persistence::{Store, StoreOptions, CacheOption, Namespace, StoreError};
+#[cfg(serializable)]
 use serde::{Deserialize, Serialize};
 
 use super::{AutotuneError, AutotuneKey, AutotuneOutcome};
@@ -30,26 +30,37 @@ pub(crate) enum ChecksumState {
 }
 
 /// Persistent cache key
-#[cfg(std_io)]
+#[cfg(serializable)]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
-pub(crate) struct PersistentCacheKey<K> {
-    key: K,
-    checksum: String,
+pub struct PersistentCacheKey<K> {
+    /// Operation key.
+    pub key: K,
+    /// Candidate-list checksum.
+    pub checksum: String,
 }
 
 /// Persistent cache entry
-#[cfg(std_io)]
+#[cfg(serializable)]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub(crate) struct PersistentCacheValue {
-    fastest_index: usize,
-    results: Vec<AutotuneResult>,
+pub struct PersistentCacheValue {
+    /// Selected candidate index.
+    pub fastest_index: usize,
+    /// Measured and rejected candidate outcomes.
+    pub results: Vec<AutotuneResult>,
+    /// Measured resource ceilings, absent in legacy entries.
+    #[serde(default)]
+    pub bounds: Option<super::Bounds>,
+    /// Derived early-exit limit, absent in legacy entries.
+    #[serde(default)]
+    pub limit: Option<core::time::Duration>,
 }
 
-#[cfg_attr(std_io, derive(Serialize, Deserialize))]
+#[cfg_attr(serializable, derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 /// The result of an autotune job.
 pub struct AutotuneResult {
-    pub(crate) outcome: Result<AutotuneOutcome, AutotuneError>,
+    /// The measured outcome or candidate failure.
+    pub outcome: Result<AutotuneOutcome, AutotuneError>,
 }
 
 impl AutotuneResult {
@@ -82,8 +93,16 @@ impl PartialEq for AutotuneResult {
 #[derive(Debug)]
 pub(crate) struct TuneCache<K> {
     in_memory_cache: HashMap<K, CacheEntry>,
-    #[cfg(std_io)]
-    persistent_cache: Cache<PersistentCacheKey<K>, PersistentCacheValue>,
+    #[cfg(all(std_io, not(persistence)))]
+    persistent_cache: Option<Cache<PersistentCacheKey<K>, PersistentCacheValue>>,
+    #[cfg(persistence)]
+    persistent_cache: Option<Store<PersistentCacheKey<K>, PersistentCacheValue>>,
+    #[cfg(persistence)]
+    table: String,
+    #[cfg(persistence)]
+    generation: u32,
+    #[cfg(persistence)]
+    hydrated: bool,
 }
 
 /// Result of the cache try
@@ -106,31 +125,51 @@ pub enum TuneCacheResult {
 
 impl<K: AutotuneKey> TuneCache<K> {
     pub(crate) fn new(
-        #[cfg_attr(not(std_io), allow(unused_variables))] name: &str,
-        #[cfg_attr(not(std_io), allow(unused_variables))] device_id: &str,
+        #[cfg_attr(not(serializable), allow(unused_variables))] name: &str,
+        #[cfg_attr(not(serializable), allow(unused_variables))] device_id: &str,
     ) -> Self {
-        #[cfg(std_io)]
+        #[cfg(persistence)]
+        {
+            use crate::runtime::config::{RudaRuntimeConfig, RuntimeConfig};
+            let config = RudaRuntimeConfig::get();
+            let namespace = Namespace::scoped("autotune", alloc::format!("{device_id}/{name}"));
+            let table = namespace.as_str().into();
+            let generation = ruda_core::environment::generation();
+            let persistent_cache = (!config.autotune.disable_cache).then(|| {
+                Store::new(StoreOptions::new().storage(namespace).cache(CacheOption::Lazy))
+            });
+            let mut cache = Self {
+                in_memory_cache: HashMap::new(),
+                hydrated: persistent_cache.is_none(),
+                persistent_cache,
+                table,
+                generation,
+            };
+            cache.load();
+            cache
+        }
+        #[cfg(all(std_io, not(persistence)))]
         {
             use crate::runtime::config::RuntimeConfig;
             use std::format;
 
-            let root = crate::runtime::config::RudaRuntimeConfig::get()
-                .autotune
-                .cache
-                .root();
-            let options = ruda_core::cache::CacheOption::default();
+            let config = crate::runtime::config::RudaRuntimeConfig::get();
+            let persistent_cache = (!config.autotune.disable_cache).then(|| {
+                let root = config.autotune.cache.root();
+                Cache::new(
+                    format!("{device_id}/{name}"),
+                    ruda_core::cache::CacheOption::default().root(root).name("autotune"),
+                )
+            });
             let mut cache = TuneCache {
                 in_memory_cache: HashMap::new(),
-                persistent_cache: Cache::new(
-                    format!("{device_id}/{name}"),
-                    options.root(root).name("autotune"),
-                ),
+                persistent_cache,
             };
             cache.load();
             cache
         }
 
-        #[cfg(not(std_io))]
+        #[cfg(not(serializable))]
         {
             TuneCache {
                 in_memory_cache: HashMap::new(),
@@ -139,6 +178,10 @@ impl<K: AutotuneKey> TuneCache<K> {
     }
 
     pub fn fastest(&self, key: &K) -> TuneCacheResult {
+        #[cfg(persistence)]
+        if self.environment_switched() {
+            return TuneCacheResult::Miss;
+        }
         let Some(val) = self.in_memory_cache.get(key) else {
             return TuneCacheResult::Miss;
         };
@@ -155,7 +198,7 @@ impl<K: AutotuneKey> TuneCache<K> {
             return TuneCacheResult::Pending;
         };
 
-        if cfg!(std_io) {
+        if cfg!(serializable) {
             match checksum {
                 ChecksumState::ToBeVerified(..) => TuneCacheResult::Unchecked, // Don't know yet.
                 ChecksumState::NoMatch => TuneCacheResult::Miss,               // Can't use this.
@@ -172,8 +215,9 @@ impl<K: AutotuneKey> TuneCache<K> {
         }
     }
 
-    #[cfg(std_io)]
+    #[cfg(serializable)]
     pub fn validate_checksum(&mut self, key: &K, checksum: &str) -> TuneCacheResult {
+        self.sync_environment();
         let Some(val) = self.in_memory_cache.get_mut(key) else {
             return TuneCacheResult::Miss;
         };
@@ -194,14 +238,46 @@ impl<K: AutotuneKey> TuneCache<K> {
         self.fastest(key)
     }
 
+    pub(crate) fn sync_environment(&mut self) {
+        #[cfg(persistence)]
+        {
+            if self.environment_switched() {
+                self.generation = ruda_core::environment::generation();
+                self.in_memory_cache.clear();
+                self.hydrated = false;
+            }
+            if !self.hydrated {
+                self.load();
+            }
+        }
+    }
+
+    #[cfg(persistence)]
+    fn environment_switched(&self) -> bool {
+        self.persistent_cache.is_some()
+            && self.generation != ruda_core::environment::generation()
+    }
+
+    #[cfg(persistence)]
+    pub(crate) fn table(&self) -> &str {
+        &self.table
+    }
+
+    #[cfg(persistence)]
+    pub(crate) fn persistent_enabled(&self) -> bool {
+        self.persistent_cache.is_some()
+    }
+
     /// Mark a key as being tuned. Used by [`Tuner::tune`] under the cache mutex so that
     /// concurrent callers see [`TuneCacheResult::Pending`] and wait on the same job instead of
     /// starting a second one. Returns `(Sender, Receiver)`:
     pub(crate) fn mark_pending(&mut self, key: K) {
+        self.sync_environment();
         self.in_memory_cache.insert(key, CacheEntry::Pending);
     }
 
     pub(crate) fn cache_insert(&mut self, key: K, fastest_index: usize) {
+        self.sync_environment();
         self.in_memory_cache.insert(
             key,
             CacheEntry::Done {
@@ -212,7 +288,7 @@ impl<K: AutotuneKey> TuneCache<K> {
     }
 }
 
-#[cfg(std_io)]
+#[cfg(serializable)]
 impl<K: AutotuneKey> TuneCache<K> {
     pub(crate) fn persistent_cache_insert(
         &mut self,
@@ -220,15 +296,22 @@ impl<K: AutotuneKey> TuneCache<K> {
         checksum: String,
         fastest_index: usize,
         results: Vec<AutotuneResult>,
-    ) {
-        if let Err(err) = self.persistent_cache.insert(
+        bounds: Option<super::Bounds>,
+        limit: Option<core::time::Duration>,
+    ) -> bool {
+        self.sync_environment();
+        let Some(cache) = self.persistent_cache.as_mut() else { return false; };
+        if let Err(err) = cache.insert(
             PersistentCacheKey { key, checksum },
             PersistentCacheValue {
                 fastest_index,
                 results,
+                bounds,
+                limit,
             },
         ) {
             match err {
+                #[cfg(all(std_io, not(persistence)))]
                 CacheError::DuplicatedKey {
                     key,
                     value_previous,
@@ -238,28 +321,52 @@ impl<K: AutotuneKey> TuneCache<K> {
                         "Autotune the same function multiple times for key {key:?} => old {value_previous:?}, new {value_updated:?}"
                     );
                 }
+                #[cfg(all(std_io, not(persistence)))]
                 CacheError::KeyOutOfSync { .. } => {
                     // This is OK.
                 }
+                #[cfg(persistence)]
+                StoreError::DuplicatedKey { key, value_previous, value_updated } => {
+                    log::warn!("Autotune the same function multiple times for key {key:?} => old {value_previous:?}, new {value_updated:?}");
+                }
+                #[cfg(persistence)]
+                StoreError::KeyOutOfSync { .. } => {}
+                #[cfg(persistence)]
+                StoreError::Backend { key, error } => {
+                    log::warn!("Autotune cache write failed for {key:?}: {error}");
+                }
             }
+            return false;
         }
-        // .expect();
+        true
     }
 
-    /// Load the persistent cache data from disk
+    /// Load persistent entries without retaining a second copy in the storage layer.
     pub(crate) fn load(&mut self) {
-        log::info!("Load autotune cache ...");
+        #[cfg(persistence)]
+        if self.hydrated {
+            return;
+        }
+        let Some(cache) = self.persistent_cache.as_mut() else { return; };
         let mut loaded = 0;
-        self.persistent_cache.for_each(|key, value| {
+        #[cfg(persistence)]
+        cache.scan(|key, value| {
             loaded += 1;
-            self.in_memory_cache.insert(
-                key.key.clone(),
-                CacheEntry::Done {
-                    checksum: ChecksumState::ToBeVerified(key.checksum.clone()),
-                    fastest_index: value.fastest_index,
-                },
-            );
+            self.in_memory_cache.entry(key.key).or_insert(CacheEntry::Done {
+                checksum: ChecksumState::ToBeVerified(key.checksum),
+                fastest_index: value.fastest_index,
+            });
         });
+        #[cfg(all(std_io, not(persistence)))]
+        cache.for_each(|key, value| {
+            loaded += 1;
+            self.in_memory_cache.insert(key.key.clone(), CacheEntry::Done {
+                checksum: ChecksumState::ToBeVerified(key.checksum.clone()),
+                fastest_index: value.fastest_index,
+            });
+        });
+        #[cfg(persistence)]
+        { self.hydrated = true; }
         log::info!("Loaded {loaded} autotune cached entries");
     }
 }

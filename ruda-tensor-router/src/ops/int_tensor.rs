@@ -27,11 +27,7 @@ impl<R: RunnerChannel> IntTensorOps<Self> for BackendRouter<R> {
     }
 
     async fn int_into_data(tensor: IntTensor<Self>) -> Result<TensorData, ExecutionError> {
-        Ok(tensor
-            .into_data()
-            .await?
-            // Since underlying backends can have different data types, we convert to the current elem
-            .convert::<IntElem<Self>>())
+        tensor.into_data().await
     }
 
     fn int_from_data(data: TensorData, device: &Device<Self>) -> IntTensor<Self> {
@@ -157,13 +153,23 @@ impl<R: RunnerChannel> IntTensorOps<Self> for BackendRouter<R> {
         indices: IntTensor<Self>,
         value: IntTensor<Self>,
     ) -> IntTensor<Self> {
+        Self::int_scatter(dim, tensor, indices, value, IndexingUpdateOp::Add)
+    }
+
+    fn int_scatter(
+        dim: usize,
+        tensor: IntTensor<Self>,
+        indices: IntTensor<Self>,
+        value: IntTensor<Self>,
+        update: IndexingUpdateOp,
+    ) -> IntTensor<Self> {
         let client = tensor.client.clone();
         let desc = ScatterOpIr::create(
             tensor.into_ir(),
             dim,
             indices.into_ir(),
             value.into_ir(),
-            IndexingUpdateOp::Add,
+            update,
             || client.create_empty_handle(),
         );
 
@@ -224,13 +230,23 @@ impl<R: RunnerChannel> IntTensorOps<Self> for BackendRouter<R> {
         indices: IntTensor<Self>,
         value: IntTensor<Self>,
     ) -> IntTensor<Self> {
+        Self::int_select_assign(tensor, dim, indices, value, IndexingUpdateOp::Add)
+    }
+
+    fn int_select_assign(
+        tensor: IntTensor<Self>,
+        dim: usize,
+        indices: IntTensor<Self>,
+        value: IntTensor<Self>,
+        update: IndexingUpdateOp,
+    ) -> IntTensor<Self> {
         let client = tensor.client.clone();
         let desc = SelectAssignOpIr::create(
             tensor.into_ir(),
             dim,
             indices.into_ir(),
             value.into_ir(),
-            IndexingUpdateOp::Add,
+            update,
             || client.create_empty_handle(),
         );
 

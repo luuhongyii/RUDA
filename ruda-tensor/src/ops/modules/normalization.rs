@@ -14,7 +14,9 @@ pub fn rms_norm_with_stats<B: Backend>(input: FloatTensor<B>, gamma: FloatTensor
     let compute = if input.dtype() == DType::F64 { FloatDType::F64 } else { FloatDType::F32 };
     if rows == 0 {
         let device = B::float_device(&input);
-        return RmsNormOutput { output: input, rstd: B::float_zeros(Shape::new([0]), &device, compute) };
+        let context = B::float_autodiff_context(&input).merge(B::float_autodiff_context(&gamma));
+        return RmsNormOutput { output: B::float_with_autodiff_context(input, context),
+            rstd: B::float_with_autodiff_context(B::float_zeros(Shape::new([0]), &device, compute), context) };
     }
     let input = B::float_reshape(B::float_cast(input, compute), Shape::new([rows, width]));
     let square_mean = B::float_mean_dim(B::float_mul(input.clone(), input.clone()), 1);
@@ -52,7 +54,10 @@ pub fn rms_norm_backward_select<B: Backend>(input: FloatTensor<B>, gamma: FloatT
     } else { FloatDType::F32 };
     if rows == 0 {
         let device = B::float_device(&input);
-        return [mask[0].then_some(input), mask[1].then(|| B::float_zeros(Shape::new([width]), &device, weight_storage))];
+        let context = [&input, &gamma, &grad, &rstd].into_iter().fold(crate::AutodiffContext::Disabled,
+            |context, value| context.merge(B::float_autodiff_context(value)));
+        return [mask[0].then(|| B::float_with_autodiff_context(input, context)),
+            mask[1].then(|| B::float_with_autodiff_context(B::float_zeros(Shape::new([width]), &device, weight_storage), context))];
     }
     let input = B::float_reshape(B::float_cast(input, forward_compute), Shape::new([rows, width]));
     let rstd = B::float_reshape(B::float_cast(rstd, forward_compute), Shape::new([rows, 1]));
@@ -88,9 +93,11 @@ pub fn layer_norm_with_stats<B: Backend>(
     let compute = if input.dtype() == DType::F64 { FloatDType::F64 } else { FloatDType::F32 };
     if rows == 0 {
         let device = B::float_device(&input);
-        return LayerNormOutput { output: input,
-            mean: B::float_zeros(Shape::new([0]), &device, compute),
-            rstd: B::float_zeros(Shape::new([0]), &device, compute) };
+        let context = [&input, &gamma].into_iter().chain(beta.iter()).fold(crate::AutodiffContext::Disabled,
+            |context, value| context.merge(B::float_autodiff_context(value)));
+        return LayerNormOutput { output: B::float_with_autodiff_context(input, context),
+            mean: B::float_with_autodiff_context(B::float_zeros(Shape::new([0]), &device, compute), context),
+            rstd: B::float_with_autodiff_context(B::float_zeros(Shape::new([0]), &device, compute), context) };
     }
     let input = B::float_reshape(B::float_cast(input, compute), Shape::new([rows, width]));
     let mean = B::float_mean_dim(input.clone(), 1);
@@ -139,9 +146,11 @@ pub fn layer_norm_backward_select<B: Backend>(input: FloatTensor<B>, gamma: Floa
     } else { FloatDType::F32 };
     if rows == 0 {
         let device = B::float_device(&input);
-        return [mask[0].then_some(input),
-            mask[1].then(|| B::float_zeros(Shape::new([width]), &device, weight_storage)),
-            mask[2].then(|| B::float_zeros(Shape::new([width]), &device, compute))];
+        let context = [&input, &gamma, &grad, &mean, &rstd].into_iter().fold(crate::AutodiffContext::Disabled,
+            |context, value| context.merge(B::float_autodiff_context(value)));
+        return [mask[0].then(|| B::float_with_autodiff_context(input, context)),
+            mask[1].then(|| B::float_with_autodiff_context(B::float_zeros(Shape::new([width]), &device, weight_storage), context)),
+            mask[2].then(|| B::float_with_autodiff_context(B::float_zeros(Shape::new([width]), &device, compute), context))];
     }
     let grad = B::float_reshape(B::float_cast(grad, compute), Shape::new([rows, width]));
     if !mask[0] && !mask[1] {

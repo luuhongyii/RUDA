@@ -27,28 +27,23 @@ pub fn cosine_similarity<B: Backend, const D: usize>(
     dim: i32,
     eps: Option<B::FloatElem>,
 ) -> Tensor<B, D> {
-    let eps = eps.unwrap_or_else(|| {
-        let min_positive = x1
+    let eps = eps.map(|value| value.elem::<f64>()).unwrap_or_else(|| {
+        x1
             .dtype()
             .finfo()
             .unwrap_or(FloatDType::F32.finfo())
-            .min_positive;
-        B::FloatElem::from_elem(min_positive)
+            .min_positive
     });
 
     // Convert negative dimension to positive
-    let dim_idx = if dim < 0 { D as i32 + dim } else { dim } as usize;
-
-    // Compute dot product: sum(x1 * x2) along the specified dimension
-    let dot_product = (x1.clone() * x2.clone()).sum_dim(dim_idx);
+    let dim_idx = if dim < 0 { D as i32 + dim } else { dim };
+    assert!((0..D as i32).contains(&dim_idx), "Cosine Similarity dimension is out of bounds");
+    let dim_idx = dim_idx as usize;
 
     // Compute L2 norms: ||x1|| and ||x2||
-    let norm_x1 = l2_norm(x1, dim_idx);
-    let norm_x2 = l2_norm(x2, dim_idx);
-
-    // Calculate the denominator (product of the norms) with epsilon to avoid division by zero
-    let denominator = norm_x1.clamp_min(eps) * norm_x2.clamp_min(eps);
+    let norm_x1 = l2_norm(x1.clone(), dim_idx).clamp_min(eps);
+    let norm_x2 = l2_norm(x2.clone(), dim_idx).clamp_min(eps);
 
     // Return the cosine similarity (dot product divided by the product of norms)
-    dot_product / denominator
+    ((x1 / norm_x1) * (x2 / norm_x2)).sum_dim(dim_idx)
 }

@@ -91,7 +91,7 @@ impl<B:Backend> FullyShardedNf4LoRALinear<B> {
         for parameter in [&self.adapter_a.weight,&self.adapter_b.weight] {
             let value=parameter.local.val();assert_eq!(value.device(),device,"NF4 adapter/base devices differ");
             assert_eq!((parameter.rank,parameter.world_size),topology,"NF4 adapter/base topologies differ");
-            assert!(!B::ad_enabled(&device) || value.is_require_grad(),"NF4 adapters must be trainable on the AD backend");
+            assert!(!value.is_autodiff() || value.is_require_grad(),"NF4 adapters must be trainable on the AD backend");
             let _=ShardedParameter::from_local(parameter.local.clone(),parameter.logical_shape.clone(),parameter.rank,parameter.world_size);
         }
     }

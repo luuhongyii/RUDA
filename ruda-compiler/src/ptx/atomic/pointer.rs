@@ -1,5 +1,5 @@
 use super::*;
-use ruda_core::{kernel::Visibility, launch::ExecutionMode};
+use ruda_core::launch::ExecutionMode;
 
 impl Emitter {
     pub(super) fn atomic_pointer(&self, variable: Variable) -> Result<String> {
@@ -27,9 +27,6 @@ impl Emitter {
             (self.shared_array(array)?, true)
         } else {
             let buffer = self.buffer(array)?;
-            if buffer.visibility != Visibility::ReadWrite {
-                return Err(invalid("atomic operations require a writable buffer"));
-            }
             (format!("%buffer_{}", buffer.id), false)
         };
         let mut index_ty = Scalar::of(index.ty)?;
@@ -64,7 +61,7 @@ impl Emitter {
         }
         let offset = self.reg(Scalar::U64);
         let multiply = if index_ty == Scalar::U32 { "mul.wide.u32" } else { "mul.lo.u64" };
-        self.line(format!("{multiply} {offset}, {index_value}, {};", ty.bytes()));
+        self.line(format!("{multiply} {offset}, {index_value}, {};", ty.bytes() * array.ty.vector_size()));
         self.line(format!("add.u64 {offset}, {base}, {offset};"));
         let destination = self.atomic_pointer_destination(out)?;
         if shared { self.line(format!("cvta.shared.u64 {destination}, {offset};")); }

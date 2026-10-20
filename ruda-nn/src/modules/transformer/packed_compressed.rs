@@ -22,6 +22,8 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> HybridAttentionBackbone<B,
         assert_eq!(layout.tokens(), count, "packed hybrid token count differs from document layout");
         assert!(matches!(tokens.dtype(), DType::I32 | DType::I64), "packed hybrid tokens must use I32/I64");
         let weight = self.embedding.weight.val();
+        let mut context = weight.autodiff_context().merge(tokens.autodiff_context());
+        if let Some(valid) = &valid { context = context.merge(valid.autodiff_context()); }
         let device = weight.device();
         let storage = weight.dtype();
         let compute = if storage == DType::F64 { DType::F64 } else { DType::F32 };
@@ -37,7 +39,7 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> HybridAttentionBackbone<B,
             let (start, end) = (bounds[0], bounds[1]);
             let length = end - start;
             if length == 0 {
-                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)));
+                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)).with_autodiff_context(context));
                 continue;
             }
             let document = tokens.clone().slice_dim(0, start..end).reshape([1, length]);
@@ -48,13 +50,13 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> HybridAttentionBackbone<B,
                 losses.push(result.indexer_loss);
             } else {
                 outputs.push(self.forward(document, valid).reshape([length, width]));
-                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)));
+                losses.push(Tensor::<B, 1>::zeros([1], (&device, compute)).with_autodiff_context(context));
             }
         }
         let output = if outputs.is_empty() {
-            Tensor::<B, 2>::zeros([count, width], (&device, storage))
+            Tensor::<B, 2>::zeros([count, width], (&device, storage)).with_autodiff_context(context)
         } else { Tensor::cat(outputs, 0) };
-        let document_indexer_losses = if losses.is_empty() { Tensor::zeros([0], (&device, compute)) }
+        let document_indexer_losses = if losses.is_empty() { Tensor::zeros([0], (&device, compute)).with_autodiff_context(context) }
             else { Tensor::cat(losses, 0) };
         PackedCompressedAttentionOutput { output, document_indexer_losses }
     }
@@ -78,7 +80,8 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> HybridAttentionLanguageMod
         let [tokens, width] = hidden.dims();
         let vocab = self.backbone.embedding.weight.val().dims()[0];
         if tokens == 0 {
-            return Tensor::<B, 2>::zeros([0, vocab], (&hidden.device(), hidden.dtype())) + hidden.sum().mul_scalar(0).reshape([1, 1]);
+            return Tensor::<B, 2>::zeros([0, vocab], (&hidden.device(), hidden.dtype())).with_autodiff_context(hidden.autodiff_context())
+                + hidden.sum().mul_scalar(0).reshape([1, 1]);
         }
         self.head.forward(hidden.reshape([1, tokens, width]), &self.backbone.embedding).reshape([tokens, vocab])
     }

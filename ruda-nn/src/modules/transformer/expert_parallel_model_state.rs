@@ -79,7 +79,7 @@ impl<B:Backend> ModuleVisitor<B> for Validate<'_,B> {
     fn visit_float<const D:usize>(&mut self,parameter:&Param<Tensor<B,D>>) {
         let dtype=parameter.is_initialized().then(||parameter.val().dtype());
         self.parameter(parameter.id,parameter.lazy_shape().as_slice().to_vec(),dtype,ExpertModelParameterKind::Float,
-            B::ad_enabled(&parameter.lazy_device()) && parameter.planned_is_require_grad(),parameter.lazy_device());
+            ruda_model::module::has_autodiff(parameter) && parameter.planned_is_require_grad(),parameter.lazy_device());
     }
     fn visit_int<const D:usize>(&mut self,parameter:&Param<Tensor<B,D,Int>>) {
         let dtype=parameter.is_initialized().then(||parameter.val().dtype());

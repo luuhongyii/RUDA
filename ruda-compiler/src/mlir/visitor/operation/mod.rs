@@ -1,7 +1,9 @@
 pub(super) mod arithmetic;
+pub(super) mod atomic;
 pub(super) mod bitwise;
 pub(super) mod comparison;
 pub(super) mod metadata;
+pub(super) mod memory;
 pub(super) mod operator;
 pub(super) mod synchronization;
 
@@ -24,8 +26,8 @@ use super::Visitor;
 impl<'a> Visitor<'a> {
     pub fn visit_operation(&mut self, operation: &Operation) {
         match operation {
-            Operation::Operator(ruda_core::ir::Operator::NativeStore(_)) => {
-                panic!("native addresses are not supported by the memref MLIR backend");
+            Operation::Operator(ruda_core::ir::Operator::NativeStore(op)) => {
+                self.visit_native_store(op);
             }
             Operation::NonSemantic(NonSemantic::Print {
                 format_string,
@@ -128,8 +130,8 @@ impl<'a> Visitor<'a> {
 
     pub fn visit_operation_with_out(&mut self, operation: &Operation, out: Variable) {
         match operation {
-            Operation::Atomic(_atomic) => {
-                todo!("Atomic operation are not yet supported");
+            Operation::Atomic(atomic) => {
+                self.visit_atomic(atomic, out);
             }
             Operation::Arithmetic(arithmetic) => {
                 self.visit_arithmetic(arithmetic, out);

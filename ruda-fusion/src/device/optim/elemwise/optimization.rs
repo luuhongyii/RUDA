@@ -96,6 +96,9 @@ impl<R: Runtime> TraceRunner<R> for ElemwiseRunner {
             },
             RefLayout::Virtual(_) => inputs.shape_ref(&config.ref_layout, config.rank),
         };
+        if shape.contains(&0) {
+            return Ok(());
+        }
         let working_units = shape.iter().product::<usize>() / config.width;
         let ruda_dim = RudaDim::new(client.properties(), working_units);
         let ruda_count = calculate_ruda_count_elemwise(client, working_units, ruda_dim);

@@ -20,8 +20,11 @@ resolver = "2"
 [features]
 client = [ "tokio-tungstenite", "async-channel", "tokio/sync",]
 default = [ "client", "server",]
+distributed = ["ruda-tensor-router/distributed", "ruda-tensor/distributed", "ruda-fusion?/distributed"]
 doc = []
-server = [ "tokio-tungstenite", "async-channel", "tokio/sync", "axum", "tracing-core/default", "tracing-subscriber/default",]
+fusion = ["client", "dep:ruda-fusion", "ruda-tensor-router/fusion"]
+iroh = ["ruda-communication/iroh"]
+server = [ "tokio-tungstenite", "async-channel", "tokio/sync", "axum", "dep:blake3", "tracing-core/default", "tracing-subscriber/default",]
 tracing = [ "ruda-tensor/tracing", "ruda-core/tracing", "ruda-tensor-config/tracing", "ruda-test-runtime/tracing", "ruda-tensor-router/tracing", "ruda-communication/tracing", "ruda-test-runtime/std",]
 
 [lib]
@@ -32,7 +35,7 @@ path = "src/lib.rs"
 version = "2.5"
 optional = true
 
-[dependencies.axum]
+[target.'cfg(not(target_family = "wasm"))'.dependencies.axum]
 version = "0.8.8"
 features = [ "ws",]
 optional = true
@@ -40,6 +43,10 @@ optional = true
 [dependencies.bytes]
 version = "1.11.1"
 default-features = false
+
+[dependencies.blake3]
+version = "1.8"
+optional = true
 
 [dependencies.derive-new]
 version = "0.7.0"
@@ -68,9 +75,16 @@ default-features = false
 
 [dependencies.tokio]
 version = "1.51.1"
-features = [ "rt", "macros", "rt-multi-thread",]
+features = [ "rt", "macros", "sync",]
 
-[dependencies.tokio-tungstenite]
+[target.'cfg(not(target_family = "wasm"))'.dependencies.tokio]
+version = "1.51.1"
+features = ["rt-multi-thread", "time", "net"]
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies.wasm-bindgen-futures]
+version = "0.4.45"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies.tokio-tungstenite]
 version = "0.29"
 optional = true
 
@@ -115,6 +129,13 @@ path = "../ruda-tensor-router"
 version = "0.21.65"
 default-features = false
 features = [ "default",]
+
+[dependencies.ruda-fusion]
+path = "../ruda-fusion"
+version = "0.21.72"
+default-features = false
+features = ["std"]
+optional = true
 
 [dependencies.ruda-communication]
 path = "../ruda-communication"

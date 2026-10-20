@@ -1,7 +1,7 @@
 use crate::{
     checkpoint::strategy::{CheckpointStrategy, NoCheckpointing},
     grads::Gradients,
-    tensor::{AutodiffTensor, AutodiffQTensor},
+    tensor::{AutodiffTensor, AutodiffQTensor, AutodiffValue},
 };
 use alloc::{format, string::String};
 use core::marker::PhantomData;
@@ -30,18 +30,26 @@ impl<B: Backend, C: CheckpointStrategy> BackendTypes for Autodiff<B, C> {
     type FloatTensorPrimitive = AutodiffTensor<B>;
     type FloatElem = B::FloatElem;
 
-    type IntTensorPrimitive = B::IntTensorPrimitive;
+    type IntTensorPrimitive = AutodiffValue<B::IntTensorPrimitive>;
     type IntElem = B::IntElem;
 
-    type BoolTensorPrimitive = B::BoolTensorPrimitive;
+    type BoolTensorPrimitive = AutodiffValue<B::BoolTensorPrimitive>;
     type BoolElem = B::BoolElem;
 
     type QuantizedTensorPrimitive = AutodiffQTensor<B>;
 }
 
 impl<B: Backend, C: CheckpointStrategy> Backend for Autodiff<B, C> {
-    fn ad_enabled(_device: &Self::Device) -> bool {
-        true
+    fn ad_enabled(device: &Self::Device) -> bool {
+        matches!(Self::autodiff_creation_context(device), ruda_tensor::AutodiffContext::Enabled(_))
+    }
+
+    fn autodiff_creation_context(device: &Self::Device) -> ruda_tensor::AutodiffContext {
+        crate::context::current::<B, C>(device)
+    }
+
+    fn with_autodiff_creation_context<R>(device: &Self::Device, context: ruda_tensor::AutodiffContext, func: impl FnOnce() -> R) -> R {
+        crate::context::run::<B, C, R>(device, context, func)
     }
 
     fn name(device: &Self::Device) -> String {
@@ -54,6 +62,29 @@ impl<B: Backend, C: CheckpointStrategy> Backend for Autodiff<B, C> {
 
     fn sync(device: &B::Device) -> Result<(), ExecutionError> {
         B::sync(device)
+    }
+
+    fn profile<O: Send + 'static>(device: &Self::Device, options: ruda_tensor::ProfileOptions,
+        func: impl FnOnce() -> O + Send) -> Result<(O, ruda_tensor::ProfileDuration), ExecutionError> {
+        B::profile(device, options, func)
+    }
+    fn profile_start(device: &Self::Device) -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> {
+        B::profile_start(device)
+    }
+    fn profile_end(device: &Self::Device, token: ruda_tensor::ProfileToken, options: ruda_tensor::ProfileOptions)
+        -> Result<ruda_tensor::ProfileDuration, ExecutionError> { B::profile_end(device, token, options) }
+    fn profile_abandon(device: &Self::Device, token: ruda_tensor::ProfileToken) { B::profile_abandon(device, token); }
+
+    fn flush(device: &B::Device) -> Result<(), ExecutionError> {
+        B::flush(device)
+    }
+
+    fn graph_prepare(device: &B::Device) -> Result<(), ExecutionError> { B::graph_prepare(device) }
+    fn graph_start_capture(device: &B::Device) -> Result<(), ExecutionError> { B::graph_start_capture(device) }
+    fn graph_stop_capture(device: &B::Device) -> Result<ruda_tensor::BackendGraph, ExecutionError> { B::graph_stop_capture(device) }
+    fn graph_abort_capture(device: &B::Device) { B::graph_abort_capture(device); }
+    unsafe fn graph_replay(device: &B::Device, graph: &ruda_tensor::BackendGraph) -> Result<(), ExecutionError> {
+        unsafe { B::graph_replay(device, graph) }
     }
 
     fn memory_persistent_allocations<
@@ -97,6 +128,16 @@ impl<B: Backend, C: CheckpointStrategy> AutodiffBackend for Autodiff<B, C> {
     type InnerBackend = B;
     type Gradients = Gradients;
 
+    fn q_grad(tensor: &AutodiffQTensor<B>, grads: &Gradients) -> Option<B::FloatTensorPrimitive> {
+        tensor.surrogate.as_ref()?.grad(grads)
+    }
+    fn q_grad_remove(tensor: &AutodiffQTensor<B>, grads: &mut Gradients) -> Option<B::FloatTensorPrimitive> {
+        tensor.surrogate.as_ref()?.grad_remove(grads)
+    }
+    fn q_grad_replace(tensor: &AutodiffQTensor<B>, grads: &mut Gradients, grad: B::FloatTensorPrimitive) {
+        tensor.surrogate.as_ref().expect("Quantized tensor has no gradient surrogate").grad_replace(grads, grad);
+    }
+
     fn backward(tensor: AutodiffTensor<B>) -> Gradients {
         tensor.backward()
     }
@@ -116,7 +157,11 @@ impl<B: Backend, C: CheckpointStrategy> AutodiffBackend for Autodiff<B, C> {
     }
 
     fn from_inner(tensor: B::FloatTensorPrimitive) -> AutodiffTensor<B> {
-        AutodiffTensor::new(tensor)
+        let context = match Self::autodiff_creation_context(&B::float_device(&tensor)) {
+            ruda_tensor::AutodiffContext::Disabled => ruda_tensor::AutodiffContext::Enabled(C::policy()),
+            context => context,
+        };
+        AutodiffTensor::new(tensor).with_context::<C>(context)
     }
 
     fn grad_replace(
@@ -128,19 +173,27 @@ impl<B: Backend, C: CheckpointStrategy> AutodiffBackend for Autodiff<B, C> {
     }
 
     fn int_inner(tensor: IntTensor<Self>) -> IntTensor<Self::InnerBackend> {
-        tensor
+        tensor.primitive
     }
 
     fn bool_inner(tensor: BoolTensor<Self>) -> BoolTensor<Self::InnerBackend> {
-        tensor
+        tensor.primitive
     }
 
     fn int_from_inner(tensor: IntTensor<Self::InnerBackend>) -> IntTensor<Self> {
-        tensor
+        let context = match Self::autodiff_creation_context(&B::int_device(&tensor)) {
+            ruda_tensor::AutodiffContext::Disabled => ruda_tensor::AutodiffContext::Enabled(C::policy()),
+            context => context,
+        };
+        AutodiffValue::with_context(tensor, context)
     }
 
     fn bool_from_inner(tensor: BoolTensor<Self::InnerBackend>) -> BoolTensor<Self> {
-        tensor
+        let context = match Self::autodiff_creation_context(&B::bool_device(&tensor)) {
+            ruda_tensor::AutodiffContext::Disabled => ruda_tensor::AutodiffContext::Enabled(C::policy()),
+            context => context,
+        };
+        AutodiffValue::with_context(tensor, context)
     }
 
     fn q_inner(tensor: QuantizedTensor<Self>) -> QuantizedTensor<Self::InnerBackend> {
@@ -148,7 +201,11 @@ impl<B: Backend, C: CheckpointStrategy> AutodiffBackend for Autodiff<B, C> {
     }
 
     fn q_from_inner(tensor: QuantizedTensor<Self::InnerBackend>) -> QuantizedTensor<Self> {
-        AutodiffQTensor::untracked(tensor)
+        let context = match Self::autodiff_creation_context(&B::q_device(&tensor)) {
+            ruda_tensor::AutodiffContext::Disabled => ruda_tensor::AutodiffContext::Enabled(C::policy()),
+            context => context,
+        };
+        AutodiffQTensor::untracked(tensor).with_context::<C>(context)
     }
 }
 
@@ -157,6 +214,16 @@ impl<B: DistributedBackend, C: CheckpointStrategy> AutodiffBackend for Autodiff<
     type InnerBackend = B;
     type Gradients = Gradients;
 
+    fn q_grad(tensor: &AutodiffQTensor<B>, grads: &Gradients) -> Option<B::FloatTensorPrimitive> {
+        tensor.surrogate.as_ref()?.grad(grads)
+    }
+    fn q_grad_remove(tensor: &AutodiffQTensor<B>, grads: &mut Gradients) -> Option<B::FloatTensorPrimitive> {
+        tensor.surrogate.as_ref()?.grad_remove(grads)
+    }
+    fn q_grad_replace(tensor: &AutodiffQTensor<B>, grads: &mut Gradients, grad: B::FloatTensorPrimitive) {
+        tensor.surrogate.as_ref().expect("Quantized tensor has no gradient surrogate").grad_replace(grads, grad);
+    }
+
     fn backward(tensor: AutodiffTensor<B>) -> Gradients {
         tensor.backward()
     }
@@ -176,7 +243,11 @@ impl<B: DistributedBackend, C: CheckpointStrategy> AutodiffBackend for Autodiff<
     }
 
     fn from_inner(tensor: B::FloatTensorPrimitive) -> AutodiffTensor<B> {
-        AutodiffTensor::new(tensor)
+        let context = match Self::autodiff_creation_context(&B::float_device(&tensor)) {
+            ruda_tensor::AutodiffContext::Disabled => ruda_tensor::AutodiffContext::Enabled(C::policy()),
+            context => context,
+        };
+        AutodiffTensor::new(tensor).with_context::<C>(context)
     }
 
     fn grad_replace(
@@ -188,19 +259,27 @@ impl<B: DistributedBackend, C: CheckpointStrategy> AutodiffBackend for Autodiff<
     }
 
     fn int_inner(tensor: IntTensor<Self>) -> IntTensor<Self::InnerBackend> {
-        tensor
+        tensor.primitive
     }
 
     fn bool_inner(tensor: BoolTensor<Self>) -> BoolTensor<Self::InnerBackend> {
-        tensor
+        tensor.primitive
     }
 
     fn int_from_inner(tensor: IntTensor<Self::InnerBackend>) -> IntTensor<Self> {
-        tensor
+        let context = match Self::autodiff_creation_context(&B::int_device(&tensor)) {
+            ruda_tensor::AutodiffContext::Disabled => ruda_tensor::AutodiffContext::Enabled(C::policy()),
+            context => context,
+        };
+        AutodiffValue::with_context(tensor, context)
     }
 
     fn bool_from_inner(tensor: BoolTensor<Self::InnerBackend>) -> BoolTensor<Self> {
-        tensor
+        let context = match Self::autodiff_creation_context(&B::bool_device(&tensor)) {
+            ruda_tensor::AutodiffContext::Disabled => ruda_tensor::AutodiffContext::Enabled(C::policy()),
+            context => context,
+        };
+        AutodiffValue::with_context(tensor, context)
     }
 
     fn q_inner(tensor: QuantizedTensor<Self>) -> QuantizedTensor<Self::InnerBackend> {
@@ -208,7 +287,11 @@ impl<B: DistributedBackend, C: CheckpointStrategy> AutodiffBackend for Autodiff<
     }
 
     fn q_from_inner(tensor: QuantizedTensor<Self::InnerBackend>) -> QuantizedTensor<Self> {
-        AutodiffQTensor::untracked(tensor)
+        let context = match Self::autodiff_creation_context(&B::q_device(&tensor)) {
+            ruda_tensor::AutodiffContext::Disabled => ruda_tensor::AutodiffContext::Enabled(C::policy()),
+            context => context,
+        };
+        AutodiffQTensor::untracked(tensor).with_context::<C>(context)
     }
 
     fn set_distributed_params(

@@ -92,6 +92,7 @@ impl Optimizer {
             ControlFlow::Switch { value, .. } => visit_read(self, value),
             ControlFlow::Loop { .. } => {}
             ControlFlow::LoopBreak { break_cond, .. } => visit_read(self, break_cond),
+            ControlFlow::ReturnValue(value) => visit_read(self, value),
             ControlFlow::Return | ControlFlow::Unreachable | ControlFlow::None => {}
         }
     }
@@ -227,7 +228,8 @@ impl Optimizer {
             | Operator::NativeLoad(unary_operator)
             | Operator::Cast(unary_operator)
             | Operator::Reinterpret(unary_operator) => self.visit_unop(unary_operator, visit_read),
-            Operator::Index(index_operator) | Operator::UncheckedIndex(index_operator) => {
+            Operator::Index(index_operator) | Operator::UncheckedIndex(index_operator)
+            | Operator::WorkgroupUniformLoad(index_operator) => {
                 visit_read(self, &mut index_operator.list);
                 visit_read(self, &mut index_operator.index);
             }
@@ -249,6 +251,8 @@ impl Optimizer {
                 visit_read(self, &mut copy_bulk_operator.input);
                 visit_read(self, &mut copy_bulk_operator.in_index);
                 visit_read(self, &mut copy_bulk_operator.out_index);
+                visit_read(self, &mut copy_bulk_operator.offset_input);
+                visit_read(self, &mut copy_bulk_operator.offset_out);
             }
             Operator::Select(select) => {
                 visit_read(self, &mut select.cond);
@@ -343,6 +347,34 @@ impl Optimizer {
         mut visit_read: impl FnMut(&mut Self, &mut Variable),
     ) {
         match cmma {
+            CoopMma::CreateTensorLayout { shape, strides } => {
+                for value in shape.iter_mut().chain(strides.iter_mut().flatten()) {
+                    visit_read(self, value);
+                }
+            }
+            CoopMma::CreateTensorView => {}
+            CoopMma::SliceTensorLayout { layout, offsets, shape } => {
+                visit_read(self, layout);
+                for value in offsets.iter_mut().chain(shape.iter_mut()) {
+                    visit_read(self, value);
+                }
+            }
+            CoopMma::LoadTensor { buffer, offset, layout, view } => {
+                visit_read(self, buffer);
+                visit_read(self, offset);
+                visit_read(self, layout);
+                if let Some(view) = view {
+                    visit_read(self, view);
+                }
+            }
+            CoopMma::StoreTensor { mat, offset, layout, view } => {
+                visit_read(self, mat);
+                visit_read(self, offset);
+                visit_read(self, layout);
+                if let Some(view) = view {
+                    visit_read(self, view);
+                }
+            }
             CoopMma::Fill { value } => {
                 visit_read(self, value);
             }
@@ -377,6 +409,12 @@ impl Optimizer {
             }
             CoopMma::Cast { input } => {
                 visit_read(self, input);
+            }
+            CoopMma::Elementwise { input, captures, .. } => {
+                visit_read(self, input);
+                for capture in captures {
+                    visit_read(self, capture);
+                }
             }
             CoopMma::RowIndex { lane_id, i, .. } => {
                 visit_read(self, lane_id);

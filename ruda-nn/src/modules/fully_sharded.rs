@@ -242,14 +242,15 @@ impl<B:Backend> ShardedParameter<B> {
         let size=elements.div_ceil(world_size);
         let start=rank*size;
         let end=(start+size).min(elements);
-        let mut local=Tensor::<B,1>::zeros([size],&value.device()).cast(value.dtype());
+        let mut local=Tensor::<B,1>::zeros([size],&value.device()).with_autodiff_context(value.autodiff_context()).cast(value.dtype());
         if end>start {
             local=local.slice_assign([0..end-start],value.clone().reshape([elements]).slice([start..end]));
         }
         // A shard is a new leaf: its optimizer must not keep the full source graph.
         let trainable=value.is_require_grad();
         let local=local.detach().set_require_grad(trainable);
-        Self::from_local(Param::initialized(parameter.id,local),shape,rank,world_size)
+        let local=Param::initialized(parameter.id,local).set_require_grad(parameter.planned_is_require_grad());
+        Self::from_local(local,shape,rank,world_size)
     }
 }
 

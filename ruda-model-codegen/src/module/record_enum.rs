@@ -12,8 +12,9 @@ pub(crate) struct EnumModuleRecordCodegen {
 }
 
 impl ModuleRecordCodegen for EnumModuleRecordCodegen {
-    fn gen_record_type(&self, record_name: &Ident, generics: &Generics, paths: &crate::DerivePaths) -> (TokenStream, Generics) {
+    fn gen_record_type(&self, record_name: &Ident, module_name: &Ident, generics: &Generics, paths: &crate::DerivePaths) -> (TokenStream, Generics) {
         let model = &paths.model;
+        let module_name = module_name.to_string();
         let mut variants = quote! {};
         let vis = &self.vis;
 
@@ -35,6 +36,7 @@ impl ModuleRecordCodegen for EnumModuleRecordCodegen {
 
                 /// The record type for the module.
                 #[derive(#model::record::Record)]
+                #[ruda_record(module = #module_name)]
                 #vis enum #record_name #impl_generics #generics_where {
                     #variants
                 }

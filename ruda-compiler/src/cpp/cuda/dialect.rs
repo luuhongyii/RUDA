@@ -425,6 +425,31 @@ impl<M: DialectWmmaCompiler<Self>> DialectRudaBuiltins<Self> for CudaDialect<M> 
 // Instructions
 
 impl<M: DialectWmmaCompiler<Self>> DialectInstructions<Self> for CudaDialect<M> {
+    fn compile_atomic_add(f: &mut std::fmt::Formatter<'_>, lhs: &Variable<Self>, rhs: &Variable<Self>, out: &Variable<Self>) -> std::fmt::Result {
+        super::atomic::reduction(f, lhs, rhs, out, "add")
+    }
+    fn compile_atomic_sub(f: &mut std::fmt::Formatter<'_>, lhs: &Variable<Self>, rhs: &Variable<Self>, out: &Variable<Self>) -> std::fmt::Result {
+        super::atomic::reduction(f, lhs, rhs, out, "sub")
+    }
+    fn compile_atomic_min(f: &mut std::fmt::Formatter<'_>, lhs: &Variable<Self>, rhs: &Variable<Self>, out: &Variable<Self>) -> std::fmt::Result {
+        super::atomic::reduction(f, lhs, rhs, out, "min")
+    }
+    fn compile_atomic_max(f: &mut std::fmt::Formatter<'_>, lhs: &Variable<Self>, rhs: &Variable<Self>, out: &Variable<Self>) -> std::fmt::Result {
+        super::atomic::reduction(f, lhs, rhs, out, "max")
+    }
+    fn compile_atomic_load(f: &mut std::fmt::Formatter<'_>, input: &Variable<Self>, out: &Variable<Self>) -> std::fmt::Result {
+        super::atomic::bits(f, input, None, None, out, "load")
+    }
+    fn compile_atomic_store(f: &mut std::fmt::Formatter<'_>, input: &Variable<Self>, out: &Variable<Self>) -> std::fmt::Result {
+        super::atomic::bits(f, out, Some(input), None, out, "store")
+    }
+    fn compile_atomic_swap(f: &mut std::fmt::Formatter<'_>, lhs: &Variable<Self>, rhs: &Variable<Self>, out: &Variable<Self>) -> std::fmt::Result {
+        super::atomic::bits(f, lhs, Some(rhs), None, out, "exch")
+    }
+    fn compile_atomic_cas(f: &mut std::fmt::Formatter<'_>, input: &Variable<Self>, cmp: &Variable<Self>, val: &Variable<Self>, out: &Variable<Self>) -> std::fmt::Result {
+        super::atomic::bits(f, input, Some(val), Some(cmp), out, "cas")
+    }
+
     fn compile_numeric_cast<Input: Component<Self>>(
         f: &mut std::fmt::Formatter<'_>, input: Input, elem: Elem<Self>,
     ) -> std::fmt::Result {

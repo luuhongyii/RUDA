@@ -677,6 +677,10 @@ pub trait DialectInstructions<D: Dialect> {
 
     // sync
     fn compile_instruction_sync_threads(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+    fn compile_instruction_sync_storage(f: &mut std::fmt::Formatter<'_>, _device_scope: bool) -> std::fmt::Result {
+        Self::compile_instruction_thread_fence(f)?;
+        Self::compile_instruction_sync_threads(f)
+    }
     fn compile_instruction_sync_warp(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
     fn compile_instruction_thread_fence(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
 

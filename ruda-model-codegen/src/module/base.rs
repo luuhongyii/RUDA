@@ -19,7 +19,7 @@ pub fn derive_impl(ast: &syn::DeriveInput, paths: &crate::DerivePaths) -> TokenS
                 if has_backend {
                     generate_module_standard(ast, struct_codegen, paths)
                 } else {
-                    generate_module_const(ast, paths)
+                    generate_module_const(ast, struct_codegen, paths)
                 }
             }
             Err(err) => err.to_compile_error(),
@@ -29,7 +29,7 @@ pub fn derive_impl(ast: &syn::DeriveInput, paths: &crate::DerivePaths) -> TokenS
                 if has_backend {
                     generate_module_standard(ast, enum_codegen, paths)
                 } else {
-                    generate_module_const(ast, paths)
+                    generate_module_const(ast, enum_codegen, paths)
                 }
             }
             Err(err) => err.to_compile_error(),

@@ -1,7 +1,7 @@
 //! Common selection engine for tensor operations, fused graphs and complete inference plans.
 //! GPU code is behind TrialRunner: the built-in runtime adapter uses completed device profiles
 //! or explicit synchronization, while application adapters must honor that same contract.
-use super::{cache::{DiskCache, Record, now_seconds}, policy::*};
+use super::{cache::{CacheBackend, DiskCache, Record, now_seconds, scoped_key, split_scoped_key}, policy::*};
 use std::{cell::Cell, collections::{BTreeMap, BTreeSet, VecDeque}, path::PathBuf,
     string::{String, ToString}, sync::{Arc, Mutex, MutexGuard}, time::{Duration, Instant}, vec::Vec};
 
@@ -16,6 +16,8 @@ impl Drop for DepthGuard { fn drop(&mut self) { DEPTH.with(|d| d.set(d.get()-1))
 /// Benchmarks MUST use isolated state. A completed measurement includes all device work whose
 /// cost belongs to the plan. A submit-only host timestamp is not a valid measurement.
 pub trait TrialRunner {
+    /// Optional resource-derived stopping bound, evaluated only on a fresh search.
+    fn time_limit(&mut self) -> Option<TimeLimit> { None }
     /// Compare isolated outputs for the candidate indices supplied to select.
     /// Unsupported comparison returns `Validation::Unsupported`; wrong output
     /// or unconfirmed completion returns an appropriate failure instead.
@@ -64,10 +66,11 @@ pub struct Decision {
 }
 /// One candidate's local timing/validation metadata.
 #[derive(Debug, Clone)]
+#[cfg_attr(persistence, derive(serde::Serialize, serde::Deserialize))]
 pub struct CandidateReport {
     /// Candidate identity supplied by the adapter.
     pub name: String,
-    /// Number of completed timing pairs; the reference row reports one baseline sample.
+    /// Completed timing pairs, or baseline/confirmation samples for the reference row.
     pub samples: usize,
     /// Median selected/reference ratio, or None when no acceptable score exists.
     pub ratio: Option<f64>,
@@ -80,6 +83,7 @@ pub struct CandidateReport {
 }
 /// Bounded in-memory diagnostics for one selection workload.
 #[derive(Debug, Clone)]
+#[cfg_attr(persistence, derive(serde::Serialize, serde::Deserialize))]
 pub struct TuneReport {
     /// Stable operator/graph/application identity.
     pub operation: String,
@@ -120,6 +124,7 @@ pub struct Stats {
 }
 #[derive(Default)]
 struct State {
+    generation: Option<u32>,
     records: BTreeMap<String, Arc<Record>>, order: MemoryOrder,
     bypass: BTreeMap<String, Scope>,
     pending: BTreeSet<String>, devices: BTreeSet<String>, poisoned_devices: BTreeSet<String>,
@@ -216,8 +221,14 @@ impl LruOrder {
 }
 /// No state mutex is held while running a candidate, validator, profile, or disk operation.
 /// Contenders use the declared reference instead of waiting (also avoids nested-tuning deadlocks).
-pub struct StackTuner { policy: StackPolicy, memory_eviction: MemoryEviction, disk: Option<DiskCache>, state: Mutex<State> }
+pub struct StackTuner { policy: StackPolicy, memory_eviction: MemoryEviction, disk: Option<CacheBackend>, state: Mutex<State> }
 struct Permit<'a> { tuner: &'a StackTuner, key: String, device: String }
+#[derive(Default)]
+pub(super) struct SearchTrace {
+    pub(super) trials: Vec<(String, Duration)>,
+    pub(super) confirmation_samples: Vec<(String, usize)>,
+    pub(super) short_circuit: Option<String>,
+}
 impl Drop for Permit<'_> {
     fn drop(&mut self) { let mut s = self.tuner.lock(); s.pending.remove(&self.key); s.devices.remove(&self.device); }
 }
@@ -231,10 +242,41 @@ impl StackTuner {
     /// Select an explicit memory retention order without changing disk eviction or validation.
     pub fn new_with_memory_eviction(policy: StackPolicy, cache_directory: Option<PathBuf>, memory_eviction: MemoryEviction) -> Result<Self, TuneFailure> {
         policy.validate()?;
-        let disk = cache_directory.map(|dir| DiskCache::new(dir, policy.capacity));
+        let disk = cache_directory.map(|dir| CacheBackend::Disk(DiskCache::new(dir, policy.capacity)));
         Ok(Self { policy, memory_eviction, disk, state: Mutex::new(State { order: MemoryOrder::new(memory_eviction), ..State::default() }) })
     }
-    fn lock(&self) -> MutexGuard<'_, State> { self.state.lock().unwrap_or_else(|e| e.into_inner()) }
+    /// Bind choices and search records to the active environment without changing it.
+    /// Existing directory-based constructors keep their original storage behavior.
+    #[cfg(persistence)]
+    pub fn in_environment(policy: StackPolicy) -> Result<Self, TuneFailure> {
+        Self::in_environment_with_memory_eviction(policy, MemoryEviction::Fifo)
+    }
+    /// Environment-backed selection with an explicit process-memory eviction order.
+    #[cfg(persistence)]
+    pub fn in_environment_with_memory_eviction(policy: StackPolicy, memory_eviction: MemoryEviction) -> Result<Self, TuneFailure> {
+        policy.validate()?;
+        let disk = Some(CacheBackend::Environment(super::environment::EnvironmentCache::new(policy.capacity)));
+        Ok(Self { policy, memory_eviction, disk, state: Mutex::new(State { order: MemoryOrder::new(memory_eviction), ..State::default() }) })
+    }
+    fn generation(&self) -> Option<u32> { self.disk.as_ref().and_then(CacheBackend::generation) }
+    fn current_key(&self, key: &str) -> bool {
+        match self.generation() {
+            Some(generation) => split_scoped_key(key).is_some_and(|(stored, _)| stored == generation),
+            None => true,
+        }
+    }
+    fn lock(&self) -> MutexGuard<'_, State> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let generation = self.generation();
+        if state.generation != generation {
+            state.records.clear(); state.bypass.clear(); state.banned.clear();
+            state.regressions.clear(); state.reports.clear();
+            state.order = MemoryOrder::new(self.memory_eviction);
+            state.generation = generation;
+            // Running trials and physical-device faults do not disappear with a cache switch.
+        }
+        state
+    }
     /// Borrow the immutable policy; runtime reconfiguration is not supported.
     pub fn policy(&self) -> &StackPolicy { &self.policy }
     /// Return the immutable process-memory retention order.
@@ -249,11 +291,11 @@ impl StackTuner {
         let s = self.lock();
         let mut parts = Vec::new();
         for (key, record) in &s.records {
-            if record.scope != Scope::Pipeline as u8 && record.is_fresh(now_seconds(), self.policy.ttl.as_secs().max(1)) { parts.push(fields(&[key, &record.winner])); }
+            if record.scope != Scope::Pipeline as u8 && record.is_fresh(now_seconds(), self.policy.ttl.as_secs().max(1)) { parts.push(fields(&[split_scoped_key(key).map_or(key.as_str(), |(_, key)| key), &record.winner])); }
         }
         // Bypassed operators retain their declared references, never an unchecked winner.
         for (key, scope) in &s.bypass {
-            if *scope != Scope::Pipeline { parts.push(fields(&[key, "unverified-reference"])); }
+            if *scope != Scope::Pipeline { parts.push(fields(&[split_scoped_key(key).map_or(key.as_str(), |(_, key)| key), "unverified-reference"])); }
         }
         parts.sort();
         let mut encoded = String::new();
@@ -268,6 +310,7 @@ impl StackTuner {
     }
     fn insert(&self, record: Record) {
         let mut s = self.lock();
+        if !self.current_key(&record.key) { return; }
         if !s.order.contains(&record.key) {
             while s.order.len() >= self.policy.capacity {
                 if let Some(key) = s.order.pop_front() {
@@ -284,6 +327,7 @@ impl StackTuner {
         c.fits(&self.policy) && !self.lock().banned.get(key).is_some_and(|b| b.contains(c.name))
     }
     fn from_record<C: CandidateSource>(&self, r: &Record, candidates: &[C], reference: usize, source: DecisionSource) -> Option<Decision> {
+        if !self.current_key(&r.key) { return None; }
         if !r.is_fresh(now_seconds(), self.policy.ttl.as_secs().max(1)) || (self.policy.require_validation && !r.verified) { return None; }
         let index = candidates.iter().position(|c| c.view().name == &r.winner && self.allowed(&r.key, c))?;
         Some(Decision { index, reference_index: reference, name: r.winner.clone(), source, verified: r.verified, ratio: Some(r.ratio), cache_key: r.key.clone() })
@@ -331,6 +375,8 @@ impl StackTuner {
     }
 
     pub(super) fn select_prepared_candidates<C: CandidateSource>(&self, problem: ProblemView<'_>, candidates: &[C], reference: usize, key: &str, runner: &mut impl TrialRunner) -> Result<Decision, TuneFailure> {
+        let scoped = scoped_key(self.generation(), key);
+        let key = scoped.as_ref();
         let fallback = |source| Decision { index: reference, reference_index: reference, name: String::clone(candidates[reference].view().name), source, verified: false, ratio: None, cache_key: key.to_string() };
         if self.lock().poisoned_devices.contains(problem.environment) {
             return Err(TuneFailure { kind: FailureKind::Quarantined, message: "device tuning lane is quarantined after an unconfirmed device completion".into() });
@@ -360,6 +406,8 @@ impl StackTuner {
             Permit { tuner: self, key: key.to_string(), device: problem.environment.to_string() }
         };
         let _depth = DepthGuard::enter();
+        #[cfg(feature = "runtime")]
+        let _real_run = crate::runtime::dry_run::RealRun::new();
         if problem.persistent {
             if let Some(disk) = &self.disk {
                 match disk.load(&key) {
@@ -376,6 +424,8 @@ impl StackTuner {
                                 Err(e) if e.kind == FailureKind::Device => { self.fail_device(problem.environment); return Err(e); }
                                 Err(_) => { if disk.remove(&key).is_err() { self.lock().stats.cache_warnings += 1; } }
                             }
+                        } else if disk.generation().is_some() && disk.remove(key).is_err() {
+                            self.lock().stats.cache_warnings += 1;
                         }
                     }
                     Err(_) => self.lock().stats.cache_warnings += 1,
@@ -384,21 +434,47 @@ impl StackTuner {
             }
         }
         if self.policy.mode == Mode::CacheOnly { return Ok(fallback(DecisionSource::CacheMiss)); }
-        match self.explore(problem, candidates, reference, &key, runner) {
+        #[cfg(persistence)]
+        let recording = self.disk.as_ref().and_then(CacheBackend::table)
+            .and_then(|table| super::record::StackRecording::new(table, key, candidates.iter().map(|candidate| candidate.view().name.as_str())));
+        let limit = runner.time_limit();
+        let mut trace = SearchTrace::default();
+        if limit.is_some_and(|limit| limit.confirmations == 0) {
+            let error = TuneFailure::invalid("time-limit confirmation count must be positive");
+            #[cfg(persistence)]
+            if let Some(recording) = recording { recording.finish_failure(&error, &trace, limit); }
+            return Err(error);
+        }
+        match self.explore(problem, candidates, reference, &key, runner, limit, &mut trace) {
             Ok((decision, report, record)) => {
+                let mut stored = false;
                 if problem.persistent {
-                    if let Some(disk) = &self.disk { if disk.save(&record).is_err() { self.lock().stats.cache_warnings += 1; } }
+                    if let Some(disk) = &self.disk {
+                        match disk.save(&record) {
+                            Ok(accepted) => stored = accepted,
+                            Err(_) => self.lock().stats.cache_warnings += 1,
+                        }
+                    }
                 }
+                #[cfg(persistence)]
+                if let Some(recording) = recording { recording.finish(&report, &trace, limit, stored); }
+                #[cfg(not(persistence))]
+                let _ = stored;
                 self.insert(record);
                 let mut s = self.lock(); s.stats.tunes += 1;
-                if s.reports.len() >= self.policy.capacity.min(128) { s.reports.pop_front(); }
-                s.reports.push_back(report);
+                if self.current_key(key) {
+                    if s.reports.len() >= self.policy.capacity.min(128) { s.reports.pop_front(); }
+                    s.reports.push_back(report);
+                }
                 Ok(decision)
             }
             Err(e) if e.kind == FailureKind::Unavailable => {
+                #[cfg(persistence)]
+                if let Some(recording) = recording { recording.finish_failure(&e, &trace, limit); }
                 // Reference benchmarking may exceed the validation/workspace budget. Preserve
                 // normal execution on the declared reference; never promote an unchecked winner.
                 let mut s = self.lock();
+                if !self.current_key(key) { return Ok(fallback(DecisionSource::ValidationUnavailable)); }
                 if !s.order.contains(&key.to_string()) { s.order.push_back(key.to_string()); }
                 s.bypass.insert(key.to_string(), problem.scope);
                 self.promote(&mut s, &key);
@@ -415,37 +491,71 @@ impl StackTuner {
                 });
                 Ok(fallback(DecisionSource::ValidationUnavailable))
             }
-            Err(e) => { if e.kind == FailureKind::Device { self.fail_device(problem.environment); } Err(e) }
+            Err(e) => {
+                #[cfg(persistence)]
+                if let Some(recording) = recording { recording.finish_failure(&e, &trace, limit); }
+                if e.kind == FailureKind::Device { self.fail_device(problem.environment); }
+                Err(e)
+            }
         }
     }
-    fn explore<C: CandidateSource>(&self, problem: ProblemView<'_>, candidates: &[C], reference: usize, key: &str, runner: &mut impl TrialRunner) -> Result<(Decision, TuneReport, Record), TuneFailure> {
+    fn explore<C: CandidateSource>(&self, problem: ProblemView<'_>, candidates: &[C], reference: usize, key: &str, runner: &mut impl TrialRunner, limit: Option<TimeLimit>, trace: &mut SearchTrace) -> Result<(Decision, TuneReport, Record), TuneFailure> {
         let started = Instant::now();
         // The mandatory reference is validated even if its compilation takes the whole budget.
         // Never treat a failed reference as permission to choose an unverified fast candidate.
-        for _ in 0..self.policy.warmups { runner.measure(reference)?; }
-        let reference_checked = self.validation(runner, reference, reference)?;
-        let reference_time = runner.measure(reference)?;
-        if reference_time.is_zero() { return Err(TuneFailure { kind: FailureKind::Unavailable, message: "reference has zero elapsed time".into() }); }
+        let mut reference_confirmations = 0;
+        let baseline = (|| {
+            for _ in 0..self.policy.warmups { runner.measure(reference)?; }
+            let checked = self.validation(runner, reference, reference)?;
+            let reference_time = runner.measure(reference)?;
+            if reference_time.is_zero() { return Err(TuneFailure { kind: FailureKind::Unavailable, message: "reference has zero elapsed time".into() }); }
+            let mut samples = std::vec![reference_time];
+            if let Some(limit) = limit.filter(|limit| reference_time <= limit.duration) {
+                while samples.len() < limit.confirmations && started.elapsed() < self.policy.budget {
+                    let duration = runner.measure(reference)?;
+                    if duration.is_zero() { break; }
+                    samples.push(duration);
+                    reference_confirmations += 1;
+                }
+                if samples.iter().filter(|duration| **duration <= limit.duration).count() >= limit.confirmations {
+                    trace.short_circuit = Some(String::clone(candidates[reference].view().name));
+                }
+            }
+            Ok((checked, samples))
+        })();
+        trace.trials.push((String::clone(candidates[reference].view().name), started.elapsed()));
+        if reference_confirmations > 0 {
+            trace.confirmation_samples.push((String::clone(candidates[reference].view().name), reference_confirmations));
+        }
+        let (reference_checked, reference_samples) = baseline?;
+        let reference_time = reference_samples[0];
         let mut winner = reference; let mut winner_ratio = 1.0; let mut winner_time = reference_time;
         let mut winner_reference = reference_time; let mut winner_checked = reference_checked;
         let mut reports = Vec::new();
-        reports.push(CandidateReport { name: String::clone(candidates[reference].view().name), samples: 1, ratio: Some(1.0), relative_mad: Some(0.0), verified: reference_checked, note: "reference; retained unless a stable measured improvement qualifies".into() });
+        reports.push(CandidateReport { name: String::clone(candidates[reference].view().name), samples: reference_samples.len(), ratio: Some(1.0), relative_mad: Some(0.0), verified: reference_checked, note: "reference; retained unless a stable measured improvement qualifies".into() });
         let mut attempted = 1; let mut exhausted = false;
         for (index, candidate) in candidates.iter().enumerate() {
             if index == reference { continue; }
             let mut report = CandidateReport { name: String::clone(candidate.view().name), samples: 0, ratio: None, relative_mad: None, verified: false, note: String::new() };
+            if let Some(winner) = &trace.short_circuit {
+                report.note = std::format!("not measured: time bound satisfied by {winner}");
+                reports.push(report);
+                continue;
+            }
             if !self.allowed(key, candidate) { report.note = "ineligible, unknown/over-budget workspace, or regressed candidate".into(); reports.push(report); continue; }
             if attempted >= self.policy.max_candidates || started.elapsed() >= self.policy.budget {
                 exhausted = true; report.note = "search budget exhausted".into(); reports.push(report); continue;
             }
             attempted += 1;
-            let result = (|| -> Result<(bool, Vec<(Duration, Duration)>), TuneFailure> {
+            let trial_started = Instant::now();
+            let mut confirmation_samples = 0;
+            let result = (|| -> Result<(bool, Vec<(Duration, Duration)>, Option<(f64, f64)>, bool), TuneFailure> {
                 for _ in 0..self.policy.warmups {
                     if started.elapsed() >= self.policy.budget { return Err(TuneFailure::rejected("budget exhausted during warmup")); }
                     runner.measure(index)?;
                 }
                 let checked = self.validation(runner, reference, index)?;
-                let mut pairs = Vec::with_capacity(self.policy.samples);
+                let mut pairs: Vec<(Duration, Duration)> = Vec::with_capacity(self.policy.samples);
                 for sample in 0..self.policy.samples {
                     if started.elapsed() >= self.policy.budget { return Err(TuneFailure::rejected("budget exhausted before enough paired samples")); }
                     // Alternate order to reduce monotonic warmup/clock/thermal bias.
@@ -457,14 +567,36 @@ impl StackTuner {
                     if pair.0.is_zero() || pair.1.is_zero() { return Err(TuneFailure::rejected("zero duration cannot be scored")); }
                     pairs.push(pair);
                 }
-                Ok((checked, pairs))
+                let score = paired_score(&pairs, &self.policy);
+                let mut confirmed = false;
+                if let (Some((ratio, _)), Some(limit)) = (score, limit) {
+                    if ratio < winner_ratio && ratio * self.policy.min_speedup <= 1.0 {
+                        let mut below = pairs.iter().filter(|pair| pair.1 <= limit.duration).count();
+                        let remaining = limit.confirmations.saturating_sub(below);
+                        // Additional confirmations never enter the paired-ratio score.
+                        while below > 0 && below < limit.confirmations && confirmation_samples < remaining
+                            && started.elapsed() < self.policy.budget
+                        {
+                            let duration = runner.measure(index)?;
+                            if duration.is_zero() { return Err(TuneFailure::rejected("zero duration cannot confirm a time bound")); }
+                            confirmation_samples += 1;
+                            below += usize::from(duration <= limit.duration);
+                        }
+                        confirmed = below >= limit.confirmations;
+                    }
+                }
+                Ok((checked, pairs, score, confirmed))
             })();
+            trace.trials.push((String::clone(candidate.view().name), trial_started.elapsed()));
+            if confirmation_samples > 0 {
+                trace.confirmation_samples.push((String::clone(candidate.view().name), confirmation_samples));
+            }
             match result {
                 Err(e) if e.kind == FailureKind::Device => return Err(e),
                 Err(e) => { report.note = e.message; },
-                Ok((checked, pairs)) => {
+                Ok((checked, pairs, score, confirmed)) => {
                     report.verified = checked; report.samples = pairs.len();
-                    match paired_score(&pairs, &self.policy) {
+                    match score {
                         None => { report.note = "timings too noisy or incomplete".into(); },
                         Some((ratio, mad)) => {
                             report.ratio = Some(ratio); report.relative_mad = Some(mad);
@@ -475,6 +607,9 @@ impl StackTuner {
                                 let mut b: Vec<_> = pairs.iter().map(|p| p.1.as_secs_f64()).collect();
                                 winner_reference = Duration::from_secs_f64(median(&mut a).unwrap());
                                 winner_time = Duration::from_secs_f64(median(&mut b).unwrap());
+                                if confirmed {
+                                    trace.short_circuit = Some(String::clone(candidate.view().name));
+                                }
                             }
                         }
                     }
@@ -494,6 +629,7 @@ impl StackTuner {
     /// `ban_candidate=true` additionally bans a non-reference name for this key.
     /// Removes the persistent record when possible; disk failures increment cache warnings.
     pub fn invalidate(&self, decision: &Decision, ban_candidate: bool) {
+        if !self.current_key(&decision.cache_key) { return; }
         {
             let mut s = self.lock(); s.records.remove(&decision.cache_key); s.regressions.remove(&decision.cache_key); s.bypass.remove(&decision.cache_key);
             if ban_candidate && decision.index != decision.reference_index {

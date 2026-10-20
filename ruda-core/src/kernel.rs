@@ -2,6 +2,9 @@ use alloc::{string::String, vec::Vec};
 use crate::{ir::{Id, Scope, StorageType, Type}, launch::RudaDim};
 use serde::{Deserialize, Serialize};
 
+mod io;
+pub use io::{BufferIOAttr, BufferIoAnalysis, KernelIo};
+
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct KernelDefinition {
@@ -60,6 +63,9 @@ impl KernelDefinition {
             use crate::ir::{Branch, Operation, PointerAccess, VariableKind};
             for instruction in &scope.instructions {
                 match &instruction.operation {
+                    Operation::CoopMma(crate::ir::CoopMma::Elementwise { function, .. }) => {
+                        visit(kernel, &function.body)?;
+                    }
                     Operation::Pointer(op) => {
                         op.validate(instruction.out)?;
                         if let crate::ir::PointerOp::Address(pointer) = op {

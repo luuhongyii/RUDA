@@ -72,8 +72,9 @@ fn row_mask<B: Backend>(inputs: &Tensor<B,2>,visible: Option<Tensor<B,1,Bool>>) 
     if let Some(visible) = visible {
         assert_eq!(visible.dims(),[inputs.dims()[0]],"classification visibility differs from actual input rows");
         assert_eq!(visible.device(),inputs.device(),"classification visibility must share the input device");
-        visible.bool_not()
-    } else {Tensor::<B,1,Bool>::zeros([inputs.dims()[0]],&inputs.device())}
+        let context = inputs.autodiff_context().merge(visible.autodiff_context());
+        visible.with_autodiff_context(context).bool_not()
+    } else {Tensor::<B,1,Bool>::zeros([inputs.dims()[0]],&inputs.device()).with_autodiff_context(inputs.autodiff_context())}
 }
 
 fn probabilities<B: Backend>(criterion: &CrossEntropyLoss<B>,inputs: Tensor<B,2>,excluded: Tensor<B,1,Bool>,dtype: DType,native: bool)
@@ -111,8 +112,12 @@ impl<B: Backend> CrossEntropyLoss<B> {
         assert_eq!(targets.dims(),[rows],"classification input and target rows differ");
         assert_eq!(targets.device(),inputs.device(),"classification inputs and targets must share a device");
         let dtype = compute(self,&inputs,None);
+        let mut context = inputs.autodiff_context().merge(targets.autodiff_context());
+        if let Some(weights) = &self.weights { context = context.merge(weights.autodiff_context()); }
         let targets = targets.cast(IntDType::I64);
         let mut excluded = row_mask(&inputs,visible);
+        context = context.merge(excluded.autodiff_context());
+        excluded = excluded.with_autodiff_context(context);
         if let Some(ignore_index) = ignore_index { excluded = excluded.bool_or(targets.clone().equal_elem(ignore_index)); }
         if let Some(pads) = &self.pad_tokens {
             for &pad in pads {
@@ -122,14 +127,14 @@ impl<B: Backend> CrossEntropyLoss<B> {
         }
         let valid = excluded.clone().bool_not();
         if rows == 0 {
-            return CategoricalLossTerms {values:inputs.cast(dtype).reshape([0]),normalizers:Tensor::zeros([0],(&targets.device(),dtype)),valid};
+            return CategoricalLossTerms {values:inputs.cast(dtype).reshape([0]).with_autodiff_context(context),normalizers:Tensor::zeros([0],(&targets.device(),dtype)).with_autodiff_context(context),valid};
         }
         let targets = targets.mask_fill(excluded.clone(),0);
         let normalizers = if let Some(weights) = &self.weights {weights.clone().cast(dtype).gather(0,targets.clone())}
-            else {Tensor::ones([rows],(&inputs.device(),dtype))};
+            else {Tensor::ones([rows],(&inputs.device(),dtype)).with_autodiff_context(context)};
         let log_probabilities = probabilities(self,inputs,excluded.clone(),dtype,native);
         let alpha = f64::from(self.smoothing.unwrap_or(0.0));
-        let mut values = if alpha == 1.0 {Tensor::zeros([rows],(&targets.device(),dtype))} else {
+        let mut values = if alpha == 1.0 {Tensor::zeros([rows],(&targets.device(),dtype)).with_autodiff_context(context)} else {
             let selected = log_probabilities.clone().gather(1,targets.reshape([rows,1])).reshape([rows]);
             product(selected,normalizers.clone()).neg().mul_scalar(1.0-alpha)
         };
@@ -165,11 +170,15 @@ impl<B: Backend> CrossEntropyLoss<B> {
         check_float(targets.dtype());
         let [rows,classes] = inputs.dims();
         let dtype = compute(self,&inputs,Some(targets.dtype()));
+        let mut context = inputs.autodiff_context().merge(targets.autodiff_context());
+        if let Some(weights) = &self.weights { context = context.merge(weights.autodiff_context()); }
         let excluded = row_mask(&inputs,visible);
+        context = context.merge(excluded.autodiff_context());
+        let excluded = excluded.with_autodiff_context(context);
         let valid = excluded.clone().bool_not();
         if rows == 0 {
             return CategoricalLossTerms {values:inputs.cast(dtype).reshape([0])+targets.cast(dtype).reshape([0]),
-                normalizers:Tensor::zeros([0],(&valid.device(),dtype)),valid};
+                normalizers:Tensor::zeros([0],(&valid.device(),dtype)).with_autodiff_context(context),valid};
         }
         let excluded_classes = excluded.clone().reshape([rows,1]).expand([rows,classes]);
         let targets = targets.cast(dtype).mask_fill(excluded_classes.clone(),0);

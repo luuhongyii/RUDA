@@ -11,11 +11,13 @@ impl CudaContext {
         logger: Arc<ServerLogger>,
         hash: Option<StableHash>,
         version: (u32, u32),
+        mut recording: CompilationRecording,
     ) -> Result<(), LaunchError> {
-        let definition = kernel.kernel_definition().ok_or_else(|| CompilationError::UnsupportedInstruction {
+        let definition = kernel.try_kernel_definition()?.ok_or_else(|| CompilationError::UnsupportedInstruction {
             reason: "Direct PTX requires Kernel IR; source-only tasks cannot be compiled by this backend".into(),
             backtrace: BackTrace::capture(),
         })?;
+        recording.defined(&definition);
         let representation = PtxCompiler.compile(
             definition,
             &PtxCompilationOptions {
@@ -39,6 +41,7 @@ impl CudaContext {
             .into());
         }
         let compiled = ruda::runtime::kernel::CompiledKernel::<PtxCompiler> {
+            io: Some(representation.io.clone()),
             entrypoint_name: representation.entrypoint.clone(),
             debug_name: Some(kernel.name()),
             source: representation.source.clone(),
@@ -49,7 +52,17 @@ impl CudaContext {
                 .then(|| DebugInformation::new("ptx", kernel_id.clone())),
         };
         logger.log_compilation(&compiled);
-        let ptx: Vec<c_char> = CString::new(compiled.source)
+        recording.source(&compiled.source);
+        if let Some((entry, stored)) = self.artifacts.rekey(kernel_id, &compiled.source) {
+            self.load_ptx(
+                entry.ptx, kernel_id.clone(), entry.entrypoint_name, compiled.ruda_dim,
+                entry.shared_mem_bytes, entry.dynamic_metadata_index,
+                compiled.io.clone(),
+            )?;
+            recording.rekeyed(stored);
+            return Ok(());
+        }
+        let ptx: Vec<c_char> = CString::new(compiled.source.as_str())
             .map_err(|err| CompilationError::Validation {
                 reason: format!("Invalid PTX source: {err}"),
                 backtrace: BackTrace::capture(),
@@ -58,10 +71,18 @@ impl CudaContext {
             .into_iter()
             .map(|byte| byte as c_char)
             .collect();
+        let stored = self.artifacts.enabled() && self.artifacts.insert(kernel_id, &compiled.source, PtxCacheEntry {
+            io: compiled.io.clone(),
+            entrypoint_name: compiled.entrypoint_name.clone(),
+            shared_mem_bytes,
+            ptx: ptx.clone(),
+            dynamic_metadata_index,
+        });
         if let (Some(cache), Some(hash)) = (&mut self.ptx_cache, hash) {
             if let Err(err) = cache.insert(
                 hash,
                 PtxCacheEntry {
+                    io: compiled.io.clone(),
                     entrypoint_name: compiled.entrypoint_name.clone(),
                     shared_mem_bytes,
                     ptx: ptx.clone(),
@@ -78,7 +99,9 @@ impl CudaContext {
             compiled.ruda_dim,
             shared_mem_bytes,
             dynamic_metadata_index,
+            compiled.io,
         )?;
+        recording.compiled(stored);
         Ok(())
     }
 }

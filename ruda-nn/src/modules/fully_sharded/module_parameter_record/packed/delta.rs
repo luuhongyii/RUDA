@@ -62,7 +62,7 @@ impl<B:Backend> FullyShardedStorageDeltaRecord<B> {
         for (saved,target) in self.signatures.iter().zip(&actual) {
             if saved.0!=target.0 || saved.1!=target.1 || saved.2!=target.2 || saved.3!=target.3 || saved.4!=target.4 {return Err(FullyShardedParameterError::Record);}
             if let Some(parameter)=floats.get(&ParamId::from(saved.0)) {
-                if B::ad_enabled(&parameter.local.val().device()) && saved.5!=target.5 {return Err(FullyShardedParameterError::Trainability);}
+                if parameter.local.val().is_autodiff() && saved.5!=target.5 {return Err(FullyShardedParameterError::Trainability);}
             } else if saved.5 {return Err(FullyShardedParameterError::Trainability);}
         }
         self.updates.validate_selected_for(module)

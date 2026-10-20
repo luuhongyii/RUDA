@@ -32,7 +32,7 @@ pub struct GlobalTensorCompilationArg {
 }
 
 #[derive(new, Debug)]
-pub struct GlobalTensorArg<R: Runtime> {
+pub struct GlobalTensorArg<R: LaunchMarker = ()> {
     pub tensor: <Tensor<Vector<DynElem, DynSize>> as LaunchArg>::RuntimeArg<R>,
     pub ty: Type,
     pub broadcasted: bool,
@@ -40,10 +40,10 @@ pub struct GlobalTensorArg<R: Runtime> {
 }
 
 impl LaunchArg for GlobalTensor {
-    type RuntimeArg<R: Runtime> = GlobalTensorArg<R>;
+    type RuntimeArg<R: LaunchMarker> = GlobalTensorArg<R>;
     type CompilationArg = GlobalTensorCompilationArg;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {

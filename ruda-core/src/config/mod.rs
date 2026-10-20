@@ -49,6 +49,9 @@ pub trait RuntimeConfig:
         self
     }
 
+    /// Applies configuration side effects before publishing the singleton.
+    fn on_loaded(&self) {}
+
     /// Retrieves the current configuration, loading it from the current directory if not set.
     ///
     /// If no configuration is set, it attempts to load one from any of [`Config::file_names`] in
@@ -72,6 +75,7 @@ pub trait RuntimeConfig:
                 }
             }
 
+            config.on_loaded();
             *state = Some(Arc::new(config));
         }
 
@@ -92,6 +96,7 @@ pub trait RuntimeConfig:
         if state.is_some() {
             panic!("Cannot set the configuration multiple times.");
         }
+        config.on_loaded();
         *state = Some(Arc::new(config));
     }
 

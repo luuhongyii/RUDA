@@ -304,6 +304,15 @@ where
         U::Item<P>,
     );
 
+    fn map_parameters<Mapper: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut Mapper) -> Self {
+        self.model = Record::<B>::map_parameters(self.model, mapper);
+        self.optimizer = Record::<B>::map_parameters(self.optimizer, mapper);
+        self.scheduler = Record::<B>::map_parameters(self.scheduler, mapper);
+        self.gradients = Record::<B>::map_parameters(self.gradients, mapper);
+        self.state = Record::<B>::map_parameters(self.state, mapper);
+        self
+    }
+
     fn into_item<P: PrecisionSettings>(self) -> Self::Item<P> {
         (
             self.model.into_item::<P>(),

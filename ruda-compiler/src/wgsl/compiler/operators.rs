@@ -126,6 +126,16 @@ impl<P: WgslLowering> WgslCompiler<P> {
         let out = out.unwrap();
         match value {
             ruda::Operator::NativeAddress(_) | ruda::Operator::NativeLoad(_) | ruda::Operator::NativeStore(_) => unreachable!(),
+            ruda::Operator::WorkgroupUniformLoad(op) => {
+                assert!(matches!(op.list.kind, ruda::VariableKind::SharedArray { .. } | ruda::VariableKind::Shared { .. }));
+                let width = if op.vector_size == 0 { op.list.vector_size() } else { op.vector_size };
+                assert_eq!(width, out.vector_size());
+                instructions.push(wgsl::Instruction::WorkgroupUniformLoad {
+                    list: self.compile_variable(op.list),
+                    index: self.compile_variable(op.index),
+                    out: self.compile_variable(out),
+                });
+            }
             ruda::Operator::Cast(op) => instructions.push(wgsl::Instruction::Assign {
                 input: self.compile_variable(op.input),
                 out: self.compile_variable(out),
@@ -179,9 +189,11 @@ impl<P: WgslLowering> WgslCompiler<P> {
             ruda::Operator::CopyMemoryBulk(op) => instructions.push(wgsl::Instruction::CopyBulk {
                 input: self.compile_variable(op.input),
                 in_index: self.compile_variable(op.in_index),
+                offset_input: self.compile_variable(op.offset_input),
                 out: self.compile_variable(out),
                 out_index: self.compile_variable(op.out_index),
-                len: op.len as u32,
+                offset_out: self.compile_variable(op.offset_out),
+                len: op.len,
             }),
             ruda::Operator::Select(op) => instructions.push(wgsl::Instruction::Select {
                 cond: self.compile_variable(op.cond),

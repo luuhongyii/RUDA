@@ -4,24 +4,32 @@ use core::marker::PhantomData;
 
 /// Original native projection with the actual first-order manual input boundary.
 #[derive(Clone,Debug)]
-pub struct PackedProjectionAutodiffState<B:FrozenPackedExpertOps> {native:B::PackedProjectionState,tracked_input:bool}
+pub struct PackedProjectionAutodiffState<B:FrozenPackedExpertOps> {native:B::PackedProjectionState,tracked_input:bool,context:ruda_tensor::AutodiffContext}
 /// Original actual native packed chain cache with the same first-order manual boundary.
 #[derive(Clone,Debug)]
-pub struct PackedSwiGluAutodiffState<B:FrozenPackedExpertOps> {native:B::PackedSwiGluState,tracked_input:bool}
+pub struct PackedSwiGluAutodiffState<B:FrozenPackedExpertOps> {native:B::PackedSwiGluState,tracked_input:bool,context:ruda_tensor::AutodiffContext}
+fn payload_context<B:FrozenPackedExpertOps,S:CheckpointStrategy>(payload:&PackedExpertPayload<Autodiff<B,S>>) -> ruda_tensor::AutodiffContext {
+    match payload {
+        PackedExpertPayload::Nf4(value) | PackedExpertPayload::Nf4Window {payload:value,..} =>
+            value.packed.context.merge(value.scales.context::<S>()).merge(value.codebook.context::<S>()),
+        PackedExpertPayload::Awq(value) => value.qweight.context.merge(value.qzeros.context).merge(value.scales.context::<S>())
+            .merge(value.bias.as_ref().map_or(ruda_tensor::AutodiffContext::Disabled, |bias| bias.context::<S>())),
+    }
+}
 fn frozen_payload<B:FrozenPackedExpertOps,S:CheckpointStrategy>(payload:PackedExpertPayload<Autodiff<B,S>>) -> Result<PackedExpertPayload<B>,PackedExpertAutodiffError<B::PackedExpertError>> {
     Ok(match payload {
         PackedExpertPayload::Nf4(value)=>{
             if value.scales.is_tracked() || value.codebook.is_tracked() {return Err(PackedExpertAutodiffError::TrainableMetadata);}
-            PackedExpertPayload::Nf4(Nf4ExpertPayload {packed:value.packed,scales:value.scales.primitive,codebook:value.codebook.primitive,options:value.options})
+            PackedExpertPayload::Nf4(Nf4ExpertPayload {packed:value.packed.primitive,scales:value.scales.primitive,codebook:value.codebook.primitive,options:value.options})
         },
         PackedExpertPayload::Awq(value)=>{
             if value.scales.is_tracked() || value.bias.as_ref().is_some_and(|value|value.is_tracked()) {return Err(PackedExpertAutodiffError::TrainableMetadata);}
-            PackedExpertPayload::Awq(AwqExpertPayload {qweight:value.qweight,qzeros:value.qzeros,scales:value.scales.primitive,
+            PackedExpertPayload::Awq(AwqExpertPayload {qweight:value.qweight.primitive,qzeros:value.qzeros.primitive,scales:value.scales.primitive,
                 bias:value.bias.map(|value|value.primitive),options:value.options})
         },
         PackedExpertPayload::Nf4Window {payload:value,element_offset}=>{
             if value.scales.is_tracked() || value.codebook.is_tracked() {return Err(PackedExpertAutodiffError::TrainableMetadata);}
-            PackedExpertPayload::Nf4Window {payload:Nf4ExpertPayload {packed:value.packed,scales:value.scales.primitive,
+            PackedExpertPayload::Nf4Window {payload:Nf4ExpertPayload {packed:value.packed.primitive,scales:value.scales.primitive,
                 codebook:value.codebook.primitive,options:value.options},element_offset}
         },
     })
@@ -49,26 +57,36 @@ impl<B:FrozenPackedExpertOps,S:CheckpointStrategy> FrozenPackedExpertOps for Aut
     type PackedProjectionState=PackedProjectionAutodiffState<B>;
     type PackedSwiGluState=PackedSwiGluAutodiffState<B>;
     fn packed_expert_forward(input:FloatTensor<Self>,global_ids:IntTensor<Self>,payload:PackedExpertPayload<Self>) -> Result<(FloatTensor<Self>,Self::PackedProjectionState),Self::PackedExpertError> {
+        let context = input.context::<S>().merge(global_ids.context).merge(payload_context::<B,S>(&payload));
+        let input = input.with_context::<S>(context);
+        let global_ids = global_ids.primitive;
         let payload=frozen_payload(payload)?;let tracked_input=input.is_tracked();
         let (output,native)=B::packed_expert_forward(input.primitive,global_ids,payload).map_err(PackedExpertAutodiffError::Native)?;
         let output=match PackedProjection::<B>(PhantomData).prepare::<S>([input.node]).compute_bound().stateful() {
             OpsKind::Tracked(prep)=>prep.finish(native.clone(),output),OpsKind::UnTracked(prep)=>prep.finish(output)};
-        Ok((output,PackedProjectionAutodiffState {native,tracked_input}))
+        Ok((output,PackedProjectionAutodiffState {native,tracked_input,context}))
     }
     fn packed_expert_input_backward(state:Self::PackedProjectionState,gradient:FloatTensor<Self>) -> Result<FloatTensor<Self>,Self::PackedExpertError> {
+        let context = gradient.context::<S>().merge(state.context);
+        let gradient = gradient.with_context::<S>(context);
         if state.tracked_input || gradient.is_tracked() {return Err(PackedExpertAutodiffError::HigherDerivativeUnsupported);}
-        B::packed_expert_input_backward(state.native,gradient.primitive).map(AutodiffTensor::new).map_err(PackedExpertAutodiffError::Native)
+        B::packed_expert_input_backward(state.native,gradient.primitive).map(|value| AutodiffTensor::new(value).with_context::<S>(context)).map_err(PackedExpertAutodiffError::Native)
     }
     fn packed_swiglu_forward(input:FloatTensor<Self>,global_ids:IntTensor<Self>,gate:PackedExpertPayload<Self>,up:PackedExpertPayload<Self>,down:PackedExpertPayload<Self>,retain_input:bool)
         -> Result<(FloatTensor<Self>,Self::PackedSwiGluState),Self::PackedExpertError> {
+        let context = input.context::<S>().merge(global_ids.context).merge(payload_context::<B,S>(&gate)).merge(payload_context::<B,S>(&up)).merge(payload_context::<B,S>(&down));
+        let input = input.with_context::<S>(context);
+        let global_ids = global_ids.primitive;
         let (gate,up,down)=(frozen_payload(gate)?,frozen_payload(up)?,frozen_payload(down)?);let tracked_input=input.is_tracked();
         let (output,native)=B::packed_swiglu_forward(input.primitive,global_ids,gate,up,down,retain_input || tracked_input).map_err(PackedExpertAutodiffError::Native)?;
         let output=match PackedSwiGlu::<B>(PhantomData).prepare::<S>([input.node]).compute_bound().stateful() {
             OpsKind::Tracked(prep)=>prep.finish(native.clone(),output),OpsKind::UnTracked(prep)=>prep.finish(output)};
-        Ok((output,PackedSwiGluAutodiffState {native,tracked_input}))
+        Ok((output,PackedSwiGluAutodiffState {native,tracked_input,context}))
     }
     fn packed_swiglu_input_backward(state:Self::PackedSwiGluState,gradient:FloatTensor<Self>) -> Result<FloatTensor<Self>,Self::PackedExpertError> {
+        let context = gradient.context::<S>().merge(state.context);
+        let gradient = gradient.with_context::<S>(context);
         if state.tracked_input || gradient.is_tracked() {return Err(PackedExpertAutodiffError::HigherDerivativeUnsupported);}
-        B::packed_swiglu_input_backward(state.native,gradient.primitive).map(AutodiffTensor::new).map_err(PackedExpertAutodiffError::Native)
+        B::packed_swiglu_input_backward(state.native,gradient.primitive).map(|value| AutodiffTensor::new(value).with_context::<S>(context)).map_err(PackedExpertAutodiffError::Native)
     }
 }

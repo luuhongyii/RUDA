@@ -101,8 +101,9 @@ impl<B: Backend> ProjectedKvCache<B> {
         let device = key.device();
         let dtype = key.dtype();
         let visible = visible.unwrap_or_else(|| {
-            if let Some(previous) = &self.visible { Tensor::<B,2,Bool>::zeros([batch,tokens],(&device,previous.dtype())).bool_not() }
-            else { Tensor::<B,2,Bool>::zeros([batch,tokens],&device).bool_not() }
+            let context = key.autodiff_context().merge(value.autodiff_context());
+            if let Some(previous) = &self.visible { Tensor::<B,2,Bool>::zeros([batch,tokens],(&device,previous.dtype())).with_autodiff_context(context).bool_not() }
+            else { Tensor::<B,2,Bool>::zeros([batch,tokens],&device).with_autodiff_context(context).bool_not() }
         });
         if self.key.is_none() && (end >= self.initial_capacity || tokens == 0) {
             self.key = Some(key.detach());
@@ -116,9 +117,9 @@ impl<B: Backend> ProjectedKvCache<B> {
         let (mut key_storage,mut value_storage,mut valid_storage) = if self.capacity < end {
             let mut capacity = self.capacity.max(self.initial_capacity).max(1);
             while capacity < end { capacity = capacity.checked_mul(2).unwrap_or(end); }
-            let mut keys = Tensor::empty([batch,heads,capacity,key_width],(&device,dtype));
-            let mut values = Tensor::empty([batch,heads,capacity,value_width],(&device,dtype));
-            let mut validity = Tensor::<B,2,Bool>::zeros([batch,capacity],(&device,visible.dtype()));
+            let mut keys = Tensor::empty([batch,heads,capacity,key_width],(&device,dtype)).with_autodiff_context(key.autodiff_context());
+            let mut values = Tensor::empty([batch,heads,capacity,value_width],(&device,dtype)).with_autodiff_context(value.autodiff_context());
+            let mut validity = Tensor::<B,2,Bool>::zeros([batch,capacity],(&device,visible.dtype())).with_autodiff_context(visible.autodiff_context());
             if self.length > 0 {
                 let (previous_key,previous_value,previous_valid) = self.prefix().unwrap();
                 keys.inplace(|storage|storage.slice_assign([0..batch,0..heads,0..self.length,0..key_width],previous_key));

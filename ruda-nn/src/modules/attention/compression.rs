@@ -110,8 +110,13 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LearnedKVCompressor<B, P> 
         let device = input.device();
         let storage = input.dtype();
         let compute = work_dtype(storage);
+        let mut context = input.autodiff_context().merge(valid.autodiff_context());
+        if let Some((previous, valid)) = &previous {
+            context = context.merge(previous.autodiff_context()).merge(valid.autodiff_context());
+        }
         if blocks == 0 {
             return (Tensor::zeros([batch, 0, d], (&device, storage))
+                .with_autodiff_context(context)
                 + input.sum().mul_scalar(0).reshape([1, 1, 1]), valid.slice_dim(1, 0..0));
         }
         let complete = input.slice_dim(1, 0..blocks * r).cast(compute);
@@ -130,9 +135,9 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LearnedKVCompressor<B, P> 
                     .reshape([batch, 1, r, d]);
                 (pv, pg, previous_valid.reshape([batch, 1, r, 1]))
             } else {
-                (Tensor::zeros([batch, 1, r, d], (&device, compute)),
-                    Tensor::zeros([batch, 1, r, d], (&device, compute)),
-                    Tensor::<B, 4, Bool>::zeros([batch, 1, r, 1], &device))
+                (Tensor::zeros([batch, 1, r, d], (&device, compute)).with_autodiff_context(context),
+                    Tensor::zeros([batch, 1, r, d], (&device, compute)).with_autodiff_context(context),
+                    Tensor::<B, 4, Bool>::zeros([batch, 1, r, 1], &device).with_autodiff_context(context))
             };
             let prev_v = if blocks == 1 { pv } else {
                 Tensor::cat(vec![pv, values.clone().slice([0..batch, 0..blocks - 1, 0..r, 0..d])], 1)
@@ -160,16 +165,21 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LearnedKVCompressor<B, P> 
     }
 
     /// Incremental inference over every supplied token, retaining only the incomplete
-    /// tail and one previous complete block. Use a backend with autograd disabled;
+    /// tail and one previous complete block. Use inputs and parameters with autograd disabled;
     /// full-history training derivatives belong to forward(), not detached cache state.
     pub fn append(&self, input: Tensor<B, 3>, valid: Option<Tensor<B, 2, Bool>>, state: Option<&CompressionState<B>>)
         -> (Tensor<B, 3>, Tensor<B, 2, Bool>, CompressionState<B>) {
-        assert!(!B::ad_enabled(&input.device()), "compression cache requires autograd-disabled inference");
+        assert!(!input.is_autodiff() && !ruda_model::module::has_autodiff(self),
+            "compression cache requires autograd-disabled inference");
         let valid = self.validate(&input, valid);
+        assert!(!valid.is_autodiff(), "compression cache requires autograd-disabled inference");
         let [batch, _, width] = input.dims();
         let device = input.device();
         let storage = input.dtype();
         let (data, masks, previous) = if let Some(state) = state {
+            assert!(!state.tail.is_autodiff() && !state.tail_valid.is_autodiff()
+                && !state.previous.is_autodiff() && !state.previous_valid.is_autodiff(),
+                "compression cache requires autograd-disabled inference");
             let tail = state.tail.dims()[1];
             assert!(tail < self.ratio, "compression cache contains an already complete tail");
             assert_eq!(state.tail.dims(), [batch, tail, width], "compression tail geometry differs");
@@ -184,26 +194,30 @@ impl<B: Backend, P: CompressedAttentionProjection<B>> LearnedKVCompressor<B, P> 
                 Some((state.previous.clone(), state.previous_valid.clone())))
         } else { (input, valid, None) };
         let length = data.dims()[1];
+        let context = data.autodiff_context().merge(masks.autodiff_context());
         let cutoff = length / self.ratio * self.ratio;
         let (result, result_valid) = self.compress(data.clone(), masks.clone(), previous.clone());
         let (previous, previous_valid) = if cutoff > 0 {
             (data.clone().slice_dim(1, cutoff - self.ratio..cutoff), masks.clone().slice_dim(1, cutoff - self.ratio..cutoff))
         } else if let Some(previous) = previous { previous }
-        else { (Tensor::zeros([batch, self.ratio, width], (&device, storage)),
-            Tensor::<B, 2, Bool>::zeros([batch, self.ratio], &device)) };
+        else { (Tensor::zeros([batch, self.ratio, width], (&device, storage)).with_autodiff_context(context),
+            Tensor::<B, 2, Bool>::zeros([batch, self.ratio], &device).with_autodiff_context(context)) };
         // Native slice assignment into exact-size storage avoids retaining a prompt-sized view.
         let tail = data.slice_dim(1, cutoff..length);
         let tail_valid = masks.slice_dim(1, cutoff..length);
         let tail = if tail.dims()[1] == 0 { tail.detach() } else {
-            Tensor::empty(tail.dims(), (&device, storage)).slice_assign([0..batch, 0..tail.dims()[1], 0..width], tail.detach())
+            Tensor::empty(tail.dims(), (&device, storage)).with_autodiff_context(tail.autodiff_context()).slice_assign([0..batch, 0..tail.dims()[1], 0..width], tail.detach())
         };
         let tail_valid = if tail_valid.dims()[1] == 0 { tail_valid } else {
             Tensor::<B, 2, Bool>::empty(tail_valid.dims(), (&device, tail_valid.dtype()))
+                .with_autodiff_context(tail_valid.autodiff_context())
                 .slice_assign([0..batch, 0..tail_valid.dims()[1]], tail_valid)
         };
         let previous = Tensor::empty(previous.dims(), (&device, storage))
+            .with_autodiff_context(previous.autodiff_context())
             .slice_assign([0..batch, 0..self.ratio, 0..width], previous.detach());
         let previous_valid = Tensor::<B, 2, Bool>::empty(previous_valid.dims(), (&device, previous_valid.dtype()))
+            .with_autodiff_context(previous_valid.autodiff_context())
             .slice_assign([0..batch, 0..self.ratio], previous_valid);
         (result.detach(), result_valid, CompressionState { tail, tail_valid, previous, previous_valid })
     }

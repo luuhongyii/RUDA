@@ -119,8 +119,14 @@ impl<R: Runtime> TraceRunner<R> for FusedReduceBroadcastedLaunch<'_> {
             false => ComptimeOptionArgs::None,
         };
 
+        let ref_strides = match &first_config.ref_layout {
+            RefLayout::Concrete(FuseArg::Output(..)) => {
+                outputs.strides_ref(&first_config.ref_layout, first_config.rank)
+            }
+            _ => inputs.strides_ref(&first_config.ref_layout, first_config.rank),
+        };
         let out_vec_axis = output_vectorization_axis(
-            &inputs.strides_ref(&first_config.ref_layout, first_config.rank),
+            &ref_strides,
             self.reduce_axis,
             VectorizationMode::Parallel,
         );

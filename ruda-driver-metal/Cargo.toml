@@ -1,0 +1,26 @@
+[package]
+name = "ruda-driver-metal"
+version.workspace = true
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Native Metal driver backend for Ruda"
+repository = "https://github.com/shuqi2077/RUDA"
+
+[features]
+default = ["ruda/runtime-default", "ruda-core/std", "ruda-kernel/frontend-default"]
+std = ["ruda/runtime-std", "ruda-core/std", "ruda-kernel/frontend-std"]
+exclusive-memory-only = ["ruda/runtime-exclusive-memory-only"]
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+ruda = { package = "ruda-runtime", path = "../ruda-runtime", version = "0.1.30", default-features = false, features = ["runtime", "runtime-channel-mutex", "runtime-monitoring"] }
+ruda-core = { path = "../ruda-core", version = "0.1.10", default-features = false, features = ["ir", "compilation-cache", "hash"] }
+ruda-kernel = { path = "../ruda-kernel", version = "0.1.47", default-features = false, features = ["frontend", "lowering-metal"] }
+ruda-compiler = { path = "../ruda-compiler", version = "0.1.19", default-features = false, features = ["cpp-default", "cpp-metal"] }
+objc2 = "0.6"
+objc2-metal = { version = "0.3", features = ["block2", "MTLLibrary", "objc2-core-foundation"] }
+objc2-foundation = "0.3"
+block2 = "0.6"
+bytemuck = "1.16"
+serde = { version = "1", features = ["derive"] }
+log = "0.4"
+

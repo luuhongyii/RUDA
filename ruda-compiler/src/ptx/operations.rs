@@ -13,7 +13,10 @@ impl Emitter {
             && matches!(out.kind, ruda_core::ir::VariableKind::LocalMut { .. }
                 | ruda_core::ir::VariableKind::LocalConst { .. }
                 | ruda_core::ir::VariableKind::Versioned { .. })
-            && let Ok(ty) = Scalar::of(out.ty.with_vector_size(1))
+            && !matches!(out.ty,
+                ruda_core::ir::Type::Scalar(ruda_core::ir::StorageType::Atomic(_))
+                | ruda_core::ir::Type::Vector(ruda_core::ir::StorageType::Atomic(_), _))
+            && let Ok(ty) = Scalar::memory_element(out.ty)
             && ty.narrow()
         {
             for register in self.vector_values(out)? {
@@ -52,6 +55,7 @@ impl Emitter {
                 Operator::NativeAddress(op) => self.native_address(op.lhs, op.rhs, out()?),
                 Operator::NativeLoad(op) => self.native_memory(op.input, out()?, false),
                 Operator::NativeStore(op) => self.native_memory(op.lhs, op.rhs, true),
+                Operator::WorkgroupUniformLoad(op) => self.workgroup_uniform_load(&op, out()?),
                 Operator::Index(op) => {
                     Self::scalar_index(op.vector_size, op.unroll_factor)?;
                     self.memory(op.list, op.index, out()?, false, true)
@@ -148,8 +152,19 @@ impl Emitter {
             {
                 Ok(())
             }
-            Operation::Synchronization(Synchronization::SyncRuda | Synchronization::SyncStorage) => {
+            Operation::Synchronization(Synchronization::SyncRuda) => {
                 self.line("bar.sync 0;");
+                Ok(())
+            }
+            Operation::Synchronization(Synchronization::SyncStorage) => {
+                let fence = if self.target.sm >= 70 && self.target.version >= (6, 0) {
+                    "fence.acq_rel.gpu;"
+                } else {
+                    "membar.gl;"
+                };
+                self.line(fence);
+                self.line("bar.sync 0;");
+                self.line(fence);
                 Ok(())
             }
             Operation::Synchronization(Synchronization::SyncPlane) => {
@@ -186,6 +201,11 @@ impl Emitter {
         }
         let ty = Scalar::of(out.ty)?;
         let src = self.value(input)?;
+        if matches!(out.kind, ruda_core::ir::VariableKind::Shared { .. }) {
+            let pointer = self.shared_array(out)?;
+            self.store_memory_scalar("shared", ty, &src, &pointer);
+            return Ok(());
+        }
         let dst = self.destination(out)?;
         self.line(format!("mov.{} {dst}, {src};", ty.storage()));
         Ok(())
@@ -236,7 +256,10 @@ impl Emitter {
             Arithmetic::Powi(op) => return self.integer_power(out, op.clone()),
             Arithmetic::Powf(op) => return self.floating_power(out, op.clone()),
             Arithmetic::Hypot(op) => return self.binary_math(out, op.clone(), false),
+            Arithmetic::Rhypot(op) => return self.reciprocal_hypot(out, op.clone()),
             Arithmetic::ArcTan2(op) => return self.binary_math(out, op.clone(), true),
+            Arithmetic::Degrees(op) => return self.angle_conversion(out, op.input, true),
+            Arithmetic::Radians(op) => return self.angle_conversion(out, op.input, false),
             Arithmetic::Modulo(op) if ty.float() => return self.floating_remainder(out, op.clone(), false),
             Arithmetic::Remainder(op) if ty.float() => return self.floating_remainder(out, op.clone(), true),
             Arithmetic::Erf(op) => return self.error_function(out, op.input),
@@ -268,7 +291,26 @@ impl Emitter {
             Arithmetic::Div(op) => {
                 self.binary(out, op, if ty.float() { "div.rn" } else { "div" }, ty)
             }
-            Arithmetic::Remainder(op) if ty.integer() => self.binary(out, op, "rem", ty),
+            Arithmetic::Remainder(op) if ty.integer() => {
+                let source_rhs = self.value(op.rhs)?;
+                let rhs = self.reg(ty);
+                self.line(format!("mov.{} {rhs}, {source_rhs};", ty.suffix()));
+                self.binary(out, op, "rem", ty)?;
+                if ty.signed() {
+                    let dst = self.destination(out)?;
+                    let negative_rem = self.reg(Scalar::Pred);
+                    let negative_rhs = self.reg(Scalar::Pred);
+                    let adjust = self.reg(Scalar::Pred);
+                    let nonzero = self.reg(Scalar::Pred);
+                    self.line(format!("setp.lt.{} {negative_rem}, {dst}, 0;", ty.suffix()));
+                    self.line(format!("setp.lt.{} {negative_rhs}, {rhs}, 0;", ty.suffix()));
+                    self.line(format!("xor.pred {adjust}, {negative_rem}, {negative_rhs};"));
+                    self.line(format!("setp.ne.{} {nonzero}, {dst}, 0;", ty.suffix()));
+                    self.line(format!("and.pred {adjust}, {adjust}, {nonzero};"));
+                    self.line(format!("@{adjust} add.{} {dst}, {dst}, {rhs};", ty.suffix()));
+                }
+                Ok(())
+            }
             Arithmetic::MulHi(op) if ty.narrow() => self.narrow_mul_hi(out, op),
             Arithmetic::MulHi(op) if ty.integer() => self.binary(out, op, "mul.hi", ty),
             Arithmetic::SaturatingAdd(op) if ty.integer() => self.saturating(out, op, false),

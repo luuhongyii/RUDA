@@ -13,11 +13,15 @@ mod tests {
     #[test]
     fn preserves_builtin_recorder_metadata() {
         type R = BinBytesRecorder<FullPrecisionSettings>;
-        let expected = "ruda_model::record::memory::BinBytesRecorder<ruda_model::record::settings::FullPrecisionSettings, alloc::vec::Vec<u8>>";
-        assert_eq!(record_type_name(type_name::<R>()), expected);
+        let expected = type_name::<R>();
+        assert!(matches!(expected,
+            "ruda_model::record::memory::BinBytesRecorder<ruda_model::record::settings::FullPrecisionSettings>" |
+            "ruda_model::record::memory::BinBytesRecorder<ruda_model::record::settings::FullPrecisionSettings, alloc::vec::Vec<u8>>"
+        ));
+        assert_eq!(record_type_name(expected), expected);
         let record = RudaRecord::<_, crate::TestBackend>::new::<R>(());
         assert_eq!(record.metadata.format, expected);
-        assert_eq!(record.metadata.version, "0.21.0");
+        assert_eq!(record.metadata.version, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

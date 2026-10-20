@@ -97,8 +97,9 @@ impl VocabParallelCrossEntropy {
         if let Some(visible) = visible {
             assert_eq!(visible.dims(),[logits.dims()[0]],"parallel loss visibility and actual rows differ");
             assert_eq!(visible.device(),logits.device(),"parallel loss visibility must share the device");
-            visible
-        } else {Tensor::<Autodiff<B,S>,1,Bool>::zeros([logits.dims()[0]],&logits.device()).bool_not()}
+            let context = logits.autodiff_context().merge(visible.autodiff_context());
+            visible.with_autodiff_context(context)
+        } else {Tensor::<Autodiff<B,S>,1,Bool>::zeros([logits.dims()[0]],&logits.device()).with_autodiff_context(logits.autodiff_context()).bool_not()}
     }
 
     fn statistics<B,S,C>(&self,logits: Tensor<Autodiff<B,S>,2>,valid: Tensor<Autodiff<B,S>,1,Bool>,
@@ -110,17 +111,21 @@ impl VocabParallelCrossEntropy {
         assert_eq!(communicator.world_size() as usize,self.layout.world_size(),"vocabulary layout and communicator size differ");
         let interval = self.layout.interval(communicator.rank() as usize);
         assert_eq!(interval.len(),width,"local logits do not match this rank's actual vocabulary storage");
+        let mut context = logits.autodiff_context().merge(valid.autodiff_context());
         let mut double = logits.dtype() == DType::F64 || target_dtype == Some(DType::F64);
         if let Some(weights) = &class_weights {
             floating(weights.dtype());
             assert_eq!(weights.dims(),[width],"local class weights and actual vocabulary columns differ");
             assert_eq!(weights.device(),logits.device(),"parallel class weights must share the logits device");
             double |= weights.dtype() == DType::F64;
+            context = context.merge(weights.autodiff_context());
         }
         // One identical scalar collective selects a work dtype across uneven shards.
         let dtype = work_dtype::<B,C>(double,&logits.device(),communicator)?;
-        let logits = logits.cast(dtype);
+        let logits = logits.cast(dtype).with_autodiff_context(context);
+        let valid = valid.with_autodiff_context(context);
         let real = Tensor::<Autodiff<B,S>,1,Int>::arange(interval.start as i64..interval.end as i64,(&logits.device(),DType::I64))
+            .with_autodiff_context(context)
             .lower_elem(self.layout.vocabulary_size as i64).reshape([1,width]).expand([rows,width]);
         let selected = valid.clone().reshape([rows,1]).expand([rows,width]).bool_and(real.clone());
         let weights = class_weights.map(|weights|weights.cast(dtype).reshape([1,width]).expand([rows,width]).mask_fill(selected.clone().bool_not(),0));
@@ -134,7 +139,7 @@ impl VocabParallelCrossEntropy {
         let maxima = communicator.all_gather_float(local_max.into_primitive().tensor())?;
         let maximum = Tensor::<B,2>::from_primitive(TensorPrimitive::Float(maxima))
             .reshape([self.layout.world_size(),rows]).max_dim(0).reshape([rows,1]);
-        let shifted = logits-Tensor::<Autodiff<B,S>,2>::from_inner(maximum);
+        let shifted = logits-Tensor::<Autodiff<B,S>,2>::from_inner(maximum).with_autodiff_context(context);
         let sums = region::reduce_from_region(shifted.clone().exp().sum_dim(1),communicator.clone())?;
         let log_sum = sums.log().reshape([rows]);
         Ok(Statistics {shifted:shifted.mask_fill(selected.bool_not(),0),log_sum,valid,weights})
@@ -153,12 +158,18 @@ impl VocabParallelCrossEntropy {
         assert_eq!(labels.device(),logits.device(),"parallel loss labels must share the device");
         let [rows,width] = logits.dims();
         let labels = labels.cast(IntDType::I64);
-        let mut valid = self.visibility(&logits,visible);
+        let context = logits.autodiff_context().merge(labels.autodiff_context());
+        let valid = self.visibility(&logits,visible);
+        let context = context.merge(valid.autodiff_context());
+        let mut valid = valid.with_autodiff_context(context);
         if let Some(ignore) = self.ignore_index {valid = valid.bool_and(labels.clone().equal_elem(ignore).bool_not());}
         let statistics = self.statistics(logits,valid,class_weights,None,&communicator)?;
         let Statistics {shifted,log_sum,valid,weights} = statistics;
         let dtype = log_sum.dtype();
-        if rows == 0 {return Ok(LossTerms {values:log_sum,normalizers:Tensor::zeros([0],(&labels.device(),dtype)),valid});}
+        if rows == 0 {
+            let context = log_sum.autodiff_context();
+            return Ok(LossTerms {values:log_sum,normalizers:Tensor::zeros([0],(&labels.device(),dtype)).with_autodiff_context(context),valid});
+        }
         let invalid = labels.clone().lower_elem(0).bool_or(labels.clone().greater_equal_elem(self.layout.vocabulary_size as i64)).bool_and(valid.clone());
         let invalid = invalid.any().float().cast(DType::F32).inner();
         let invalid = communicator.all_reduce_sum(invalid.into_primitive().tensor())?;
@@ -207,12 +218,16 @@ impl VocabParallelCrossEntropy {
         floating(targets.dtype());
         let [rows,width] = logits.dims();
         let valid = self.visibility(&logits,visible);
+        let context = valid.autodiff_context().merge(targets.autodiff_context());
+        let valid = valid.with_autodiff_context(context);
         let Statistics {shifted,log_sum,valid,weights} = self.statistics(logits,valid,class_weights,Some(targets.dtype()),&communicator)?;
         let dtype = log_sum.dtype();
+        let context = log_sum.autodiff_context();
         if rows == 0 {return Ok(LossTerms {values:log_sum+targets.cast(dtype).sum_dim(1).reshape([0]),
-            normalizers:Tensor::zeros([0],(&valid.device(),dtype)),valid});}
+            normalizers:Tensor::zeros([0],(&valid.device(),dtype)).with_autodiff_context(context),valid});}
         let interval = self.layout.interval(communicator.rank() as usize);
         let real = Tensor::<Autodiff<B,S>,1,Int>::arange(interval.start as i64..interval.end as i64,(&targets.device(),DType::I64))
+            .with_autodiff_context(context)
             .lower_elem(self.layout.vocabulary_size as i64).reshape([1,width]).expand([rows,width]);
         let selected = valid.clone().reshape([rows,1]).expand([rows,width]).bool_and(real);
         let targets = targets.cast(dtype).mask_fill(selected.clone().bool_not(),0);
@@ -274,6 +289,7 @@ impl VocabParallelLossLayout {
         let output = shifted-log_sum.reshape([rows,1]);
         let interval = self.interval(communicator.rank() as usize);
         let padding = Tensor::<Autodiff<B,S>,1,Int>::arange(interval.start as i64..interval.end as i64,(&output.device(),DType::I64))
+            .with_autodiff_context(output.autodiff_context())
             .greater_equal_elem(self.vocabulary_size() as i64).reshape([1,width]).expand([rows,width]);
         Ok(output.mask_fill(padding,f64::NEG_INFINITY).mask_fill(valid.bool_not().reshape([rows,1]).expand([rows,width]),0))
     }

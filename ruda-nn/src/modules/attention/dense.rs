@@ -39,7 +39,8 @@ fn check_broadcast(shape: [usize; 4], target: [usize; 4]) {
 }
 
 fn connected_zero<B: Backend>(tensor: Tensor<B, 4>, dtype: DType) -> Tensor<B, 1> {
-    let excluded = Tensor::<B, 4, Bool>::zeros(tensor.dims(), &tensor.device()).bool_not();
+    let excluded = Tensor::<B, 4, Bool>::zeros(tensor.dims(), &tensor.device())
+        .with_autodiff_context(tensor.autodiff_context()).bool_not();
     tensor.cast(dtype).mask_fill(excluded, 0).sum()
 }
 
@@ -63,6 +64,11 @@ pub fn dense_scaled_dot_product_attention<B: Backend>(
         "key/value payloads or QK feature geometry differ");
     assert_eq!(batch, value_batch, "query/value batches differ");
     let device = query.device();
+    let mut context = query.autodiff_context().merge(key.autodiff_context()).merge(value.autodiff_context());
+    if let Some(mask) = &masks.query_valid { context = context.merge(mask.autodiff_context()); }
+    if let Some(mask) = &masks.key_valid { context = context.merge(mask.autodiff_context()); }
+    if let Some(mask) = &masks.allowed { context = context.merge(mask.autodiff_context()); }
+    if let Some(bias) = &masks.bias { context = context.merge(bias.autodiff_context()); }
     let storage = query.dtype();
     assert!(matches!(storage, DType::F32 | DType::F16 | DType::BF16 | DType::F64)
         && key.dtype() == storage && value.dtype() == storage, "attention requires matching floating input storage");
@@ -92,10 +98,12 @@ pub fn dense_scaled_dot_product_attention<B: Backend>(
     if let Some((left, right)) = options.window { assert!(left >= -1 && right >= -1, "window distances must be nonnegative or -1"); }
     if let Some(dropout) = dropout { assert!(dropout.prob.is_finite() && (0.0..=1.0).contains(&dropout.prob), "invalid attention dropout probability"); }
     if batch == 0 || queries == 0 || keys == 0
-        || dropout.is_some_and(|dropout|dropout.prob == 1.0 && B::ad_enabled(&device)) {
+        || dropout.is_some_and(|dropout|dropout.prob == 1.0 && dropout.training.is_enabled()
+            && matches!(context, ruda_model::tensor::AutodiffContext::Enabled(_))) {
         let mut zero = connected_zero(query, compute) + connected_zero(key, compute) + connected_zero(value, compute);
         if let Some(bias) = masks.bias { zero = zero + connected_zero(bias, compute); }
         return (Tensor::<B, 4>::zeros([batch, heads, queries, value_features], (&device, compute))
+            .with_autodiff_context(context)
             + zero.reshape([1, 1, 1, 1])).cast(storage);
     }
     let groups = heads / kv_heads;
@@ -117,7 +125,7 @@ pub fn dense_scaled_dot_product_attention<B: Backend>(
         .repeat_dim(2, groups).reshape([batch, heads, keys, value_features]);
     let mut scores = query.matmul(key.swap_dims(2, 3)).mul_scalar(scale);
     if let Some(bias) = masks.bias { scores = scores + bias.cast(compute).expand(score_shape); }
-    let mut excluded = Tensor::<B, 4, Bool>::zeros(score_shape, &device);
+    let mut excluded = Tensor::<B, 4, Bool>::zeros(score_shape, &device).with_autodiff_context(context);
     if let Some(mask) = masks.allowed { excluded = excluded.bool_or(mask.expand(score_shape).bool_not()); }
     if let Some(mask) = masks.query_valid {
         excluded = excluded.bool_or(mask.reshape([batch, 1, queries, 1]).expand(score_shape).bool_not());
@@ -133,8 +141,10 @@ pub fn dense_scaled_dot_product_attention<B: Backend>(
             PackedCausalAlignment::LowerRight => key_length - query_length,
         };
         let rows = Tensor::<B, 1, Int>::arange(0..query_length, (&device, DType::I64))
+            .with_autodiff_context(context)
             .add_scalar(offset).reshape([1, 1, queries, 1]).expand(score_shape);
         let columns = Tensor::<B, 1, Int>::arange(0..key_length, (&device, DType::I64))
+            .with_autodiff_context(context)
             .reshape([1, 1, 1, keys]).expand(score_shape);
         if options.causal { excluded = excluded.bool_or(columns.clone().greater(rows.clone())); }
         if let Some((left, right)) = options.window {

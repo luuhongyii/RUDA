@@ -97,6 +97,10 @@ impl<B: Backend> MuonShardedState<B> {
 }
 
 impl<B: Backend> Record<B> for MuonShardedState<B> {
+    fn map_parameters<M: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut M) -> Self {
+        self.local = self.local.map_parameters(mapper);
+        self
+    }
     type Item<S: PrecisionSettings> = (u32,u32,usize,Vec<usize>,[usize;2],<MuonState<B,2> as Record<B>>::Item<S>);
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
         (self.version,self.rank,self.layout.axis,self.layout.lengths,self.global_shape,self.local.into_item::<S>())

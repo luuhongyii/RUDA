@@ -2,6 +2,13 @@ mod base;
 
 pub use base::*;
 
+/// Register ordered device-thread shutdown after initializing a native library.
+/// Re-registration preserves exit ordering when a library is loaded lazily.
+pub fn register_device_service_shutdown() {
+    #[cfg(all(feature = "std", multi_threading, any(unix, windows)))]
+    channel::register_exit_hook();
+}
+
 use crate::device::{DeviceId, DeviceService, ServerUtilitiesHandle};
 
 #[cfg(feature = "std")]
@@ -56,6 +63,10 @@ impl<S: DeviceService> DeviceHandle<S> {
 
     pub fn device_id(&self) -> DeviceId {
         self.handle.device_id()
+    }
+
+    pub fn service_id(&self) -> crate::device::ServiceId {
+        crate::device::ServiceId::of::<S>(self.device_id())
     }
 
     pub fn utilities(&self) -> ServerUtilitiesHandle {

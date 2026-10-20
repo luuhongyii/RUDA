@@ -82,7 +82,13 @@ impl CustomOpIr {
             id: id.to_owned(),
             inputs: inputs.to_vec(),
             outputs: outputs.to_vec(),
+            scalars: Vec::new(),
         }
+    }
+
+    /// Create a custom operation with scalar arguments.
+    pub fn with_scalars(id: &'static str, inputs: &[TensorIr], outputs: &[TensorIr], scalars: Vec<ScalarIr>) -> Self {
+        Self { id: id.to_owned(), inputs: inputs.to_vec(), outputs: outputs.to_vec(), scalars }
     }
 
     /// Cast the intermediate representation, and get the in and output tensors.
@@ -712,6 +718,7 @@ impl FloatOperationIr {
             FloatOperationIr::ArcTan(repr) => TensorIter::from([&repr.input]),
             FloatOperationIr::ArcTanh(repr) => TensorIter::from([&repr.input]),
             FloatOperationIr::ArcTan2(repr) => TensorIter::from([&repr.lhs, &repr.rhs]),
+            FloatOperationIr::Hypot(repr) => TensorIter::from([&repr.lhs, &repr.rhs]),
             FloatOperationIr::Powf(repr) => TensorIter::from([&repr.lhs, &repr.rhs]),
         }
     }
@@ -754,6 +761,7 @@ impl FloatOperationIr {
             FloatOperationIr::ArcTan(repr) => TensorIter::from([&repr.out]),
             FloatOperationIr::ArcTanh(repr) => TensorIter::from([&repr.out]),
             FloatOperationIr::ArcTan2(repr) => TensorIter::from([&repr.out]),
+            FloatOperationIr::Hypot(repr) => TensorIter::from([&repr.out]),
             FloatOperationIr::Powf(repr) => TensorIter::from([&repr.out]),
         }
     }
@@ -844,7 +852,7 @@ impl FloatOperationIr {
             FloatOperationIr::ArcSinh(repr) => repr.input.mark_read_only(nodes, &mut output),
             FloatOperationIr::ArcTan(repr) => repr.input.mark_read_only(nodes, &mut output),
             FloatOperationIr::ArcTanh(repr) => repr.input.mark_read_only(nodes, &mut output),
-            FloatOperationIr::ArcTan2(repr) => {
+            FloatOperationIr::ArcTan2(repr) | FloatOperationIr::Hypot(repr) => {
                 repr.lhs.mark_read_only(nodes, &mut output);
                 repr.rhs.mark_read_only(nodes, &mut output);
             }

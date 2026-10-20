@@ -467,6 +467,10 @@ impl<E: TchElement> FloatTensorOps<Self> for LibTorch<E> {
         TchOps::atan2(lhs, rhs)
     }
 
+    fn float_hypot(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
+        TchTensor::new(lhs.tensor.f_hypot(&rhs.tensor).unwrap())
+    }
+
     fn float_round(tensor: TchTensor) -> TchTensor {
         tensor.unary_ops(|mut tensor| tensor.round_(), |tensor| tensor.round())
     }

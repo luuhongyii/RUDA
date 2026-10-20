@@ -23,7 +23,7 @@ impl SimpleLayout {
     }
 }
 
-impl<R: Runtime> SimpleLayoutLaunch<R> {
+impl<R: LaunchMarker> SimpleLayoutLaunch<R> {
     pub fn from_shape(shape: &Shape, vector_size: VectorSize) -> Self {
         let len = shape.iter().product::<usize>();
         Self::new(len, vector_size)

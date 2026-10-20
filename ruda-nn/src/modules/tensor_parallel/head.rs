@@ -68,10 +68,14 @@ fn mask_padding<B:Backend>(mut projection:Linear<B>,layout:&VocabParallelLossLay
     assert!(!matches!(projection.weight.val().dtype(),DType::QFloat(_)),
         "packed head padding must be removed/repacked explicitly before loading native local shards");
     let device = projection.weight.val().device();
-    let limit = Tensor::<B,1,Int>::from_data(ruda_model::tensor::TensorData::new(alloc::vec![real as i64],[1]),(&device,DType::I64)).expand([width]);
-    let padding = Tensor::<B,1,Int>::arange(0..width as i64,(&device,DType::I64)).greater_equal(limit);
+    let context = projection.weight.val().autodiff_context();
+    let limit = Tensor::<B,1,Int>::from_data(ruda_model::tensor::TensorData::new(alloc::vec![real as i64],[1]),(&device,DType::I64)).with_autodiff_context(context).expand([width]);
+    let padding = Tensor::<B,1,Int>::arange(0..width as i64,(&device,DType::I64)).with_autodiff_context(context).greater_equal(limit);
     projection.weight = projection.weight.map(|weight|weight.mask_fill(padding.clone().reshape([1,width]).expand([hidden,width]),0));
-    projection.bias = projection.bias.map(|bias|bias.map(|value|value.mask_fill(padding,0)));
+    projection.bias = projection.bias.map(|bias|bias.map(|value| {
+        let context = value.autodiff_context();
+        value.mask_fill(padding.with_autodiff_context(context),0)
+    }));
     projection
 }
 
@@ -166,17 +170,18 @@ impl VocabParallelLossLayout {
         assert!(D > 0,"native vocabulary gather requires a class axis");
         assert_eq!(communicator.world_size() as usize,self.world_size(),"native vocabulary gather topology/layout differ");
         let width = self.interval(communicator.rank() as usize).len();let mut shape = logits.dims();
+        let context = logits.autodiff_context();
         assert_eq!(shape[D-1],width,"native gather logits differ from actual rank storage");
         if shape[..D-1].contains(&0) {shape[D-1] = self.vocabulary_size();return Ok(logits.reshape(shape));}
         let maximum = (0..self.world_size()).map(|rank|self.interval(rank).len()).max().unwrap();
         let total = maximum.checked_mul(self.world_size()).expect("native padded vocabulary gather geometry overflow");
         let leading = logits.swap_dims(0,D-1);let mut padding_shape = leading.dims();padding_shape[0] = maximum-width;
         let padded = if width == maximum {leading} else {
-            let zeros = Tensor::<B,D>::zeros(padding_shape,(&leading.device(),leading.dtype()));Tensor::cat(alloc::vec![leading,zeros],0)
+            let zeros = Tensor::<B,D>::zeros(padding_shape,(&leading.device(),leading.dtype())).with_autodiff_context(context);Tensor::cat(alloc::vec![leading,zeros],0)
         };
         let mut gathered_shape = padded.dims();gathered_shape[0] = total;
         let gathered = communicator.all_gather_float(padded.into_primitive().tensor())?;
-        let gathered = Tensor::<B,D>::from_primitive(TensorPrimitive::Float(gathered));
+        let gathered = Tensor::<B,D>::from_primitive(TensorPrimitive::Float(gathered)).with_autodiff_context(context);
         assert_eq!(gathered.dims(),gathered_shape,"native transport returned incompatible vocabulary geometry");
         let mut parts = Vec::new();
         for rank in 0..self.world_size() {

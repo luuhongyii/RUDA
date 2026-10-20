@@ -4,8 +4,12 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::{PrecisionSettings, Record};
 use crate::tensor::backend::Backend;
+use crate::module::ModuleMapper;
 
 impl<B: Backend, T: Record<B>> Record<B> for Box<T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        Box::new((*self).map_parameters(mapper))
+    }
     type Item<S: PrecisionSettings> = Box<T::Item<S>>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
@@ -18,6 +22,9 @@ impl<B: Backend, T: Record<B>> Record<B> for Box<T> {
 }
 
 impl<B: Backend, T: Record<B>> Record<B> for VecDeque<T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.into_iter().map(|value| value.map_parameters(mapper)).collect()
+    }
     type Item<S: PrecisionSettings> = VecDeque<T::Item<S>>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
@@ -30,6 +37,9 @@ impl<B: Backend, T: Record<B>> Record<B> for VecDeque<T> {
 }
 
 impl<B: Backend, T: Record<B>> Record<B> for LinkedList<T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.into_iter().map(|value| value.map_parameters(mapper)).collect()
+    }
     type Item<S: PrecisionSettings> = LinkedList<T::Item<S>>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
@@ -42,6 +52,12 @@ impl<B: Backend, T: Record<B>> Record<B> for LinkedList<T> {
 }
 
 impl<B: Backend, T: Record<B>, E: Record<B>> Record<B> for Result<T, E> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        match self {
+            Ok(value) => Ok(value.map_parameters(mapper)),
+            Err(value) => Err(value.map_parameters(mapper)),
+        }
+    }
     type Item<S: PrecisionSettings> = Result<T::Item<S>, E::Item<S>>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
@@ -61,6 +77,9 @@ impl<B: Backend, T: Record<B>, E: Record<B>> Record<B> for Result<T, E> {
 
 impl<B, K, T> Record<B> for BTreeMap<K, T>
 where B: Backend, K: Ord + Clone + Send + Serialize + DeserializeOwned, T: Record<B> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.into_iter().map(|(key, value)| (key, value.map_parameters(mapper))).collect()
+    }
     type Item<S: PrecisionSettings> = BTreeMap<K, T::Item<S>>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
@@ -82,6 +101,9 @@ where B: Backend, K: Ord + Clone + Send + Serialize + DeserializeOwned {
 }
 
 impl<B: Backend, T: Record<B>> Record<B> for hashbrown::HashMap<String, T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.into_iter().map(|(key, value)| (key, value.map_parameters(mapper))).collect()
+    }
     type Item<S: PrecisionSettings> = hashbrown::HashMap<String, T::Item<S>>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
@@ -95,6 +117,9 @@ impl<B: Backend, T: Record<B>> Record<B> for hashbrown::HashMap<String, T> {
 
 #[cfg(feature = "std")]
 impl<B: Backend, T: Record<B>> Record<B> for std::collections::HashMap<String, T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.into_iter().map(|(key, value)| (key, value.map_parameters(mapper))).collect()
+    }
     type Item<S: PrecisionSettings> = std::collections::HashMap<String, T::Item<S>>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
@@ -107,6 +132,9 @@ impl<B: Backend, T: Record<B>> Record<B> for std::collections::HashMap<String, T
 }
 
 impl<B: Backend, T: Record<B>> Record<B> for Range<T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        self.start.map_parameters(mapper)..self.end.map_parameters(mapper)
+    }
     type Item<S: PrecisionSettings> = (T::Item<S>, T::Item<S>);
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {
@@ -119,6 +147,7 @@ impl<B: Backend, T: Record<B>> Record<B> for Range<T> {
 }
 
 impl<B: Backend, T: Record<B>> Record<B> for RangeFrom<T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self { self.start.map_parameters(mapper).. }
     type Item<S: PrecisionSettings> = T::Item<S>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> { self.start.into_item::<S>() }
@@ -129,6 +158,7 @@ impl<B: Backend, T: Record<B>> Record<B> for RangeFrom<T> {
 }
 
 impl<B: Backend, T: Record<B>> Record<B> for RangeTo<T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self { ..self.end.map_parameters(mapper) }
     type Item<S: PrecisionSettings> = T::Item<S>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> { self.end.into_item::<S>() }
@@ -139,6 +169,7 @@ impl<B: Backend, T: Record<B>> Record<B> for RangeTo<T> {
 }
 
 impl<B: Backend, T: Record<B>> Record<B> for RangeToInclusive<T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self { ..=self.end.map_parameters(mapper) }
     type Item<S: PrecisionSettings> = T::Item<S>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> { self.end.into_item::<S>() }
@@ -168,6 +199,13 @@ pub enum BoundItem<T> {
 }
 
 impl<B: Backend, T: Record<B>> Record<B> for Bound<T> {
+    fn map_parameters<M: ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        match self {
+            Self::Included(value) => Self::Included(value.map_parameters(mapper)),
+            Self::Excluded(value) => Self::Excluded(value.map_parameters(mapper)),
+            Self::Unbounded => Self::Unbounded,
+        }
+    }
     type Item<S: PrecisionSettings> = BoundItem<T::Item<S>>;
 
     fn into_item<S: PrecisionSettings>(self) -> Self::Item<S> {

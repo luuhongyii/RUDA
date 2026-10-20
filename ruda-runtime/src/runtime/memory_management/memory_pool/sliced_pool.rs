@@ -1,7 +1,7 @@
 use crate::runtime::{
     memory_management::{
         BytesFormat, ManagedMemoryHandle, MemoryLocation, MemoryUsage,
-        memory_pool::{MemoryPage, MemoryPool, Slice},
+        memory_pool::{MemoryPage, MemoryPool, PageMapping, Slice},
     },
     server::IoError,
     storage::StorageId,
@@ -58,6 +58,15 @@ impl SlicedPool {
 }
 
 impl MemoryPool for SlicedPool {
+    fn materialize<Storage: crate::runtime::storage::ComputeStorage>(
+        &mut self, storage: &mut Storage, binding: &super::ManagedMemoryBinding,
+    ) -> Result<(), IoError> {
+        self.find(binding)?;
+        let (page, id) = &mut self.pages[binding.descriptor().page()];
+        *id = page.materialize(storage)?;
+        Ok(())
+    }
+
     fn accept(&self, size: u64) -> bool {
         self.max_alloc_size >= size
             ||
@@ -97,13 +106,14 @@ impl MemoryPool for SlicedPool {
             description: "Sliced pool page index capacity exhausted".into(),
             backtrace: ruda_core::backtrace::BackTrace::capture(),
         })?;
-        let storage = storage.alloc(self.page_size)?;
+        let mapping = PageMapping::current();
+        let storage = mapping.allocate(storage, self.page_size)?;
 
         let storage_id = storage.id;
         let mut location_base = self.location_base;
         location_base.page = page_index;
 
-        let mut page = MemoryPage::new(storage, self.alignment, location_base);
+        let mut page = MemoryPage::new_with_mapping(storage, self.alignment, location_base, mapping);
         let returned = page.try_reserve(size);
         self.pages.push((page, storage_id));
 
@@ -145,7 +155,7 @@ impl MemoryPool for SlicedPool {
             let summary = page.summary(false);
 
             if summary.amount_free == summary.amount_total {
-                storage.dealloc(id);
+                if page.is_mapped() { storage.dealloc(id); }
             } else {
                 let page_pos = self.pages_tmp.len() as u16;
                 if index != page_pos as usize {

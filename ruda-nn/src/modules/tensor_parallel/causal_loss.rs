@@ -25,18 +25,19 @@ impl CausalCrossEntropyConfig {
         let [batch,sequence,width] = hidden.dims();
         assert_eq!(labels.dims(),[batch,sequence],"causal hidden/label geometry differs");
         assert_eq!(labels.device(),hidden.device(),"causal hidden/labels must share a device");
+        let context = hidden.autodiff_context().merge(labels.autodiff_context());
         let length = if self.shift {sequence.saturating_sub(1)} else {sequence};
         let count = batch.checked_mul(length).expect("causal target row count overflow");
         if count == 0 {
-            let mask = Tensor::<Autodiff<B,S>,3,Bool>::zeros(hidden.dims(),&hidden.device()).bool_not();
-            return Ok(CausalLoss {loss_sum:hidden.cast(DType::F32).mask_fill(mask,0).sum(),valid_tokens:Tensor::zeros([1],&labels.device())});
+            let mask = Tensor::<Autodiff<B,S>,3,Bool>::zeros(hidden.dims(),&hidden.device()).with_autodiff_context(context).bool_not();
+            return Ok(CausalLoss {loss_sum:hidden.cast(DType::F32).mask_fill(mask,0).sum(),valid_tokens:Tensor::zeros([1],&labels.device()).with_autodiff_context(context)});
         }
         let (hidden,labels) = if self.shift {
             (hidden.slice([0..batch,0..length,0..width]),labels.slice([0..batch,1..sequence]))
         } else {(hidden,labels)};
         let hidden = hidden.reshape([count,width]);let labels = labels.reshape([count]);
         let valid_tokens = labels.clone().equal_elem(self.ignore_index).bool_not().int().sum();
-        let mut loss_sum = Tensor::<Autodiff<B,S>,1>::zeros([1],(&hidden.device(),DType::F32));
+        let mut loss_sum = Tensor::<Autodiff<B,S>,1>::zeros([1],(&hidden.device(),DType::F32)).with_autodiff_context(context);
         for start in (0..count).step_by(self.token_chunk_size) {
             let end = start.saturating_add(self.token_chunk_size).min(count);
             let logits = project(hidden.clone().slice([start..end,0..width]),&communicator)?;
@@ -59,7 +60,7 @@ impl CausalCrossEntropyConfig {
         assert_eq!(labels.dims(),[tokens],"packed causal hidden/label lengths differ");
         assert_eq!(labels.device(),hidden.device(),"packed causal hidden/labels must share a device");
         let labels = if self.shift {
-            labels.clone().mask_fill(packed.document_starts::<Autodiff<B,S>>(&labels.device()),self.ignore_index)
+            labels.clone().mask_fill(packed.document_starts::<Autodiff<B,S>>(&labels.device()).with_autodiff_context(labels.autodiff_context()),self.ignore_index)
         } else {labels};
         self.forward_sharded_hidden(hidden.reshape([1,tokens,width]),labels.reshape([1,tokens]),layout,communicator,project,label_smoothing)
     }

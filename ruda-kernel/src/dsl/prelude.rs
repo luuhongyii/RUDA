@@ -2,7 +2,7 @@ pub use crate::dsl::{
     RudaLaunch, RudaType, RuntimeArg,
     codegen::{KernelExpansion, KernelIntegrator, KernelSettings},
     comment, comptime, comptime_type,
-    compute::{KernelBuilder, KernelLauncher, PreparedKernel},
+    compute::{ErasedPreparedKernel, KernelBuilder, KernelContext, KernelLauncher, PreparedKernel},
     ruda, derive_ruda_comptime,
     frontend::*,
     pod::RudaElement,
@@ -11,7 +11,7 @@ pub use crate::dsl::{
 pub use ruda_core::{flex32, format::type_name_short_sanitized, tf32};
 pub use ruda_core::ir::{AddressType, FastMath, Scope, StorageType, Type, VectorSize};
 pub use ruda::runtime::{
-    client::ComputeClient,
+    client::{Client, ComputeClient, ErasedClient},
     id::KernelId,
     kernel::*,
     backend::Runtime,

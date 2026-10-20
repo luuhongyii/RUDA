@@ -112,6 +112,11 @@ impl<B:Backend> LBFGSFp32MasterState<B> {
 }
 
 impl<B:Backend> Record<B> for LBFGSFp32MasterState<B> {
+    fn map_parameters<M: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut M) -> Self {
+        self.master = self.master.map_parameters(mapper);
+        self.optimizer = self.optimizer.map_parameters(mapper);
+        self
+    }
     type Item<P:PrecisionSettings> = (u32,Vec<LBFGSMasterParameter>,Option<(u32,Vec<usize>)>,
         <(Option<Tensor<B,1>>,LBFGSState<B>) as Record<B>>::Item<P>);
     fn into_item<P:PrecisionSettings>(self) -> Self::Item<P> {

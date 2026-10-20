@@ -5,7 +5,9 @@ pub(super) fn context(mut error: CompilationError, context: impl std::fmt::Displ
     let reason = match &mut error {
         CompilationError::UnsupportedInstruction { reason, .. } |
         CompilationError::Validation { reason, .. } |
+        CompilationError::ExpansionPanicked { reason, .. } |
         CompilationError::Generic { reason, .. } => reason,
+        CompilationError::DevicePoisoned(poison) => &mut poison.reason,
     };
     reason.push_str(&format!("\n  in {context}"));
     error

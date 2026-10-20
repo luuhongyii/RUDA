@@ -62,7 +62,8 @@ impl<B:Backend> FullyShardedPackedParameterRecord<B> {
             if source.local().val().device()!=original.device() {return Err(FullyShardedParameterError::Device);}
         }
         let start=rank*size;let end=(start+size).min(elements);
-        let mut local=Tensor::<B,1,Int>::zeros([size],(&original.device(),original.dtype()));
+        let mut local=Tensor::<B,1,Int>::zeros([size],(&original.device(),original.dtype()))
+            .with_autodiff_context(original.autodiff_context());
         for (source_rank,source) in sources.iter().enumerate() {
             let source_start=source_rank*source_size;
             let overlap_start=start.max(source_start);
@@ -101,8 +102,9 @@ impl<B:Backend> ShardedPackedParameter<B> {
         if record.id()!=self.local.id || record.logical_shape()!=self.logical_shape || record.rank()!=self.rank || record.world_size()!=self.world_size {
             return Err(FullyShardedParameterError::Record);
         }
-        if record.local().val().dtype()!=self.local.val().dtype() {return Err(FullyShardedParameterError::DType);}
-        let value=record.local().val().to_device(&self.local.val().device());
+        let original=self.local.val();
+        if record.local().val().dtype()!=original.dtype() {return Err(FullyShardedParameterError::DType);}
+        let value=record.local().val().to_device(&original.device()).with_autodiff_context(original.autodiff_context());
         self.local=self.local.map(|_|value);Ok(self)
     }
 }
@@ -183,7 +185,7 @@ impl<B:Backend> FullyShardedStorageRecord<B> {
             let target=floating.get(&saved.id()).ok_or(FullyShardedParameterError::Record)?;
             if target.logical_shape!=saved.logical_shape() || target.rank!=saved.rank() || target.world_size!=saved.world_size() {return Err(FullyShardedParameterError::Record);}
             if target.local.val().dtype()!=saved.local().val().dtype() {return Err(FullyShardedParameterError::DType);}
-            if B::ad_enabled(&target.local.val().device()) && target.local.val().is_require_grad()!=saved.is_trainable() {return Err(FullyShardedParameterError::Trainability);}
+            if target.local.val().is_autodiff() && target.local.val().is_require_grad()!=saved.is_trainable() {return Err(FullyShardedParameterError::Trainability);}
         }
         for saved in &self.packed {
             let target=targets.get(&saved.id()).ok_or(FullyShardedParameterError::Record)?;
@@ -206,11 +208,13 @@ impl<B:Backend> FullyShardedStorageRecord<B> {
         let mut floats=BTreeMap::new();let mut integers=BTreeMap::new();
         for saved in self.floating.parameters {
             let original=targets.get(&saved.id()).ok_or(FullyShardedParameterError::Record)?.local.val();
-            floats.insert(saved.id(),saved.local().val().to_device(&original.device()).detach().set_require_grad(original.is_require_grad()));
+            floats.insert(saved.id(),saved.local().val().to_device(&original.device()).detach()
+                .with_autodiff_context(original.autodiff_context()).set_require_grad(original.is_require_grad()));
         }
         for saved in self.packed {
             let original=packed_targets.get(&saved.id()).ok_or(FullyShardedParameterError::Record)?.local.val();
-            integers.insert(saved.id(),saved.local().val().to_device(&original.device()));
+            integers.insert(saved.id(),saved.local().val().to_device(&original.device())
+                .with_autodiff_context(original.autodiff_context()));
         }
         struct Restore<B:Backend> {values:BTreeMap<ParamId,Tensor<B,1,Int>>,seen:BTreeSet<ParamId>}
         impl<B:Backend> ModuleMapper<B> for Restore<B> {

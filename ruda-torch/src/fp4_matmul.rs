@@ -41,7 +41,7 @@ fn matmul<O: Numeric, P: Float>(
             cmma::MatrixLayout::RowMajor, &left.to_slice(), 16u32);
         let bb = cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::B, 16usize, 16usize, 16usize,
             cmma::MatrixLayout::RowMajor, &right.to_slice(), 16u32);
-        cmma::execute::<f16, f16, f32, f32>(&aa, &bb, &acc, &acc); sync_ruda();
+        cmma::execute::<f16, f16, f32, f32, _>(&aa, &bb, &acc, &acc); sync_ruda();
         if k - base <= 16usize || (base + 16usize) % group == 0usize {
             cmma::store(&mut partial.to_slice_mut(), &acc, 16u32, cmma::MatrixLayout::RowMajor); sync_ruda();
             #[unroll] for i in 0usize..8usize {

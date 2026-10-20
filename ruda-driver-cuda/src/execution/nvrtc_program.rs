@@ -22,7 +22,13 @@ unsafe fn destroy_program(program: *mut sys::nvrtcProgram) -> sys::nvrtcResult {
 
 impl NvrtcProgram {
     pub(super) fn new(source: CString) -> Result<Self, result::NvrtcError> {
-        let handle = result::create_program(source.as_c_str(), None)?;
+        let handle = match result::create_program(source.as_c_str(), None) {
+            Ok(handle) => handle,
+            Err(error) => {
+                ruda_core::device::register_device_service_shutdown();
+                return Err(error);
+            }
+        };
         Ok(Self { handle, _source: source, destroy: destroy_program })
     }
 
@@ -38,6 +44,7 @@ impl Drop for NvrtcProgram {
         // is still alive and no manual destroy is exposed. This also runs on
         // early Result returns and unwinding (but not process abort).
         let status = unsafe { (self.destroy)(&mut self.handle) };
+        ruda_core::device::register_device_service_shutdown();
         if status != sys::nvrtcResult::NVRTC_SUCCESS {
             // Never mask the original compilation error with a Drop panic.
             log::warn!("Unable to destroy NVRTC program: {status:?}");
@@ -128,5 +135,54 @@ mod tests {
                 assert!(!result::get_program_log(invalid.raw()).unwrap().is_empty());
             }
         }
+    }
+
+    #[test]
+    #[ignore = "requires the NVRTC shared library; runs real compilation during child process exit"]
+    fn nvrtc_compilation_finishes_before_late_library_exit_callbacks() {
+        use ruda_core::{device_handle::DeviceHandle, device::{DeviceId, DeviceService, ServerUtilitiesHandle}};
+        use std::{path::PathBuf, sync::Arc};
+
+        fn compile_kernel(name: &str) {
+            let source = CString::new(format!(
+                "extern \"C\" __global__ void {name}(float* out, const float* in) {{ unsigned i = blockIdx.x * blockDim.x + threadIdx.x; out[i] = logf(in[i] * in[i] + 1.0f); }}"
+            )).unwrap();
+            let program = NvrtcProgram::new(source).unwrap();
+            unsafe {
+                result::compile_program(program.raw(), &["--gpu-architecture=compute_90", "--fmad=false", "-lineinfo"]).unwrap();
+                assert!(!result::get_ptx(program.raw()).unwrap().is_empty());
+            }
+        }
+
+        struct PendingCompiler { queued: usize, marker: PathBuf }
+        impl DeviceService for PendingCompiler {
+            fn init(_: DeviceId) -> Self {
+                Self { queued: 0, marker: std::env::var_os("RUDA_NVRTC_EXIT_MARKER").unwrap().into() }
+            }
+            fn utilities(&self) -> ServerUtilitiesHandle { Arc::new(()) }
+            fn shutdown(&mut self) {
+                assert_eq!(self.queued, 3);
+                for index in 0..self.queued {
+                    compile_kernel(&format!("ruda_exit_pending_{index}"));
+                }
+                std::fs::write(&self.marker, b"three queued NVRTC compilations completed at exit").unwrap();
+            }
+        }
+        if std::env::var_os("RUDA_NVRTC_EXIT_MARKER").is_some() {
+            let device = DeviceHandle::<PendingCompiler>::new(DeviceId::new(64997, 1));
+            compile_kernel("ruda_exit_warmup");
+            for _ in 0..3 { device.submit(|service| service.queued += 1); }
+            return;
+        }
+        let marker = std::env::temp_dir().join(format!("ruda-nvrtc-exit-{}", std::process::id()));
+        assert!(!marker.exists());
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["nvrtc_compilation_finishes_before_late_library_exit_callbacks", "--ignored", "--nocapture", "--test-threads=1"])
+            .env("RUDA_NVRTC_EXIT_MARKER", &marker)
+            .output().unwrap();
+        assert!(output.status.success(), "child {:?}\n{}\n{}", output.status,
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert_eq!(std::fs::read(&marker).unwrap(), b"three queued NVRTC compilations completed at exit");
+        std::fs::remove_file(marker).unwrap();
     }
 }

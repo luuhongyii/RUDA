@@ -14,4 +14,11 @@ pub trait Record<B: Backend>: Send {
 
     /// Convert the given item into a record.
     fn from_item<S: PrecisionSettings>(item: Self::Item<S>, device: &B::Device) -> Self;
+
+    /// Transform stored parameters without constructing a model. Composite records
+    /// forward this operation to their fields; `derive(Record)` does so automatically.
+    fn map_parameters<M: crate::module::ModuleMapper<B>>(self, _mapper: &mut M) -> Self
+    where Self: Sized {
+        self
+    }
 }

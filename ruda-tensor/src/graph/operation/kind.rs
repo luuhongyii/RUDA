@@ -111,6 +111,8 @@ pub enum FloatOperationIr {
     Silu(UnaryOpIr),
     /// Operation corresponding to [quantize_dynamic](crate::ops::QTensorOps::quantize_dynamic).
     QuantizeDynamic(CastOpIr),
+    /// Operation corresponding to [hypot](crate::ops::FloatTensorOps::float_hypot).
+    Hypot(BinaryOpIr),
 }
 
 /// Operation intermediate representation specific to module.

@@ -190,6 +190,16 @@ where
         ruprim::indexing::scatter(dim, tensor, indices, value, false)
     }
 
+    fn float_scatter(
+        dim: usize,
+        tensor: FloatTensor<Self>,
+        indices: IntTensor<Self>,
+        value: FloatTensor<Self>,
+        update: ruda_tensor::tensor::IndexingUpdateOp,
+    ) -> FloatTensor<Self> {
+        ruprim::indexing::scatter_update(dim, tensor, indices, value, update)
+    }
+
     fn float_scatter_nd(
         data: FloatTensor<Self>,
         indices: IntTensor<Self>,
@@ -209,6 +219,16 @@ where
         indices: IntTensor<Self>,
     ) -> FloatTensor<Self> {
         ruprim::indexing::select(tensor, dim, indices)
+    }
+
+    fn float_select_assign(
+        tensor: FloatTensor<Self>,
+        dim: usize,
+        indices: IntTensor<Self>,
+        value: FloatTensor<Self>,
+        update: ruda_tensor::tensor::IndexingUpdateOp,
+    ) -> FloatTensor<Self> {
+        ruprim::indexing::select_assign_update(tensor, dim, indices, value, update)
     }
 
     fn float_select_add(
@@ -592,6 +612,10 @@ where
 
     fn float_atan2(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
         ruprim::elementwise::binary::float::atan2::<R>(lhs, rhs)
+    }
+
+    fn float_hypot(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
+        ruprim::elementwise::binary::float::hypot::<R>(lhs, rhs)
     }
 
     fn float_round(tensor: FloatTensor<Self>) -> FloatTensor<Self> {

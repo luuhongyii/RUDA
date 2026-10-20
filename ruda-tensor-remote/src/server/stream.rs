@@ -1,10 +1,11 @@
 use core::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::shared::{ConnectionId, TaskResponse, TensorRemote};
+use crate::shared::{ConnectionId, LocalTransferId, SessionId, TaskResponse, TensorRemote};
 
+use super::local_comm::LocalCommService;
 use super::processor::{Processor, ProcessorTask};
-use ruda_tensor::TensorData;
+use ruda_tensor::{ProfileOptions, ProfileToken, TensorData};
 use ruda_communication::{
     Protocol,
     data_service::{TensorDataService, TensorTransferId},
@@ -43,7 +44,29 @@ where
         writer_sender: Sender<Receiver<TaskResponse>>,
         data_service: Arc<TensorDataService<B, P>>,
     ) -> Self {
-        let (sender, worker) = Processor::<B, P>::start(runner, data_service).await;
+        Self::new_inner(runner, writer_sender, data_service, None, None).await
+    }
+
+    pub(crate) async fn new_with_local_comm(
+        runner: Runner<B>,
+        writer_sender: Sender<Receiver<TaskResponse>>,
+        data_service: Arc<TensorDataService<B, P>>,
+        session: SessionId,
+        local_comm: Arc<LocalCommService<B>>,
+        closed: tokio_util::sync::CancellationToken,
+        probe: super::processor::WorkerProbe,
+    ) -> Self {
+        Self::new_inner(runner, writer_sender, data_service, Some((session, local_comm, closed)), Some(probe)).await
+    }
+
+    async fn new_inner(
+        runner: Runner<B>,
+        writer_sender: Sender<Receiver<TaskResponse>>,
+        data_service: Arc<TensorDataService<B, P>>,
+        local_comm: Option<(SessionId, Arc<LocalCommService<B>>, tokio_util::sync::CancellationToken)>,
+        probe: Option<super::processor::WorkerProbe>,
+    ) -> Self {
+        let (sender, worker) = Processor::<B, P>::start(runner, data_service, local_comm, probe).await;
 
         Self {
             compute_sender: sender,
@@ -92,6 +115,43 @@ where
         self.submit_with_response(|sender| ProcessorTask::RemoveGraph(id, graph, sender)).await
     }
 
+    pub async fn register_alias(&self, id: ConnectionId, destination: TensorId, source: TensorId) -> Result<(), StreamClosed> {
+        self.submit_with_response(|sender| ProcessorTask::RegisterAlias(id, destination, source, sender)).await
+    }
+
+    pub(crate) async fn queue_graph_replay(&self, id: GraphId, graph: Arc<ruda_tensor_router::CachedGraph>, bindings: GraphBindings)
+        -> Result<(), StreamClosed> {
+        self.submit(ProcessorTask::QueueGraphReplay(id, graph, bindings)).await
+    }
+
+    pub(crate) async fn queue_alias(&self, destination: TensorId, source: TensorId) -> Result<(), StreamClosed> {
+        self.submit(ProcessorTask::QueueAlias(destination, source)).await
+    }
+
+    pub async fn flush(&self, id: ConnectionId) -> Result<(), StreamClosed> {
+        self.submit_with_response(|sender| ProcessorTask::Flush(id, sender)).await
+    }
+
+    pub async fn device_info(&self, id: ConnectionId, info: crate::RemoteDeviceInfo) -> Result<(), StreamClosed> {
+        self.submit_with_response(|sender| ProcessorTask::DeviceInfo(id, info, sender)).await
+    }
+
+    pub async fn sync_collective(&self, id: ConnectionId) -> Result<(), StreamClosed> {
+        self.submit_with_response(|sender| ProcessorTask::SyncCollective(id, sender)).await
+    }
+
+    pub async fn profile_start(&self, id: ConnectionId) -> Result<(), StreamClosed> {
+        self.submit_with_response(|sender| ProcessorTask::ProfileStart(id, sender)).await
+    }
+
+    pub async fn profile_end(&self, id: ConnectionId, token: ProfileToken, options: ProfileOptions) -> Result<(), StreamClosed> {
+        self.submit_with_response(|sender| ProcessorTask::ProfileEnd(id, token, options, sender)).await
+    }
+
+    pub async fn profile_abandon(&self, token: ProfileToken) -> Result<(), StreamClosed> {
+        self.submit(ProcessorTask::ProfileAbandon(token)).await
+    }
+
     pub async fn register_tensor(&self, tensor_id: TensorId, data: TensorData) -> Result<(), StreamClosed> {
         self.submit(ProcessorTask::RegisterTensor(tensor_id, data)).await
     }
@@ -102,6 +162,16 @@ where
         new_id: TensorId,
     ) -> Result<(), StreamClosed> {
         self.submit(ProcessorTask::RegisterTensorRemote(tensor, new_id)).await
+    }
+
+    pub(crate) async fn register_tensor_local(&self, transfer_id: LocalTransferId, new_id: TensorId)
+        -> Result<(), StreamClosed> {
+        self.submit(ProcessorTask::RegisterTensorLocal { transfer_id, new_id }).await
+    }
+
+    pub(crate) async fn expose_tensor_local(&self, tensor: TensorIr, transfer_id: LocalTransferId)
+        -> Result<(), StreamClosed> {
+        self.submit(ProcessorTask::ExposeTensorLocal { tensor, transfer_id }).await
     }
 
     pub async fn expose_tensor_remote(
@@ -120,6 +190,16 @@ where
 
     pub async fn read_tensor(&self, id: ConnectionId, desc: TensorIr) -> Result<(), StreamClosed> {
         self.submit_with_response(|sender| ProcessorTask::ReadTensor(id, desc, sender)).await
+    }
+
+    pub(crate) async fn expose_tensor_capability(&self, tensor: TensorIr, count: u32,
+        capability: ruda_communication::data_service::TransferCapability, target: ruda_communication::PeerId) -> Result<(), StreamClosed> {
+        self.submit(ProcessorTask::ExposeTensorCapability { tensor, count, capability, target }).await
+    }
+
+    pub(crate) async fn register_tensor_capability(&self, address: ruda_communication::Address,
+        capability: ruda_communication::data_service::TransferCapability, new_id: TensorId) -> Result<(), StreamClosed> {
+        self.submit(ProcessorTask::RegisterTensorCapability { address, capability, new_id }).await
     }
 
     pub async fn sync(&self, id: ConnectionId) -> Result<(), StreamClosed> {

@@ -110,7 +110,7 @@ pub fn stft<B: Backend>(
             );
             w
         }
-        None => Tensor::ones([win_len], &device),
+        None => Tensor::<B, 1>::ones([win_len], &device).with_context_of(&signal),
     };
 
     let window = pad_window_to_n_fft(window, win_len, n_fft);
@@ -235,7 +235,7 @@ pub fn istft<B: Backend>(
             );
             w
         }
-        None => Tensor::ones([win_len], &device),
+        None => Tensor::<B, 1>::ones([win_len], &device).with_context_of(&stft_matrix),
     };
     let window = pad_window_to_n_fft(window, win_len, n_fft);
 
@@ -264,8 +264,8 @@ pub fn istft<B: Backend>(
     let windowed = frames.mul(window_3d.clone());
 
     let expected_len = n_fft + (n_frames - 1) * hop_length;
-    let mut output = Tensor::<B, 2>::zeros([batch, expected_len], &device);
-    let mut window_sum = Tensor::<B, 2>::zeros([batch, expected_len], &device);
+    let mut output = Tensor::<B, 2>::zeros([batch, expected_len], &device).with_context_of(&windowed);
+    let mut window_sum = Tensor::<B, 2>::zeros([batch, expected_len], &device).with_context_of(&window_3d);
 
     let window_1d: Tensor<B, 1> = window_3d.clone().reshape([n_fft]);
     let window_sq_1d: Tensor<B, 1> = window_1d.clone().mul(window_1d);

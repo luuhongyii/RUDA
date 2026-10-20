@@ -125,7 +125,7 @@ visit_fields! {
     QuantizationParametersIr => [scales];
     QuantizeOpIr => [tensor, qparams, out];
     DequantizeOpIr => [input, out];
-    CustomOpIr => [inputs, outputs];
+    CustomOpIr => [inputs, outputs, scalars];
     SwapDimsOpIr => [input, out];
     PermuteOpIr => [input, out];
     ShapeOpIr => [input, out];
@@ -203,6 +203,7 @@ impl VisitFields for FloatOperationIr {
             Self::ArcTan(value0) => { value0.visit_fields(visitor); }
             Self::ArcTanh(value0) => { value0.visit_fields(visitor); }
             Self::ArcTan2(value0) => { value0.visit_fields(visitor); }
+            Self::Hypot(value0) => { value0.visit_fields(visitor); }
             Self::Round(value0) => { value0.visit_fields(visitor); }
             Self::Floor(value0) => { value0.visit_fields(visitor); }
             Self::Ceil(value0) => { value0.visit_fields(visitor); }

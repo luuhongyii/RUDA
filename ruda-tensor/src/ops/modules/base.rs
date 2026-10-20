@@ -1,8 +1,30 @@
 use super::{conv, ctc, embedding, interpolation, linear, pool};
-use crate::ops::unfold::unfold4d_using_conv2d;
+use crate::ops::unfold::{create_unfolding_weight, unfold4d_using_conv2d};
 use crate::tensor::{BoolTensor, FloatTensor, IntTensor};
 use crate::{Backend, ElementConversion, TensorMetadata};
 use ruda_core::tensor::Shape;
+
+/// Batch-normalized output and per-channel batch statistics.
+#[derive(new)]
+pub struct BatchNormTrain<B: Backend> {
+    /// Normalized input, with its original shape.
+    pub output: FloatTensor<B>,
+    /// Batch mean with shape `[channels]`.
+    pub mean: FloatTensor<B>,
+    /// Biased batch variance, excluding epsilon, with shape `[channels]`.
+    pub variance: FloatTensor<B>,
+}
+
+/// First-order gradients of batch normalization using batch statistics.
+#[derive(new)]
+pub struct BatchNormTrainBackward<B: Backend> {
+    /// Input gradient.
+    pub x_grad: FloatTensor<B>,
+    /// Scale gradient with shape `[channels]`.
+    pub gamma_grad: FloatTensor<B>,
+    /// Bias gradient with shape `[channels]`.
+    pub beta_grad: FloatTensor<B>,
+}
 
 /// Softmax/log-softmax output and its unrounded working-storage value.
 pub struct SoftmaxOutput<B: Backend> {
@@ -208,6 +230,92 @@ pub use ruda_core::tensor::spatial::AttentionModuleOptions;
 
 /// Module operations trait.
 pub trait ModuleOps<B: Backend> {
+    /// Normalize `[batch, channels, ...]` using supplied `[channels]` statistics.
+    fn batch_norm(
+        x: FloatTensor<B>, gamma: FloatTensor<B>, beta: FloatTensor<B>,
+        mean: FloatTensor<B>, variance: FloatTensor<B>, epsilon: f64,
+    ) -> FloatTensor<B> {
+        let mut dimensions = alloc::vec![1; x.shape().num_dims()];
+        dimensions[1] = x.shape()[1];
+        let shape = Shape::from(dimensions);
+        let gamma = B::float_reshape(gamma, shape.clone());
+        let beta = B::float_reshape(beta, shape.clone());
+        let mean = B::float_reshape(mean, shape.clone());
+        let variance = B::float_reshape(variance, shape);
+        let std = B::float_sqrt(B::float_add_scalar(variance, epsilon.into()));
+        let normalized = B::float_div(B::float_sub(x, mean), std);
+        B::float_add(B::float_mul(normalized, gamma), beta)
+    }
+
+    /// Normalize using batch statistics, returning the mean and biased variance.
+    /// Autodiff differentiates the output as one operation and detaches the statistics.
+    fn batch_norm_train(
+        x: FloatTensor<B>, gamma: FloatTensor<B>, beta: FloatTensor<B>, epsilon: f64,
+    ) -> BatchNormTrain<B> {
+        let shape = x.shape();
+        let channels = shape[1];
+        let flattened = Shape::new([channels, shape.num_elements() / channels]);
+        let mut per_channel = alloc::vec![1; shape.num_dims()];
+        per_channel[1] = channels;
+        let mean = B::float_mean_dim(
+            B::float_reshape(B::float_swap_dims(x.clone(), 0, 1), flattened.clone()), 1,
+        );
+        let mean = B::float_reshape(mean, Shape::from(per_channel));
+        let centered = B::float_sub(x.clone(), mean.clone());
+        let variance = B::float_mean_dim(
+            B::float_reshape(
+                B::float_swap_dims(B::float_mul(centered.clone(), centered), 0, 1), flattened,
+            ), 1,
+        );
+        let mean = B::float_reshape(mean, Shape::new([channels]));
+        let variance = B::float_reshape(variance, Shape::new([channels]));
+        let output = B::batch_norm(x, gamma, beta, mean.clone(), variance.clone(), epsilon);
+        BatchNormTrain::new(output, mean, variance)
+    }
+
+    /// Differentiate the normalized output using its saved batch mean and variance.
+    fn batch_norm_train_backward(
+        x: FloatTensor<B>, gamma: FloatTensor<B>, mean: FloatTensor<B>,
+        variance: FloatTensor<B>, epsilon: f64, output_grad: FloatTensor<B>,
+    ) -> BatchNormTrainBackward<B> {
+        let shape = x.shape();
+        let channels = shape[1];
+        let flattened = Shape::new([channels, shape.num_elements() / channels]);
+        let mut per_channel = alloc::vec![1; shape.num_dims()];
+        per_channel[1] = channels;
+        let per_channel = Shape::from(per_channel);
+        let inv_std = B::float_reshape(
+            B::float_recip(B::float_sqrt(B::float_add_scalar(variance, epsilon.into()))),
+            per_channel.clone(),
+        );
+        let normalized = B::float_mul(
+            B::float_sub(x, B::float_reshape(mean, per_channel.clone())), inv_std.clone(),
+        );
+        let output_grad_flat = B::float_reshape(
+            B::float_swap_dims(output_grad.clone(), 0, 1), flattened.clone(),
+        );
+        let normalized_grad_flat = B::float_reshape(
+            B::float_swap_dims(B::float_mul(output_grad.clone(), normalized.clone()), 0, 1), flattened,
+        );
+        let beta_grad = B::float_sum_dim(output_grad_flat.clone(), 1);
+        let gamma_grad = B::float_sum_dim(normalized_grad_flat.clone(), 1);
+        let mean_grad = B::float_reshape(
+            B::float_mean_dim(output_grad_flat, 1), per_channel.clone(),
+        );
+        let mean_normalized_grad = B::float_reshape(
+            B::float_mean_dim(normalized_grad_flat, 1), per_channel.clone(),
+        );
+        let centred_grad = B::float_sub(output_grad, mean_grad);
+        let projected = B::float_mul(normalized, mean_normalized_grad);
+        let scale = B::float_mul(B::float_reshape(gamma, per_channel), inv_std);
+        let x_grad = B::float_mul(scale, B::float_sub(centred_grad, projected));
+        BatchNormTrainBackward::new(
+            x_grad,
+            B::float_reshape(gamma_grad, Shape::new([channels])),
+            B::float_reshape(beta_grad, Shape::new([channels])),
+        )
+    }
+
     /// Working-storage ELU, or CELU when continuous is true, using the original alpha.
     fn exponential_relu_native(tensor: FloatTensor<B>, alpha: f64, continuous: bool) -> FloatTensor<B> {
         super::activation_training::exponential_relu_native::<B>(tensor, alpha, continuous)
@@ -652,6 +760,39 @@ pub trait ModuleOps<B: Backend> {
         } else {
             unfold4d_using_conv2d::<B>(x, kernel_size, options)
         }
+    }
+
+    /// Fold `[batch, channels * kernel_area, blocks]` into NCHW, summing overlaps.
+    /// The grouped one-hot transposed convolution is the adjoint of [`Self::unfold4d`].
+    fn fold4d(
+        x: FloatTensor<B>,
+        output_size: [usize; 2],
+        kernel_size: [usize; 2],
+        options: UnfoldOptions,
+    ) -> FloatTensor<B> {
+        let [batch_size, channels_col, num_blocks] = x.shape().dims();
+        let [kernel_height, kernel_width] = kernel_size;
+        let [output_height, output_width] = output_size;
+        let [stride_height, stride_width] = options.stride;
+        let [padding_height, padding_width] = options.padding;
+        let [dilation_height, dilation_width] = options.dilation;
+        let kernel_elems = kernel_height * kernel_width;
+        assert_eq!(channels_col % kernel_elems, 0,
+            "fold4d: input channels ({channels_col}) must be divisible by the kernel size product ({kernel_elems})");
+        let channels = channels_col / kernel_elems;
+        let height_span = output_height + 2 * padding_height - dilation_height * (kernel_height - 1) - 1;
+        let width_span = output_width + 2 * padding_width - dilation_width * (kernel_width - 1) - 1;
+        let blocks_height = height_span / stride_height + 1;
+        let blocks_width = width_span / stride_width + 1;
+        assert_eq!(num_blocks, blocks_height * blocks_width,
+            "fold4d: number of blocks ({num_blocks}) does not match the expected grid ({blocks_height} x {blocks_width}) for the given output size and options");
+        let groups = channels.max(1);
+        let weight = create_unfolding_weight::<B>(channels, kernel_size, groups, &B::float_device(&x), x.dtype());
+        let weight = B::float_with_autodiff_context(weight, B::float_autodiff_context(&x));
+        let x = B::float_reshape(x, Shape::new([batch_size, channels_col, blocks_height, blocks_width]));
+        let padding_out = [height_span % stride_height, width_span % stride_width];
+        B::conv_transpose2d(x, weight, None,
+            ConvTransposeOptions::new(options.stride, options.padding, padding_out, options.dilation, groups))
     }
 
     /// One dimensional avg pooling.

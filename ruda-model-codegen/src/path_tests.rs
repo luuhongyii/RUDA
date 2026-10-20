@@ -99,6 +99,22 @@ fn config_user_paths_and_literals_are_not_rewritten() {
 
 #[test]
 fn module_and_record_user_backend_paths_are_not_rewritten() {
+    struct UserTypes {
+        backend: syn::Path,
+        field: syn::Type,
+        found_backend: bool,
+        found_field: bool,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for UserTypes {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            self.found_backend |= *path == self.backend;
+            syn::visit::visit_path(self, path);
+        }
+        fn visit_type(&mut self, ty: &'ast syn::Type) {
+            self.found_field |= *ty == self.field;
+            syn::visit::visit_type(self, ty);
+        }
+    }
     let input: DeriveInput = parse_quote! {
         pub struct UserModule<B: ruda::CustomBackend> {
             value: ruda::module::Param<ruda::tensor::Tensor<B, 2>>,
@@ -111,11 +127,15 @@ fn module_and_record_user_backend_paths_are_not_rewritten() {
         crate::derive_record,
         crate::derive_record_native,
     ] {
-        let output = derive(&input).to_string();
-        assert!(output.contains(&quote!(ruda::CustomBackend).to_string()));
-        assert!(output.contains(
-            &quote!(ruda::module::Param<ruda::tensor::Tensor<B, 2>>).to_string()
-        ));
+        let output = syn::parse2::<syn::File>(derive(&input)).expect("generated Rust syntax");
+        let mut types = UserTypes {
+            backend: parse_quote!(ruda::CustomBackend),
+            field: parse_quote!(ruda::module::Param<ruda::tensor::Tensor<B, 2>>),
+            found_backend: false,
+            found_field: false,
+        };
+        syn::visit::Visit::visit_file(&mut types, &output);
+        assert!(types.found_backend && types.found_field);
         assert_eq!(before, input.to_token_stream().to_string());
     }
 }

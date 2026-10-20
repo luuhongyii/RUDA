@@ -5,12 +5,14 @@ pub mod autotune;
 pub mod cache;
 /// Compilation config module.
 pub mod compilation;
+pub mod environment;
 /// Memory config module.
 pub mod memory;
 /// Profiling config module.
 pub mod profiling;
 /// Streaming config module.
 pub mod streaming;
+pub mod throughput;
 
 mod base;
 mod logger;

@@ -63,6 +63,10 @@ pub trait RudaIndexExpand {
     type Idx;
     fn expand_index(self, scope: &mut Scope, index: Self::Idx) -> Self::Output;
     fn expand_index_unchecked(self, scope: &mut Scope, index: Self::Idx) -> Self::Output;
+    fn expand_index_reference(self, _scope: &mut Scope, _index: Self::Idx, _writable: bool) -> Self::Output
+    where Self: Sized {
+        panic!("This container must implement address-preserving reference indexing")
+    }
 }
 
 pub trait RudaIndexMut:
@@ -128,6 +132,43 @@ where
     };
 
     NativeExpand::new(var)
+}
+
+pub(crate) fn expand_index_reference_native<A: RudaType + RudaIndex>(
+    scope: &mut Scope,
+    array: NativeExpand<A>,
+    index: NativeExpand<usize>,
+    writable: bool,
+) -> NativeExpand<A::Output>
+where A::Output: RudaPrimitive {
+    use ruda_core::ir::{AddressSpace, PointerAccess, PointerType, TypedPointer};
+    let original = *array.expand;
+    let base = if original.is_array() {
+        original
+    } else {
+        scope.reference_borrow(array.expand, writable).expect("addressable indexed value");
+        scope.reference_storage(original).expect("indexed references require addressable storage")
+    };
+    let (address_space, unroll_factor) = match base.kind {
+        VariableKind::GlobalInputArray(_) | VariableKind::GlobalOutputArray(_) => (AddressSpace::Global, 1),
+        VariableKind::SharedArray { unroll_factor, .. } => (AddressSpace::Shared, unroll_factor),
+        VariableKind::LocalArray { unroll_factor, .. } | VariableKind::ConstantArray { unroll_factor, .. } => {
+            (AddressSpace::Local, unroll_factor)
+        }
+        _ => panic!("indexed reference requires array storage"),
+    };
+    let pointee = if original.is_array() { base.ty } else { base.ty.with_vector_size(1) };
+    let index = match index.expand.kind {
+        VariableKind::Constant(value) => Variable::constant(value, usize::as_type(scope)),
+        _ => *index.expand,
+    };
+    scope.reference_address(TypedPointer {
+        base, index, ty: PointerType {
+            pointee, address_space,
+            access: if writable || pointee.is_atomic() { PointerAccess::ReadWrite } else { PointerAccess::ReadOnly },
+        },
+        checked: true, unroll_factor,
+    }).expect("valid indexed reference").into()
 }
 
 pub(crate) fn expand_index_assign_native<A: RudaType<ExpandType = NativeExpand<A>> + RudaIndexMut>(

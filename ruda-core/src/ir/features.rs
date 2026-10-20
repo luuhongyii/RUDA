@@ -16,6 +16,8 @@ pub struct Features {
     pub memory_reinterpret: bool,
     /// Enables explicit alignment. If false, alignment still compiles, but isn't actually applied.
     pub alignment: bool,
+    /// Storage synchronization orders global memory at device scope.
+    pub device_memory_scope: bool,
 
     /// Type support
     pub types: Types,
@@ -53,6 +55,10 @@ pub struct Types {
 pub struct MatmulFeatures {
     /// The cmma feature enables cooperative matrix-multiply and accumulate operations.
     pub cmma: BTreeSet<MmaConfig>,
+    /// Workgroup-level cooperative MMA with flexible matrix dimensions.
+    /// Account for [`crate::ir::HardwareProperties::ruda_mma_reserved_shared_memory`]
+    /// when allocating shared memory for these operations.
+    pub ruda_mma: BTreeSet<RudaMmaConfig>,
     /// The manual MMA feature enables cooperative matrix-multiply with manually managed data
     /// movement
     pub mma: BTreeSet<MmaConfig>,
@@ -63,6 +69,10 @@ pub struct MatmulFeatures {
     pub ldmatrix: BTreeSet<StorageType>,
     /// Types supported by stmatrix, if any
     pub stmatrix: BTreeSet<StorageType>,
+    /// Tensor layouts and permutation views can address cooperative matrix loads/stores.
+    pub cmma_tensor_addressing: bool,
+    /// Scalar callbacks with row and column coordinates on cooperative matrices.
+    pub cmma_elementwise: bool,
 }
 
 /// Operations allowed for this type. CMMA is defined separately.
@@ -105,6 +115,8 @@ pub enum AtomicUsage {
     Add,
     /// Atomic min/max
     MinMax,
+    /// Atomic exchange and compare-and-swap of the complete value.
+    Exchange,
 }
 
 impl AtomicUsage {
@@ -142,6 +154,32 @@ pub struct MmaConfig {
     pub n: u32,
     /// The size of the matrix on the `k` dimension
     pub k: u32,
+}
+
+/// Element types and flexible shape constraints of a workgroup-level MMA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RudaMmaConfig {
+    /// Element of the A matrix.
+    pub a_type: StorageType,
+    /// Element of the B matrix.
+    pub b_type: StorageType,
+    /// Element of the C/D matrices.
+    pub cd_type: StorageType,
+    /// Required multiple for M.
+    pub m_granularity: u32,
+    /// Maximum M.
+    pub m_max: u32,
+    /// Required multiple for N.
+    pub n_granularity: u32,
+    /// Maximum N.
+    pub n_max: u32,
+    /// Required multiple for K.
+    pub k_granularity: u32,
+    /// Maximum K.
+    pub k_max: u32,
+    /// Required number of workgroup invocations, or no fixed requirement.
+    pub units_per_block: Option<u32>,
 }
 
 /// Shape and element types of a valid block-scaled MMA configuration
@@ -204,6 +242,8 @@ impl Features {
             Type::Scalar(storage_type) | Type::Vector(storage_type, _) => {
                 self.types.storage.contains_key(&storage_type)
             }
+            Type::Semantic(SemanticType::TensorLayout(_)
+                | SemanticType::TensorView(_)) => self.matmul.cmma_tensor_addressing,
             Type::Semantic(semantic_type) => self.types.semantic.contains(&semantic_type),
             Type::Pointer(pointer) => self.supports_type(pointer.pointee()),
         }

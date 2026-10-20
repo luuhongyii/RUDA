@@ -63,7 +63,7 @@ impl ProfileTicks {
 pub struct ProfileDuration {
     // The future to read profiling data. For System profiling,
     // this should be entirely synchronous.
-    future: DynFut<ProfileTicks>,
+    future: DynFut<Option<ProfileTicks>>,
     method: TimingMethod,
 }
 
@@ -74,14 +74,14 @@ impl ProfileDuration {
     }
 
     /// Create a new `ProfileDuration` from a future that resolves to a duration.
-    pub fn new(future: DynFut<ProfileTicks>, method: TimingMethod) -> ProfileDuration {
+    pub fn new(future: DynFut<Option<ProfileTicks>>, method: TimingMethod) -> ProfileDuration {
         Self { future, method }
     }
 
     /// Create a new `ProfileDuration` straight from a duration.
     pub fn new_system_time(start: Instant, end: Instant) -> Self {
         Self::new(
-            Box::pin(async move { ProfileTicks::from_start_end(start, end) }),
+            Box::pin(async move { Some(ProfileTicks::from_start_end(start, end)) }),
             TimingMethod::System,
         )
     }
@@ -90,16 +90,24 @@ impl ProfileDuration {
     pub fn new_device_time(
         future: impl Future<Output = ProfileTicks> + Send + 'static,
     ) -> ProfileDuration {
+        Self::new(Box::pin(async move { Some(future.await) }), TimingMethod::Device)
+    }
+
+    /// Create a device profile whose readback may contain no measurement.
+    pub fn new_device_time_maybe(
+        future: impl Future<Output = Option<ProfileTicks>> + Send + 'static,
+    ) -> ProfileDuration {
         Self::new(Box::pin(future), TimingMethod::Device)
     }
 
     /// Retrieve the future that resolves the profile.
-    pub fn into_future(self) -> DynFut<ProfileTicks> {
+    pub fn into_future(self) -> DynFut<Option<ProfileTicks>> {
         self.future
     }
 
     /// Resolve the actual duration of the profile, possibly by waiting for the future to complete.
-    pub async fn resolve(self) -> ProfileTicks {
+    /// Returns `None` when no measurement was recorded, not a zero duration.
+    pub async fn resolve(self) -> Option<ProfileTicks> {
         self.future.await
     }
 }

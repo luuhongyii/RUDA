@@ -1,7 +1,7 @@
 use ruda_core::config::logger::{LogLevel, LoggerConfig};
 
 /// Configuration for operation fusion in Ruda.
-#[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FusionConfig {
     /// Logger configuration for fusion logs.
     #[serde(default)]
@@ -10,7 +10,24 @@ pub struct FusionConfig {
     /// Beam search configuration used when exploring fusion opportunities.
     #[serde(default)]
     pub beam_search: BeamSearchConfig,
+
+    /// Optional operation limit for a router-cached graph.
+    #[serde(default)]
+    pub max_graph_size: Option<usize>,
+
+    /// Close a router graph after this many operations without a new best fusion score.
+    #[serde(default = "default_growth_patience")]
+    pub growth_patience: usize,
 }
+
+impl Default for FusionConfig {
+    fn default() -> Self {
+        Self { logger: LoggerConfig::default(), beam_search: BeamSearchConfig::default(),
+            max_graph_size: None, growth_patience: default_growth_patience() }
+    }
+}
+
+fn default_growth_patience() -> usize { 32 }
 
 /// Beam search configuration controlling how the fusion optimizer explores independent blocks
 /// of operations.
@@ -22,12 +39,18 @@ pub struct BeamSearchConfig {
     /// in the fusion cache.
     #[serde(default = "default_max_blocks")]
     pub max_blocks: usize,
+
+    /// Maximum newly built optimizations per stream; cached plans remain usable.
+    /// `None` keeps exploration unlimited. Further cache misses execute without caching.
+    #[serde(default)]
+    pub max_explorations: Option<usize>,
 }
 
 impl Default for BeamSearchConfig {
     fn default() -> Self {
         Self {
             max_blocks: default_max_blocks(),
+            max_explorations: None,
         }
     }
 }

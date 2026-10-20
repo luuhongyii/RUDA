@@ -56,7 +56,7 @@ pub(crate) fn generate_module_standard<Codegen: ModuleCodegen>(
 
     let record = codegen.record_codegen();
     let record_name = Ident::new(format!("{name}Record").as_str(), name.span());
-    let (record_type, record_generics) = record.gen_record_type(&record_name, &generics.module, paths);
+    let (record_type, record_generics) = record.gen_record_type(&record_name, name, &generics.module, paths);
 
     let (generics_module, generics_ty_module, generics_where_module) =
         generics.module.split_for_impl();
@@ -133,10 +133,8 @@ pub(crate) fn generate_module_standard<Codegen: ModuleCodegen>(
     codegen
 }
 
-// TODO: wait that means nothing is persistent... (empty!)
-
-// When there is no backend in the generic parameter, the type is considered as a constant.
-pub(crate) fn generate_module_const(ast: &syn::DeriveInput, paths: &crate::DerivePaths) -> TokenStream {
+// Backend-independent modules retain empty records, but participate in lifecycle traversal.
+pub(crate) fn generate_module_const<Codegen: ModuleCodegen>(ast: &syn::DeriveInput, codegen: Codegen, paths: &crate::DerivePaths) -> TokenStream {
     let model = &paths.model;
     let name = &ast.ident;
     let (generics, generics_ty, generics_where) = ast.generics.split_for_impl();
@@ -158,15 +156,33 @@ pub(crate) fn generate_module_const(ast: &syn::DeriveInput, paths: &crate::Deriv
 
     let display_fn = display::display_fn(ast, paths);
     let attributes_fn = display::attributes_fn(ast, paths);
+    let visit = codegen.gen_visit(paths);
+    let map = codegen.gen_map(paths);
+    let valid = codegen.gen_valid(paths);
+    let from_inner = codegen.gen_from_inner(paths);
 
     let mut codegen = quote! {
         impl #generics_module #model::module::Module<B> for #name #generics_ty #generics_where {
-            #model::empty!(module);
+            type Record = #model::module::EmptyRecord;
+            #visit
+            #map
+            fn into_record(self) -> Self::Record { #model::module::EmptyRecord::new() }
+            fn load_record(self, _: Self::Record) -> Self { self }
+            fn to_device(self, _: &B::Device) -> Self { self }
+            fn fork(self, _: &B::Device) -> Self { self }
+            fn collect_devices(&self, devices: #model::module::Devices<B>) -> #model::module::Devices<B> { devices }
         }
 
         impl #generics_module_ad #model::module::AutodiffModule<B>
             for #name #generics_ty #generics_where {
-            #model::empty!(ad_module, #name #generics_ty);
+            type InnerModule = Self;
+            #valid
+            #from_inner
+        }
+
+        impl #generics_module_ad #model::module::HasAutodiffModule<B>
+            for #name #generics_ty #generics_where {
+            type TrainModule = Self;
         }
 
         impl #generics core::fmt::Display for #name #generics_ty #generics_where {

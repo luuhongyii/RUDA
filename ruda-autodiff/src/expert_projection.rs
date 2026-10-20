@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 /// Original native row/cube state with explicit unsupported manual higher-order differentiation.
 #[derive(Clone,Debug)]
-pub struct ExpertProjectionAutodiffState<B:ExpertProjectionOps> {native:B::ExpertProjectionState,tracked_primals:bool}
+pub struct ExpertProjectionAutodiffState<B:ExpertProjectionOps> {native:B::ExpertProjectionState,tracked_primals:bool,context:ruda_tensor::AutodiffContext}
 #[derive(Debug)]
 struct Projection<B:ExpertProjectionOps>(PhantomData<B>);
 impl<B:ExpertProjectionOps> Backward<B,2> for Projection<B> {
@@ -22,17 +22,23 @@ impl<B:ExpertProjectionOps,S:CheckpointStrategy> ExpertProjectionOps for Autodif
     type ExpertProjectionState=ExpertProjectionAutodiffState<B>;
     fn expert_projection_forward(input:FloatTensor<Self>,global_ids:IntTensor<Self>,weights:FloatTensor<Self>,options:ExpertProjectionOptions)
         -> Result<(FloatTensor<Self>,Self::ExpertProjectionState),Self::ExpertProjectionError> {
+        let context = input.context::<S>().merge(weights.context::<S>()).merge(global_ids.context);
+        let input = input.with_context::<S>(context);
+        let weights = weights.with_context::<S>(context);
+        let global_ids = global_ids.primitive;
         let tracked_primals=input.is_tracked() || weights.is_tracked();let dtypes=[input.primitive.dtype().into(),weights.primitive.dtype().into()];
         let (output,native)=B::expert_projection_forward(input.primitive,global_ids,weights.primitive,options).map_err(MoeAutodiffError::Native)?;
         let output=match Projection::<B>(PhantomData).prepare::<S>([input.node,weights.node]).compute_bound().stateful() {
             OpsKind::Tracked(prep)=>prep.finish((native.clone(),dtypes),output),OpsKind::UnTracked(prep)=>prep.finish(output)};
-        Ok((output,ExpertProjectionAutodiffState {native,tracked_primals}))
+        Ok((output,ExpertProjectionAutodiffState {native,tracked_primals,context}))
     }
     fn expert_projection_backward(state:Self::ExpertProjectionState,gradient:FloatTensor<Self>,selection:ExpertProjectionSelection)
         -> Result<ExpertProjectionBackward<Self>,Self::ExpertProjectionError> {
+        let context = gradient.context::<S>().merge(state.context);
+        let gradient = gradient.with_context::<S>(context);
         if state.tracked_primals || gradient.is_tracked() {return Err(MoeAutodiffError::HigherDerivativeUnsupported);}
         let result=B::expert_projection_backward(state.native,gradient.primitive,selection).map_err(MoeAutodiffError::Native)?;
-        Ok(ExpertProjectionBackward {input:result.input.map(AutodiffTensor::new),weights:result.weights.map(AutodiffTensor::new)})
+        Ok(ExpertProjectionBackward {input:result.input.map(|value| AutodiffTensor::new(value).with_context::<S>(context)),weights:result.weights.map(|value| AutodiffTensor::new(value).with_context::<S>(context))})
     }
 }
 #[derive(Debug)]
@@ -50,6 +56,9 @@ impl<B:NativeSwiGluOps> Backward<B,2> for SwiGlu<B> {
 impl<B:NativeSwiGluOps,S:CheckpointStrategy> NativeSwiGluOps for Autodiff<B,S> {
     type SwiGluError=MoeAutodiffError<B::SwiGluError>;
     fn native_swiglu(gate:FloatTensor<Self>,up:FloatTensor<Self>) -> Result<FloatTensor<Self>,Self::SwiGluError> {
+        let context = gate.context::<S>().merge(up.context::<S>());
+        let gate = gate.with_context::<S>(context);
+        let up = up.with_context::<S>(context);
         let dtypes=[gate.primitive.dtype().into(),up.primitive.dtype().into()];let saved=(gate.primitive.clone(),up.primitive.clone(),dtypes);
         let output=B::native_swiglu(gate.primitive,up.primitive).map_err(MoeAutodiffError::Native)?;
         Ok(match SwiGlu::<B>(PhantomData).prepare::<S>([gate.node,up.node]).compute_bound().stateful() {
@@ -57,8 +66,12 @@ impl<B:NativeSwiGluOps,S:CheckpointStrategy> NativeSwiGluOps for Autodiff<B,S> {
     }
     fn native_swiglu_backward(gate:FloatTensor<Self>,up:FloatTensor<Self>,gradient:FloatTensor<Self>,selection:NativeSwiGluSelection)
         -> Result<NativeSwiGluBackward<Self>,Self::SwiGluError> {
+        let context = gate.context::<S>().merge(up.context::<S>()).merge(gradient.context::<S>());
+        let gate = gate.with_context::<S>(context);
+        let up = up.with_context::<S>(context);
+        let gradient = gradient.with_context::<S>(context);
         if gate.is_tracked() || up.is_tracked() || gradient.is_tracked() {return Err(MoeAutodiffError::HigherDerivativeUnsupported);}
         let result=B::native_swiglu_backward(gate.primitive,up.primitive,gradient.primitive,selection).map_err(MoeAutodiffError::Native)?;
-        Ok(NativeSwiGluBackward {gate:result.gate.map(AutodiffTensor::new),up:result.up.map(AutodiffTensor::new)})
+        Ok(NativeSwiGluBackward {gate:result.gate.map(|value| AutodiffTensor::new(value).with_context::<S>(context)),up:result.up.map(|value| AutodiffTensor::new(value).with_context::<S>(context))})
     }
 }

@@ -12,6 +12,7 @@ use std::{
     cell::RefCell,
     marker::PhantomData,
     panic::{AssertUnwindSafe, catch_unwind},
+    vec::Vec,
 };
 
 use custom_channel::DeviceClient;
@@ -208,7 +209,63 @@ std::thread_local! {
 
     /// Heterogeneous map of service states owned by this thread.
     #[allow(clippy::type_complexity)]
-    static STATES: RefCell<HashMap<TypeId, RefCell<Box<dyn Any + 'static>>>> = RefCell::new(HashMap::new());
+    static STATES: RefCell<HashMap<TypeId, ServiceState>> = RefCell::new(HashMap::new());
+}
+
+struct ServiceState {
+    value: RefCell<Box<dyn Any>>,
+    shutdown: fn(&mut dyn Any),
+}
+
+fn shutdown_services() {
+    STATES.with_borrow(|states| {
+        for state in states.values() {
+            (state.shutdown)(state.value.borrow_mut().as_mut());
+        }
+    });
+    // Drop outside the TLS borrow: upstream handles can submit downstream cleanup.
+    drop(STATES.with_borrow_mut(core::mem::take));
+}
+
+#[cfg(any(unix, windows))]
+pub(super) fn register_exit_hook() {
+    unsafe extern "C" {
+        fn atexit(callback: extern "C" fn()) -> core::ffi::c_int;
+    }
+    // SAFETY: the callback has static lifetime, the C ABI, and cannot unwind.
+    assert_eq!(unsafe { atexit(shutdown_at_exit) }, 0, "Cannot register device shutdown");
+}
+
+#[cfg(any(unix, windows))]
+extern "C" fn shutdown_at_exit() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if catch_unwind(AssertUnwindSafe(shutdown_runners)).is_err() {
+        std::eprintln!("RUDA device shutdown failed");
+        std::process::abort();
+    }
+}
+
+fn shutdown_runners() {
+    // No registry lock is held while joining: upstream shutdown may initialize
+    // or submit work to downstream services that must remain available.
+    for stage in [DeviceServiceStage::Upstream, DeviceServiceStage::Downstream] {
+        loop {
+            let clients: Vec<_> = RUNNERS.lock().as_ref().into_iter()
+                .flat_map(|runners| runners.iter())
+                .filter(|(id, client)| id.stage == stage && !client.is_shutdown())
+                .map(|(_, client)| client.clone()).collect();
+            if clients.is_empty() {
+                break;
+            }
+            for client in clients {
+                client.shutdown();
+            }
+        }
+    }
 }
 
 /// Internal runner logic to manage background thread spawning.
@@ -302,8 +359,13 @@ impl ChannelDeviceState {
                     let service = service.unwrap_or_else(|| S::init(device_id));
                     let utilities = service.utilities();
 
-                    map.entry(type_id)
-                        .or_insert_with(|| RefCell::new(Box::new(service)));
+                    map.entry(type_id).or_insert_with(|| ServiceState {
+                        value: RefCell::new(Box::new(service)),
+                        shutdown: |state| state.downcast_mut::<S>().unwrap().shutdown(),
+                    });
+                    // Native driver initialization must precede registration so
+                    // our workers finish before that driver's exit handlers.
+                    super::register_device_service_shutdown();
                     callback
                         .send(Ok(ChannelService { type_id, utilities }))
                         .unwrap();
@@ -356,7 +418,7 @@ impl ChannelService {
     fn act_on<R>(&self, f: impl FnOnce(&mut Box<dyn Any + 'static>) -> R) -> R {
         STATES.with_borrow(|map| {
             let cell = map.get(&self.type_id).expect("Service state not found");
-            let mut guard = cell
+            let mut guard = cell.value
                 .try_borrow_mut()
                 .expect("Service state is already borrowed");
             f(&mut guard)
@@ -577,10 +639,10 @@ mod custom_channel {
     };
     use core::{
         hint::spin_loop,
-        sync::atomic::{AtomicPtr, AtomicU32, Ordering},
+        sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering},
         time::Duration,
     };
-    use std::{sync::Arc, vec::Vec};
+    use std::{sync::{Arc, Mutex}, thread::JoinHandle, vec::Vec};
 
     /// Maximum number of [`Task`] that can be queued.
     pub const CHANNEL_MAX_TASK: usize = 32;
@@ -633,7 +695,7 @@ mod custom_channel {
             let mut server = Server::new(runner_id);
             let state = server.state.clone();
 
-            std::thread::Builder::new()
+            let thread = std::thread::Builder::new()
                 .name(std::format!(
                     "DS{}-{}-{}",
                     match runner_id.stage {
@@ -646,14 +708,17 @@ mod custom_channel {
                 .spawn(move || {
                     init();
                     server.start();
+                    super::shutdown_services();
                 })
                 .unwrap();
+            *state.thread.lock().unwrap() = Some(thread);
 
             Self { state }
         }
 
         /// Atomically reserves a slot in the buffer and writes the task.
         pub fn enqueue<F: FnOnce() + Send + 'static>(&self, func: F) -> Result<(), CallError> {
+            let _submission = self.state.begin_submission()?;
             let mut idle_count: u32 = 0;
             loop {
                 let index = self.state.available_index.fetch_add(1, Ordering::Acquire) as usize;
@@ -678,6 +743,11 @@ mod custom_channel {
 
         /// Forces a flush by filling the remaining buffer with no-op tasks.
         pub fn flush(&self) {
+            let Ok(_submission) = self.state.begin_submission() else { return; };
+            self.flush_inner();
+        }
+
+        fn flush_inner(&self) {
             let index_start =
                 self.state
                     .available_index
@@ -704,6 +774,33 @@ mod custom_channel {
                 .enqueued_count
                 .fetch_add(actual_added as u32, Ordering::SeqCst);
         }
+
+        pub fn is_shutdown(&self) -> bool {
+            self.state.stopping.load(Ordering::Acquire)
+        }
+
+        pub fn shutdown(&self) {
+            let mut thread = self.state.thread.lock().unwrap();
+            let Some(handle) = thread.take() else { return; };
+            assert_ne!(handle.thread().id(), std::thread::current().id(),
+                "A device runner cannot join itself");
+            self.state.submissions.fetch_or(CLOSED, Ordering::AcqRel);
+            while self.state.submissions.load(Ordering::Acquire) != CLOSED {
+                std::thread::yield_now();
+            }
+            self.flush_inner();
+            self.state.stopping.store(true, Ordering::Release);
+            if let Err(error) = handle.join() {
+                std::panic::resume_unwind(error);
+            }
+        }
+    }
+
+    const CLOSED: usize = 1usize << (usize::BITS - 1);
+
+    struct Submission<'a>(&'a AtomicUsize);
+    impl Drop for Submission<'_> {
+        fn drop(&mut self) { self.0.fetch_sub(1, Ordering::Release); }
     }
 
     struct State {
@@ -718,9 +815,19 @@ mod custom_channel {
         enqueued_count: AtomicU32,
         /// The runner id (for debugging purposes).
         runner_id: RunnerId,
+        submissions: AtomicUsize,
+        stopping: AtomicBool,
+        thread: Mutex<Option<JoinHandle<()>>>,
     }
 
     impl State {
+        fn begin_submission(&self) -> Result<Submission<'_>, CallError> {
+            self.submissions.fetch_update(Ordering::Acquire, Ordering::Relaxed,
+                |count| (count & CLOSED == 0).then(|| count + 1))
+                .map_err(|_| CallError)?;
+            Ok(Submission(&self.submissions))
+        }
+
         /// Initializes the task at `index` in the current queue with `func`.
         /// Exclusive access per slot is guaranteed by `available_index.fetch_add`.
         fn init_task_at<F: FnOnce() + Send + 'static>(&self, index: usize, func: F) {
@@ -774,6 +881,9 @@ mod custom_channel {
                 available_index: AtomicU32::new(0),
                 enqueued_count: AtomicU32::new(0),
                 runner_id,
+                submissions: AtomicUsize::new(0),
+                stopping: AtomicBool::new(false),
+                thread: Mutex::new(None),
             });
 
             Self {
@@ -793,12 +903,17 @@ mod custom_channel {
                     idle_count = 0;
                 }
 
+                let stopping = self.state.stopping.load(Ordering::Acquire);
                 let queue_size = self.state.enqueued_count.load(Ordering::Acquire) as usize;
 
                 if queue_size >= CHANNEL_MAX_TASK {
                     self.fetch();
                     idle_count = 0;
                     continue;
+                }
+
+                if stopping {
+                    break;
                 }
 
                 if idle_count < SPIN_BUDGET_SERVER {
@@ -842,6 +957,10 @@ mod custom_channel {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "channel_shutdown_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod tests {

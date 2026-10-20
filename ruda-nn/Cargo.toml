@@ -28,6 +28,7 @@ std = [ "ruda-model/std", "num-traits/std", "ruda-autodiff?/std",]
 tensor-parallel = [ "dep:ruda-autodiff",]
 sparse = [ "dep:serde", "ruda-tensor-device?/sparse",]
 test-cuda = [ "cuda", "ruda-tensor-device/cuda-default", "ruda-core/id-tests-std",]
+test-cuda-native = [ "test-cuda",]
 test-memory-checks = [ "fusion", "ruda-fusion/memory-checks",]
 test-metal = [ "test-wgpu", "ruda-tensor-wgpu/metal",]
 test-rocm = [ "ruda-tensor-rocm/default",]
@@ -125,6 +126,11 @@ optional = true
 version = "1.0.148"
 default-features = false
 optional = true
+
+[dev-dependencies.ruda-tensor]
+path = "../ruda-tensor"
+default-features = false
+features = [ "graph",]
 
 [dev-dependencies.ruda-tensor-host]
 path = "../ruda-tensor-host"

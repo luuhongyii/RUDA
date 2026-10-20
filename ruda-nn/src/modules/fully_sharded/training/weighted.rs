@@ -21,7 +21,7 @@ impl<B:Backend,S:CheckpointStrategy> FullyShardedWeightedLoss<B,S> {
         assert_eq!(weight.dims(),[1],"sharded window weight must be scalar");
         assert_eq!(weight.device(),self.statistics.loss_sum.device(),"sharded window weight device differs");
         let dtype=if weight.dtype()==DType::F64 || self.statistics.loss_sum.dtype()==DType::F64 {DType::F64} else {DType::F32};
-        let weight=Tensor::<Autodiff<B,S>,1>::from_inner(weight.cast(dtype));
+        let weight=Tensor::<Autodiff<B,S>,1>::from_inner(weight.cast(dtype)).with_autodiff_context(self.statistics.loss_sum.autodiff_context());
         let empty=weight.clone().equal_elem(0);
         self.statistics.loss_sum.clone().cast(dtype).mask_fill(empty.clone(),0)/weight.mask_fill(empty,1)
     }

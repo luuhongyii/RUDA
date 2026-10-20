@@ -1,6 +1,6 @@
 use super::*;
 use alloc::{vec, vec::Vec};
-use ruda::runtime::backend::Runtime;
+use crate::dsl::frontend::LaunchMarker;
 use ruda_core::ir::{AtomicOpCode, BinaryOperator, PointerOp, Select, UnaryOperator};
 
 /// A first-class pointer value. Its address space and permissions are statically distinct.
@@ -51,6 +51,37 @@ fn emit(scope: &mut Scope, operation: PointerOp, ty: Type) -> ManagedVariable {
         .expect("valid first-class pointer operation");
     scope.register(Instruction::new(operation, *out));
     out
+}
+
+#[ruda]
+impl<E: RudaPrimitive, A: PointerPermission> ValuePtr<E, Workgroup, A> {
+    /// Load after a workgroup barrier. Every unit must pass the same shared-memory address.
+    pub fn workgroup_uniform_load(&self) -> E {
+        intrinsic!(|scope| {
+            let ty = self.expand.ty.pointer_type().expect("pointer value type").pointee();
+            NativeExpand::new(emit(
+                scope,
+                PointerOp::UniformLoad { pointer: *self.expand },
+                ty,
+            ))
+        })
+    }
+}
+
+#[ruda]
+impl<E: RudaPrimitive<Scalar: Numeric>, A: PointerPermission> ValuePtr<Atomic<E>, Workgroup, A> {
+    /// Atomically load after a workgroup barrier; the address must be uniform across all units.
+    pub fn workgroup_uniform_load_atomic(&self) -> E {
+        intrinsic!(|scope| {
+            let pointee = self.expand.ty.pointer_type().expect("pointer value type").pointee();
+            let ty = Type::scalar(pointee.elem_type()).with_vector_size(pointee.vector_size());
+            NativeExpand::new(emit(
+                scope,
+                PointerOp::UniformLoad { pointer: *self.expand },
+                ty,
+            ))
+        })
+    }
 }
 
 #[ruda]
@@ -265,7 +296,7 @@ integer_atomic!(fetch_or, Or);
 integer_atomic!(fetch_xor, Xor);
 
 #[ruda]
-impl<E: RudaPrimitive<Scalar: Int>, S: PointerSpace> ValuePtr<Atomic<E>, S, ReadWrite> {
+impl<E: RudaPrimitive<Scalar: Numeric>, S: PointerSpace> ValuePtr<Atomic<E>, S, ReadWrite> {
     pub fn compare_exchange_weak(&self, compare: E, value: E) -> E {
         intrinsic!(|scope| {
             let ty = E::as_type(scope);
@@ -281,10 +312,10 @@ impl<E: RudaPrimitive<Scalar: Int>, S: PointerSpace> ValuePtr<Atomic<E>, S, Read
 }
 
 impl<E: RudaPrimitive, A: PointerPermission> LaunchArg for ValuePtr<E, GlobalSpace, A> {
-    type RuntimeArg<R: Runtime> = <Array<E> as LaunchArg>::RuntimeArg<R>;
+    type RuntimeArg<R: LaunchMarker> = <Array<E> as LaunchArg>::RuntimeArg<R>;
     type CompilationArg = <Array<E> as LaunchArg>::CompilationArg;
 
-    fn register<R: Runtime>(
+    fn register<R: LaunchMarker>(
         arg: Self::RuntimeArg<R>,
         launcher: &mut KernelLauncher<R>,
     ) -> Self::CompilationArg {

@@ -5,7 +5,7 @@ use ruda_tensor::{
     backend::{Backend, DeviceId, DeviceOps, ExecutionError},
     try_read_sync,
 };
-use ruda_tensor::graph::{BackendIr, OperationIr, TensorHandle, TensorId, TensorIr};
+use ruda_tensor::graph::{BackendIr, GraphBindings, GraphId, GraphIr, OperationIr, TensorHandle, TensorId, TensorIr};
 use ruda_core::future::DynFut;
 
 use crate::{
@@ -111,6 +111,13 @@ macro_rules! impl_multi_backend_types {
             {
                type Device = MultiDevice<$DefaultBackend, $($OtherBackend),+>;
 
+                fn context_id(&self) -> Option<usize> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.context_id(),
+                        $(Self::$OtherBackend(runner) => runner.context_id(),)+
+                    }
+                }
+
                 fn avg_pool3d_native_output_size(&self, input: [usize; 3], kernel: [usize; 3],
                     stride: [usize; 3], padding: [usize; 3], ceil: bool) -> Option<[usize; 3]> {
                     match self {
@@ -125,6 +132,34 @@ macro_rules! impl_multi_backend_types {
                         $(
                             Self::$OtherBackend(runner) => runner.register_op(op),
                         )+
+                    }
+                }
+
+                fn register_alias(&self, destination: TensorId, source: TensorId) -> Result<(), ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.register_alias(destination, source),
+                        $(Self::$OtherBackend(runner) => runner.register_alias(destination, source),)+
+                    }
+                }
+
+                fn register_graph(&self, graph: GraphIr) -> Result<GraphId, ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.register_graph(graph),
+                        $(Self::$OtherBackend(runner) => runner.register_graph(graph),)+
+                    }
+                }
+
+                fn execute_graph(&self, id: GraphId, bindings: GraphBindings) -> Result<(), ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.execute_graph(id, bindings),
+                        $(Self::$OtherBackend(runner) => runner.execute_graph(id, bindings),)+
+                    }
+                }
+
+                fn remove_graph(&self, id: GraphId) -> Result<(), ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.remove_graph(id),
+                        $(Self::$OtherBackend(runner) => runner.remove_graph(id),)+
                     }
                 }
 
@@ -170,12 +205,78 @@ macro_rules! impl_multi_backend_types {
                     }
                 }
 
+                fn flush(&self) -> Result<(), ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.flush(),
+                        $(
+                            Self::$OtherBackend(runner) => runner.flush(),
+                        )+
+                    }
+                }
+
+                fn profile_start(&self) -> Result<Option<ruda_tensor::ProfileToken>, ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.profile_start(),
+                        $(Self::$OtherBackend(runner) => runner.profile_start(),)+
+                    }
+                }
+
+                fn profile_end(&self, token: ruda_tensor::ProfileToken, options: ruda_tensor::ProfileOptions)
+                    -> Result<ruda_tensor::ProfileDuration, ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.profile_end(token, options),
+                        $(Self::$OtherBackend(runner) => runner.profile_end(token, options),)+
+                    }
+                }
+
+                fn profile_abandon(&self, token: ruda_tensor::ProfileToken) {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.profile_abandon(token),
+                        $(Self::$OtherBackend(runner) => runner.profile_abandon(token),)+
+                    }
+                }
+
                 fn seed(&self, seed: u64) {
                     match self {
                         Self::$DefaultBackend(runner) => runner.seed(seed),
                         $(
                             Self::$OtherBackend(runner) => runner.seed(seed),
                         )+
+                    }
+                }
+
+                fn graph_prepare(&self) -> Result<(), ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.graph_prepare(),
+                        $(Self::$OtherBackend(runner) => runner.graph_prepare(),)+
+                    }
+                }
+
+                fn graph_start_capture(&self) -> Result<(), ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.graph_start_capture(),
+                        $(Self::$OtherBackend(runner) => runner.graph_start_capture(),)+
+                    }
+                }
+
+                fn graph_stop_capture(&self) -> Result<ruda_tensor::BackendGraph, ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.graph_stop_capture(),
+                        $(Self::$OtherBackend(runner) => runner.graph_stop_capture(),)+
+                    }
+                }
+
+                fn graph_abort_capture(&self) {
+                    match self {
+                        Self::$DefaultBackend(runner) => runner.graph_abort_capture(),
+                        $(Self::$OtherBackend(runner) => runner.graph_abort_capture(),)+
+                    }
+                }
+
+                unsafe fn graph_replay(&self, graph: &ruda_tensor::BackendGraph) -> Result<(), ExecutionError> {
+                    match self {
+                        Self::$DefaultBackend(runner) => unsafe { runner.graph_replay(graph) },
+                        $(Self::$OtherBackend(runner) => unsafe { runner.graph_replay(graph) },)+
                     }
                 }
 

@@ -5,26 +5,28 @@ use tracing_subscriber::{
 
 /// Utilities to help handle communication termination.
 pub async fn os_shutdown_signal() {
+    try_os_shutdown_signal().await.expect("failed to install shutdown signal handler");
+}
+
+/// Wait for process shutdown, reporting signal-handler installation failures.
+pub async fn try_os_shutdown_signal() -> std::io::Result<()> {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        tokio::signal::ctrl_c().await
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?
+            .recv().await;
+        Ok(())
     };
 
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    let terminate = std::future::pending::<std::io::Result<()>>();
 
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+        result = ctrl_c => result,
+        result = terminate => result,
     }
 }
 

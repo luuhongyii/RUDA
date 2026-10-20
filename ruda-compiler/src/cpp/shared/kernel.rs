@@ -95,6 +95,7 @@ impl<D: Dialect> SharedMemory<D> {
 
 #[derive(Debug, Clone)]
 pub struct ComputeKernel<D: Dialect> {
+    pub io: ruda_core::kernel::KernelIo,
     pub tensor_maps: Vec<KernelArg<D>>,
     pub buffers: Vec<KernelArg<D>>,
     pub scalars: Vec<(Elem<D>, usize)>,

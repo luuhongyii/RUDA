@@ -132,8 +132,10 @@ impl LoRALinearConfig {
         assert_eq!(adapter_a.dimensions()[2],self.rank,"loaded expert adapter rank differs from actual explicit configuration");
         let denominator=if use_rslora {(self.rank as f64).sqrt()}else {self.rank as f64};
         let mut layer=PackedExpertLoRA {base,adapter_a,adapter_b,dropout:DropoutConfig::new(self.dropout).init(),scale:self.alpha/denominator};layer.validate();
-        assert!(!B::ad_enabled(&layer.base.device()) || (layer.adapter_a.weight.val().is_require_grad() && layer.adapter_b.weight.val().is_require_grad()),
-            "loaded expert adapter leaves must be trainable when attaching with AD enabled");
+        for value in [layer.adapter_a.weight.val(), layer.adapter_b.weight.val()] {
+            assert!(!value.is_autodiff() || value.is_require_grad(),
+                "loaded expert adapter leaves must be trainable when attaching with AD enabled");
+        }
         layer.base=layer.base.freeze_for_adapter();layer
     }
     /// Allocate actual new expert adapter leaves with the existing linear initializer and zero B.
@@ -153,9 +155,9 @@ impl LoRALinearConfig {
             return self.from_grouped_expert_adapters(base,ExpertLinear::from_parameters(a,forward,backward),ExpertLinear::from_parameters(b,forward,backward),use_rslora);
         }
         let a=LinearConfig::new(k,self.rank).initializer.init_with::<B,3,_>([e,self.rank,k],Some(k),Some(self.rank),&device)
-            .map(|value|value.cast(adapter_dtype).detach().require_grad());
+            .map(|value|value.cast(adapter_dtype).detach()).set_require_grad(true);
         let b=Initializer::Zeros.init_with::<B,3,_>([e,n,self.rank],Some(self.rank),Some(n),&device)
-            .map(|value|value.cast(adapter_dtype).detach().require_grad());
+            .map(|value|value.cast(adapter_dtype).detach()).set_require_grad(true);
         self.from_grouped_expert_adapters(base,ExpertLinear::from_parameters(a,forward,backward),ExpertLinear::from_parameters(b,forward,backward),use_rslora)
     }
 }

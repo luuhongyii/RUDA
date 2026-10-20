@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use ruda_core::tensor::{DType, Shape, Slice};
 
 use crate::{
-    AutodiffBackend, Backend, Distribution, ExecutionError, Scalar, TensorData,
+    AutodiffBackend, Backend, Distribution, ExecutionError, Scalar, TensorData, TensorMetadata,
     get_device_settings,
     ops::TransactionPrimitive,
     tensor::{
@@ -17,6 +17,21 @@ impl<B: Backend> TransactionOp<B> for Int {
     }
 }
 impl<B: Backend> BasicOps<B> for Int {
+    fn erase_primitive(tensor: Self::Primitive) -> crate::primitive::ErasedTensorPrimitive<B> {
+        crate::primitive::ErasedTensorPrimitive::Int(tensor)
+    }
+    fn restore_primitive(tensor: crate::primitive::ErasedTensorPrimitive<B>) -> Self::Primitive {
+        match tensor {
+            crate::primitive::ErasedTensorPrimitive::Int(tensor) => tensor,
+            _ => panic!("Module mapping changed the integer tensor kind"),
+        }
+    }
+    fn autodiff_context(tensor: &Self::Primitive) -> crate::AutodiffContext { B::int_autodiff_context(tensor) }
+
+    fn with_autodiff_context(tensor: Self::Primitive, context: crate::AutodiffContext) -> Self::Primitive {
+        B::int_with_autodiff_context(tensor, context)
+    }
+
     type Elem = B::IntElem;
 
     fn empty(shape: Shape, device: &Device<B>, dtype: DType) -> Self::Primitive {
@@ -69,10 +84,7 @@ impl<B: Backend> BasicOps<B> for Int {
         values: Self::Primitive,
         update: IndexingUpdateOp,
     ) -> Self::Primitive {
-        match update {
-            IndexingUpdateOp::Add => B::int_select_add(tensor, dim, indices, values),
-            _ => unimplemented!(),
-        }
+        B::int_select_assign(tensor, dim, indices, values, update)
     }
 
     fn mask_where(
@@ -106,10 +118,11 @@ impl<B: Backend> BasicOps<B> for Int {
         values: Self::Primitive,
         update: IndexingUpdateOp,
     ) -> Self::Primitive {
-        match update {
-            IndexingUpdateOp::Add => B::int_scatter_add(dim, tensor, indices, values),
-            _ => unimplemented!(),
+        let count = indices.shape().num_elements();
+        if count == 0 {
+            return tensor;
         }
+        B::int_scatter(dim, tensor, indices, values, update)
     }
 
     fn scatter_nd(

@@ -23,9 +23,10 @@ pub(super) fn valid_mask<B: Backend>(input: &Tensor<B, 3>, valid: Option<Tensor<
         Some(valid) => {
             assert_eq!(valid.dims(), [batch, length], "valid mask must describe the actual input slots");
             assert_eq!(valid.device(), input.device(), "valid mask device differs");
-            valid
+            let context = input.autodiff_context().merge(valid.autodiff_context());
+            valid.with_autodiff_context(context)
         }
-        None => Tensor::<B, 2, Bool>::zeros([batch, length], &input.device()).bool_not(),
+        None => Tensor::<B, 2, Bool>::zeros([batch, length], &input.device()).with_autodiff_context(input.autodiff_context()).bool_not(),
     }
 }
 
@@ -65,13 +66,15 @@ pub fn sparse_gather_entries<B: Backend>(entries: Tensor<B, 3>, indices: Tensor<
     assert_eq!(indices.dtype(), DType::I64, "selected key indices must be I64");
     let device = entries.device();
     let dtype = entries.dtype();
+    let context = entries.autodiff_context().merge(indices.autodiff_context());
     if keys == 0 || batch == 0 || queries == 0 || count == 0 {
         return Tensor::zeros([batch, queries, count, width], (&device, dtype))
+            .with_autodiff_context(context)
             + entries.sum().mul_scalar(0).reshape([1, 1, 1, 1]);
     }
     let valid = indices.clone().greater_equal_elem(0);
     let safe = indices.mask_fill(valid.clone().bool_not(), 0);
-    let offsets = positions::<B>(batch, 0, &device).mul_scalar(i64::try_from(keys).expect("key stride exceeds I64"))
+    let offsets = positions::<B>(batch, 0, &device).with_autodiff_context(context).mul_scalar(i64::try_from(keys).expect("key stride exceeds I64"))
         .reshape([batch, 1, 1]);
     let ids = (safe + offsets).reshape([batch * queries * count]);
     let selected = entries.reshape([batch * keys, width]).select(0, ids)
@@ -90,9 +93,13 @@ pub fn sparse_stable_topk<B: Backend>(scores: Tensor<B, 3>, k: usize,
     work_dtype(scores.dtype());
     let [batch, queries, keys] = scores.dims();
     let device = scores.device();
+    let mut context = scores.autodiff_context();
+    if let Some(indices) = &indices { context = context.merge(indices.autodiff_context()); }
+    if let Some(valid) = &valid { context = context.merge(valid.autodiff_context()); }
     let indices = indices.unwrap_or_else(|| positions::<B>(keys, 0, &device)
+        .with_autodiff_context(context)
         .reshape([1, 1, keys]).expand([batch, queries, keys]));
-    let valid = valid.unwrap_or_else(|| Tensor::<B, 3, Bool>::zeros([batch, queries, keys], &device).bool_not());
+    let valid = valid.unwrap_or_else(|| Tensor::<B, 3, Bool>::zeros([batch, queries, keys], &device).with_autodiff_context(context).bool_not());
     assert_eq!(indices.dims(), scores.dims(), "top-k external IDs must match scores");
     assert_eq!(indices.dtype(), DType::I64, "top-k IDs must use I64");
     assert_eq!(indices.device(), device, "top-k IDs must share the score device");
@@ -155,7 +162,8 @@ pub fn indexer_kl_loss<B: Backend>(scores: Tensor<B, 3>, teacher: Tensor<B, 3>,
     assert_eq!(teacher.device(), scores.device(), "indexer teacher device differs");
     work_dtype(teacher.dtype());
     let compute = work_dtype(scores.dtype());
-    let valid = valid.unwrap_or_else(|| Tensor::<B, 3, Bool>::zeros(scores.dims(), &scores.device()).bool_not());
+    let context = scores.autodiff_context().merge(teacher.autodiff_context());
+    let valid = valid.unwrap_or_else(|| Tensor::<B, 3, Bool>::zeros(scores.dims(), &scores.device()).with_autodiff_context(context).bool_not());
     assert_eq!(valid.dims(), scores.dims(), "indexer teacher validity differs");
     assert_eq!(valid.device(), scores.device(), "indexer teacher validity device differs");
     if keys == 0 || batch == 0 || queries == 0 { return scores.sum().mul_scalar(0); }
@@ -198,7 +206,8 @@ impl SparseRotaryEmbedding {
         if self.rope_dim == 0 { return input; }
         let pairs = self.rope_dim / 2;
         let frequencies: Vec<f32> = (0..pairs).map(|i| self.base.powf(-((2 * i) as f64) / self.rope_dim as f64) as f32).collect();
-        let frequencies = Tensor::<B, 1>::from_data(TensorData::new(frequencies, [pairs]), &input.device()).cast(compute);
+        let context = input.autodiff_context().merge(pos.autodiff_context());
+        let frequencies = Tensor::<B, 1>::from_data(TensorData::new(frequencies, [pairs]), &input.device()).with_autodiff_context(context).cast(compute);
         let mut angles = pos.cast::<FloatDType>(compute.into()).reshape([tokens, 1]) * frequencies.reshape([1, pairs]);
         if inverse { angles = angles.neg(); }
         let cos = angles.clone().cos().reshape([1, tokens, 1, pairs]);

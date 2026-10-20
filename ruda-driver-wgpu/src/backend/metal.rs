@@ -17,12 +17,18 @@ use wgpu::{
 };
 
 pub async fn request_metal_device(adapter: &wgpu::Adapter) -> (wgpu::Device, wgpu::Queue) {
+    try_request_metal_device(adapter).await.expect("Unable to request Metal device")
+}
+
+pub async fn try_request_metal_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue), crate::WgpuInitError> {
     let limits = adapter.limits();
     let features = adapter
         .features()
         .difference(Features::MAPPABLE_PRIMARY_BUFFERS);
     unsafe {
-        let hal_adapter = adapter.as_hal::<hal::api::Metal>().unwrap();
+        let hal_adapter = adapter.as_hal::<hal::api::Metal>().ok_or_else(|| crate::WgpuInitError::InvalidConfiguration {
+            message: "Native Metal initialization requires a Metal adapter".into(),
+        })?;
         request_device(adapter, &hal_adapter, features, limits)
     }
 }
@@ -32,7 +38,7 @@ fn request_device(
     adapter: &metal::Adapter,
     features: Features,
     limits: Limits,
-) -> (wgpu::Device, wgpu::Queue) {
+) -> Result<(wgpu::Device, wgpu::Queue), crate::WgpuInitError> {
     // The default is MemoryHints::Performance, which tries to do some bigger
     // block allocations. However, we already batch allocations, so we
     // can use MemoryHints::MemoryUsage to lower memory usage.
@@ -40,7 +46,7 @@ fn request_device(
     let device = unsafe {
         adapter
             .open(features, &limits, &memory_hints)
-            .expect("should create metal HAL device")
+            .map_err(|err| crate::WgpuInitError::RequestDevice { message: format!("Metal HAL device: {err}") })?
     };
 
     let descriptor = DeviceDescriptor {
@@ -56,7 +62,7 @@ fn request_device(
     unsafe {
         wgpu_adapter
             .create_device_from_hal(device, &descriptor)
-            .expect("Failed to create wgpu device")
+            .map_err(|err| crate::WgpuInitError::RequestDevice { message: format!("Metal Wgpu device: {err}") })
     }
 }
 
@@ -69,6 +75,7 @@ pub fn register_metal_features(
     unsafe {
         if let Some(adapter) = adapter.as_hal::<hal::api::Metal>() {
             register_features(&adapter, props, features, comp_options);
+            comp_options.supports_msl = true;
         }
     }
 }
@@ -77,11 +84,15 @@ fn register_features(
     _adapter: &metal::Adapter,
     props: &mut DeviceProperties,
     _features: Features,
-    _comp_options: &mut WgpuCompilationOptions,
+    comp_options: &mut WgpuCompilationOptions,
 ) {
     register_types(props);
     register_cmma(props);
     props.features.alignment = true;
+    // HAL 29 selects MSL 3.2 on these OS versions; older MSL retains workgroup scope.
+    let device_scope = objc2::available!(macos = 15.0, ios = 18.0, tvos = 18.0, visionos = 2.0);
+    props.features.device_memory_scope = device_scope;
+    comp_options.supports_msl_device_memory_scope = device_scope;
     props.features.plane.insert(Plane::Ops);
     props.features.plane.insert(Plane::Sync);
 }

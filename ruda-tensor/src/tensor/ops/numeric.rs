@@ -14,6 +14,11 @@ pub trait Numeric<B: BackendTypes>: BasicOps<B>
 where
     Self::Elem: Element,
 {
+    /// Squares each element without changing its numeric kind.
+    fn numeric_square(tensor: Self::Primitive) -> Self::Primitive {
+        Self::powi_scalar(tensor, 2.into())
+    }
+
     /// Adds two tensors together.
     ///
     /// # Arguments

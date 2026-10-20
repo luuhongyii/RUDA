@@ -9,6 +9,7 @@ fn matrix(ident: MatrixIdent) -> Matrix {
         ident, m: 16, n: 8, k: 64,
         storage: if ident == MatrixIdent::Accumulator { FloatKind::F32.into() } else { fp4().storage_type() },
         layout: MatrixLayout::Undefined,
+        scope: ruda_core::ir::MatrixScope::Plane,
     }
 }
 

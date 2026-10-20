@@ -4,7 +4,7 @@ use melior::{
         arith, index, memref,
         ods::{self, llvm, vector},
     },
-    ir::{Operation, r#type::IntegerType},
+    ir::{Operation, operation::OperationBuilder, r#type::IntegerType},
 };
 
 use crate::mlir::visitor::prelude::*;
@@ -12,9 +12,10 @@ use crate::mlir::visitor::prelude::*;
 impl<'a> Visitor<'a> {
     pub fn visit_operator_with_out(&mut self, operator: &Operator, out: Variable) {
         match operator {
-            Operator::NativeAddress(_) | Operator::NativeLoad(_) | Operator::NativeStore(_) => {
-                panic!("native addresses are not supported by the memref MLIR backend");
-            }
+            Operator::NativeAddress(op) => self.visit_native_address(op, out),
+            Operator::NativeLoad(op) => self.visit_native_load(op, out),
+            Operator::NativeStore(_) => unreachable!("native stores do not produce a result"),
+            Operator::WorkgroupUniformLoad(op) => self.visit_workgroup_uniform_load(op, out),
             Operator::And(and) => {
                 let lhs = self.get_variable(and.lhs);
                 let rhs = self.get_variable(and.rhs);
@@ -64,8 +65,8 @@ impl<'a> Visitor<'a> {
                     ));
                 }
             }
-            Operator::CopyMemoryBulk(_copy_memory_bulk) => {
-                todo!("copy_memory_bulk is not implemented {}", operator)
+            Operator::CopyMemoryBulk(copy_memory_bulk) => {
+                self.visit_copy_memory_bulk(copy_memory_bulk, out);
             }
             Operator::Index(index) | Operator::UncheckedIndex(index) => {
                 let load_ssa = self.visit_index(index, out);
@@ -105,11 +106,13 @@ impl<'a> Visitor<'a> {
             Operator::Reinterpret(reinterpret) => {
                 let target_type = out.ty.to_type(self.context);
                 let input = self.get_variable(reinterpret.input);
-                let value = self.append_operation_with_result(arith::bitcast(
-                    input,
-                    target_type,
-                    self.location,
-                ));
+                let value = if out.storage_type().is_atomic() {
+                    self.native_pointer(input)
+                } else if reinterpret.input.storage_type().is_atomic() {
+                    self.pointer_as_integer(input, target_type)
+                } else {
+                    self.append_operation_with_result(arith::bitcast(input, target_type, self.location))
+                };
                 self.insert_variable(out, value);
             }
             Operator::Select(select) => {
@@ -141,20 +144,28 @@ impl<'a> Visitor<'a> {
                         self.location,
                     ));
                 }
-                let value = self.append_operation_with_result(arith::select(
-                    condition,
-                    then,
-                    or_else,
-                    self.location,
-                ));
+                let value = if out.storage_type().is_atomic() {
+                    self.append_operation_with_result(
+                        OperationBuilder::new("llvm.select", self.location)
+                            .add_operands(&[condition, then, or_else])
+                            .add_results(&[out.ty.to_type(self.context)])
+                            .build().expect("valid atomic reference selection"),
+                    )
+                } else {
+                    self.append_operation_with_result(arith::select(
+                        condition, then, or_else, self.location,
+                    ))
+                };
                 self.insert_variable(out, value);
             }
         }
     }
 
     fn visit_index(&mut self, index: &IndexOperator, out: Variable) -> Value<'a, 'a> {
-        assert!(index.vector_size == 0);
-        let mut index_value = self.get_index(index.index, out.ty, index.list.ty.is_vectorized());
+        assert!(index.vector_size == 0 || index.vector_size == out.vector_size());
+        let mut index_value = self.get_index(
+            index.index, out.ty, index.list.ty.is_vectorized() || index.vector_size > 0,
+        );
         if !self.is_memory(index.list) {
             let to_extract = self.get_variable(index.list);
             // Item of size 1
@@ -173,6 +184,11 @@ impl<'a> Visitor<'a> {
             let vector_extract =
                 llvm::extractelement(self.context, res, to_extract, index_value, self.location);
             self.append_operation_with_result(vector_extract)
+        } else if out.storage_type().is_atomic() {
+            let memref = self.get_memory(index.list);
+            self.memref_element_pointer(
+                memref, index_value, index.list.storage_type().to_type(self.context),
+            )
         } else if out.ty.is_vectorized() {
             let vector_type = Type::vector(
                 &[out.vector_size() as u64],
@@ -193,7 +209,6 @@ impl<'a> Visitor<'a> {
     }
 
     fn visit_index_assign(&mut self, index_assign: &IndexAssignOperator, out: Variable) {
-        assert!(index_assign.vector_size == 0);
         let value = self.get_variable(index_assign.value);
         let memref = self.get_memory(out);
         if matches!(
@@ -213,28 +228,34 @@ impl<'a> Visitor<'a> {
             self.block.append_operation(operation);
             return;
         }
-        let operation = if index_assign.value.ty.is_vectorized() {
-            let indices = self.get_index(
-                index_assign.index,
-                index_assign.value.ty,
-                out.ty.is_vectorized(),
-            );
-            vector::store(self.context, value, memref, &[indices], self.location)
+        let width = if index_assign.vector_size == 0 {
+            out.vector_size()
         } else {
+            index_assign.vector_size
+        };
+        let indices = if index_assign.vector_size == 0 && index_assign.value.ty.is_vectorized() {
+            self.get_index(index_assign.index, index_assign.value.ty, out.ty.is_vectorized())
+        } else {
+            self.get_index(index_assign.index, out.ty.with_vector_size(width), true)
+        };
+        let operation = if index_assign.value.ty.is_vectorized() {
+            vector::store(self.context, value, memref, &[indices], self.location).into()
+        } else if width > 1 {
             let vector_type = Type::vector(
-                &[out.vector_size() as u64],
+                &[width as u64],
                 index_assign.value.storage_type().to_type(self.context),
             );
-            let indices = self.get_index(index_assign.index, out.ty, out.ty.is_vectorized());
             let splat = self.append_operation_with_result(vector::splat(
                 self.context,
                 vector_type,
                 value,
                 self.location,
             ));
-            vector::store(self.context, splat, memref, &[indices], self.location)
+            vector::store(self.context, splat, memref, &[indices], self.location).into()
+        } else {
+            memref::store(value, memref, &[indices], self.location)
         };
-        self.block.append_operation(operation.into());
+        self.block.append_operation(operation);
     }
 
     pub(crate) fn visit_cast(&mut self, to_cast: Variable, out: Variable) {

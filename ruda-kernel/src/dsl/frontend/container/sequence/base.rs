@@ -140,6 +140,10 @@ impl<T: RudaType> RudaIndexExpand for SequenceExpand<T> {
             .as_usize();
         self.__expand_index_method(scope, index)
     }
+    fn expand_index_reference(self, scope: &mut Scope, index: Self::Idx, writable: bool) -> Self::Output {
+        let value = self.expand_index(scope, index);
+        crate::dsl::frontend::IntoMut::expand_reference(value, scope, writable)
+    }
 }
 
 /// Expand type of [Sequence].

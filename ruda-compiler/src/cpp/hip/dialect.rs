@@ -383,7 +383,10 @@ impl<M: DialectWmmaCompiler<Self>> DialectInstructions<Self> for HipDialect<M> {
     }
 
     fn compile_instruction_sync_warp(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "#error Sync warp is unimplemented on hip\n")
+        f.write_str(
+            "__builtin_amdgcn_fence(__ATOMIC_ACQ_REL, \"wavefront\");\n\
+             __builtin_amdgcn_wave_barrier();\n",
+        )
     }
 
     fn compile_instruction_thread_fence(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

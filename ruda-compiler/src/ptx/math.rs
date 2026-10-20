@@ -2,6 +2,29 @@ use super::{Result, emit::Emitter, invalid, types::Scalar};
 use ruda_core::ir::{ConstantValue, Variable};
 
 impl Emitter {
+    pub fn angle_conversion(&mut self, out: Variable, input: Variable, degrees: bool) -> Result<()> {
+        let ty = Scalar::of(out.ty)?;
+        if !ty.float() || ty.fp8() || input.ty != out.ty {
+            return Err(invalid("angle conversion requires matching floating operands"));
+        }
+        let source = self.value(input)?;
+        let destination = self.destination(out)?;
+        let compute = if ty.half() { Scalar::F32 } else { ty };
+        let source = if ty.half() { self.half_to_f32(ty, &source)? } else { source };
+        let factor = if compute == Scalar::F64 {
+            if degrees { 1.0f64.to_degrees() } else { 1.0f64.to_radians() }
+        } else {
+            (if degrees { 1.0f32.to_degrees() } else { 1.0f32.to_radians() }) as f64
+        };
+        let factor = compute.constant(ConstantValue::Float(factor))?;
+        let result = if ty.half() { self.reg(Scalar::F32) } else { destination.clone() };
+        self.line(format!("mul.rn.{} {result}, {source}, {factor};", compute.suffix()));
+        if ty.half() {
+            self.line(format!("cvt.rn.{}.f32 {destination}, {result};", ty.suffix()));
+        }
+        Ok(())
+    }
+
     pub fn reciprocal(&mut self, out: Variable, input: Variable) -> Result<()> {
         let ty = Scalar::of(out.ty)?;
         if input.ty != out.ty || ty == Scalar::Pred {

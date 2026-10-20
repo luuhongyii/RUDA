@@ -1,0 +1,8 @@
+The import code generator is derived from tracel-ai/burn-onnx v0.22.0,
+revision 96660512a3fa72cf21c4a77226659b37e95d9f64, under MIT OR Apache-2.0.
+Copyright (c) 2022 Nathaniel Simard & Burn Framework Contributors.
+
+Modified for native backend-generic RUDA models, RUDA Host initializer
+transforms, and RUDA Rudapack storage. Original licenses and notices accompany
+this crate. onnx-ir 0.22.0 and its tensor-data types are import-time dependencies;
+generated models use RUDA and do not require the importer or a Burn runtime.

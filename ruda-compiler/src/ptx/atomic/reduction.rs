@@ -66,7 +66,8 @@ impl Emitter {
         let desired = self.reg(ty);
         if !add { self.line(format!("mov.b16 {desired}, {operand};")); }
         let observed = self.reg(ty);
-        self.line(format!("atom.cas.b16 {observed}, [{pointer}], 0, 0;"));
+        let semantics = self.atomic_semantics(pointer);
+        self.line(format!("atom{semantics}.cas.b16 {observed}, [{pointer}], 0, 0;"));
         let expected = self.reg(ty);
         let previous_bits = self.reg(Scalar::U32);
         let expected_bits = self.reg(Scalar::U32);
@@ -75,7 +76,7 @@ impl Emitter {
         self.line(format!("{again}:"));
         self.line(format!("mov.b16 {expected}, {observed};"));
         if add { self.half_binary("add", ty, &desired, &operand, &expected)?; }
-        self.line(format!("atom.cas.b16 {observed}, [{pointer}], {expected}, {desired};"));
+        self.line(format!("atom{semantics}.cas.b16 {observed}, [{pointer}], {expected}, {desired};"));
         self.line(format!("cvt.u32.u16 {previous_bits}, {observed};"));
         self.line(format!("cvt.u32.u16 {expected_bits}, {expected};"));
         self.line(format!("setp.ne.u32 {retry}, {previous_bits}, {expected_bits};"));

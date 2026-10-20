@@ -50,10 +50,10 @@ pub struct PermutedLayoutCompilationArg {
 }
 
 impl ViewLayoutLaunchArg for PermutedLayout {
-    type RuntimeArg<R: Runtime> = PermutedLayoutLaunch;
+    type RuntimeArg<R: LaunchMarker> = PermutedLayoutLaunch;
     type CompilationArg = PermutedLayoutCompilationArg;
 
-    fn register<R: Runtime, B: BufferArg>(
+    fn register<R: LaunchMarker, B: BufferArg>(
         arg: Self::RuntimeArg<R>,
         buffer: &B,
         ty: Type,
@@ -63,7 +63,7 @@ impl ViewLayoutLaunchArg for PermutedLayout {
         let strides = buffer.strides();
         let (shape, strides, len) = match arg.reference_shape {
             Some(reference_shape) => {
-                let len = reference_shape.len();
+                let len = reference_shape.num_elements();
                 let strides = strides_ref(shape, &reference_shape, strides);
                 (reference_shape.iter().copied().collect(), strides, len)
             }
@@ -94,7 +94,7 @@ impl ViewLayoutLaunchArg for PermutedLayout {
     }
 }
 
-fn strides_ref<R: Runtime>(
+fn strides_ref<R: LaunchMarker>(
     shape: &[usize],
     reference_shape: &[usize],
     strides: &[usize],
@@ -132,7 +132,7 @@ impl PermutedLayoutLaunch {
         }
     }
 
-    pub fn from_reference_handle<R: Runtime>(reference_handle: TensorBinding<R>) -> Self {
+    pub fn from_reference_handle<R: LaunchMarker>(reference_handle: TensorBinding<R>) -> Self {
         Self::from_reference_shape(reference_handle.shape)
     }
 }

@@ -24,6 +24,7 @@ pub(super) struct AdaptiveState {
 }
 
 struct Relocation {
+    copy: bool,
     allocation: ManagedMemoryHandle,
     target: ManagedMemoryHandle,
     source: StorageHandle,
@@ -260,7 +261,7 @@ impl AdaptiveState {
                     break;
                 };
                 let destination = pools[self.current].find_at(target.descriptor().location())?.storage.clone();
-                moves.push(Relocation { allocation, target, source, destination, cursor });
+                moves.push(Relocation { copy: page.mapped, allocation, target, source, destination, cursor });
             }
         }
         if moves.is_empty() {
@@ -271,17 +272,26 @@ impl AdaptiveState {
                 _ => Ok(reclaimed),
             };
         }
-        storage.relocation_barrier()?;
-        let copied = storage.relocation_copy_batch(moves.iter().map(|relocation| {
-            (&relocation.source, &relocation.destination)
-        }));
-        // A failed enqueue can leave earlier copies active. No target may be
-        // reused unless the completion wait proves those writes have finished.
-        if let Err(error) = storage.relocation_complete() {
-            core::mem::forget(moves);
-            return Err(error);
+        // Unmapped sources carry no device data. Move their reservations without
+        // manufacturing backing just to copy uninitialized bytes.
+        if moves.iter().any(|relocation| relocation.copy) {
+            for relocation in moves.iter_mut().filter(|relocation| relocation.copy) {
+                pools[self.current].materialize(storage, &relocation.target.clone().binding())?;
+                relocation.destination = pools[self.current]
+                    .find_at(relocation.target.descriptor().location())?.storage.clone();
+            }
+            storage.relocation_barrier()?;
+            let copied = storage.relocation_copy_batch(moves.iter().filter(|relocation| relocation.copy).map(|relocation| {
+                (&relocation.source, &relocation.destination)
+            }));
+            // A failed enqueue can leave earlier copies active. No target may be
+            // reused unless the completion wait proves those writes have finished.
+            if let Err(error) = storage.relocation_complete() {
+                core::mem::forget(moves);
+                return Err(error);
+            }
+            copied?;
         }
-        copied?;
         for relocation in moves {
             let source_pool = relocation.allocation.descriptor().location().pool as usize;
             match &mut pools[source_pool] {

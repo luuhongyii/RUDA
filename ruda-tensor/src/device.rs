@@ -11,6 +11,10 @@ pub use hashbrown::HashMap;
 
 /// Device trait for all ruda backend devices.
 pub trait DeviceOps: Clone + Default + PartialEq + Send + Sync + core::fmt::Debug + Device {
+    /// Device-specific defaults for dynamically selected or remote backends.
+    /// Static backends may retain defaults derived from their element types.
+    fn defaults(&self) -> Option<DeviceSettings> { None }
+
     /// Returns the [device id](DeviceId).
     fn id(&self) -> DeviceId {
         self.to_id()
@@ -28,6 +32,7 @@ pub trait DeviceOps: Clone + Default + PartialEq + Send + Sync + core::fmt::Debu
 /// Get the [`device`'s settings](DeviceSettings).
 pub fn get_device_settings<B: Backend>(device: &B::Device) -> DeviceSettings {
     let default_settings = || {
+        if let Some(settings) = device.defaults() { return settings; }
         DeviceSettings::new(
             default_float::<B>(),
             default_int::<B>(),

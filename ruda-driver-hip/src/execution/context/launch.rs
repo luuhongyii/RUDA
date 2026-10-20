@@ -38,16 +38,8 @@ impl HipContext {
                 std::ptr::null_mut(),
             );
 
-            if status == ruda_hip_sys::hipError_t_hipErrorOutOfMemory {
-                Err(LaunchError::OutOfMemory {
-                    reason: format!("Out of memory when launching kernel: {kernel_id:?}"),
-                    backtrace: BackTrace::capture(),
-                })
-            } else if status != HIP_SUCCESS {
-                Err(LaunchError::Unknown {
-                    reason: format!("Unable to launch kernel {kernel_id:?} with status {status:?}"),
-                    backtrace: BackTrace::capture(),
-                })
+            if status != HIP_SUCCESS {
+                Err(crate::execution::status::launch("hipModuleLaunchKernel", status))
             } else {
                 Ok(())
             }

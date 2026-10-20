@@ -1,5 +1,5 @@
 use crate::{
-    AutoCompiler, AutoGraphicsApi, GraphicsApi, WgpuDevice, backend, execution::WgpuServer,
+    AutoCompiler, AutoGraphicsApi, GraphicsApi, WgpuBackend, WgpuDevice, WgpuDeviceKind, backend, execution::WgpuServer,
     contiguous_strides,
 };
 use ruda_core::device::{Device, DeviceService};
@@ -32,23 +32,15 @@ impl Runtime for WgpuRuntime {
     }
 
     fn name(client: &ComputeClient<Self>) -> &'static str {
-        match client.info() {
-            wgpu::Backend::Vulkan => {
-                #[cfg(feature = "spirv")]
-                return "wgpu<spirv>";
+        client.runtime_name().expect("Wgpu server must report its selected compiler")
+    }
 
-                #[cfg(not(feature = "spirv"))]
-                return "wgpu<wgsl>";
-            }
-            wgpu::Backend::Metal => {
-                #[cfg(feature = "msl")]
-                return "wgpu<msl>";
-
-                #[cfg(not(feature = "msl"))]
-                return "wgpu<wgsl>";
-            }
-            _ => "wgpu<wgsl>",
-        }
+    fn utilization(
+        device: &Self::Device,
+    ) -> Result<ruda::runtime::backend::DeviceUtilization, ruda::runtime::backend::UtilizationUnavailable> {
+        ruda::runtime::monitoring::gpu_utilization::CardCounters::read(
+            Self::client(device).properties().identity.physical.as_ref(),
+        )
     }
 
     fn max_ruda_count() -> (u32, u32, u32) {
@@ -78,88 +70,55 @@ impl Runtime for WgpuRuntime {
     }
 
     fn enumerate_devices(type_id: u16, info: &wgpu::Backend) -> Vec<DeviceId> {
-        #[cfg(target_family = "wasm")]
+        let selection = WgpuDevice::from_id(DeviceId::new(type_id, 0));
+        if selection.backend() != WgpuBackend::Auto
+            && !adapters::backend_candidates(selection.backend()).contains(info)
         {
-            let _ = type_id;
-            let _ = info;
-            // WebGPU only supports a single device currently.
-            vec![DeviceId::new(0, 0)]
+            return Vec::new();
         }
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::all(),
-                ..wgpu::InstanceDescriptor::new_without_display_handle()
-            });
-
-            let adapters = enumerate_all_adapters(instance, *info);
-            adapters
-                .into_iter()
-                .filter(|adapter| {
-                    // Default doesn't filter device types.
-                    if type_id == 4 {
-                        return true;
-                    }
-
-                    let device_type = adapter.get_info().device_type;
-
-                    let adapter_type_id = match device_type {
-                        wgpu::DeviceType::Other => 4,
-                        wgpu::DeviceType::IntegratedGpu => 1,
-                        wgpu::DeviceType::DiscreteGpu => 0,
-                        wgpu::DeviceType::VirtualGpu => 2,
-                        wgpu::DeviceType::Cpu => 3,
-                    };
-
-                    adapter_type_id == type_id
-                })
-                .enumerate()
-                .map(|(index, adapter)| match adapter.get_info().device_type {
-                    wgpu::DeviceType::DiscreteGpu => DeviceId::new(0, index as u16),
-                    wgpu::DeviceType::IntegratedGpu => DeviceId::new(1, index as u16),
-                    wgpu::DeviceType::VirtualGpu => DeviceId::new(2, index as u16),
-                    wgpu::DeviceType::Cpu => DeviceId::new(3, 0),
-                    wgpu::DeviceType::Other => DeviceId::new(4, 0),
-                })
-                .collect()
-        }
+        Self::enumerate_all_devices(info).into_iter()
+            .filter(|id| (type_id & 7) == 4 || (id.type_id & 7) == (type_id & 7))
+            .collect()
     }
 
     fn enumerate_all_devices(info: &wgpu::Backend) -> Vec<DeviceId> {
+        let api = match info {
+            wgpu::Backend::Vulkan => WgpuBackend::Vulkan,
+            wgpu::Backend::Metal => WgpuBackend::Metal,
+            wgpu::Backend::Dx12 => WgpuBackend::Dx12,
+            wgpu::Backend::Gl => WgpuBackend::Gl,
+            wgpu::Backend::BrowserWebGpu => WgpuBackend::WebGpu,
+            wgpu::Backend::Noop => return Vec::new(),
+        };
         #[cfg(target_family = "wasm")]
         {
-            let _ = info;
-            // WebGPU only supports a single device currently.
-            vec![DeviceId::new(0, 0)]
+            vec![WgpuDevice::DefaultDevice.on(api).to_id()]
         }
-
         #[cfg(not(target_family = "wasm"))]
         {
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::all(),
-                ..wgpu::InstanceDescriptor::new_without_display_handle()
-            });
-            let adapters = enumerate_all_adapters(instance, *info);
-            adapters
-                .into_iter()
-                .enumerate()
-                .map(|(index, adapter)| match adapter.get_info().device_type {
-                    wgpu::DeviceType::DiscreteGpu => DeviceId::new(0, index as u16),
-                    wgpu::DeviceType::IntegratedGpu => DeviceId::new(1, index as u16),
-                    wgpu::DeviceType::VirtualGpu => DeviceId::new(2, index as u16),
-                    wgpu::DeviceType::Cpu => DeviceId::new(3, 0),
-                    wgpu::DeviceType::Other => DeviceId::new(4, 0),
-                })
-                .collect()
+            if !wgpu::Instance::enabled_backend_features().contains((*info).into()) {
+                return Vec::new();
+            }
+            let instance = adapters::instance_for(*info);
+            let found = future::block_on(instance.enumerate_adapters((*info).into()));
+            let mut indices = [0usize; 7];
+            found.into_iter().filter_map(|adapter| {
+                let kind = match adapter.get_info().device_type {
+                    wgpu::DeviceType::DiscreteGpu => 0,
+                    wgpu::DeviceType::IntegratedGpu => 1,
+                    wgpu::DeviceType::VirtualGpu => 2,
+                    wgpu::DeviceType::Cpu => 3,
+                    wgpu::DeviceType::Other => 6,
+                };
+                let index = indices[kind];
+                indices[kind] += 1;
+                if index > WgpuDeviceKind::MAX_INDEX || (kind == 3 && index != 0) {
+                    return None;
+                }
+                Some(WgpuDevice::from_id(DeviceId::new(kind as u16, index as u16)).on(api).to_id())
+            }).collect()
         }
     }
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn enumerate_all_adapters(instance: wgpu::Instance, backend: wgpu::Backend) -> Vec<wgpu::Adapter> {
-    // `enumerate_adapters` is now async & available on WebGPU
-    ruda_core::future::block_on(instance.enumerate_adapters(backend.into()))
 }
 
 /// The values that control how a WGPU Runtime will perform its calculations.
@@ -172,29 +131,51 @@ pub struct RuntimeOptions {
 
 impl Default for RuntimeOptions {
     fn default() -> Self {
-        #[cfg(test)]
-        const DEFAULT_MAX_TASKS: usize = 32;
-        #[cfg(not(test))]
-        const DEFAULT_MAX_TASKS: usize = 32;
-
-        let tasks_max = match std::env::var("RUDA_WGPU_MAX_TASKS") {
-            Ok(value) => value
-                .parse::<usize>()
-                .expect("RUDA_WGPU_MAX_TASKS should be a positive integer."),
-            Err(_) => DEFAULT_MAX_TASKS,
-        };
-
-        Self {
-            tasks_max,
-            memory_config: MemoryConfiguration::default(),
-        }
+        Self::try_default().expect("Invalid Wgpu runtime options")
     }
 }
 
-mod adapters;
+impl RuntimeOptions {
+    pub fn try_default() -> Result<Self, WgpuInitError> {
+        Self::with_tasks_max(None)
+    }
+
+    pub fn with_tasks_max(tasks_max: Option<usize>) -> Result<Self, WgpuInitError> {
+        let tasks_max = match tasks_max {
+            Some(value) => value,
+            None => match std::env::var("RUDA_WGPU_MAX_TASKS") {
+                Ok(value) => value.parse::<usize>().map_err(|_| WgpuInitError::InvalidConfiguration {
+                    message: format!("RUDA_WGPU_MAX_TASKS must be a positive integer, got {value:?}"),
+                })?,
+                Err(std::env::VarError::NotPresent) => 32,
+                Err(err) => return Err(WgpuInitError::InvalidConfiguration { message: err.to_string() }),
+            },
+        };
+        let options = Self {
+            tasks_max,
+            memory_config: MemoryConfiguration::default(),
+        };
+        options.validate()?;
+        Ok(options)
+    }
+
+    pub(super) fn validate(&self) -> Result<(), WgpuInitError> {
+        if self.tasks_max == 0 {
+            return Err(WgpuInitError::InvalidConfiguration {
+                message: "tasks_max must be greater than zero".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+pub(crate) mod adapters;
 mod device_service;
+mod error;
 mod setup;
 
-pub use setup::{WgpuSetup, init_device, init_setup, init_setup_async};
-pub(crate) use setup::create_setup_for_device;
-pub(crate) use device_service::create_server;
+pub use error::WgpuInitError;
+pub use setup::{WgpuSetup, init_device, init_setup, init_setup_async, try_init_device,
+    try_init_device_with_api, try_init_setup, try_init_setup_async};
+pub(crate) use setup::try_create_setup_for_device;
+pub(crate) use device_service::try_create_server;

@@ -36,6 +36,7 @@ pub struct CppSupportedFeatures {
     pub fast_math: bool,
     pub fast_tanh: bool,
     pub elect_sync: bool,
+    pub device_memory_scope: bool,
 }
 
 impl Default for CompilationOptions {
@@ -219,6 +220,10 @@ impl<D: Dialect, P: super::DialectProcessors> Compiler for CppCompiler<D, P> {
 
     fn extension(&self) -> &'static str {
         "cpp"
+    }
+
+    fn buffer_io(&self, repr: &Self::Representation) -> Option<ruda_core::kernel::KernelIo> {
+        Some(repr.io.clone())
     }
 }
 

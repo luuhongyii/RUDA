@@ -24,7 +24,8 @@ pub(super) fn gather_index_matrix<B:Backend,C:BroadcastTensorCollective<B>>(indi
     if communicator.world_size() == 1 {return Ok(indices.reshape([1,rows,width]));}
     let count = rows.checked_mul(communicator.world_size() as usize).expect("candidate index gather geometry overflow");
     let encoded_width = width.checked_mul(4).expect("candidate index encoding geometry overflow");
-    let mask = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![65535_i64],[1,1]),(&indices.device(),DType::I64)).expand([rows,width]);
+    let context=indices.autodiff_context();
+    let mask = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![65535_i64],[1,1]),(&indices.device(),DType::I64)).with_autodiff_context(context).expand([rows,width]);
     let mut words = Vec::with_capacity(4);
     for word in 0usize..4 {
         let part = indices.clone().bitwise_right_shift_scalar(((word*16) as i32).elem()).bitwise_and(mask.clone());
@@ -33,7 +34,7 @@ pub(super) fn gather_index_matrix<B:Backend,C:BroadcastTensorCollective<B>>(indi
     }
     let encoded = Tensor::cat(words,1);
     let gathered = communicator.all_gather_float(encoded.into_primitive().tensor())?;
-    let gathered = Tensor::<B,2>::from_primitive(TensorPrimitive::Float(gathered));
+    let gathered = Tensor::<B,2>::from_primitive(TensorPrimitive::Float(gathered)).with_autodiff_context(context);
     assert_eq!(gathered.dims(),[count,encoded_width],"candidate index transport returned incompatible geometry");
     let mut result:Option<Tensor<B,2,Int>> = None;
     for word in 0usize..4 {
@@ -66,26 +67,29 @@ impl VocabParallelLossLayout {
             assert_eq!(visible.dims(),[rows],"greedy row visibility differs");
             assert_eq!(visible.device(),logits.device(),"greedy row visibility must share the device");
         }
+        let mut context=logits.autodiff_context();
+        if let Some(visible)=&visible {context=context.merge(visible.autodiff_context());}
         if rows == 0 {
-            return Ok(VocabParallelGreedySelection {indices:Tensor::zeros([0],(&logits.device(),DType::I64)),valid:Tensor::zeros([0],&logits.device())});
+            return Ok(VocabParallelGreedySelection {indices:Tensor::zeros([0],(&logits.device(),DType::I64)).with_autodiff_context(context),
+                valid:Tensor::zeros([0],&logits.device()).with_autodiff_context(context)});
         }
         let logits = logits.cast(DType::F32);
-        let ids = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&logits.device(),DType::I64)).reshape([1,width]).expand([rows,width]);
-        let limit = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![self.vocabulary_size() as i64],[1,1]),(&logits.device(),DType::I64)).expand([rows,width]);
+        let ids = Tensor::<B,1,Int>::arange(interval.start as i64..interval.end as i64,(&logits.device(),DType::I64)).with_autodiff_context(context).reshape([1,width]).expand([rows,width]);
+        let limit = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![self.vocabulary_size() as i64],[1,1]),(&logits.device(),DType::I64)).with_autodiff_context(context).expand([rows,width]);
         let mut valid = logits.clone().is_nan().bool_not().bool_and(ids.clone().lower(limit));
         if let Some(visible) = visible {valid = valid.bool_and(visible.reshape([rows,1]).expand([rows,width]));}
         let local_maximum = actual_maximum(&logits,Some(&valid));
         let maximum = if communicator.world_size() == 1 {local_maximum} else {
             let gathered = communicator.all_gather_float(local_maximum.into_primitive().tensor())?;
-            let gathered = Tensor::<B,2>::from_primitive(TensorPrimitive::Float(gathered)).reshape([self.world_size(),rows]).transpose();
+            let gathered = Tensor::<B,2>::from_primitive(TensorPrimitive::Float(gathered)).with_autodiff_context(context).reshape([self.world_size(),rows]).transpose();
             actual_maximum(&gathered,None)
         };
         let candidates = logits.equal(maximum).bool_and(valid);
-        let sentinel = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![i64::MAX],[1,1]),(&ids.device(),DType::I64)).expand([rows,width]);
+        let sentinel = Tensor::<B,2,Int>::from_data(TensorData::new(alloc::vec![i64::MAX],[1,1]),(&ids.device(),DType::I64)).with_autodiff_context(context).expand([rows,width]);
         let local = ids.mask_where(candidates.bool_not(),sentinel).min_dim(1);
         let gathered = gather_indices(local,&communicator)?;
         let indices = gathered.min_dim(0).reshape([rows]);
-        let sentinel = Tensor::<B,1,Int>::from_data(TensorData::new(alloc::vec![i64::MAX],[1]),(&indices.device(),DType::I64)).expand([rows]);
+        let sentinel = Tensor::<B,1,Int>::from_data(TensorData::new(alloc::vec![i64::MAX],[1]),(&indices.device(),DType::I64)).with_autodiff_context(context).expand([rows]);
         let valid = indices.clone().not_equal(sentinel);
         Ok(VocabParallelGreedySelection {indices:indices.mask_fill(valid.clone().bool_not(),-1),valid})
     }

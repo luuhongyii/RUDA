@@ -7,7 +7,7 @@ use crate::runtime::{
 use alloc::vec::Vec;
 use ruda_core::backtrace::BackTrace;
 
-use super::{ManagedMemoryBinding, ManagedMemoryHandle, MemoryPool, Slice, calculate_padding};
+use super::{ManagedMemoryBinding, ManagedMemoryHandle, MemoryPool, PageMapping, Slice, calculate_padding};
 
 /// A memory pool that allocates buffers in a range of sizes and reuses them to minimize allocations.
 ///
@@ -120,10 +120,12 @@ impl ExclusiveMemoryPool {
             .max(size)
             .next_multiple_of(self.alignment);
 
-        let storage = storage.alloc(alloc_size)?;
+        let mapping = PageMapping::current();
+        let storage = mapping.allocate(storage, alloc_size)?;
 
         let padding = calculate_padding(size, self.alignment);
         let mut slice = Slice::new(storage, padding);
+        slice.mapped = mapping.is_mapped();
 
         // Return a smaller part of the slice. By construction, we only ever
         // get a page with a big enough size, so this is ok to do.
@@ -144,6 +146,14 @@ impl ExclusiveMemoryPool {
 }
 
 impl MemoryPool for ExclusiveMemoryPool {
+    fn materialize<Storage: ComputeStorage>(
+        &mut self, storage: &mut Storage, binding: &ManagedMemoryBinding,
+    ) -> Result<(), IoError> {
+        self.find(binding)?;
+        let page = &mut self.pages[binding.descriptor().page()];
+        page.slice.materialize(storage, page.alloc_size)
+    }
+
     fn accept(&self, size: u64) -> bool {
         self.max_alloc_size >= size
     }
@@ -227,7 +237,7 @@ impl MemoryPool for ExclusiveMemoryPool {
                     // If free found is sufficiently high (ie. we've seen this alloc as free multiple times,
                     // without it being used in the meantime), deallocate it.
                     if page.free_count >= ALLOC_AFTER_FREE || explicit {
-                        storage.dealloc(page.slice.storage.id);
+                        if page.slice.mapped { storage.dealloc(page.slice.storage.id); }
                         continue;
                     }
                 }

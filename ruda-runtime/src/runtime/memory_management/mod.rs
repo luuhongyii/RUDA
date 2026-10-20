@@ -11,6 +11,9 @@ pub use base::*;
 mod memory_manage;
 pub use memory_manage::*;
 mod adaptive;
+mod error_graph;
+mod taint;
+pub use error_graph::{ErrorGraph, FailureId, Skipped};
 
 use alloc::vec::Vec;
 
@@ -97,3 +100,5 @@ impl MemoryConfiguration {
         { false }
     }
 }
+mod page_guard;
+pub use page_guard::PageGuard;

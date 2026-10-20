@@ -94,7 +94,7 @@ fn local_cube<B:Backend>(parameter:Param<Tensor<B,3>>,range:Range<usize>,shared:
         assert_eq!(value.dtype(),source.dtype(),"tied expert source storage differs");assert_eq!(value.device(),source.device(),"tied expert source devices differ");
         assert_eq!(value.is_require_grad(),source.is_require_grad(),"tied expert source trainability differs");
         let (id,_,mapper)=parameter.consume();return Param::from_mapped_value(id,value,mapper);}
-    let mut local=Tensor::<B,3>::empty([count,rows,columns],(&source.device(),source.dtype()));
+    let mut local=Tensor::<B,3>::empty([count,rows,columns],(&source.device(),source.dtype())).with_autodiff_context(source.autodiff_context());
     if count!=0 {local=local.slice_assign([0..count,0..rows,0..columns],source.clone().slice([range.clone(),0..rows,0..columns]));}
     // Preserve source identity/flags while making only the owned GPU copy a new optimizer leaf.
     let local=parameter.map(|_|local.detach().set_require_grad(source.is_require_grad()));

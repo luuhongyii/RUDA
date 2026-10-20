@@ -1,5 +1,5 @@
 use crate::memory::manager::WgpuMemManager;
-use super::{poll::WgpuPoll, timings::QueryProfiler};
+use super::{poll::WgpuPoll, timings::{QueryProfiler, TimestampQuerySetBudget, TimestampSampling}};
 use crate::{WgpuResource, memory::controller::WgpuAllocController, schedule::ScheduleTask};
 use ruda_core::{
     backtrace::BackTrace,
@@ -22,15 +22,25 @@ use wgpu::ComputePipeline;
 
 #[derive(Debug)]
 enum Timings {
-    Device(QueryProfiler),
+    Unclaimed { budget: Arc<TimestampQuerySetBudget>, sampling: TimestampSampling },
+    Device(Box<QueryProfiler>),
     System(TimestampProfiler),
+}
+
+impl Timings {
+    fn system() -> Self {
+        if cfg!(target_family = "wasm") {
+            panic!("Cannot profile on web assembly without timestamp_query feature as it requires blocking.");
+        }
+        Self::System(TimestampProfiler::default())
+    }
 }
 
 #[derive(Debug)]
 pub struct WgpuStream {
     pub mem_manage: WgpuMemManager,
     pub device: wgpu::Device,
-    pub errors: Vec<ServerError>,
+    poison: super::device_poison::PoisonWatch,
     compute_pass: Option<wgpu::ComputePass<'static>>,
     timings: Timings,
     tasks_count: usize,
@@ -54,20 +64,16 @@ impl WgpuStream {
         memory_properties: MemoryDeviceProperties,
         memory_config: MemoryConfiguration,
         timing_method: TimingMethod,
+        timing_budget: Arc<TimestampQuerySetBudget>,
+        timestamp_sampling: TimestampSampling,
         tasks_max: usize,
         logger: Arc<ServerLogger>,
+        poison: super::device_poison::PoisonWatch,
     ) -> Self {
         let timings = if timing_method == TimingMethod::Device {
-            Timings::Device(QueryProfiler::new(&queue, &device))
+            Timings::Unclaimed { budget: timing_budget, sampling: timestamp_sampling }
         } else {
-            if cfg!(target_family = "wasm") {
-                // On WASM, there's not much we can do here anymore. This should be very rare however,
-                // all modern GPU's support timestamp queries.
-                panic!(
-                    "Cannot profile on web assembly without timestamp_query feature as it requires blocking."
-                );
-            }
-            Timings::System(TimestampProfiler::default())
+            Timings::system()
         };
 
         let poll = WgpuPoll::new(device.clone());
@@ -80,7 +86,7 @@ impl WgpuStream {
             mem_manage,
             compute_pass: None,
             timings,
-            errors: Vec::new(),
+            poison,
             encoder: {
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Ruda Tasks Encoder"),
@@ -104,25 +110,34 @@ impl WgpuStream {
     /// * `task` - The task to execute.
     pub fn enqueue_task(&mut self, task: ScheduleTask) {
         match task {
-            ScheduleTask::Write { data, buffer } => {
+            ScheduleTask::Write { data, buffer, destination: _destination } => {
                 // It is important to flush before writing, as the write operation is inserted
                 // into the QUEUE not the encoder. We want to make sure all outstanding work
                 // happens _before_ the write operation.
-                let _ = self
-                    .flush(StreamErrorMode {
-                        ignore: true,
-                        flush: false,
-                    })
-                    .ok();
+                if let Err(error) = self.flush(StreamErrorMode { ignore: true, flush: false }) {
+                    self.error(error);
+                    return;
+                }
                 self.write_to_buffer(&buffer, &data);
             }
             ScheduleTask::Execute {
                 pipeline,
                 count,
+                count_resource,
                 resources,
+                execution,
             } => {
+                if let Err(error) = self.poison.check() {
+                    self.error(error);
+                    return;
+                }
                 let resources = resources.into_resources(self);
-                self.register_pipeline(pipeline, resources.iter(), &count);
+                match self.register_pipeline(pipeline, resources.iter(), &count, count_resource.as_ref()) {
+                    Ok(()) => execution.complete(),
+                    Err(error) => {
+                        self.error(error);
+                    }
+                }
             }
         }
     }
@@ -130,6 +145,7 @@ impl WgpuStream {
     pub fn sync(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), ServerError>> + Send + 'static>> {
+        if let Err(error) = self.poison.check() { return Box::pin(async move { Err(error) }); }
         let error_scope = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
 
         let flush_error = self
@@ -142,6 +158,7 @@ impl WgpuStream {
         let queue = self.queue.clone();
         let error_future = error_scope.pop();
         let poll = self.poll.start_polling();
+        let poison = self.poison.clone();
 
         Box::pin(async move {
             let (sender, receiver) = async_channel::bounded::<()>(1);
@@ -151,8 +168,11 @@ impl WgpuStream {
                 core::mem::drop(poll);
             });
             let _ = receiver.recv().await;
+            poison.check()?;
 
-            if let Some(error) = error_future.await {
+            let scoped_error = error_future.await;
+            poison.check()?;
+            if let Some(error) = scoped_error {
                 return Err(ServerError::Generic {
                     reason: format!("{error}"),
                     backtrace: BackTrace::capture(),
@@ -168,6 +188,7 @@ impl WgpuStream {
 
     /// Allocates a new empty buffer using the main memory pool.
     pub fn empty(&mut self, size: u64) -> Result<ManagedMemoryHandle, IoError> {
+        self.poison.check().map_err(|error| IoError::Execution(Box::new(error)))?;
         if self.mem_manage.relocation_pending(size) {
             self.flush(StreamErrorMode { ignore: false, flush: false })
                 .map_err(|error| IoError::Execution(Box::new(error)))?;
@@ -175,9 +196,11 @@ impl WgpuStream {
         self.mem_manage.reserve(size)
     }
 
-    /// Registers a new error into the error sink.
+    pub(crate) fn check_device(&self) -> Result<(), ServerError> { self.poison.check() }
+
+    /// Invalidate active measurements; buffers, not the stream, carry ordinary failures.
     pub fn error(&mut self, error: ServerError) {
-        self.errors.push(error);
+        self.profile_error(ProfileError::Server(Box::new(error.clone())));
     }
 
     pub(crate) fn create_uniform(&mut self, data: &[u8]) -> WgpuResource {
@@ -204,9 +227,10 @@ impl WgpuStream {
         }
     }
 
-    pub fn flush(&mut self, mode: StreamErrorMode) -> Result<(), ServerError> {
+    pub fn flush(&mut self, _mode: StreamErrorMode) -> Result<(), ServerError> {
+        self.poison.check()?;
         if self.tasks_count == 0 {
-            return self.flush_errors(mode);
+            return Ok(());
         }
 
         // End the current compute pass.
@@ -239,29 +263,7 @@ impl WgpuStream {
         self.tasks_count = 0;
         self.pending_write_count = 0;
 
-        self.flush_errors(mode)
-    }
-
-    fn flush_errors(&mut self, mode: StreamErrorMode) -> Result<(), ServerError> {
-        if mode.flush {
-            let errors = self.flush_errors_queue();
-
-            if !mode.ignore && !errors.is_empty() {
-                let error = ServerError::ServerUnhealthy {
-                    errors,
-                    backtrace: BackTrace::capture(),
-                };
-                return Err(error);
-            }
-        } else if !mode.ignore && !self.errors.is_empty() {
-            let error = ServerError::ServerUnhealthy {
-                errors: self.errors.clone(),
-                backtrace: BackTrace::capture(),
-            };
-            return Err(error);
-        }
-
-        Ok(())
+        self.poison.check()
     }
 
     fn register_pipeline<'a>(
@@ -269,9 +271,10 @@ impl WgpuStream {
         pipeline: Arc<ComputePipeline>,
         resources: impl Iterator<Item = &'a WgpuResource>,
         dispatch: &RudaCount,
-    ) {
+        count_resource: Option<&WgpuResource>,
+    ) -> Result<(), ServerError> {
         if dispatch.is_empty() {
-            return;
+            return Ok(());
         }
 
         let entries = resources
@@ -290,13 +293,7 @@ impl WgpuStream {
         // be dropped before the encoder. This isn't unsafe - it's still checked at runtime.
         let pass = self.compute_pass.get_or_insert_with(|| {
             let writes = if let Timings::Device(query_time) = &mut self.timings {
-                query_time
-                    .register_profile_device(&self.device)
-                    .map(|query_set| wgpu::ComputePassTimestampWrites {
-                        query_set,
-                        beginning_of_pass_write_index: Some(0),
-                        end_of_pass_write_index: Some(1),
-                    })
+                query_time.register_profile_device(&self.device)
             } else {
                 None
             };
@@ -324,27 +321,19 @@ impl WgpuStream {
             RudaCount::Static(x, y, z) => {
                 pass.dispatch_workgroups(x, y, z);
             }
-            RudaCount::Dynamic(binding) => {
-                let res = self.mem_manage.get_resource(binding).unwrap();
+            RudaCount::Dynamic(_) => {
+                let res = count_resource.ok_or_else(|| IoError::NotFound {
+                    reason: "Missing indirect dispatch buffer".into(),
+                    backtrace: BackTrace::capture(),
+                })?;
                 if let Some(pin) = res.address_pin() { self.pending_address_pins.push(pin); }
                 pass.dispatch_workgroups_indirect(&res.buffer, res.offset);
             }
         }
         self.flush_if_needed();
+        Ok(())
     }
 
-    pub(crate) fn flush_errors_queue(&mut self) -> Vec<ServerError> {
-        let errors = core::mem::take(&mut self.errors);
-
-        if !errors.is_empty() {
-            self.profile_error(ProfileError::Unknown {
-                reason: alloc::format!("{:?}", errors),
-                backtrace: BackTrace::capture(),
-            });
-        }
-
-        errors
-    }
 }
 
 mod io;

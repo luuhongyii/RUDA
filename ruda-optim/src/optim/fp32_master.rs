@@ -168,6 +168,11 @@ impl<B: Backend, O: SimpleOptimizer<B>> SimpleOptimizer<B> for Fp32MasterOptimiz
 }
 
 impl<B: Backend, const D: usize, S: Record<B> + Clone> Record<B> for Fp32MasterState<B, D, S> {
+    fn map_parameters<M: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut M) -> Self {
+        self.master = mapper.map_tensor(self.master);
+        self.inner = self.inner.map_parameters(mapper);
+        self
+    }
     type Item<P: PrecisionSettings> = <(Tensor<B, D>, Option<S>) as Record<B>>::Item<P>;
 
     fn into_item<P: PrecisionSettings>(self) -> Self::Item<P> {

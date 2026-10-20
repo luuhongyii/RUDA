@@ -149,7 +149,7 @@ impl LoRALinearConfig {
         let device=base.packed.val().device();
         let mut a=LinearConfig::new(base.input_features,self.rank).with_bias(false).init(&device);
         let mut b=LinearConfig::new(self.rank,base.output_features).with_bias(false).with_initializer(Initializer::Zeros).init(&device);
-        a.weight=a.weight.map(|value|value.cast(adapter_dtype).detach().require_grad());b.weight=b.weight.map(|value|value.cast(adapter_dtype).detach().require_grad());
+        a.weight=a.weight.map(|value|value.cast(adapter_dtype).detach()).set_require_grad(true);b.weight=b.weight.map(|value|value.cast(adapter_dtype).detach()).set_require_grad(true);
         self.from_nf4_adapters(base,a,b,use_rslora)
     }
     /// Attach actual loaded floating adapter leaves, with no merge or base requantization.
@@ -161,7 +161,7 @@ impl LoRALinearConfig {
         assert!(adapter_a.bias.is_none() && adapter_b.bias.is_none(),"NF4 adapters must be bias-free");
         assert_eq!(a.device(),device,"NF4 adapter A device differs");assert_eq!(b.device(),device,"NF4 adapter B device differs");
         for dtype in [a.dtype(),b.dtype()] {assert!(matches!(dtype,DType::F32|DType::F16|DType::BF16),"unsupported NF4 adapter dtype");}
-        assert!(!B::ad_enabled(&device) || (a.is_require_grad() && b.is_require_grad()),"NF4 adapters must be trainable on the AD backend");
+        assert!((!a.is_autodiff() || a.is_require_grad()) && (!b.is_autodiff() || b.is_require_grad()),"NF4 adapters must be trainable on the AD backend");
         let denominator=if use_rslora {(self.rank as f64).sqrt()} else {self.rank as f64};
         Nf4LoRALinear {base,adapter_a,adapter_b,dropout:DropoutConfig::new(self.dropout).init(),scale:self.alpha/denominator}
     }

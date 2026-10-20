@@ -127,6 +127,16 @@ where
         ruprim::indexing::scatter(dim, tensor, indices, value, false)
     }
 
+    fn int_scatter(
+        dim: usize,
+        tensor: IntTensor<Self>,
+        indices: IntTensor<Self>,
+        value: IntTensor<Self>,
+        update: ruda_tensor::tensor::IndexingUpdateOp,
+    ) -> IntTensor<Self> {
+        ruprim::indexing::scatter_update(dim, tensor, indices, value, update)
+    }
+
     fn int_scatter_nd(
         data: IntTensor<Self>,
         indices: IntTensor<Self>,
@@ -146,6 +156,16 @@ where
         indices: IntTensor<Self>,
     ) -> IntTensor<Self> {
         ruprim::indexing::select(tensor, dim, indices)
+    }
+
+    fn int_select_assign(
+        tensor: IntTensor<Self>,
+        dim: usize,
+        indices: IntTensor<Self>,
+        value: IntTensor<Self>,
+        update: ruda_tensor::tensor::IndexingUpdateOp,
+    ) -> IntTensor<Self> {
+        ruprim::indexing::select_assign_update(tensor, dim, indices, value, update)
     }
 
     fn int_select_add(

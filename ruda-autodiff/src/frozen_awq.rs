@@ -32,6 +32,11 @@ impl<B: FrozenAwqOps, S: CheckpointStrategy> FrozenAwqOps for Autodiff<B, S> {
         input: FloatTensor<Self>, qweight: IntTensor<Self>, qzeros: IntTensor<Self>,
         scales: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, group_size: usize,
     ) -> Result<FloatTensor<Self>, Self::AwqError> {
+        let context = input.context::<S>().merge(scales.context::<S>()).merge(qweight.context).merge(qzeros.context).merge(bias.as_ref().map_or(ruda_tensor::AutodiffContext::Disabled, |value| value.context::<S>()));
+        let input = input.with_context::<S>(context);
+        let scales = scales.with_context::<S>(context);
+        let qweight = qweight.primitive;
+        let qzeros = qzeros.primitive;
         if scales.is_tracked() || bias.as_ref().is_some_and(|value| value.is_tracked()) {
             return Err(FrozenAwqError::TrainableBase);
         }
@@ -48,6 +53,11 @@ impl<B: FrozenAwqOps, S: CheckpointStrategy> FrozenAwqOps for Autodiff<B, S> {
         gradient: FloatTensor<Self>, qweight: IntTensor<Self>, qzeros: IntTensor<Self>,
         scales: FloatTensor<Self>, group_size: usize,
     ) -> Result<FloatTensor<Self>, Self::AwqError> {
+        let context = gradient.context::<S>().merge(scales.context::<S>()).merge(qweight.context).merge(qzeros.context);
+        let gradient = gradient.with_context::<S>(context);
+        let scales = scales.with_context::<S>(context);
+        let qweight = qweight.primitive;
+        let qzeros = qzeros.primitive;
         if scales.is_tracked() { return Err(FrozenAwqError::TrainableBase); }
         let state = (qweight.clone(), qzeros.clone(), scales.primitive.clone(), group_size, true);
         let output = B::frozen_awq_input_backward(gradient.primitive, qweight, qzeros, scales.primitive,

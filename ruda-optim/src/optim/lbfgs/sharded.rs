@@ -314,6 +314,10 @@ impl<B: Backend> LBFGSShardedState<B> {
 }
 
 impl<B: Backend> Record<B> for LBFGSShardedState<B> {
+    fn map_parameters<M: ruda_model::module::ModuleMapper<B>>(mut self, mapper: &mut M) -> Self {
+        self.state = self.state.map_parameters(mapper);
+        self
+    }
     type Item<S: PrecisionSettings> = (
         u32, u32, Vec<usize>, <LBFGSState<B> as Record<B>>::Item<S>,
     );
