@@ -14,7 +14,7 @@ def main():
     try:
         rustc=shutil.which('rustc')
         if rustc is None:raise RuntimeError('rustc unavailable; production Rust NOT executed')
-        src=ROOT/'crates/ruDNN/src/paged_attention'
+        src=ROOT/'ruDNN/src/paged_attention'
         harness=out/'harness.rs'
         def literal(path):return json.dumps(str(path))
         harness.write_text('#[derive(Debug,PartialEq,Eq)] pub struct PagedAttentionError(pub &\'static str);\n'

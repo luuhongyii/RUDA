@@ -29,8 +29,8 @@ class RunnerTests(unittest.TestCase):
         tools,commands=plans('rust-host','both',Path('/tmp/test-ruda'))
         self.assertEqual(tools,['rustc'])
         flat=' '.join(' '.join(c) for c,e in commands)
-        self.assertIn('crates/ruSOLVER/src/lib.rs',flat)
-        self.assertIn('crates/ruINTEGRATE/src/lib.rs',flat)
+        self.assertIn('ruSOLVER/src/lib.rs',flat)
+        self.assertIn('ruINTEGRATE/src/lib.rs',flat)
         self.assertNotIn('oracle.py',flat)
     def test_cuda_plan_explicitly_tests_both_compilers(self):
         _,commands=plans('cuda','both',Path('/tmp/test-ruda'))

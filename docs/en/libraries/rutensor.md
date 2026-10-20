@@ -10,10 +10,10 @@ The Cargo package is `ruTENSOR`; the Rust import name is `rutensor`. Defaults en
 
 ```toml
 [dependencies]
-rutensor = { package = "ruTENSOR", path = "../RUDA/crates/ruTENSOR" }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rutensor = { package = "ruTENSOR", path = "../RUDA/ruTENSOR" }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Contraction, reduction, and permutation
@@ -158,6 +158,6 @@ The search uses exhaustive subset dynamic programming and is exponential in the 
 
 Two-input contractions may dispatch to ruBLAS when both inputs have the same F16/BF16/F32 storage, computation is F32, and the labels describe a single shared K axis with M/N as the last two output axes. Inputs must have no diagonal labels and use Identity/Conjugate transforms; batch axes may broadcast. Other contractions retain the general kernel. A rejected matmul setup uses that kernel, but a matmul launch error is returned rather than hidden. The alpha/beta epilogue, optional C, and output descriptor are retained.
 
-See [path planning](../../../crates/ruTENSOR/src/path.rs), [matrix dispatch](../../../crates/ruTENSOR/src/matmul.rs), and [einsum plan methods](../../../crates/ruTENSOR/src/einsum.rs).
+See [path planning](../../../ruTENSOR/src/path.rs), [matrix dispatch](../../../ruTENSOR/src/matmul.rs), and [einsum plan methods](../../../ruTENSOR/src/einsum.rs).
 
 ruTENSOR exposes a Ruda Rust API, not the NVIDIA cuTENSOR C ABI. The device must support the selected storage and compute types.

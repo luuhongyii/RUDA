@@ -10,127 +10,127 @@
 
 | API | Source |
 | --- | --- |
-| `ruda_torch.get_math_backend()` | [Source](../../crates/ruda-torch/python/ruda_torch/math_backend.py) |
-| `ruda_torch.set_math_backend(name)` | [Source](../../crates/ruda-torch/python/ruda_torch/math_backend.py) |
-| `ruda_torch.math_backend(name)` | [Source](../../crates/ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.get_math_backend()` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.set_math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
+| `ruda_torch.math_backend(name)` | [Source](../../ruda-torch/python/ruda_torch/math_backend.py) |
 
 ## `__init__`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.is_available()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L37) |
-| `ruda_torch.is_initialized()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L40) |
-| `ruda_torch.device_count()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L48) |
-| `ruda_torch.current_device()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L51) |
-| `ruda_torch.get_amp_supported_dtype()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L57) |
-| `ruda_torch.synchronize(device=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L61) |
-| `ruda_torch.manual_seed_all(seed)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L85) |
-| `ruda_torch.manual_seed(seed)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L88) |
-| `ruda_torch.get_rng_state(device=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L91) |
-| `ruda_torch.set_rng_state(state, device=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L94) |
-| `ruda_torch.get_rng_state_all()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L97) |
-| `ruda_torch.set_rng_state_all(states)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L100) |
-| `ruda_torch.device(index=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L106) |
-| `ruda_torch.execution_stats()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/__init__.py#L114) |
+| `ruda_torch.is_available()` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L37) |
+| `ruda_torch.is_initialized()` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L40) |
+| `ruda_torch.device_count()` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L48) |
+| `ruda_torch.current_device()` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L51) |
+| `ruda_torch.get_amp_supported_dtype()` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L57) |
+| `ruda_torch.synchronize(device=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L61) |
+| `ruda_torch.manual_seed_all(seed)` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L85) |
+| `ruda_torch.manual_seed(seed)` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L88) |
+| `ruda_torch.get_rng_state(device=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L91) |
+| `ruda_torch.set_rng_state(state, device=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L94) |
+| `ruda_torch.get_rng_state_all()` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L97) |
+| `ruda_torch.set_rng_state_all(states)` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L100) |
+| `ruda_torch.device(index=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L106) |
+| `ruda_torch.execution_stats()` | [Исходный код](../../ruda-torch/python/ruda_torch/__init__.py#L114) |
 
 ## `random`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.Generator` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L11) |
-| `ruda_torch.default_generator` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L69) |
-| `ruda_torch.uniform_(tensor, from_=0.0, to=1.0, *, generator=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L78) |
-| `ruda_torch.normal_(tensor, mean=0.0, std=1.0, *, generator=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L84) |
-| `ruda_torch.bernoulli_(tensor, p=0.5, *, generator=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L90) |
-| `ruda_torch.register_random_ops()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L111) |
-| `ruda_torch.random.native_dropout(input, p, train=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L96) |
+| `ruda_torch.Generator` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L11) |
+| `ruda_torch.default_generator` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L69) |
+| `ruda_torch.uniform_(tensor, from_=0.0, to=1.0, *, generator=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L78) |
+| `ruda_torch.normal_(tensor, mean=0.0, std=1.0, *, generator=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L84) |
+| `ruda_torch.bernoulli_(tensor, p=0.5, *, generator=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L90) |
+| `ruda_torch.register_random_ops()` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L111) |
+| `ruda_torch.random.native_dropout(input, p, train=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L96) |
 
 ### `Generator`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `Generator(seed=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L17) |
-| `Generator.manual_seed(seed)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L21) |
-| `Generator.initial_seed()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L28) |
-| `Generator.get_state()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L31) |
-| `Generator.set_state(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L35) |
-| `Generator.fill_(tensor, distribution, first, second)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py#L45) |
+| `Generator(seed=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L17) |
+| `Generator.manual_seed(seed)` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L21) |
+| `Generator.initial_seed()` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L28) |
+| `Generator.get_state()` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L31) |
+| `Generator.set_state(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L35) |
+| `Generator.fill_(tensor, distribution, first, second)` | [Исходный код](../../ruda-torch/python/ruda_torch/random.py#L45) |
 
 ## `_streams`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.Stream` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L10) |
-| `ruda_torch.Event` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L27) |
-| `ruda_torch.stream(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L66) |
-| `ruda_torch.current_stream(device=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L56) |
-| `ruda_torch.default_stream(device=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L59) |
-| `ruda_torch.record_stream(tensor, value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L74) |
+| `ruda_torch.Stream` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L10) |
+| `ruda_torch.Event` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L27) |
+| `ruda_torch.stream(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L66) |
+| `ruda_torch.current_stream(device=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L56) |
+| `ruda_torch.default_stream(device=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L59) |
+| `ruda_torch.record_stream(tensor, value)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L74) |
 
 ### `Stream`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `Stream(*, priority=0, _id=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L11) |
-| `Stream.query()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L15) |
-| `Stream.synchronize()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L17) |
-| `Stream.wait_event(event)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L19) |
-| `Stream.wait_stream(other)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L21) |
-| `Stream.record_event(event=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L23) |
+| `Stream(*, priority=0, _id=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L11) |
+| `Stream.query()` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L15) |
+| `Stream.synchronize()` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L17) |
+| `Stream.wait_event(event)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L19) |
+| `Stream.wait_stream(other)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L21) |
+| `Stream.record_event(event=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L23) |
 
 ### `Event`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `Event(*, enable_timing=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L28) |
-| `Event.record(value=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L30) |
-| `Event.wait(value=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L34) |
-| `Event.query()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L36) |
-| `Event.synchronize()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L38) |
-| `Event.elapsed_time(other)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L40) |
-| `Event.close()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L45) |
-| `Event.__del__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_streams.py#L48) |
+| `Event(*, enable_timing=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L28) |
+| `Event.record(value=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L30) |
+| `Event.wait(value=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L34) |
+| `Event.query()` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L36) |
+| `Event.synchronize()` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L38) |
+| `Event.elapsed_time(other)` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L40) |
+| `Event.close()` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L45) |
+| `Event.__del__()` | [Исходный код](../../ruda-torch/python/ruda_torch/_streams.py#L48) |
 
 ## `_paged`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.PagedAttentionPlan` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_paged.py#L52) |
+| `ruda_torch.PagedAttentionPlan` | [Исходный код](../../ruda-torch/python/ruda_torch/_paged.py#L52) |
 
 ### `PagedAttentionPlan`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PagedAttentionPlan(*, page_size, num_pages, block_tables, kv_lengths, sequence_ids, positions, splits=1, backward_strategy='atomic')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_paged.py#L53) |
-| `PagedAttentionPlan.backward_strategy` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_paged.py#L84) |
-| `PagedAttentionPlan.splits` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_paged.py#L88) |
-| `PagedAttentionPlan.workspace_bytes(query_heads, value_dim)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_paged.py#L91) |
-| `PagedAttentionPlan.attention(q, k, v, *, scale, causal=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_paged.py#L113) |
-| `PagedAttentionPlan.mla(absorbed_query, position_query, latent_cache, position_cache, *, scale, causal=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_paged.py#L132) |
+| `PagedAttentionPlan(*, page_size, num_pages, block_tables, kv_lengths, sequence_ids, positions, splits=1, backward_strategy='atomic')` | [Исходный код](../../ruda-torch/python/ruda_torch/_paged.py#L53) |
+| `PagedAttentionPlan.backward_strategy` | [Исходный код](../../ruda-torch/python/ruda_torch/_paged.py#L84) |
+| `PagedAttentionPlan.splits` | [Исходный код](../../ruda-torch/python/ruda_torch/_paged.py#L88) |
+| `PagedAttentionPlan.workspace_bytes(query_heads, value_dim)` | [Исходный код](../../ruda-torch/python/ruda_torch/_paged.py#L91) |
+| `PagedAttentionPlan.attention(q, k, v, *, scale, causal=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/_paged.py#L113) |
+| `PagedAttentionPlan.mla(absorbed_query, position_query, latent_cache, position_cache, *, scale, causal=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/_paged.py#L132) |
 
 ## `_graph`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.StaticGraph` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L10) |
-| `ruda_torch.GraphOp` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py#L17) |
+| `ruda_torch.StaticGraph` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L10) |
+| `ruda_torch.GraphOp` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph_spec.py#L17) |
 
 ### `StaticGraph`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `StaticGraph.from_model(model, **options)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L37) |
-| `StaticGraph(inputs, nodes, *, outputs=None, infer_dependencies=False, track_completion=False, optimize=False, reuse_workspace=False, training=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L47) |
-| `StaticGraph.replay()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L125) |
-| `StaticGraph.run_eager()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L129) |
-| `StaticGraph.synchronize()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L137) |
-| `StaticGraph.query()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L138) |
-| `StaticGraph.query_completion()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L139) |
-| `StaticGraph.wait_completion()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L140) |
-| `StaticGraph.info` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L143) |
-| `StaticGraph.close()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L158) |
-| `StaticGraph.__enter__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L164) |
-| `StaticGraph.__exit__(*_)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph.py#L165) |
+| `StaticGraph.from_model(model, **options)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L37) |
+| `StaticGraph(inputs, nodes, *, outputs=None, infer_dependencies=False, track_completion=False, optimize=False, reuse_workspace=False, training=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L47) |
+| `StaticGraph.replay()` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L125) |
+| `StaticGraph.run_eager()` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L129) |
+| `StaticGraph.synchronize()` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L137) |
+| `StaticGraph.query()` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L138) |
+| `StaticGraph.query_completion()` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L139) |
+| `StaticGraph.wait_completion()` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L140) |
+| `StaticGraph.info` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L143) |
+| `StaticGraph.close()` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L158) |
+| `StaticGraph.__enter__()` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L164) |
+| `StaticGraph.__exit__(*_)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph.py#L165) |
 
 ### `GraphOp`
 
@@ -138,108 +138,108 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `GraphOp.add(output, left, right, *, alpha=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py#L34) |
-| `GraphOp.mul(output, left, right)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py#L36) |
-| `GraphOp.silu(output, value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py#L38) |
-| `GraphOp.silu_mul(output, gate, up)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py#L40) |
-| `GraphOp.copy(output, value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py#L42) |
-| `GraphOp.rms_norm(output, value, weight=None, *, eps=1e-05)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py#L44) |
+| `GraphOp.add(output, left, right, *, alpha=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph_spec.py#L34) |
+| `GraphOp.mul(output, left, right)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph_spec.py#L36) |
+| `GraphOp.silu(output, value)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph_spec.py#L38) |
+| `GraphOp.silu_mul(output, gate, up)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph_spec.py#L40) |
+| `GraphOp.copy(output, value)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph_spec.py#L42) |
+| `GraphOp.rms_norm(output, value, weight=None, *, eps=1e-05)` | [Исходный код](../../ruda-torch/python/ruda_torch/_graph_spec.py#L44) |
 
 ## `training`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.LayerNorm` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L141) |
-| <code>ruda_torch.layer_norm(x: torch.Tensor, weight: torch.Tensor &#124; None=None, bias: torch.Tensor &#124; None=None, *, eps: float=1e-05)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L127) |
-| `ruda_torch.RMSNorm` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L82) |
-| <code>ruda_torch.rms_norm(x: torch.Tensor, weight: torch.Tensor &#124; None=None, *, eps: float &#124; None=None)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L65) |
-| `ruda_torch.silu_mul(gate: torch.Tensor, up: torch.Tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L183) |
-| `ruda_torch.AdamW` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L207) |
-| `ruda_torch.GradScaler` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L521) |
+| `ruda_torch.LayerNorm` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L141) |
+| <code>ruda_torch.layer_norm(x: torch.Tensor, weight: torch.Tensor &#124; None=None, bias: torch.Tensor &#124; None=None, *, eps: float=1e-05)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L127) |
+| `ruda_torch.RMSNorm` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L82) |
+| <code>ruda_torch.rms_norm(x: torch.Tensor, weight: torch.Tensor &#124; None=None, *, eps: float &#124; None=None)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L65) |
+| `ruda_torch.silu_mul(gate: torch.Tensor, up: torch.Tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L183) |
+| `ruda_torch.AdamW` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L207) |
+| `ruda_torch.GradScaler` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L521) |
 
 ### `LayerNorm`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `LayerNorm(width: int, *, eps=1e-05, elementwise_affine=True, bias=True, device=None, dtype=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L143) |
-| `LayerNorm.forward(x)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L160) |
+| `LayerNorm(width: int, *, eps=1e-05, elementwise_affine=True, bias=True, device=None, dtype=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L143) |
+| `LayerNorm.forward(x)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L160) |
 
 ### `RMSNorm`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `RMSNorm(width: int, *, eps=1e-05, elementwise_affine=True, device=None, dtype=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L84) |
-| `RMSNorm.forward(x)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L95) |
+| `RMSNorm(width: int, *, eps=1e-05, elementwise_affine=True, device=None, dtype=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L84) |
+| `RMSNorm.forward(x)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L95) |
 
 ### `AdamW`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01, *, fused_step=False, max_grad_norm=None, hierarchical_stats=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L224) |
-| `AdamW.step(closure=None, *, loss_scale=1.0, global_grad_norm=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L277) |
-| `AdamW.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L455) |
-| `AdamW.load_state_dict(state_dict)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L466) |
+| `AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01, *, fused_step=False, max_grad_norm=None, hierarchical_stats=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L224) |
+| `AdamW.step(closure=None, *, loss_scale=1.0, global_grad_norm=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L277) |
+| `AdamW.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L455) |
+| `AdamW.load_state_dict(state_dict)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L466) |
 
 ### `GradScaler`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `GradScaler(init_scale=65536.0, growth_factor=2.0, backoff_factor=0.5, growth_interval=2000, min_scale=2.0 ** (-24), max_scale=2.0 ** 24)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L530) |
-| `GradScaler.scale(loss: torch.Tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L547) |
-| `GradScaler.begin_backward()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L555) |
-| `GradScaler.record_step(skipped)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L561) |
-| `GradScaler.step(optimizer: AdamW, *args, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L568) |
-| `GradScaler.update()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L594) |
-| `GradScaler.get_scale()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L607) |
-| `GradScaler.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L610) |
-| `GradScaler.load_state_dict(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training.py#L617) |
+| `GradScaler(init_scale=65536.0, growth_factor=2.0, backoff_factor=0.5, growth_interval=2000, min_scale=2.0 ** (-24), max_scale=2.0 ** 24)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L530) |
+| `GradScaler.scale(loss: torch.Tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L547) |
+| `GradScaler.begin_backward()` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L555) |
+| `GradScaler.record_step(skipped)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L561) |
+| `GradScaler.step(optimizer: AdamW, *args, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L568) |
+| `GradScaler.update()` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L594) |
+| `GradScaler.get_scale()` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L607) |
+| `GradScaler.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L610) |
+| `GradScaler.load_state_dict(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/training.py#L617) |
 
 ## `_router`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.selected_router_weights(logits: torch.Tensor, indices: torch.Tensor, *, scoring: str='softmax', renormalize: bool=False, scale: float=1.0) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_router.py#L49) |
+| `ruda_torch.selected_router_weights(logits: torch.Tensor, indices: torch.Tensor, *, scoring: str='softmax', renormalize: bool=False, scale: float=1.0) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/_router.py#L49) |
 
 ## `compiler`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.compile(model=None, *, capture='aot', native='auto', device_type='ruda', fullgraph=False, dynamic=None, min_native_ops=2, cache_size=4, decompositions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L365) |
-| `ruda_torch.make_backend(*, native='auto', device_type='ruda', min_native_ops=2, cache_size=4, decompositions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L232) |
-| `ruda_torch.CompiledModel` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L242) |
-| `ruda_torch.CompiledFunction` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L316) |
-| `ruda_torch.NativeCoverageError` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/_compile_native.py#L19) |
-| `ruda_torch.GraphExecutionError` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L23) |
-| `ruda_torch.compiler.CompileOptions` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L28) |
-| `ruda_torch.compiler.RudaBackend` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L155) |
+| `ruda_torch.compile(model=None, *, capture='aot', native='auto', device_type='ruda', fullgraph=False, dynamic=None, min_native_ops=2, cache_size=4, decompositions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L365) |
+| `ruda_torch.make_backend(*, native='auto', device_type='ruda', min_native_ops=2, cache_size=4, decompositions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L232) |
+| `ruda_torch.CompiledModel` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L242) |
+| `ruda_torch.CompiledFunction` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L316) |
+| `ruda_torch.NativeCoverageError` | [Исходный код](../../ruda-torch/python/ruda_torch/_compile_native.py#L19) |
+| `ruda_torch.GraphExecutionError` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L23) |
+| `ruda_torch.compiler.CompileOptions` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L28) |
+| `ruda_torch.compiler.RudaBackend` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L155) |
 
 ### `CompiledModel`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CompiledModel(model, backend)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L250) |
-| `CompiledModel.original` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L264) |
-| `CompiledModel.info` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L268) |
-| `CompiledModel.forward(*args, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L271) |
-| `CompiledModel.state_dict(*args, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L280) |
-| `CompiledModel.load_state_dict(state_dict, strict=True, assign=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L289) |
-| `CompiledModel.named_parameters(prefix='', recurse=True, remove_duplicate=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L292) |
-| `CompiledModel.named_buffers(prefix='', recurse=True, remove_duplicate=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L295) |
-| `CompiledModel.__getattr__(name)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L298) |
-| `CompiledModel.close()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L305) |
-| `CompiledModel.__enter__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L308) |
-| `CompiledModel.__exit__(*_)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L312) |
+| `CompiledModel(model, backend)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L250) |
+| `CompiledModel.original` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L264) |
+| `CompiledModel.info` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L268) |
+| `CompiledModel.forward(*args, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L271) |
+| `CompiledModel.state_dict(*args, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L280) |
+| `CompiledModel.load_state_dict(state_dict, strict=True, assign=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L289) |
+| `CompiledModel.named_parameters(prefix='', recurse=True, remove_duplicate=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L292) |
+| `CompiledModel.named_buffers(prefix='', recurse=True, remove_duplicate=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L295) |
+| `CompiledModel.__getattr__(name)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L298) |
+| `CompiledModel.close()` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L305) |
+| `CompiledModel.__enter__()` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L308) |
+| `CompiledModel.__exit__(*_)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L312) |
 
 ### `CompiledFunction`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CompiledFunction(function, backend)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L318) |
-| `CompiledFunction.__call__(*args, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L324) |
-| `CompiledFunction.info` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L333) |
-| `CompiledFunction.close()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L336) |
-| `CompiledFunction.__enter__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L339) |
-| `CompiledFunction.__exit__(*_)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L343) |
+| `CompiledFunction(function, backend)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L318) |
+| `CompiledFunction.__call__(*args, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L324) |
+| `CompiledFunction.info` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L333) |
+| `CompiledFunction.close()` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L336) |
+| `CompiledFunction.__enter__()` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L339) |
+| `CompiledFunction.__exit__(*_)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L343) |
 
 ### `NativeCoverageError`
 
@@ -251,68 +251,68 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CompileOptions.__post_init__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L37) |
+| `CompileOptions.__post_init__()` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L37) |
 
 ### `RudaBackend`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `RudaBackend(options=None, *, decompositions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L162) |
-| `RudaBackend.info` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L172) |
-| `RudaBackend.__call__(gm, example_inputs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L202) |
-| `RudaBackend.close()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L221) |
-| `RudaBackend.__enter__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L224) |
-| `RudaBackend.__exit__(*_)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/compiler.py#L228) |
+| `RudaBackend(options=None, *, decompositions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L162) |
+| `RudaBackend.info` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L172) |
+| `RudaBackend.__call__(gm, example_inputs)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L202) |
+| `RudaBackend.close()` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L221) |
+| `RudaBackend.__enter__()` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L224) |
+| `RudaBackend.__exit__(*_)` | [Исходный код](../../ruda-torch/python/ruda_torch/compiler.py#L228) |
 
 ## `quantization`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.LearnedFakeQuantize` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/quantization.py#L84) |
-| <code>ruda_torch.learned_fake_quantize(x: Tensor, scales: Tensor, *, bits: int=4, block_shape: Sequence[int] &#124; None=None, symmetric: bool=True) -&gt; Tensor</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/quantization.py#L38) |
+| `ruda_torch.LearnedFakeQuantize` | [Исходный код](../../ruda-torch/python/ruda_torch/quantization.py#L84) |
+| <code>ruda_torch.learned_fake_quantize(x: Tensor, scales: Tensor, *, bits: int=4, block_shape: Sequence[int] &#124; None=None, symmetric: bool=True) -&gt; Tensor</code> | [Исходный код](../../ruda-torch/python/ruda_torch/quantization.py#L38) |
 
 ### `LearnedFakeQuantize`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| <code>LearnedFakeQuantize(initial_scales: Tensor, *, bits: int=4, block_shape: Sequence[int] &#124; None=None, symmetric: bool=True)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/quantization.py#L90) |
-| `LearnedFakeQuantize.forward(x: Tensor) -> Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/quantization.py#L104) |
+| <code>LearnedFakeQuantize(initial_scales: Tensor, *, bits: int=4, block_shape: Sequence[int] &#124; None=None, symmetric: bool=True)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/quantization.py#L90) |
+| `LearnedFakeQuantize.forward(x: Tensor) -> Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/quantization.py#L104) |
 
 ## `mhc`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.MHC` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L44) |
-| `ruda_torch.MHCResidual` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L129) |
-| `ruda_torch.MHCSequential` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L149) |
-| `ruda_torch.MHCCoefficients` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L19) |
-| `ruda_torch.sinkhorn(logits: torch.Tensor, iterations: int=20) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L25) |
+| `ruda_torch.MHC` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L44) |
+| `ruda_torch.MHCResidual` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L129) |
+| `ruda_torch.MHCSequential` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L149) |
+| `ruda_torch.MHCCoefficients` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L19) |
+| `ruda_torch.sinkhorn(logits: torch.Tensor, iterations: int=20) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L25) |
 
 ### `MHC`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `MHC(width: int, streams: int=4, *, sinkhorn_iterations: int=20, eps: float=1e-06, gate_init: float=0.01, device=None, dtype=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L51) |
-| `MHC.expand(x: torch.Tensor) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L75) |
-| `MHC.reduce(x: torch.Tensor) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L80) |
-| `MHC.coefficients(x: torch.Tensor) -> MHCCoefficients` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L91) |
-| `MHC.pre(x: torch.Tensor) -> tuple[torch.Tensor, MHCCoefficients]` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L104) |
-| `MHC.post(x: torch.Tensor, branch_output: torch.Tensor, coefficients: MHCCoefficients) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L110) |
-| `MHC.forward(x: torch.Tensor, branch: nn.Module, *args, **kwargs) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L124) |
+| `MHC(width: int, streams: int=4, *, sinkhorn_iterations: int=20, eps: float=1e-06, gate_init: float=0.01, device=None, dtype=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L51) |
+| `MHC.expand(x: torch.Tensor) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L75) |
+| `MHC.reduce(x: torch.Tensor) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L80) |
+| `MHC.coefficients(x: torch.Tensor) -> MHCCoefficients` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L91) |
+| `MHC.pre(x: torch.Tensor) -> tuple[torch.Tensor, MHCCoefficients]` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L104) |
+| `MHC.post(x: torch.Tensor, branch_output: torch.Tensor, coefficients: MHCCoefficients) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L110) |
+| `MHC.forward(x: torch.Tensor, branch: nn.Module, *args, **kwargs) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L124) |
 
 ### `MHCResidual`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `MHCResidual(branch: nn.Module, width: int, streams: int=4, *, checkpoint_branch: bool=False, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L131) |
-| `MHCResidual.forward(x: torch.Tensor, *args, **kwargs) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L140) |
+| `MHCResidual(branch: nn.Module, width: int, streams: int=4, *, checkpoint_branch: bool=False, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L131) |
+| `MHCResidual.forward(x: torch.Tensor, *args, **kwargs) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L140) |
 
 ### `MHCSequential`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `MHCSequential(width: int, branches, streams: int=4, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L151) |
-| `MHCSequential.forward(x: torch.Tensor) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/mhc.py#L159) |
+| `MHCSequential(width: int, branches, streams: int=4, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L151) |
+| `MHCSequential.forward(x: torch.Tensor) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/mhc.py#L159) |
 
 ### `MHCCoefficients`
 
@@ -322,83 +322,83 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.LightningIndexer` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L114) |
-| `ruda_torch.DSAIndexer` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L114) |
-| <code>ruda_torch.indexer_kl_loss(scores: torch.Tensor, teacher: torch.Tensor, valid: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L35) |
-| `ruda_torch.LearnedKVCompressor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L294) |
-| `ruda_torch.CompressedSparseAttention` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L627) |
-| `ruda_torch.HeavilyCompressedAttention` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L633) |
-| `ruda_torch.CSA` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L627) |
-| `ruda_torch.HCA` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L633) |
-| `ruda_torch.AttentionOutput` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L24) |
-| `ruda_torch.IndexerOutput` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L29) |
-| `ruda_torch.CompressedAttentionCache` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L397) |
-| `ruda_torch.CompressionState` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L283) |
-| `ruda_torch.RotaryEmbedding` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L69) |
+| `ruda_torch.LightningIndexer` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L114) |
+| `ruda_torch.DSAIndexer` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L114) |
+| <code>ruda_torch.indexer_kl_loss(scores: torch.Tensor, teacher: torch.Tensor, valid: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L35) |
+| `ruda_torch.LearnedKVCompressor` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L294) |
+| `ruda_torch.CompressedSparseAttention` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L627) |
+| `ruda_torch.HeavilyCompressedAttention` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L633) |
+| `ruda_torch.CSA` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L627) |
+| `ruda_torch.HCA` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L633) |
+| `ruda_torch.AttentionOutput` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L24) |
+| `ruda_torch.IndexerOutput` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L29) |
+| `ruda_torch.CompressedAttentionCache` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L397) |
+| `ruda_torch.CompressionState` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L283) |
+| `ruda_torch.RotaryEmbedding` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L69) |
 
 ### `LightningIndexer`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| <code>LightningIndexer(width: int, num_heads: int=4, head_dim: int=16, *, query_dim: int &#124; None=None, topk: int=32, query_chunk_size: int=32, key_chunk_size: int=128, external_keys: bool=False, detach_inputs: bool=True, rope_dim: int=0, eps: float=1e-06, device=None, dtype=None)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L124) |
-| <code>LightningIndexer.project_keys(x: torch.Tensor, pos: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L149) |
-| `LightningIndexer.scores(x, keys, *, query_latent=None, query_positions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L185) |
-| `LightningIndexer.selected_scores(x, keys, indices, *, query_latent=None, query_positions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L191) |
-| `LightningIndexer.select(x, keys, *, allowed=None, query_latent=None, query_positions=None, key_valid=None, query_valid=None, key_end_positions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L198) |
-| `LightningIndexer.forward(x, key_states=None, *, prepared_keys=None, allowed=None, query_latent=None, query_positions=None, causal=True, key_end_positions=None, key_valid=None, query_valid=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L248) |
-| `LightningIndexer.distillation_loss(x, prepared_keys, teacher, *, allowed=None, indices=None, query_latent=None, query_positions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L269) |
+| <code>LightningIndexer(width: int, num_heads: int=4, head_dim: int=16, *, query_dim: int &#124; None=None, topk: int=32, query_chunk_size: int=32, key_chunk_size: int=128, external_keys: bool=False, detach_inputs: bool=True, rope_dim: int=0, eps: float=1e-06, device=None, dtype=None)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L124) |
+| <code>LightningIndexer.project_keys(x: torch.Tensor, pos: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L149) |
+| `LightningIndexer.scores(x, keys, *, query_latent=None, query_positions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L185) |
+| `LightningIndexer.selected_scores(x, keys, indices, *, query_latent=None, query_positions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L191) |
+| `LightningIndexer.select(x, keys, *, allowed=None, query_latent=None, query_positions=None, key_valid=None, query_valid=None, key_end_positions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L198) |
+| `LightningIndexer.forward(x, key_states=None, *, prepared_keys=None, allowed=None, query_latent=None, query_positions=None, causal=True, key_end_positions=None, key_valid=None, query_valid=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L248) |
+| `LightningIndexer.distillation_loss(x, prepared_keys, teacher, *, allowed=None, indices=None, query_latent=None, query_positions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L269) |
 
 ### `DSAIndexer`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| <code>DSAIndexer(width: int, num_heads: int=4, head_dim: int=16, *, query_dim: int &#124; None=None, topk: int=32, query_chunk_size: int=32, key_chunk_size: int=128, external_keys: bool=False, detach_inputs: bool=True, rope_dim: int=0, eps: float=1e-06, device=None, dtype=None)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L124) |
-| <code>DSAIndexer.project_keys(x: torch.Tensor, pos: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L149) |
-| `DSAIndexer.scores(x, keys, *, query_latent=None, query_positions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L185) |
-| `DSAIndexer.selected_scores(x, keys, indices, *, query_latent=None, query_positions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L191) |
-| `DSAIndexer.select(x, keys, *, allowed=None, query_latent=None, query_positions=None, key_valid=None, query_valid=None, key_end_positions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L198) |
-| `DSAIndexer.forward(x, key_states=None, *, prepared_keys=None, allowed=None, query_latent=None, query_positions=None, causal=True, key_end_positions=None, key_valid=None, query_valid=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L248) |
-| `DSAIndexer.distillation_loss(x, prepared_keys, teacher, *, allowed=None, indices=None, query_latent=None, query_positions=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L269) |
+| <code>DSAIndexer(width: int, num_heads: int=4, head_dim: int=16, *, query_dim: int &#124; None=None, topk: int=32, query_chunk_size: int=32, key_chunk_size: int=128, external_keys: bool=False, detach_inputs: bool=True, rope_dim: int=0, eps: float=1e-06, device=None, dtype=None)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L124) |
+| <code>DSAIndexer.project_keys(x: torch.Tensor, pos: torch.Tensor &#124; None=None) -&gt; torch.Tensor</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L149) |
+| `DSAIndexer.scores(x, keys, *, query_latent=None, query_positions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L185) |
+| `DSAIndexer.selected_scores(x, keys, indices, *, query_latent=None, query_positions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L191) |
+| `DSAIndexer.select(x, keys, *, allowed=None, query_latent=None, query_positions=None, key_valid=None, query_valid=None, key_end_positions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L198) |
+| `DSAIndexer.forward(x, key_states=None, *, prepared_keys=None, allowed=None, query_latent=None, query_positions=None, causal=True, key_end_positions=None, key_valid=None, query_valid=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L248) |
+| `DSAIndexer.distillation_loss(x, prepared_keys, teacher, *, allowed=None, indices=None, query_latent=None, query_positions=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L269) |
 
 ### `LearnedKVCompressor`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `LearnedKVCompressor(width: int, head_dim: int, ratio: int, *, overlap=False, eps=1e-06, device=None, dtype=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L301) |
-| `LearnedKVCompressor.forward(x, valid_mask=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L351) |
-| <code>LearnedKVCompressor.append(x, valid_mask=None, state: CompressionState &#124; None=None)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L359) |
+| `LearnedKVCompressor(width: int, head_dim: int, ratio: int, *, overlap=False, eps=1e-06, device=None, dtype=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L301) |
+| `LearnedKVCompressor.forward(x, valid_mask=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L351) |
+| <code>LearnedKVCompressor.append(x, valid_mask=None, state: CompressionState &#124; None=None)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L359) |
 
 ### `CompressedSparseAttention`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CompressedSparseAttention(width: int, num_heads: int, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L629) |
-| `CompressedSparseAttention.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
-| <code>CompressedSparseAttention.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
+| `CompressedSparseAttention(width: int, num_heads: int, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L629) |
+| `CompressedSparseAttention.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
+| <code>CompressedSparseAttention.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
 
 ### `HeavilyCompressedAttention`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `HeavilyCompressedAttention(width: int, num_heads: int, *, compress_ratio=128, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L635) |
-| `HeavilyCompressedAttention.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
-| <code>HeavilyCompressedAttention.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
+| `HeavilyCompressedAttention(width: int, num_heads: int, *, compress_ratio=128, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L635) |
+| `HeavilyCompressedAttention.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
+| <code>HeavilyCompressedAttention.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
 
 ### `CSA`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CSA(width: int, num_heads: int, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L629) |
-| `CSA.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
-| <code>CSA.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
+| `CSA(width: int, num_heads: int, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L629) |
+| `CSA.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
+| <code>CSA.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
 
 ### `HCA`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `HCA(width: int, num_heads: int, *, compress_ratio=128, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L635) |
-| `HCA.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
-| <code>HCA.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
+| `HCA(width: int, num_heads: int, *, compress_ratio=128, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L635) |
+| `HCA.forward(x, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L560) |
+| <code>HCA.forward_cached(x, cache: CompressedAttentionCache &#124; None=None, *, valid_mask=None)</code> | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L583) |
 
 ### `AttentionOutput`
 
@@ -414,8 +414,8 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CompressedAttentionCache.reorder(batch_indices: torch.Tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L409) |
-| `CompressedAttentionCache.tensor_bytes` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L420) |
+| `CompressedAttentionCache.reorder(batch_indices: torch.Tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L409) |
+| `CompressedAttentionCache.tensor_bytes` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L420) |
 
 ### `CompressionState`
 
@@ -423,80 +423,80 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CompressionState.reorder(batch_indices: torch.Tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L289) |
+| `CompressionState.reorder(batch_indices: torch.Tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L289) |
 
 ### `RotaryEmbedding`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `RotaryEmbedding(rope_dim: int, base: float=10000.0, *, device=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L75) |
-| `RotaryEmbedding.forward(x: torch.Tensor, pos: torch.Tensor, *, inverse: bool=False) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py#L93) |
+| `RotaryEmbedding(rope_dim: int, base: float=10000.0, *, device=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L75) |
+| `RotaryEmbedding.forward(x: torch.Tensor, pos: torch.Tensor, *, inverse: bool=False) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/sparse_attention.py#L93) |
 
 ## `optim`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.Muon` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L144) |
-| `ruda_torch.MuonAdamW` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L340) |
-| `ruda_torch.muon_orthogonalize(gradient: torch.Tensor, *, ns_steps=5, coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, stable_normalization=True) -> torch.Tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L37) |
+| `ruda_torch.Muon` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L144) |
+| `ruda_torch.MuonAdamW` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L340) |
+| `ruda_torch.muon_orthogonalize(gradient: torch.Tensor, *, ns_steps=5, coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, stable_normalization=True) -> torch.Tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L37) |
 
 ### `Muon`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `Muon(params, lr=0.02, *, momentum=0.95, weight_decay=0.0, nesterov=True, momentum_mode='sgd', dampening=0.0, ns_steps=5, ns_coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, adjust_lr='original', matrix_layout='as_stored', stable_normalization=True, flatten=False, max_grad_norm=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L155) |
-| `Muon.add_param_group(param_group)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L172) |
-| `Muon.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L212) |
-| `Muon.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L302) |
-| `Muon.load_state_dict(state_dict)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L307) |
+| `Muon(params, lr=0.02, *, momentum=0.95, weight_decay=0.0, nesterov=True, momentum_mode='sgd', dampening=0.0, ns_steps=5, ns_coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, adjust_lr='original', matrix_layout='as_stored', stable_normalization=True, flatten=False, max_grad_norm=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L155) |
+| `Muon.add_param_group(param_group)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L172) |
+| `Muon.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L212) |
+| `Muon.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L302) |
+| `Muon.load_state_dict(state_dict)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L307) |
 
 ### `MuonAdamW`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `MuonAdamW(param_groups, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L342) |
-| `MuonAdamW.add_param_group(param_group)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L172) |
-| `MuonAdamW.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L212) |
-| `MuonAdamW.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L302) |
-| `MuonAdamW.load_state_dict(state_dict)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L307) |
-| `MuonAdamW.from_model(model: nn.Module, *, muon_modules, adamw_modules=(), lr=0.02, adamw_lr=0.001, weight_decay=0.0, betas=(0.9, 0.999), **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/optim.py#L349) |
+| `MuonAdamW(param_groups, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L342) |
+| `MuonAdamW.add_param_group(param_group)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L172) |
+| `MuonAdamW.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L212) |
+| `MuonAdamW.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L302) |
+| `MuonAdamW.load_state_dict(state_dict)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L307) |
+| `MuonAdamW.from_model(model: nn.Module, *, muon_modules, adamw_modules=(), lr=0.02, adamw_lr=0.001, weight_decay=0.0, betas=(0.9, 0.999), **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/optim.py#L349) |
 
 ## `hybrid_model`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.MHCTransformerBlock` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L66) |
-| `ruda_torch.HybridAttentionLanguageModel` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L121) |
-| `ruda_torch.HybridAttentionBackbone` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L204) |
-| `ruda_torch.HybridAttentionCache` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L28) |
-| `ruda_torch.next_token_loss(logits: torch.Tensor, tokens: torch.Tensor, *, valid_mask=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L251) |
+| `ruda_torch.MHCTransformerBlock` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L66) |
+| `ruda_torch.HybridAttentionLanguageModel` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L121) |
+| `ruda_torch.HybridAttentionBackbone` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L204) |
+| `ruda_torch.HybridAttentionCache` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L28) |
+| `ruda_torch.next_token_loss(logits: torch.Tensor, tokens: torch.Tensor, *, valid_mask=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L251) |
 
 ### `MHCTransformerBlock`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `MHCTransformerBlock(width: int, num_heads: int, *, streams=4, attention_kind='csa', feedforward_width=None, sinkhorn_iterations=20, eps=1e-06, **attention_kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L72) |
-| `MHCTransformerBlock.forward(state, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L91) |
-| `MHCTransformerBlock.forward_cached(state, cache=None, *, valid_mask=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L105) |
+| `MHCTransformerBlock(width: int, num_heads: int, *, streams=4, attention_kind='csa', feedforward_width=None, sinkhorn_iterations=20, eps=1e-06, **attention_kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L72) |
+| `MHCTransformerBlock.forward(state, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L91) |
+| `MHCTransformerBlock.forward_cached(state, cache=None, *, valid_mask=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L105) |
 
 ### `HybridAttentionLanguageModel`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `HybridAttentionLanguageModel(vocab_size: int, width: int, num_heads: int, num_layers: int, *, streams=4, csa_ratio=4, hca_ratio=128, tie_embeddings=False, sinkhorn_iterations=20, eps=1e-06, **attention_kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L129) |
-| `HybridAttentionLanguageModel.forward(tokens, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L151) |
-| `HybridAttentionLanguageModel.forward_hidden(tokens, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L155) |
-| `HybridAttentionLanguageModel.hidden_backbone()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L159) |
-| `HybridAttentionLanguageModel.forward_hidden_cached(tokens, cache=None, *, valid_mask=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L163) |
-| `HybridAttentionLanguageModel.forward_cached(tokens, cache=None, *, valid_mask=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L194) |
-| `HybridAttentionLanguageModel.forward_cached_last(tokens, cache=None, *, valid_mask=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L198) |
+| `HybridAttentionLanguageModel(vocab_size: int, width: int, num_heads: int, num_layers: int, *, streams=4, csa_ratio=4, hca_ratio=128, tie_embeddings=False, sinkhorn_iterations=20, eps=1e-06, **attention_kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L129) |
+| `HybridAttentionLanguageModel.forward(tokens, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L151) |
+| `HybridAttentionLanguageModel.forward_hidden(tokens, *, valid_mask=None, return_aux=False, indexer_warmup=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L155) |
+| `HybridAttentionLanguageModel.hidden_backbone()` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L159) |
+| `HybridAttentionLanguageModel.forward_hidden_cached(tokens, cache=None, *, valid_mask=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L163) |
+| `HybridAttentionLanguageModel.forward_cached(tokens, cache=None, *, valid_mask=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L194) |
+| `HybridAttentionLanguageModel.forward_cached_last(tokens, cache=None, *, valid_mask=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L198) |
 
 ### `HybridAttentionBackbone`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `HybridAttentionBackbone(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L212) |
-| `HybridAttentionBackbone.forward(input_ids, attention_mask=None, *, position_ids=None, cu_seqlens=None, max_seqlen=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L220) |
+| `HybridAttentionBackbone(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L212) |
+| `HybridAttentionBackbone.forward(input_ids, attention_mask=None, *, position_ids=None, cu_seqlens=None, max_seqlen=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L220) |
 
 ### `HybridAttentionCache`
 
@@ -504,265 +504,265 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `HybridAttentionCache.reorder(batch_indices)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L35) |
-| `HybridAttentionCache.tensor_bytes` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py#L43) |
+| `HybridAttentionCache.reorder(batch_indices)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L35) |
+| `HybridAttentionCache.tensor_bytes` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_model.py#L43) |
 
 ## `sequence_training`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.gated_delta_rule(query, key, value, beta, log_decay, *, initial_state=None, query_scale=None, normalize_qk=False, norm_eps=1e-06, chunk_size=64, checkpoint_chunks=True, native_forward=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sequence_training.py#L137) |
-| `ruda_torch.solve_triangular(a, b, *, upper=False, left=True, unitriangular=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sequence_training.py#L52) |
-| `ruda_torch.sequence_training.triangular_mask(x, diagonal=0, *, upper=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sequence_training.py#L11) |
+| `ruda_torch.gated_delta_rule(query, key, value, beta, log_decay, *, initial_state=None, query_scale=None, normalize_qk=False, norm_eps=1e-06, chunk_size=64, checkpoint_chunks=True, native_forward=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/sequence_training.py#L137) |
+| `ruda_torch.solve_triangular(a, b, *, upper=False, left=True, unitriangular=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/sequence_training.py#L52) |
+| `ruda_torch.sequence_training.triangular_mask(x, diagonal=0, *, upper=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/sequence_training.py#L11) |
 
 ## `finetuning`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.LoRALinear` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L210) |
-| `ruda_torch.NF4Linear` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L138) |
-| `ruda_torch.inject_lora(model, *, target_modules, rank=16, alpha=16.0, adapter_dtype=torch.float32, dropout=0.0, use_rslora=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L289) |
-| `ruda_torch.quantize_nf4(model, *, target_modules, block_size=64, tile_rows=128)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L322) |
-| `ruda_torch.adapter_state_dict(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L358) |
-| `ruda_torch.load_adapter_state_dict(model, state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L388) |
-| `ruda_torch.merge_lora(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L429) |
-| `ruda_torch.load_nf4_safetensors(model, directory, *, target_modules, device, dtype=torch.bfloat16, block_size=64, tile_rows=128, parameter_dtypes=None, buffer_dtypes=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L471) |
-| `ruda_torch.finetune_state_dict(model, optimizer, *, base_id, step, data_state, scaler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L620) |
-| `ruda_torch.load_finetune_state_dict(model, optimizer, state, *, base_id, scaler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L646) |
-| `ruda_torch.finetuning.pack_nf4(weight, *, block_size=64, chunk_blocks=1024)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L40) |
+| `ruda_torch.LoRALinear` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L210) |
+| `ruda_torch.NF4Linear` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L138) |
+| `ruda_torch.inject_lora(model, *, target_modules, rank=16, alpha=16.0, adapter_dtype=torch.float32, dropout=0.0, use_rslora=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L289) |
+| `ruda_torch.quantize_nf4(model, *, target_modules, block_size=64, tile_rows=128)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L322) |
+| `ruda_torch.adapter_state_dict(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L358) |
+| `ruda_torch.load_adapter_state_dict(model, state)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L388) |
+| `ruda_torch.merge_lora(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L429) |
+| `ruda_torch.load_nf4_safetensors(model, directory, *, target_modules, device, dtype=torch.bfloat16, block_size=64, tile_rows=128, parameter_dtypes=None, buffer_dtypes=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L471) |
+| `ruda_torch.finetune_state_dict(model, optimizer, *, base_id, step, data_state, scaler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L620) |
+| `ruda_torch.load_finetune_state_dict(model, optimizer, state, *, base_id, scaler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L646) |
+| `ruda_torch.finetuning.pack_nf4(weight, *, block_size=64, chunk_blocks=1024)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L40) |
 
 ### `LoRALinear`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `LoRALinear(base, *, rank=16, alpha=16.0, adapter_dtype=torch.float32, dropout=0.0, use_rslora=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L212) |
-| `LoRALinear.get_extra_state()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L238) |
-| `LoRALinear.scaling` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L245) |
-| `LoRALinear.set_extra_state(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L248) |
-| `LoRALinear.forward(x)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L252) |
+| `LoRALinear(base, *, rank=16, alpha=16.0, adapter_dtype=torch.float32, dropout=0.0, use_rslora=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L212) |
+| `LoRALinear.get_extra_state()` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L238) |
+| `LoRALinear.scaling` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L245) |
+| `LoRALinear.set_extra_state(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L248) |
+| `LoRALinear.forward(x)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L252) |
 
 ### `NF4Linear`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `NF4Linear(in_features, out_features, packed, scales, *, block_size=64, tile_rows=128, bias=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L146) |
-| `NF4Linear.from_linear(linear, *, block_size=64, tile_rows=128)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L172) |
-| `NF4Linear.get_extra_state()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L189) |
-| `NF4Linear.set_extra_state(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L193) |
-| `NF4Linear.forward(x)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/finetuning.py#L197) |
+| `NF4Linear(in_features, out_features, packed, scales, *, block_size=64, tile_rows=128, bias=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L146) |
+| `NF4Linear.from_linear(linear, *, block_size=64, tile_rows=128)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L172) |
+| `NF4Linear.get_extra_state()` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L189) |
+| `NF4Linear.set_extra_state(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L193) |
+| `NF4Linear.forward(x)` | [Исходный код](../../ruda-torch/python/ruda_torch/finetuning.py#L197) |
 
 ## `causal_finetuning`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.chunked_lm_cross_entropy(hidden, head, labels, *, token_chunk_size=32, ignore_index=-100, shift=True, reduction='mean', recompute=True, label_smoothing=0.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L25) |
-| `ruda_torch.SFTCollator` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L85) |
-| `ruda_torch.CausalLMFinetuner` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L181) |
-| `ruda_torch.SFTTrainer` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L303) |
-| `ruda_torch.load_hf_nf4_model(directory, *, target_modules, device, dtype=torch.bfloat16, auto_class=None, rank=16, alpha=16.0, block_size=64, tile_rows=128, adapter_dtype=torch.float32, parameter_dtypes=None, config_kwargs=None, model_kwargs=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L261) |
-| `ruda_torch.activation_checkpoint_modules(model, target_modules, *, preserve_rng_state=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L150) |
-| `ruda_torch.PackedCausalLMFinetuner` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L232) |
-| `ruda_torch.CausalLMTrainer` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L669) |
+| `ruda_torch.chunked_lm_cross_entropy(hidden, head, labels, *, token_chunk_size=32, ignore_index=-100, shift=True, reduction='mean', recompute=True, label_smoothing=0.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L25) |
+| `ruda_torch.SFTCollator` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L85) |
+| `ruda_torch.CausalLMFinetuner` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L181) |
+| `ruda_torch.SFTTrainer` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L303) |
+| `ruda_torch.load_hf_nf4_model(directory, *, target_modules, device, dtype=torch.bfloat16, auto_class=None, rank=16, alpha=16.0, block_size=64, tile_rows=128, adapter_dtype=torch.float32, parameter_dtypes=None, config_kwargs=None, model_kwargs=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L261) |
+| `ruda_torch.activation_checkpoint_modules(model, target_modules, *, preserve_rng_state=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L150) |
+| `ruda_torch.PackedCausalLMFinetuner` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L232) |
+| `ruda_torch.CausalLMTrainer` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L669) |
 
 ### `SFTCollator`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `SFTCollator(tokenizer=None, *, max_length, pad_token_id=None, train_on_prompt=False, truncate=False, template_kwargs=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L92) |
-| `SFTCollator.encode(sample)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L105) |
-| `SFTCollator.__call__(samples)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L135) |
+| `SFTCollator(tokenizer=None, *, max_length, pad_token_id=None, train_on_prompt=False, truncate=False, template_kwargs=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L92) |
+| `SFTCollator.encode(sample)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L105) |
+| `SFTCollator.__call__(samples)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L135) |
 
 ### `CausalLMFinetuner`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CausalLMFinetuner(backbone, head, *, token_chunk_size=32, activation_checkpointing=True, checkpoint_modules=None, preserve_rng_state=True, label_smoothing=0.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L183) |
-| `CausalLMFinetuner.hidden(input_ids, attention_mask)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L208) |
-| `CausalLMFinetuner.forward(input_ids, attention_mask, labels, *, reduction='mean', label_smoothing=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L225) |
+| `CausalLMFinetuner(backbone, head, *, token_chunk_size=32, activation_checkpointing=True, checkpoint_modules=None, preserve_rng_state=True, label_smoothing=0.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L183) |
+| `CausalLMFinetuner.hidden(input_ids, attention_mask)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L208) |
+| `CausalLMFinetuner.forward(input_ids, attention_mask, labels, *, reduction='mean', label_smoothing=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L225) |
 
 ### `SFTTrainer`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `SFTTrainer(model, optimizer, *, base_id, run_config, scaler=None, scheduler=None, replica_group=None, gradient_overlap=False, bucket_bytes=25 * 1024 * 1024, sampler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L310) |
-| `SFTTrainer.train_step(microbatches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L374) |
-| `SFTTrainer.train_step_autotuned(microbatches, *, autotuner=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L464) |
-| `SFTTrainer.evaluate(microbatches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L475) |
-| `SFTTrainer.save(directory)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L562) |
-| `SFTTrainer.resume(path)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L590) |
-| `SFTTrainer.save_distributed(directory)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L617) |
-| `SFTTrainer.resume_distributed(directory, *, generation=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L631) |
-| `SFTTrainer.write_progress(directory, metrics, *, total_steps=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L651) |
+| `SFTTrainer(model, optimizer, *, base_id, run_config, scaler=None, scheduler=None, replica_group=None, gradient_overlap=False, bucket_bytes=25 * 1024 * 1024, sampler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L310) |
+| `SFTTrainer.train_step(microbatches)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L374) |
+| `SFTTrainer.train_step_autotuned(microbatches, *, autotuner=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L464) |
+| `SFTTrainer.evaluate(microbatches)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L475) |
+| `SFTTrainer.save(directory)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L562) |
+| `SFTTrainer.resume(path)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L590) |
+| `SFTTrainer.save_distributed(directory)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L617) |
+| `SFTTrainer.resume_distributed(directory, *, generation=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L631) |
+| `SFTTrainer.write_progress(directory, metrics, *, total_steps=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L651) |
 
 ### `PackedCausalLMFinetuner`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PackedCausalLMFinetuner(backbone, head, *, token_chunk_size=32, activation_checkpointing=True, checkpoint_modules=None, preserve_rng_state=True, label_smoothing=0.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L183) |
-| `PackedCausalLMFinetuner.hidden(input_ids, attention_mask)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L208) |
-| `PackedCausalLMFinetuner.forward(input_ids, attention_mask, labels, position_ids, cu_seqlens, max_seqlen, *, reduction='mean', label_smoothing=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L242) |
+| `PackedCausalLMFinetuner(backbone, head, *, token_chunk_size=32, activation_checkpointing=True, checkpoint_modules=None, preserve_rng_state=True, label_smoothing=0.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L183) |
+| `PackedCausalLMFinetuner.hidden(input_ids, attention_mask)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L208) |
+| `PackedCausalLMFinetuner.forward(input_ids, attention_mask, labels, position_ids, cu_seqlens, max_seqlen, *, reduction='mean', label_smoothing=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L242) |
 
 ### `CausalLMTrainer`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `CausalLMTrainer(model, optimizer, *, base_id, run_config, scaler=None, scheduler=None, replica_group=None, gradient_overlap=False, bucket_bytes=25 * 1024 * 1024, sampler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L310) |
-| `CausalLMTrainer.train_step(microbatches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L374) |
-| `CausalLMTrainer.train_step_autotuned(microbatches, *, autotuner=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L464) |
-| `CausalLMTrainer.evaluate(microbatches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L475) |
-| `CausalLMTrainer.save(directory)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L562) |
-| `CausalLMTrainer.resume(path)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L590) |
-| `CausalLMTrainer.save_distributed(directory)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L617) |
-| `CausalLMTrainer.resume_distributed(directory, *, generation=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L631) |
-| `CausalLMTrainer.write_progress(directory, metrics, *, total_steps=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py#L651) |
+| `CausalLMTrainer(model, optimizer, *, base_id, run_config, scaler=None, scheduler=None, replica_group=None, gradient_overlap=False, bucket_bytes=25 * 1024 * 1024, sampler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L310) |
+| `CausalLMTrainer.train_step(microbatches)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L374) |
+| `CausalLMTrainer.train_step_autotuned(microbatches, *, autotuner=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L464) |
+| `CausalLMTrainer.evaluate(microbatches)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L475) |
+| `CausalLMTrainer.save(directory)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L562) |
+| `CausalLMTrainer.resume(path)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L590) |
+| `CausalLMTrainer.save_distributed(directory)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L617) |
+| `CausalLMTrainer.resume_distributed(directory, *, generation=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L631) |
+| `CausalLMTrainer.write_progress(directory, metrics, *, total_steps=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/causal_finetuning.py#L651) |
 
 ## `distributed_training`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.ReplicaGroup` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L13) |
+| `ruda_torch.ReplicaGroup` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L13) |
 
 ### `ReplicaGroup`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ReplicaGroup(process_group=None, *, device_type='ruda')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L20) |
-| `ReplicaGroup.gather_metadata(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L52) |
-| `ReplicaGroup.sum_(tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L74) |
-| `ReplicaGroup.max_(tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L81) |
-| `ReplicaGroup.min_(tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L87) |
-| `ReplicaGroup.broadcast_(tensor, root=0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L93) |
-| `ReplicaGroup.all_gather(tensor, *, axis=0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L103) |
-| `ReplicaGroup.reduce_scatter(tensor, *, axis=0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L116) |
-| `ReplicaGroup.begin_gradient_overlap(*, global_weight, normalized=False, bucket_bytes=25 * 1024 * 1024)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L131) |
-| `ReplicaGroup.initialize(model, *, root=0, broadcast_buffers=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L141) |
-| `ReplicaGroup.validate_model(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L188) |
-| `ReplicaGroup.total_weight(local_weight)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L199) |
-| `ReplicaGroup.synchronize_gradients(*, local_weight, normalized=False, missing='error')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L209) |
-| `ReplicaGroup.validate_training_options(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_training.py#L265) |
+| `ReplicaGroup(process_group=None, *, device_type='ruda')` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L20) |
+| `ReplicaGroup.gather_metadata(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L52) |
+| `ReplicaGroup.sum_(tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L74) |
+| `ReplicaGroup.max_(tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L81) |
+| `ReplicaGroup.min_(tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L87) |
+| `ReplicaGroup.broadcast_(tensor, root=0)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L93) |
+| `ReplicaGroup.all_gather(tensor, *, axis=0)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L103) |
+| `ReplicaGroup.reduce_scatter(tensor, *, axis=0)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L116) |
+| `ReplicaGroup.begin_gradient_overlap(*, global_weight, normalized=False, bucket_bytes=25 * 1024 * 1024)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L131) |
+| `ReplicaGroup.initialize(model, *, root=0, broadcast_buffers=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L141) |
+| `ReplicaGroup.validate_model(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L188) |
+| `ReplicaGroup.total_weight(local_weight)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L199) |
+| `ReplicaGroup.synchronize_gradients(*, local_weight, normalized=False, missing='error')` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L209) |
+| `ReplicaGroup.validate_training_options(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_training.py#L265) |
 
 ## `parallel_training`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.ColumnParallelLinear` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L57) |
-| `ruda_torch.RowParallelLinear` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L81) |
-| `ruda_torch.VocabParallelEmbedding` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L104) |
-| `ruda_torch.TensorParallelMLP` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L131) |
-| `ruda_torch.TensorParallelAttention` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L147) |
-| `ruda_torch.tensor_parallelize(model, group, plan)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L205) |
-| `ruda_torch.tensor_parallel_state_dict(model, group)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L273) |
-| `ruda_torch.load_tensor_parallel_state_dict(model, state, group, *, strict=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L296) |
-| `ruda_torch.copy_to_tensor_parallel(value, group)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L41) |
-| `ruda_torch.reduce_from_tensor_parallel(value, group)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L45) |
-| `ruda_torch.gather_from_tensor_parallel(value, group, *, axis=-1)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L49) |
-| `ruda_torch.scatter_to_tensor_parallel(value, group, *, axis=-1)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L53) |
-| `ruda_torch.parallel_training.GradientOverlap` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L324) |
+| `ruda_torch.ColumnParallelLinear` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L57) |
+| `ruda_torch.RowParallelLinear` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L81) |
+| `ruda_torch.VocabParallelEmbedding` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L104) |
+| `ruda_torch.TensorParallelMLP` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L131) |
+| `ruda_torch.TensorParallelAttention` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L147) |
+| `ruda_torch.tensor_parallelize(model, group, plan)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L205) |
+| `ruda_torch.tensor_parallel_state_dict(model, group)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L273) |
+| `ruda_torch.load_tensor_parallel_state_dict(model, state, group, *, strict=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L296) |
+| `ruda_torch.copy_to_tensor_parallel(value, group)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L41) |
+| `ruda_torch.reduce_from_tensor_parallel(value, group)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L45) |
+| `ruda_torch.gather_from_tensor_parallel(value, group, *, axis=-1)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L49) |
+| `ruda_torch.scatter_to_tensor_parallel(value, group, *, axis=-1)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L53) |
+| `ruda_torch.parallel_training.GradientOverlap` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L324) |
 
 ### `ColumnParallelLinear`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ColumnParallelLinear(linear, group, *, gather_output=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L59) |
-| `ColumnParallelLinear.forward(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L75) |
+| `ColumnParallelLinear(linear, group, *, gather_output=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L59) |
+| `ColumnParallelLinear.forward(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L75) |
 
 ### `RowParallelLinear`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `RowParallelLinear(linear, group, *, input_is_parallel=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L83) |
-| `RowParallelLinear.forward(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L97) |
+| `RowParallelLinear(linear, group, *, input_is_parallel=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L83) |
+| `RowParallelLinear.forward(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L97) |
 
 ### `VocabParallelEmbedding`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `VocabParallelEmbedding(embedding, group)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L106) |
-| `VocabParallelEmbedding.forward(tokens)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L121) |
+| `VocabParallelEmbedding(embedding, group)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L106) |
+| `VocabParallelEmbedding.forward(tokens)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L121) |
 
 ### `TensorParallelMLP`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `TensorParallelMLP(gate, up, down, group, *, activation=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L133) |
-| `TensorParallelMLP.forward(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L143) |
+| `TensorParallelMLP(gate, up, down, group, *, activation=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L133) |
+| `TensorParallelMLP.forward(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L143) |
 
 ### `TensorParallelAttention`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `TensorParallelAttention(query, key, value, output, group, *, num_heads, num_kv_heads=None, head_dim=None, scale=None, dropout_p=0.0, attention_impl=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L153) |
-| `TensorParallelAttention.forward(hidden, *, attention_mask=None, is_causal=False, position_transform=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L179) |
+| `TensorParallelAttention(query, key, value, output, group, *, num_heads, num_kv_heads=None, head_dim=None, scale=None, dropout_p=0.0, attention_impl=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L153) |
+| `TensorParallelAttention.forward(hidden, *, attention_mask=None, is_causal=False, position_transform=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L179) |
 
 ### `GradientOverlap`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `GradientOverlap(group, *, global_weight, normalized, bucket_bytes)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L326) |
-| `GradientOverlap.finish(*, local_weight, missing='zero')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_training.py#L370) |
+| `GradientOverlap(group, *, global_weight, normalized, bucket_bytes)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L326) |
+| `GradientOverlap.finish(*, local_weight, missing='zero')` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_training.py#L370) |
 
 ## `sharded_training`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.FullyShardedModule` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L91) |
-| `ruda_torch.fully_shard(model, group, *, unit_paths=None, device=None, root=0, recompute=True, shard_buffers=None, ensure_backward=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L305) |
-| `ruda_torch.Zero2Optimizer` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L346) |
-| `ruda_torch.ShardedReplicaGroup` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L474) |
+| `ruda_torch.FullyShardedModule` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L91) |
+| `ruda_torch.fully_shard(model, group, *, unit_paths=None, device=None, root=0, recompute=True, shard_buffers=None, ensure_backward=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L305) |
+| `ruda_torch.Zero2Optimizer` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L346) |
+| `ruda_torch.ShardedReplicaGroup` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L474) |
 
 ### `FullyShardedModule`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `FullyShardedModule(module, group, *, device=None, root=0, recompute=True, shard_buffers=None, ensure_backward=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L101) |
-| `FullyShardedModule.forward(*args, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L218) |
-| `FullyShardedModule.train(mode=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L226) |
-| `FullyShardedModule.extra_repr()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L233) |
-| `FullyShardedModule.get_extra_state()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L236) |
-| `FullyShardedModule.set_extra_state(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L243) |
-| `FullyShardedModule.full_state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L249) |
-| `FullyShardedModule.load_full_state_dict(state, *, strict=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L266) |
+| `FullyShardedModule(module, group, *, device=None, root=0, recompute=True, shard_buffers=None, ensure_backward=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L101) |
+| `FullyShardedModule.forward(*args, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L218) |
+| `FullyShardedModule.train(mode=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L226) |
+| `FullyShardedModule.extra_repr()` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L233) |
+| `FullyShardedModule.get_extra_state()` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L236) |
+| `FullyShardedModule.set_extra_state(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L243) |
+| `FullyShardedModule.full_state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L249) |
+| `FullyShardedModule.load_full_state_dict(state, *, strict=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L266) |
 
 ### `Zero2Optimizer`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `Zero2Optimizer(parameter_groups, group, optimizer_factory)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L353) |
-| `Zero2Optimizer.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L387) |
-| `Zero2Optimizer.step(closure=None, **kwargs)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L419) |
-| `Zero2Optimizer.zero_grad(set_to_none=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L447) |
-| `Zero2Optimizer.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L455) |
-| `Zero2Optimizer.load_state_dict(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L459) |
+| `Zero2Optimizer(parameter_groups, group, optimizer_factory)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L353) |
+| `Zero2Optimizer.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L387) |
+| `Zero2Optimizer.step(closure=None, **kwargs)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L419) |
+| `Zero2Optimizer.zero_grad(set_to_none=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L447) |
+| `Zero2Optimizer.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L455) |
+| `Zero2Optimizer.load_state_dict(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L459) |
 
 ### `ShardedReplicaGroup`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ShardedReplicaGroup(model, group)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L481) |
-| `ShardedReplicaGroup.gather_metadata(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L494) |
-| `ShardedReplicaGroup.validate_training_options(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L497) |
-| `ShardedReplicaGroup.total_weight(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L500) |
-| `ShardedReplicaGroup.sum_(tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L503) |
-| `ShardedReplicaGroup.validate_model(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L506) |
-| `ShardedReplicaGroup.validate_microbatches(batches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L511) |
-| `ShardedReplicaGroup.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L518) |
-| `ShardedReplicaGroup.prepare_optimizer_step(optimizer, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_training.py#L535) |
+| `ShardedReplicaGroup(model, group)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L481) |
+| `ShardedReplicaGroup.gather_metadata(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L494) |
+| `ShardedReplicaGroup.validate_training_options(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L497) |
+| `ShardedReplicaGroup.total_weight(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L500) |
+| `ShardedReplicaGroup.sum_(tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L503) |
+| `ShardedReplicaGroup.validate_model(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L506) |
+| `ShardedReplicaGroup.validate_microbatches(batches)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L511) |
+| `ShardedReplicaGroup.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L518) |
+| `ShardedReplicaGroup.prepare_optimizer_step(optimizer, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_training.py#L535) |
 
 ## `pipeline_training`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.PipelineStage` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L31) |
-| `ruda_torch.PipelineTensorSpec` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L12) |
+| `ruda_torch.PipelineStage` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L31) |
+| `ruda_torch.PipelineTensorSpec` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L12) |
 
 ### `PipelineStage`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PipelineStage(module, group, *, input_spec, output_spec)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L41) |
-| `PipelineStage.invocation_contract` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L92) |
-| `PipelineStage.validate_interfaces(count, microbatch_specs=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L94) |
-| `PipelineStage.run(inputs=None, targets=None, *, loss_sum, global_weight, loss_scale=1.0, microbatch_specs=None, schedule='1f1b')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L149) |
+| `PipelineStage(module, group, *, input_spec, output_spec)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L41) |
+| `PipelineStage.invocation_contract` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L92) |
+| `PipelineStage.validate_interfaces(count, microbatch_specs=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L94) |
+| `PipelineStage.run(inputs=None, targets=None, *, loss_sum, global_weight, loss_scale=1.0, microbatch_specs=None, schedule='1f1b')` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L149) |
 
 ### `PipelineTensorSpec`
 
@@ -770,27 +770,27 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PipelineTensorSpec.validate()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L16) |
-| `PipelineTensorSpec.allocate(device)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L22) |
-| `PipelineTensorSpec.has_floating` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L27) |
+| `PipelineTensorSpec.validate()` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L16) |
+| `PipelineTensorSpec.allocate(device)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L22) |
+| `PipelineTensorSpec.has_floating` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L27) |
 
 ## `structured_pipeline`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.StructuredPipelineStage` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L149) |
-| `ruda_torch.PipelineTreeSpec` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L58) |
-| `ruda_torch.PipelineLeafSpec` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L33) |
-| `ruda_torch.PipelineConstant` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L21) |
+| `ruda_torch.StructuredPipelineStage` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L149) |
+| `ruda_torch.PipelineTreeSpec` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L58) |
+| `ruda_torch.PipelineLeafSpec` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L33) |
+| `ruda_torch.PipelineConstant` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L21) |
 
 ### `StructuredPipelineStage`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `StructuredPipelineStage(module, group, *, input_spec, output_spec, input_mode='single')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L165) |
-| `StructuredPipelineStage.invocation_contract` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L227) |
-| `StructuredPipelineStage.validate_interfaces(count, microbatch_specs=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L94) |
-| `StructuredPipelineStage.run(inputs=None, targets=None, *, loss_sum, global_weight, loss_scale=1.0, microbatch_specs=None, schedule='1f1b')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L149) |
+| `StructuredPipelineStage(module, group, *, input_spec, output_spec, input_mode='single')` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L165) |
+| `StructuredPipelineStage.invocation_contract` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L227) |
+| `StructuredPipelineStage.validate_interfaces(count, microbatch_specs=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L94) |
+| `StructuredPipelineStage.run(inputs=None, targets=None, *, loss_sum, global_weight, loss_scale=1.0, microbatch_specs=None, schedule='1f1b')` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L149) |
 
 ### `PipelineTreeSpec`
 
@@ -798,23 +798,23 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PipelineTreeSpec(structure)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L71) |
-| `PipelineTreeSpec.from_flat(tree, leaves)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L79) |
-| `PipelineTreeSpec.validate()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L94) |
-| `PipelineTreeSpec.has_floating` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L101) |
-| `PipelineTreeSpec.allocate(device)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L104) |
-| `PipelineTreeSpec.matches(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L109) |
+| `PipelineTreeSpec(structure)` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L71) |
+| `PipelineTreeSpec.from_flat(tree, leaves)` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L79) |
+| `PipelineTreeSpec.validate()` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L94) |
+| `PipelineTreeSpec.has_floating` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L101) |
+| `PipelineTreeSpec.allocate(device)` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L104) |
+| `PipelineTreeSpec.matches(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L109) |
 
 ### `PipelineLeafSpec`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PipelineLeafSpec.validate()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L45) |
-| `PipelineLeafSpec.allocate(device)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L22) |
-| `PipelineLeafSpec.has_floating` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py#L27) |
-| `PipelineLeafSpec(shape, dtype=torch.float32)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L40) |
-| `PipelineLeafSpec.__eq__(other)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L51) |
-| `PipelineLeafSpec.__hash__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L54) |
+| `PipelineLeafSpec.validate()` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L45) |
+| `PipelineLeafSpec.allocate(device)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L22) |
+| `PipelineLeafSpec.has_floating` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_training.py#L27) |
+| `PipelineLeafSpec(shape, dtype=torch.float32)` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L40) |
+| `PipelineLeafSpec.__eq__(other)` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L51) |
+| `PipelineLeafSpec.__hash__()` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L54) |
 
 ### `PipelineConstant`
 
@@ -822,367 +822,367 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PipelineConstant.__post_init__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L25) |
-| `PipelineConstant.__eq__(other)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L27) |
-| `PipelineConstant.__hash__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py#L30) |
+| `PipelineConstant.__post_init__()` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L25) |
+| `PipelineConstant.__eq__(other)` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L27) |
+| `PipelineConstant.__hash__()` | [Исходный код](../../ruda-torch/python/ruda_torch/structured_pipeline.py#L30) |
 
 ## `distributed_checkpoint`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.DistributedCheckpoint` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py#L129) |
-| `ruda_torch.model_shard_layout(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py#L47) |
+| `ruda_torch.DistributedCheckpoint` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py#L129) |
+| `ruda_torch.model_shard_layout(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py#L47) |
 
 ### `DistributedCheckpoint`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `DistributedCheckpoint(group, directory)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py#L137) |
-| `DistributedCheckpoint.save(model, optimizer, *, step, application_state=None, scheduler=None, scaler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py#L140) |
-| `DistributedCheckpoint.load(model, optimizer, *, generation=None, scheduler=None, scaler=None, validate_application=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py#L196) |
-| `DistributedCheckpoint.consolidate(*, generation=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py#L256) |
-| `DistributedCheckpoint.load_consolidated(model, optimizer, state, *, reshard_application, scheduler=None, scaler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py#L307) |
+| `DistributedCheckpoint(group, directory)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py#L137) |
+| `DistributedCheckpoint.save(model, optimizer, *, step, application_state=None, scheduler=None, scaler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py#L140) |
+| `DistributedCheckpoint.load(model, optimizer, *, generation=None, scheduler=None, scaler=None, validate_application=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py#L196) |
+| `DistributedCheckpoint.consolidate(*, generation=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py#L256) |
+| `DistributedCheckpoint.load_consolidated(model, optimizer, state, *, reshard_application, scheduler=None, scaler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py#L307) |
 
 ## `adapter_interop`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.load_peft_adapter(model, directory, *, module_map=None, prefix='base_model.model.', adapter_dtype=torch.float32)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/adapter_interop.py#L19) |
-| `ruda_torch.save_peft_adapter(model, directory, *, base_model_name_or_path, prefix='base_model.model.', task_type=None, module_map=None, replica_group=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/adapter_interop.py#L119) |
+| `ruda_torch.load_peft_adapter(model, directory, *, module_map=None, prefix='base_model.model.', adapter_dtype=torch.float32)` | [Исходный код](../../ruda-torch/python/ruda_torch/adapter_interop.py#L19) |
+| `ruda_torch.save_peft_adapter(model, directory, *, base_model_name_or_path, prefix='base_model.model.', task_type=None, module_map=None, replica_group=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/adapter_interop.py#L119) |
 
 ## `attention`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.scaled_dot_product_attention(query, key, value, *, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/attention.py#L9) |
+| `ruda_torch.scaled_dot_product_attention(query, key, value, *, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/attention.py#L9) |
 
 ## `block_attention`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.block_scaled_dot_product_attention(query, key, value, *, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False, query_block_size=128, key_block_size=256, generator=None, causal_offset=0, window_size=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/block_attention.py#L162) |
+| `ruda_torch.block_scaled_dot_product_attention(query, key, value, *, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False, query_block_size=128, key_block_size=256, generator=None, causal_offset=0, window_size=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/block_attention.py#L162) |
 
 ## `parallel_loss`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.vocab_parallel_cross_entropy(logits, targets, group, *, vocab_start=None, global_vocab_size=None, ignore_index=-100, label_smoothing=0.0, reduction='mean')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_loss.py#L56) |
+| `ruda_torch.vocab_parallel_cross_entropy(logits, targets, group, *, vocab_start=None, global_vocab_size=None, ignore_index=-100, label_smoothing=0.0, reduction='mean')` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_loss.py#L56) |
 
 ## `transformers_attention`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.register_transformers_attention(name='ruda_block', *, query_block_size=128, key_block_size=256)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/transformers_attention.py#L7) |
+| `ruda_torch.register_transformers_attention(name='ruda_block', *, query_block_size=128, key_block_size=256)` | [Исходный код](../../ruda-torch/python/ruda_torch/transformers_attention.py#L7) |
 
 ## `parallel_mesh`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.ParallelMesh` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L11) |
-| `ruda_torch.TensorParallelGroup` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L94) |
+| `ruda_torch.ParallelMesh` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L11) |
+| `ruda_torch.TensorParallelGroup` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L94) |
 
 ### `ParallelMesh`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ParallelMesh(*, data_parallel=1, tensor_parallel=1, pipeline_parallel=1, device_type='ruda', timeout_seconds=1800)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L18) |
-| `ParallelMesh.data` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L63) |
-| `ParallelMesh.tensor` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L66) |
-| `ParallelMesh.pipeline` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L69) |
-| `ParallelMesh.stage` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L72) |
-| `ParallelMesh.stage_mesh()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L74) |
-| `ParallelMesh.close()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L78) |
+| `ParallelMesh(*, data_parallel=1, tensor_parallel=1, pipeline_parallel=1, device_type='ruda', timeout_seconds=1800)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L18) |
+| `ParallelMesh.data` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L63) |
+| `ParallelMesh.tensor` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L66) |
+| `ParallelMesh.pipeline` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L69) |
+| `ParallelMesh.stage` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L72) |
+| `ParallelMesh.stage_mesh()` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L74) |
+| `ParallelMesh.close()` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L78) |
 
 ### `TensorParallelGroup`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `TensorParallelGroup(model, group)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L101) |
-| `TensorParallelGroup.gather_metadata(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L108) |
-| `TensorParallelGroup.validate_training_options(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L110) |
-| `TensorParallelGroup.validate_model(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L112) |
-| `TensorParallelGroup.total_weight(local_weight)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L117) |
-| `TensorParallelGroup.validate_microbatches(batches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L123) |
-| `TensorParallelGroup.sum_(tensor)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L129) |
-| `TensorParallelGroup.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L133) |
-| `TensorParallelGroup.prepare_optimizer_step(optimizer, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py#L147) |
+| `TensorParallelGroup(model, group)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L101) |
+| `TensorParallelGroup.gather_metadata(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L108) |
+| `TensorParallelGroup.validate_training_options(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L110) |
+| `TensorParallelGroup.validate_model(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L112) |
+| `TensorParallelGroup.total_weight(local_weight)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L117) |
+| `TensorParallelGroup.validate_microbatches(batches)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L123) |
+| `TensorParallelGroup.sum_(tensor)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L129) |
+| `TensorParallelGroup.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L133) |
+| `TensorParallelGroup.prepare_optimizer_step(optimizer, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_mesh.py#L147) |
 
 ## `sharded_optim`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.ShardedMuon` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_optim.py#L49) |
-| `ruda_torch.distributed_grad_norm(parameters, group, *, loss_scale=1.0, replicated_ids=(), replication_factors=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_optim.py#L11) |
+| `ruda_torch.ShardedMuon` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_optim.py#L49) |
+| `ruda_torch.distributed_grad_norm(parameters, group, *, loss_scale=1.0, replicated_ids=(), replication_factors=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_optim.py#L11) |
 
 ### `ShardedMuon`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ShardedMuon(params, group, lr=0.02, *, momentum=0.95, weight_decay=0.0, nesterov=True, momentum_mode='sgd', dampening=0.0, ns_steps=5, ns_coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, adjust_lr='original', matrix_layout='as_stored', stable_normalization=True, flatten=False, max_grad_norm=None, owners=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_optim.py#L60) |
-| `ShardedMuon.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_optim.py#L94) |
-| `ShardedMuon.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_optim.py#L173) |
-| `ShardedMuon.load_state_dict(record)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_optim.py#L179) |
+| `ShardedMuon(params, group, lr=0.02, *, momentum=0.95, weight_decay=0.0, nesterov=True, momentum_mode='sgd', dampening=0.0, ns_steps=5, ns_coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, adjust_lr='original', matrix_layout='as_stored', stable_normalization=True, flatten=False, max_grad_norm=None, owners=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_optim.py#L60) |
+| `ShardedMuon.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_optim.py#L94) |
+| `ShardedMuon.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_optim.py#L173) |
+| `ShardedMuon.load_state_dict(record)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_optim.py#L179) |
 
 ## `quantization_interop`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.bnb_nf4_linear(state, weight_key, *, device='ruda:0', dtype=torch.float16, bias=None, tile_rows=128)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/quantization_interop.py#L12) |
-| `ruda_torch.load_bnb_nf4_safetensors(model, directory, *, target_modules, device='ruda:0', dtype=torch.float16, tile_rows=128)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/quantization_interop.py#L98) |
+| `ruda_torch.bnb_nf4_linear(state, weight_key, *, device='ruda:0', dtype=torch.float16, bias=None, tile_rows=128)` | [Исходный код](../../ruda-torch/python/ruda_torch/quantization_interop.py#L12) |
+| `ruda_torch.load_bnb_nf4_safetensors(model, directory, *, target_modules, device='ruda:0', dtype=torch.float16, tile_rows=128)` | [Исходный код](../../ruda-torch/python/ruda_torch/quantization_interop.py#L98) |
 
 ## `parallel_adapters`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.ColumnParallelLoRALinear` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L169) |
-| `ruda_torch.RowParallelLoRALinear` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L191) |
-| `ruda_torch.ColumnParallelNF4Linear` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L92) |
-| `ruda_torch.RowParallelNF4Linear` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L106) |
-| `ruda_torch.shard_nf4_linear(layer, group, *, axis)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L35) |
-| `ruda_torch.parallel_adapters.lora_from_parallel_base(base, *, rank=16, alpha=16.0, adapter_dtype=torch.float32, dropout=0.0, use_rslora=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L213) |
-| `ruda_torch.parallel_adapters.merge_parallel_lora(layer)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L266) |
-| `ruda_torch.parallel_adapters.parallel_linear(source, group, *, axis, **options)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L283) |
-| `ruda_torch.parallel_adapters.parameter_shards(source, replacement, axis)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L294) |
-| `ruda_torch.parallel_adapters.adapter_base_kind(layer)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L307) |
-| `ruda_torch.parallel_adapters.full_adapter_matrix(layer, name)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L311) |
-| `ruda_torch.parallel_adapters.local_adapter_matrix(layer, name, value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L317) |
-| `ruda_torch.parallel_adapters.nf4_layout(module, prefix)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L325) |
-| `ruda_torch.parallel_adapters.join_nf4_field(values, spec)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L339) |
-| `ruda_torch.parallel_adapters.slice_nf4_field(value, spec, rank, world)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L371) |
-| `ruda_torch.parallel_adapters.full_nf4_state(module)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L401) |
-| `ruda_torch.parallel_adapters.local_nf4_state(module, state, prefix)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L420) |
+| `ruda_torch.ColumnParallelLoRALinear` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L169) |
+| `ruda_torch.RowParallelLoRALinear` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L191) |
+| `ruda_torch.ColumnParallelNF4Linear` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L92) |
+| `ruda_torch.RowParallelNF4Linear` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L106) |
+| `ruda_torch.shard_nf4_linear(layer, group, *, axis)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L35) |
+| `ruda_torch.parallel_adapters.lora_from_parallel_base(base, *, rank=16, alpha=16.0, adapter_dtype=torch.float32, dropout=0.0, use_rslora=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L213) |
+| `ruda_torch.parallel_adapters.merge_parallel_lora(layer)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L266) |
+| `ruda_torch.parallel_adapters.parallel_linear(source, group, *, axis, **options)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L283) |
+| `ruda_torch.parallel_adapters.parameter_shards(source, replacement, axis)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L294) |
+| `ruda_torch.parallel_adapters.adapter_base_kind(layer)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L307) |
+| `ruda_torch.parallel_adapters.full_adapter_matrix(layer, name)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L311) |
+| `ruda_torch.parallel_adapters.local_adapter_matrix(layer, name, value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L317) |
+| `ruda_torch.parallel_adapters.nf4_layout(module, prefix)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L325) |
+| `ruda_torch.parallel_adapters.join_nf4_field(values, spec)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L339) |
+| `ruda_torch.parallel_adapters.slice_nf4_field(value, spec, rank, world)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L371) |
+| `ruda_torch.parallel_adapters.full_nf4_state(module)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L401) |
+| `ruda_torch.parallel_adapters.local_nf4_state(module, state, prefix)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L420) |
 
 ### `ColumnParallelLoRALinear`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ColumnParallelLoRALinear.scaling` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L158) |
-| `ColumnParallelLoRALinear.get_extra_state()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L160) |
-| `ColumnParallelLoRALinear.set_extra_state(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L165) |
-| `ColumnParallelLoRALinear(layer, group, *, gather_output=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L172) |
-| `ColumnParallelLoRALinear.forward(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L181) |
+| `ColumnParallelLoRALinear.scaling` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L158) |
+| `ColumnParallelLoRALinear.get_extra_state()` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L160) |
+| `ColumnParallelLoRALinear.set_extra_state(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L165) |
+| `ColumnParallelLoRALinear(layer, group, *, gather_output=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L172) |
+| `ColumnParallelLoRALinear.forward(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L181) |
 
 ### `RowParallelLoRALinear`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `RowParallelLoRALinear.scaling` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L158) |
-| `RowParallelLoRALinear.get_extra_state()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L160) |
-| `RowParallelLoRALinear.set_extra_state(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L165) |
-| `RowParallelLoRALinear(layer, group, *, input_is_parallel=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L194) |
-| `RowParallelLoRALinear.forward(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L203) |
+| `RowParallelLoRALinear.scaling` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L158) |
+| `RowParallelLoRALinear.get_extra_state()` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L160) |
+| `RowParallelLoRALinear.set_extra_state(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L165) |
+| `RowParallelLoRALinear(layer, group, *, input_is_parallel=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L194) |
+| `RowParallelLoRALinear.forward(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L203) |
 
 ### `ColumnParallelNF4Linear`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ColumnParallelNF4Linear.get_extra_state()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L84) |
-| `ColumnParallelNF4Linear.set_extra_state(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L88) |
-| `ColumnParallelNF4Linear(layer, group, *, gather_output=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L95) |
-| `ColumnParallelNF4Linear.forward(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L101) |
+| `ColumnParallelNF4Linear.get_extra_state()` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L84) |
+| `ColumnParallelNF4Linear.set_extra_state(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L88) |
+| `ColumnParallelNF4Linear(layer, group, *, gather_output=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L95) |
+| `ColumnParallelNF4Linear.forward(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L101) |
 
 ### `RowParallelNF4Linear`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `RowParallelNF4Linear.get_extra_state()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L84) |
-| `RowParallelNF4Linear.set_extra_state(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L88) |
-| `RowParallelNF4Linear(layer, group, *, input_is_parallel=False)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L109) |
-| `RowParallelNF4Linear.forward(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py#L116) |
+| `RowParallelNF4Linear.get_extra_state()` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L84) |
+| `RowParallelNF4Linear.set_extra_state(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L88) |
+| `RowParallelNF4Linear(layer, group, *, input_is_parallel=False)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L109) |
+| `RowParallelNF4Linear.forward(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_adapters.py#L116) |
 
 ## `parallel_checkpoint_io`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.load_tensor_parallel_safetensors(model, directory, group, *, device, dtype=torch.bfloat16, nf4_targets=(), block_size=64, tile_rows=128, parameter_dtypes=None, buffer_dtypes=None, nf4_format='dense')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_checkpoint_io.py#L14) |
-| `ruda_torch.load_tensor_parallel_bnb_nf4_safetensors(model, directory, group, *, target_modules, device='ruda:0', dtype=torch.float16, tile_rows=128, parameter_dtypes=None, buffer_dtypes=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/parallel_checkpoint_io.py#L175) |
+| `ruda_torch.load_tensor_parallel_safetensors(model, directory, group, *, device, dtype=torch.bfloat16, nf4_targets=(), block_size=64, tile_rows=128, parameter_dtypes=None, buffer_dtypes=None, nf4_format='dense')` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_checkpoint_io.py#L14) |
+| `ruda_torch.load_tensor_parallel_bnb_nf4_safetensors(model, directory, group, *, target_modules, device='ruda:0', dtype=torch.float16, tile_rows=128, parameter_dtypes=None, buffer_dtypes=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/parallel_checkpoint_io.py#L175) |
 
 ## `hybrid_parallel`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.DataTensorParallelGroup` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L10) |
-| `ruda_torch.hybrid_parallel.join_mesh_field(values, spec)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L142) |
-| `ruda_torch.hybrid_parallel.slice_mesh_field(value, spec, rank, world)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L173) |
+| `ruda_torch.DataTensorParallelGroup` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L10) |
+| `ruda_torch.hybrid_parallel.join_mesh_field(values, spec)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L142) |
+| `ruda_torch.hybrid_parallel.slice_mesh_field(value, spec, rank, world)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L173) |
 
 ### `DataTensorParallelGroup`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `DataTensorParallelGroup(model, mesh, *, data_root=0, tensor_root=0, broadcast_buffers=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L18) |
-| `DataTensorParallelGroup.gather_metadata(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L41) |
-| `DataTensorParallelGroup.validate_training_options(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L43) |
-| `DataTensorParallelGroup.validate_model(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L45) |
-| `DataTensorParallelGroup.total_weight(local_weight)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L49) |
-| `DataTensorParallelGroup.validate_microbatches(batches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L60) |
-| `DataTensorParallelGroup.sum_(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L67) |
-| `DataTensorParallelGroup.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L71) |
-| `DataTensorParallelGroup.begin_gradient_overlap(*, global_weight, normalized=False, bucket_bytes=25 * 1024 * 1024)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L90) |
-| `DataTensorParallelGroup.replication_factors(parameters)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L93) |
-| `DataTensorParallelGroup.prepare_optimizer_step(optimizer, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L97) |
-| `DataTensorParallelGroup.checkpoint_layout(layout)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L132) |
+| `DataTensorParallelGroup(model, mesh, *, data_root=0, tensor_root=0, broadcast_buffers=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L18) |
+| `DataTensorParallelGroup.gather_metadata(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L41) |
+| `DataTensorParallelGroup.validate_training_options(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L43) |
+| `DataTensorParallelGroup.validate_model(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L45) |
+| `DataTensorParallelGroup.total_weight(local_weight)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L49) |
+| `DataTensorParallelGroup.validate_microbatches(batches)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L60) |
+| `DataTensorParallelGroup.sum_(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L67) |
+| `DataTensorParallelGroup.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L71) |
+| `DataTensorParallelGroup.begin_gradient_overlap(*, global_weight, normalized=False, bucket_bytes=25 * 1024 * 1024)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L90) |
+| `DataTensorParallelGroup.replication_factors(parameters)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L93) |
+| `DataTensorParallelGroup.prepare_optimizer_step(optimizer, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L97) |
+| `DataTensorParallelGroup.checkpoint_layout(layout)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L132) |
 
 ## `tensor_parallel_optim`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.TensorParallelMuon` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L13) |
-| `ruda_torch.MeshShardedMuon` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L220) |
+| `ruda_torch.TensorParallelMuon` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L13) |
+| `ruda_torch.MeshShardedMuon` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L220) |
 
 ### `TensorParallelMuon`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `TensorParallelMuon(params, model, group, lr=0.02, *, momentum=0.95, weight_decay=0.0, nesterov=True, momentum_mode='sgd', dampening=0.0, ns_steps=5, ns_coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, adjust_lr='original', matrix_layout='as_stored', stable_normalization=True, flatten=False, max_grad_norm=None, owners=None, consensus_group=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L25) |
-| `TensorParallelMuon.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L89) |
-| `TensorParallelMuon.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L182) |
-| `TensorParallelMuon.load_state_dict(record)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L188) |
+| `TensorParallelMuon(params, model, group, lr=0.02, *, momentum=0.95, weight_decay=0.0, nesterov=True, momentum_mode='sgd', dampening=0.0, ns_steps=5, ns_coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, adjust_lr='original', matrix_layout='as_stored', stable_normalization=True, flatten=False, max_grad_norm=None, owners=None, consensus_group=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L25) |
+| `TensorParallelMuon.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L89) |
+| `TensorParallelMuon.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L182) |
+| `TensorParallelMuon.load_state_dict(record)` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L188) |
 
 ### `MeshShardedMuon`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `MeshShardedMuon(params, model, mesh, lr=0.02, *, momentum=0.95, weight_decay=0.0, nesterov=True, momentum_mode='sgd', dampening=0.0, ns_steps=5, ns_coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, adjust_lr='original', matrix_layout='as_stored', stable_normalization=True, flatten=False, max_grad_norm=None, owners=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L232) |
-| `MeshShardedMuon.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L89) |
-| `MeshShardedMuon.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L182) |
-| `MeshShardedMuon.load_state_dict(record)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L188) |
+| `MeshShardedMuon(params, model, mesh, lr=0.02, *, momentum=0.95, weight_decay=0.0, nesterov=True, momentum_mode='sgd', dampening=0.0, ns_steps=5, ns_coefficients=(3.4445, -4.775, 2.0315), eps=1e-07, adjust_lr='original', matrix_layout='as_stored', stable_normalization=True, flatten=False, max_grad_norm=None, owners=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L232) |
+| `MeshShardedMuon.step(closure=None, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L89) |
+| `MeshShardedMuon.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L182) |
+| `MeshShardedMuon.load_state_dict(record)` | [Исходный код](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py#L188) |
 
 ## `sharded_mesh`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.ShardedDataTensorParallelGroup` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L118) |
-| `ruda_torch.sharded_mesh.sharded_mesh_layout(model, mesh)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L22) |
-| `ruda_torch.sharded_mesh.join_fsdp_extra(values, spec)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L84) |
-| `ruda_torch.sharded_mesh.slice_fsdp_extra(value, spec, rank, world)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L103) |
+| `ruda_torch.ShardedDataTensorParallelGroup` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L118) |
+| `ruda_torch.sharded_mesh.sharded_mesh_layout(model, mesh)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L22) |
+| `ruda_torch.sharded_mesh.join_fsdp_extra(values, spec)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L84) |
+| `ruda_torch.sharded_mesh.slice_fsdp_extra(value, spec, rank, world)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L103) |
 
 ### `ShardedDataTensorParallelGroup`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ShardedDataTensorParallelGroup(model, mesh, *, data_root=0, tensor_root=0, broadcast_buffers=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L128) |
-| `ShardedDataTensorParallelGroup.gather_metadata(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L41) |
-| `ShardedDataTensorParallelGroup.validate_training_options(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L43) |
-| `ShardedDataTensorParallelGroup.validate_model(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L171) |
-| `ShardedDataTensorParallelGroup.total_weight(local_weight)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L49) |
-| `ShardedDataTensorParallelGroup.validate_microbatches(batches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L175) |
-| `ShardedDataTensorParallelGroup.sum_(value)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py#L67) |
-| `ShardedDataTensorParallelGroup.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L186) |
-| `ShardedDataTensorParallelGroup.begin_gradient_overlap(**options)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L183) |
-| `ShardedDataTensorParallelGroup.replication_factors(parameters)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L193) |
-| `ShardedDataTensorParallelGroup.prepare_optimizer_step(optimizer, *, loss_scale=1.0)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L198) |
-| `ShardedDataTensorParallelGroup.checkpoint_layout(layout)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py#L219) |
+| `ShardedDataTensorParallelGroup(model, mesh, *, data_root=0, tensor_root=0, broadcast_buffers=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L128) |
+| `ShardedDataTensorParallelGroup.gather_metadata(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L41) |
+| `ShardedDataTensorParallelGroup.validate_training_options(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L43) |
+| `ShardedDataTensorParallelGroup.validate_model(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L171) |
+| `ShardedDataTensorParallelGroup.total_weight(local_weight)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L49) |
+| `ShardedDataTensorParallelGroup.validate_microbatches(batches)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L175) |
+| `ShardedDataTensorParallelGroup.sum_(value)` | [Исходный код](../../ruda-torch/python/ruda_torch/hybrid_parallel.py#L67) |
+| `ShardedDataTensorParallelGroup.synchronize_gradients(*, local_weight, normalized=False, missing='zero')` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L186) |
+| `ShardedDataTensorParallelGroup.begin_gradient_overlap(**options)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L183) |
+| `ShardedDataTensorParallelGroup.replication_factors(parameters)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L193) |
+| `ShardedDataTensorParallelGroup.prepare_optimizer_step(optimizer, *, loss_scale=1.0)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L198) |
+| `ShardedDataTensorParallelGroup.checkpoint_layout(layout)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_mesh.py#L219) |
 
 ## `pipeline_trainer`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.PipelineTrainer` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py#L15) |
+| `ruda_torch.PipelineTrainer` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_trainer.py#L15) |
 
 ### `PipelineTrainer`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PipelineTrainer(stage, optimizer, mesh, *, stage_name, base_id, run_config, scaler=None, scheduler=None, input_is_parallel=False, tied_parameters=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py#L24) |
-| `PipelineTrainer.train_step(inputs=None, targets=None, *, local_weight, loss_sum, microbatch_specs=None, schedule='1f1b')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py#L62) |
-| `PipelineTrainer.train_step_autotuned(inputs=None, targets=None, *, local_weight, loss_sum, microbatch_specs=None, autotuner=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py#L161) |
-| `PipelineTrainer.save_distributed(directory, *, application_state=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py#L193) |
-| `PipelineTrainer.resume_distributed(directory, *, generation=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py#L240) |
-| `PipelineTrainer.consolidate(directory, *, generation=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py#L265) |
-| `PipelineTrainer.resume_consolidated(state, *, reshard_application, stage_transform=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py#L272) |
+| `PipelineTrainer(stage, optimizer, mesh, *, stage_name, base_id, run_config, scaler=None, scheduler=None, input_is_parallel=False, tied_parameters=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_trainer.py#L24) |
+| `PipelineTrainer.train_step(inputs=None, targets=None, *, local_weight, loss_sum, microbatch_specs=None, schedule='1f1b')` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_trainer.py#L62) |
+| `PipelineTrainer.train_step_autotuned(inputs=None, targets=None, *, local_weight, loss_sum, microbatch_specs=None, autotuner=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_trainer.py#L161) |
+| `PipelineTrainer.save_distributed(directory, *, application_state=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_trainer.py#L193) |
+| `PipelineTrainer.resume_distributed(directory, *, generation=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_trainer.py#L240) |
+| `PipelineTrainer.consolidate(directory, *, generation=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_trainer.py#L265) |
+| `PipelineTrainer.resume_consolidated(state, *, reshard_application, stage_transform=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_trainer.py#L272) |
 
 ## `pipeline_ties`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.PipelineTiedParameters` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py#L11) |
+| `ruda_torch.PipelineTiedParameters` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_ties.py#L11) |
 
 ### `PipelineTiedParameters`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PipelineTiedParameters(model, mesh, bindings)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py#L20) |
-| `PipelineTiedParameters.validate_optimizer(optimizer)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py#L73) |
-| `PipelineTiedParameters.synchronize_gradients()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py#L83) |
-| `PipelineTiedParameters.replication_count(parameter)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py#L92) |
-| `PipelineTiedParameters.synchronize_state(optimizer)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py#L97) |
-| `PipelineTiedParameters.close()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py#L120) |
+| `PipelineTiedParameters(model, mesh, bindings)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_ties.py#L20) |
+| `PipelineTiedParameters.validate_optimizer(optimizer)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_ties.py#L73) |
+| `PipelineTiedParameters.synchronize_gradients()` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_ties.py#L83) |
+| `PipelineTiedParameters.replication_count(parameter)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_ties.py#L92) |
+| `PipelineTiedParameters.synchronize_state(optimizer)` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_ties.py#L97) |
+| `PipelineTiedParameters.close()` | [Исходный код](../../ruda-torch/python/ruda_torch/pipeline_ties.py#L120) |
 
 ## `training_data`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.StatefulShardSampler` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L9) |
-| `ruda_torch.TokenBudgetBatchSampler` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L148) |
-| `ruda_torch.collate_varlen_causal_lm(samples, *, ignore_index=-100)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L287) |
+| `ruda_torch.StatefulShardSampler` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L9) |
+| `ruda_torch.TokenBudgetBatchSampler` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L148) |
+| `ruda_torch.collate_varlen_causal_lm(samples, *, ignore_index=-100)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L287) |
 
 ### `StatefulShardSampler`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `StatefulShardSampler(length, *, source_id, rank=0, replicas=1, shuffle=False, seed=0, tail='uneven')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L18) |
-| `StatefulShardSampler.from_mesh(length, mesh, **options)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L33) |
-| `StatefulShardSampler.__len__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L47) |
-| `StatefulShardSampler.remaining` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L52) |
-| `StatefulShardSampler.__iter__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L54) |
-| `StatefulShardSampler.commit(count)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L61) |
-| `StatefulShardSampler.rewind_uncommitted()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L66) |
-| `StatefulShardSampler.set_epoch(epoch)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L70) |
-| `StatefulShardSampler.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L78) |
-| `StatefulShardSampler.load_state_dict(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L86) |
-| `StatefulShardSampler.validate_state_dict(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L110) |
-| `StatefulShardSampler.consolidate(states)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L116) |
-| `StatefulShardSampler.from_consolidated(state, *, rank, replicas)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L137) |
+| `StatefulShardSampler(length, *, source_id, rank=0, replicas=1, shuffle=False, seed=0, tail='uneven')` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L18) |
+| `StatefulShardSampler.from_mesh(length, mesh, **options)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L33) |
+| `StatefulShardSampler.__len__()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L47) |
+| `StatefulShardSampler.remaining` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L52) |
+| `StatefulShardSampler.__iter__()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L54) |
+| `StatefulShardSampler.commit(count)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L61) |
+| `StatefulShardSampler.rewind_uncommitted()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L66) |
+| `StatefulShardSampler.set_epoch(epoch)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L70) |
+| `StatefulShardSampler.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L78) |
+| `StatefulShardSampler.load_state_dict(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L86) |
+| `StatefulShardSampler.validate_state_dict(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L110) |
+| `StatefulShardSampler.consolidate(states)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L116) |
+| `StatefulShardSampler.from_consolidated(state, *, rank, replicas)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L137) |
 
 ### `TokenBudgetBatchSampler`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `TokenBudgetBatchSampler(sampler, lengths, *, maximum_tokens, layout, maximum_examples=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L162) |
-| `TokenBudgetBatchSampler.committed` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L178) |
-| `TokenBudgetBatchSampler.issued` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L182) |
-| `TokenBudgetBatchSampler.remaining_examples` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L186) |
-| `TokenBudgetBatchSampler.peek()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L210) |
-| `TokenBudgetBatchSampler.__iter__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L214) |
-| `TokenBudgetBatchSampler.__len__()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L219) |
-| `TokenBudgetBatchSampler.commit(examples)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L227) |
-| `TokenBudgetBatchSampler.rewind_uncommitted()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L230) |
-| `TokenBudgetBatchSampler.set_epoch(epoch)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L233) |
-| `TokenBudgetBatchSampler.state_dict()` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L236) |
-| `TokenBudgetBatchSampler.validate_state_dict(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L240) |
-| `TokenBudgetBatchSampler.load_state_dict(state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L253) |
-| `TokenBudgetBatchSampler.consolidate(states)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L258) |
-| `TokenBudgetBatchSampler.from_consolidated(state, *, rank, replicas)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_data.py#L279) |
+| `TokenBudgetBatchSampler(sampler, lengths, *, maximum_tokens, layout, maximum_examples=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L162) |
+| `TokenBudgetBatchSampler.committed` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L178) |
+| `TokenBudgetBatchSampler.issued` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L182) |
+| `TokenBudgetBatchSampler.remaining_examples` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L186) |
+| `TokenBudgetBatchSampler.peek()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L210) |
+| `TokenBudgetBatchSampler.__iter__()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L214) |
+| `TokenBudgetBatchSampler.__len__()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L219) |
+| `TokenBudgetBatchSampler.commit(examples)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L227) |
+| `TokenBudgetBatchSampler.rewind_uncommitted()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L230) |
+| `TokenBudgetBatchSampler.set_epoch(epoch)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L233) |
+| `TokenBudgetBatchSampler.state_dict()` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L236) |
+| `TokenBudgetBatchSampler.validate_state_dict(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L240) |
+| `TokenBudgetBatchSampler.load_state_dict(state)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L253) |
+| `TokenBudgetBatchSampler.consolidate(states)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L258) |
+| `TokenBudgetBatchSampler.from_consolidated(state, *, rank, replicas)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_data.py#L279) |
 
 ## `varlen_attention`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.varlen_scaled_dot_product_attention(query, key, value, cu_seqlens_q, cu_seqlens_k=None, *, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False, query_block_size=128, key_block_size=256, generator=None, window_size=None, causal_alignment='upper_left')` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/varlen_attention.py#L17) |
+| `ruda_torch.varlen_scaled_dot_product_attention(query, key, value, cu_seqlens_q, cu_seqlens_k=None, *, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False, query_block_size=128, key_block_size=256, generator=None, window_size=None, causal_alignment='upper_left')` | [Исходный код](../../ruda-torch/python/ruda_torch/varlen_attention.py#L17) |
 
 ## `training_checkpoint`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.training_state_dict(model, optimizer, *, base_id, step, data_state, scaler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_checkpoint.py#L42) |
-| `ruda_torch.validate_training_state_dict(model, optimizer, state, *, base_id, scaler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_checkpoint.py#L76) |
-| `ruda_torch.load_training_state_dict(model, optimizer, state, *, base_id, scaler=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_checkpoint.py#L105) |
+| `ruda_torch.training_state_dict(model, optimizer, *, base_id, step, data_state, scaler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_checkpoint.py#L42) |
+| `ruda_torch.validate_training_state_dict(model, optimizer, state, *, base_id, scaler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_checkpoint.py#L76) |
+| `ruda_torch.load_training_state_dict(model, optimizer, state, *, base_id, scaler=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_checkpoint.py#L105) |
 
 ## `training_autotune`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.TrainingAutotuner` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L278) |
-| `ruda_torch.TrainingPlan` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L50) |
-| `ruda_torch.PipelineAutotuner` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L515) |
+| `ruda_torch.TrainingAutotuner` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L278) |
+| `ruda_torch.TrainingPlan` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L50) |
+| `ruda_torch.PipelineAutotuner` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L515) |
 
 ### `TrainingAutotuner`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `TrainingAutotuner(*, repeats=3, max_candidates=12, max_seconds=300.0, rtol=0.0, atol=0.0, max_snapshot_bytes=None, progress=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L290) |
-| `TrainingAutotuner.tune(trainer, microbatches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L388) |
-| `TrainingAutotuner.train_step(trainer, microbatches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L493) |
+| `TrainingAutotuner(*, repeats=3, max_candidates=12, max_seconds=300.0, rtol=0.0, atol=0.0, max_snapshot_bytes=None, progress=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L290) |
+| `TrainingAutotuner.tune(trainer, microbatches)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L388) |
+| `TrainingAutotuner.train_step(trainer, microbatches)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L493) |
 
 ### `TrainingPlan`
 
@@ -1190,22 +1190,22 @@
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `TrainingPlan.apply(trainer, batches)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L57) |
+| `TrainingPlan.apply(trainer, batches)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L57) |
 
 ### `PipelineAutotuner`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `PipelineAutotuner(*, repeats=3, max_candidates=12, max_seconds=300.0, rtol=0.0, atol=0.0, max_snapshot_bytes=None, progress=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L290) |
-| `PipelineAutotuner.tune(trainer, inputs=None, targets=None, *, local_weight, loss_sum, microbatch_specs=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L528) |
-| `PipelineAutotuner.train_step(trainer, inputs=None, targets=None, *, local_weight, loss_sum, microbatch_specs=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/training_autotune.py#L607) |
+| `PipelineAutotuner(*, repeats=3, max_candidates=12, max_seconds=300.0, rtol=0.0, atol=0.0, max_snapshot_bytes=None, progress=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L290) |
+| `PipelineAutotuner.tune(trainer, inputs=None, targets=None, *, local_weight, loss_sum, microbatch_specs=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L528) |
+| `PipelineAutotuner.train_step(trainer, inputs=None, targets=None, *, local_weight, loss_sum, microbatch_specs=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/training_autotune.py#L607) |
 
 ## `sharded_adapter_interop`
 
 | Публичное имя / вызов | Исходный код |
 | --- | --- |
-| `ruda_torch.sharded_adapter_interop.has_sharded_units(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L11) |
-| `ruda_torch.sharded_adapter_interop.adapter_layers(model, *, remove_duplicate=True)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L15) |
-| `ruda_torch.sharded_adapter_interop.sharded_adapter_state_dict(model)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L54) |
-| `ruda_torch.sharded_adapter_interop.load_sharded_adapter_state_dict(model, state)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L83) |
-| `ruda_torch.sharded_adapter_interop.load_sharded_peft_adapter(model, pairs, config, *, module_map=None)` | [Исходный код](../../crates/ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L122) |
+| `ruda_torch.sharded_adapter_interop.has_sharded_units(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L11) |
+| `ruda_torch.sharded_adapter_interop.adapter_layers(model, *, remove_duplicate=True)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L15) |
+| `ruda_torch.sharded_adapter_interop.sharded_adapter_state_dict(model)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L54) |
+| `ruda_torch.sharded_adapter_interop.load_sharded_adapter_state_dict(model, state)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L83) |
+| `ruda_torch.sharded_adapter_interop.load_sharded_peft_adapter(model, pairs, config, *, module_map=None)` | [Исходный код](../../ruda-torch/python/ruda_torch/sharded_adapter_interop.py#L122) |

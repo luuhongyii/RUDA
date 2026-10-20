@@ -23,11 +23,11 @@ Das Tensor-Framework verteilt Vorgänge an Rechenbibliotheken. Anwendungen müss
 |`Tensor<T>`|Kernel-Tensor-Zugriff mit Form- und Schritt-Metadaten|
 |`Runtime`|Ordnet Compiler-, Rechenserver- und Gerätetypen zu|
 
-Die entsprechenden CUDA-Konzepte finden Sie im [Kompatibilitätsleitfaden](compatibility.md). Öffentliche Exporte finden Sie im [DSL-Vorspiel](../../crates/ruda-kernel/src/dsl/prelude.rs).
+Die entsprechenden CUDA-Konzepte finden Sie im [Kompatibilitätsleitfaden](compatibility.md). Öffentliche Exporte finden Sie im [DSL-Vorspiel](../../ruda-kernel/src/dsl/prelude.rs).
 
 ## 3. Ihr erster Kernel
 
-Dieser Kernel stammt aus dem [ptx-runtime-Beispiel](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs), das das vollständige Hostprogramm und die Ausführungsprüfungen enthält:
+Dieser Kernel stammt aus dem [ptx-runtime-Beispiel](../../ruda-driver-cuda/examples/ptx_runtime.rs), das das vollständige Hostprogramm und die Ausführungsprüfungen enthält:
 
 ```rust
 use ruda_kernel::dsl::prelude::*;

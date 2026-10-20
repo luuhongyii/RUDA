@@ -39,7 +39,7 @@
 
 Не поддерживается. IR возвращает `CompilationError::UnsupportedInstruction`. Неверная конфигурация или структура возвращает `CompilationError::Validation`. Диагностика включает в себя префикс `Direct PTX:`. Серверная часть не возвращается к NVRTC автоматически.
 
-Определения: [модуль PTX](../../crates/ruda-compiler/src/ptx/mod.rs), [тесты компилятора](../../crates/ruda-compiler/src/ptx/tests.rs) и [выбор бэкенда среды выполнения](../../crates/ruda-driver-cuda/src/compiler_backend.rs).
+Определения: [модуль PTX](../../ruda-compiler/src/ptx/mod.rs), [тесты компилятора](../../ruda-compiler/src/ptx/tests.rs) и [выбор бэкенда среды выполнения](../../ruda-driver-cuda/src/compiler_backend.rs).
 
 ## 5. Передача packed FP4 и NVFP4 scaled MMA
 
@@ -47,4 +47,4 @@
 
 `CoopMma::ExecuteScaled` принимает только SM 120 с PTX 8.7 или новее, tile `16×8×64`, packed E2M1x2 A/B, F32 C/D, масштабы E4M3 и `scales_factor = 4`. Генерируется `mxf4nvf4.block_scale.scale_vec::4X`, а выходная цель меняется на `sm_120a`. Другие архитектуры, формы tile, форматы масштабов и множители отклоняются; также требуется достаточная ёмкость регистров fragment.
 
-[Packed-операции](../../crates/ruda-compiler/src/ptx/packed.rs), [scaled MMA](../../crates/ruda-compiler/src/ptx/matrix/scaled.rs), [пример передачи и раскладки](../../crates/ruda-driver-cuda/examples/ptx_packed.rs). Пример читает экспортированный PTX и проверяет передачу байтов и координаты fragment; арифметику NVFP4 MMA он не выполняет.
+[Packed-операции](../../ruda-compiler/src/ptx/packed.rs), [scaled MMA](../../ruda-compiler/src/ptx/matrix/scaled.rs), [пример передачи и раскладки](../../ruda-driver-cuda/examples/ptx_packed.rs). Пример читает экспортированный PTX и проверяет передачу байтов и координаты fragment; арифметику NVFP4 MMA он не выполняет.

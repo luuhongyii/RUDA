@@ -2,7 +2,7 @@
 
 [Содержание](README.md) · [API](native-pytorch-api.md) · [Подробные контракты](../en/finetuning.md)
 
-Для Rust — ruda_nn::LoRALinearConfig, PyTorch — inject_lora, локального HF safetensors — load_hf_nf4_model/load_nf4_safetensors. Семейство модели, targets, backbone/head не угадываются; веса не скачиваются и отсутствующие операторы не добавляются. Подготовьте [native-компоненты](../../crates/ruda-torch/README.md). Нужен safetensors, для HF-helper также transformers/accelerate без remote code.
+Для Rust — ruda_nn::LoRALinearConfig, PyTorch — inject_lora, локального HF safetensors — load_hf_nf4_model/load_nf4_safetensors. Семейство модели, targets, backbone/head не угадываются; веса не скачиваются и отсутствующие операторы не добавляются. Подготовьте [native-компоненты](../../ruda-torch/README.md). Нужен safetensors, для HF-helper также transformers/accelerate без remote code.
 
 ## Порядок подготовки
 
@@ -42,4 +42,4 @@ adapter_state_dict/load_adapter_state_dict содержат CPU A/B и стро�
 
 SFTTrainer.save пишет/проверяет next.pt, вращает latest→previous, resume требует точный run_config/scheduler. write_progress пишет локально, RUDA GPU peak остаётся неизвестным. Low-level API не сохраняет автоматически Python/NumPy RNG, внешний sampler или независимый RUDA RNG. merge_lora только eval-Dense без чужих tied base weights, не NF4.
 
-[CLI](../../crates/ruda-torch/python/examples/finetune_causal_lm.py): явно model/data/output/base-id/backbone/head, точные targets, max-length/steps. Output вне repo, targets — paths, не all-linear. Сначала ограниченные реальные input shapes, затем та же конфигурация с --resume; --steps новое общее число. Один проход файла без скрытого repeat/shuffle. --chat/--truncate/--train-on-prompt лишь при нужной supervision; --compile не означает полностью native.
+[CLI](../../ruda-torch/python/examples/finetune_causal_lm.py): явно model/data/output/base-id/backbone/head, точные targets, max-length/steps. Output вне repo, targets — paths, не all-linear. Сначала ограниченные реальные input shapes, затем та же конфигурация с --resume; --steps новое общее число. Один проход файла без скрытого repeat/shuffle. --chat/--truncate/--train-on-prompt лишь при нужной supervision; --compile не означает полностью native.

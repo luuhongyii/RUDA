@@ -9,9 +9,9 @@ spec=importlib.util.spec_from_file_location('ascend_build',ROOT/'tools/ascend/bu
 b=importlib.util.module_from_spec(spec);sys.modules[spec.name]=b;spec.loader.exec_module(b)
 
 def test_production_no_longer_contains_original_cpp_device_headers():
-    assert not (ROOT/'crates/ruda-driver-cann/vendor/deepgemm-ascend').exists()
-    assert not list((ROOT/'crates/ruda-ascend-kernels').rglob('*.hpp'))
-    for p in (ROOT/'crates/ruda-ascend-kernels/src').glob('*.rs'):
+    assert not (ROOT/'ruda-driver-cann/vendor/deepgemm-ascend').exists()
+    assert not list((ROOT/'ruda-ascend-kernels').rglob('*.hpp'))
+    for p in (ROOT/'ruda-ascend-kernels/src').glob('*.rs'):
         if p.name=='tests.rs':continue
         for line in p.read_text().splitlines():
             if line.lstrip().startswith('//!') or line.lstrip().startswith('//'):continue
@@ -19,8 +19,8 @@ def test_production_no_longer_contains_original_cpp_device_headers():
             assert 'bf16_gemm_impl' not in line
 
 def test_kernel_is_structured_rust_not_cpp_template():
-    ir=(ROOT/'crates/ruda-ascend-kernels/src/ir.rs').read_text()
-    core=(ROOT/'crates/ruda-ascend-kernels/src/kernel.rs').read_text()
+    ir=(ROOT/'ruda-ascend-kernels/src/ir.rs').read_text()
+    core=(ROOT/'ruda-ascend-kernels/src/kernel.rs').read_text()
     assert 'Raw(' not in ir and 'Cpp(' not in ir
     for op in ['Op::GlobalToL1','Op::L1ToL0','Op::Mmad','Op::Store','scheduler::persistent']:
         assert op in core
@@ -28,15 +28,15 @@ def test_kernel_is_structured_rust_not_cpp_template():
     assert 'asc_mmad(' not in core  # Target spellings belong to lowering, not algorithms.
 
 def test_runtime_refuses_the_old_cpp_schema():
-    src=(ROOT/'crates/ruda-driver-cann/src/tensor/deepgemm/artifact.rs').read_text()
+    src=(ROOT/'ruda-driver-cann/src/tensor/deepgemm/artifact.rs').read_text()
     assert 'ruda.ascend.rust.bf16.v2' in src
     assert 'ruda.deepgemm.bf16.v1' not in src
     assert 'source_language' in src and 'rust-device-ir' in src
 
 def test_provenance_and_license_retained():
-    meta=json.loads((ROOT/'crates/ruda-ascend-kernels/UPSTREAM.json').read_text())
+    meta=json.loads((ROOT/'ruda-ascend-kernels/UPSTREAM.json').read_text())
     assert meta['archive_commit_comment']=='8491bbb4b8c02a094a2318965f50c70438a3e73c'
-    assert 'Permission is hereby granted' in (ROOT/'crates/ruda-ascend-kernels/LICENSE').read_text()
+    assert 'Permission is hereby granted' in (ROOT/'ruda-ascend-kernels/LICENSE').read_text()
 
 def test_no_rustc_cannot_emit_even_source_only(monkeypatch,tmp_path):
     monkeypatch.setattr(b.shutil,'which',lambda _:None)
@@ -93,6 +93,6 @@ def test_linear_gradient_identity_reference():
         assert abs(np.sum(((xx@w.T)-(x@w.T))*dy)/1e-5-dx[p,q])<1e-6
 
 def test_standalone_rust_has_no_host_device_runtime_dependencies():
-    text=(ROOT/'crates/ruda-ascend-kernels/Cargo.toml').read_text()
+    text=(ROOT/'ruda-ascend-kernels/Cargo.toml').read_text()
     assert text.split('[dependencies]')[1].strip()==''
-    assert '#![forbid(unsafe_code)]' in (ROOT/'crates/ruda-ascend-kernels/src/lib.rs').read_text()
+    assert '#![forbid(unsafe_code)]' in (ROOT/'ruda-ascend-kernels/src/lib.rs').read_text()

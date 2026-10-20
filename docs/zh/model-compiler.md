@@ -68,14 +68,14 @@ def block(x, residual):
 
 | 操作 | 可进入原生区域的重载 |
 | --- | --- |
-| 复制与一元逐点操作 | `aten.clone.default`；`relu`、`silu`、`sigmoid`、`tanh`、`exp`、`log`、`sqrt`、`rsqrt` 等一元操作的 `.default`，完整列表见 [`UNARY_CODES`](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py)。 |
+| 复制与一元逐点操作 | `aten.clone.default`；`relu`、`silu`、`sigmoid`、`tanh`、`exp`、`log`、`sqrt`、`rsqrt` 等一元操作的 `.default`，完整列表见 [`UNARY_CODES`](../../ruda-torch/python/ruda_torch/_graph_spec.py)。 |
 | 张量与标量算术 | `aten.add/sub/mul/div.Tensor` 和 `.Scalar`；张量二元操作要求形状与类型相同，不广播、不做混合类型提升。 |
 | 矩阵乘 | `aten.mm.default`、`aten.bmm.default`；分别要求同类型的二维、三维输入，内维和批次匹配，不做批次广播。 |
 | 保留维度的归约 | `aten.sum.dim_IntList`、`aten.mean.dim`，要求 `keepdim=True`，不指定额外的 `dtype` 转换。 |
 | Softmax 与反向 | `aten._softmax.default`、`aten._log_softmax.default`、`aten._softmax_backward_data.default`、`aten._log_softmax_backward_data.default`；不做半精度到 FP32 的隐式提升，反向类型须匹配。 |
 | 激活反向 | `aten.silu_backward.default`、`aten.sigmoid_backward.default`、`aten.tanh_backward.default`。 |
 
-运行时仍检查 `ruda:0` 设备、稠密布局、FP32/FP16/BF16 类型、非空的 1–8 维形状和节点数限制；输入复制到连续暂存存储，操作输出须为连续布局。标量须能表示为有限 FP32 值。完整分段规则见 [`_compile_native.py`](../../crates/ruda-torch/python/ruda_torch/_compile_native.py)。显式 `GraphOp` 的 RMSNorm/SiLU-mul 节点不代表 AOT 会自动识别对应复合操作。广播、视图、就地修改、随机操作及其他未支持操作在 `native='auto'` 下留在原设备普通执行，在 `native='required'` 下报错。
+运行时仍检查 `ruda:0` 设备、稠密布局、FP32/FP16/BF16 类型、非空的 1–8 维形状和节点数限制；输入复制到连续暂存存储，操作输出须为连续布局。标量须能表示为有限 FP32 值。完整分段规则见 [`_compile_native.py`](../../ruda-torch/python/ruda_torch/_compile_native.py)。显式 `GraphOp` 的 RMSNorm/SiLU-mul 节点不代表 AOT 会自动识别对应复合操作。广播、视图、就地修改、随机操作及其他未支持操作在 `native='auto'` 下留在原设备普通执行，在 `native='required'` 下报错。
 
 不能把 `fullgraph=True` 理解为“全部操作原生捕获”：它只约束 PyTorch 图是否出现断点。`native='required'` 也只审查捕获到的操作。
 
@@ -145,19 +145,19 @@ compiled = torch.compile(model, backend=backend, fullgraph=False)
 
 ```bash
 python -m pytest -q \
-  crates/ruda-torch/python/tests/test_model_compile.py \
-  crates/ruda-torch/python/tests/test_compile_native.py
+  ruda-torch/python/tests/test_model_compile.py \
+  ruda-torch/python/tests/test_compile_native.py
 
-python crates/ruda-torch/tools/check_cpp_bridge.py \
+python ruda-torch/tools/check_cpp_bridge.py \
   --compiler clang++ --static-graph --output ./model-cpp
 RUDA_CPP_TEST_LIBRARY="$(find ./model-cpp -name '_C*.so' -print -quit)" \
-  python -m pytest -q crates/ruda-torch/python/tests/test_model_compile_cpp.py
+  python -m pytest -q ruda-torch/python/tests/test_model_compile_cpp.py
 ```
 
-真实设备验收须先准备匹配的 Rust 和 C++ 组件，可按仓库说明从源码构建，或使用 [Linux/Colab 预编译包](../../crates/ruda-torch/README.md#linuxcolab-precompiled-bundle)：
+真实设备验收须先准备匹配的 Rust 和 C++ 组件，可按仓库说明从源码构建，或使用 [Linux/Colab 预编译包](../../ruda-torch/README.md#linuxcolab-precompiled-bundle)：
 
 ```bash
-RUDA_CUDA_COMPILER=ptx python crates/ruda-torch/tools/validate_model_compile.py \
+RUDA_CUDA_COMPILER=ptx python ruda-torch/tools/validate_model_compile.py \
   --output ./model-gpu-result.json --steps 3
 ```
 

@@ -12,7 +12,7 @@
 | 本地 Hugging Face safetensors 权重 | `load_hf_nf4_model` 或与架构无关的 `load_nf4_safetensors` |
 | 因果语言模型训练 | `CausalLMFinetuner`、`SFTCollator`、`SFTTrainer` |
 
-通用接口不自动选择模型家族、猜测适配器目标、下载权重或补齐缺失设备算子。模型实际调用的前向／反向操作仍须由执行后端支持。原生 PyTorch 使用 `ruda:0`，不是 `torch.cuda` 存储。先准备匹配的[原生组件](../../crates/ruda-torch/README.md#build-and-install)，使用打包权重时还须具备对应 NF4 扩展。
+通用接口不自动选择模型家族、猜测适配器目标、下载权重或补齐缺失设备算子。模型实际调用的前向／反向操作仍须由执行后端支持。原生 PyTorch 使用 `ruda:0`，不是 `torch.cuda` 存储。先准备匹配的[原生组件](../../ruda-torch/README.md#build-and-install)，使用打包权重时还须具备对应 NF4 扩展。
 
 Python safetensors 流式加载需要 `safetensors`；Python HF 辅助入口和命令行示例还需要 `transformers`、`accelerate`。所选架构须能由已安装的 Transformers 在不执行远程代码的情况下构造。T4 的低精度路径选择 FP16，不要在缺少相应硬件支持时选择 BF16。
 
@@ -89,7 +89,7 @@ CLI 在 `<output-dir>/checkpoints/step-NNNNNNNN` 保存 `trainable.safetensors`�
 
 `LoRALinearConfig::new(rank, alpha).with_dropout(p).init(base)` 接收已有 Rust `Linear<B>`，冻结 base 而不改变其参数 ID。A 从输入宽度投影到 rank，B 从 rank 投影到输出宽度并初始化为零，两者使用 base 权重类型；`forward` 保留受支持的前导维度。
 
-Rust 要求 `rank > 0`、`alpha` 有限、`0 <= dropout < 1`，无效配置触发断言；与 Python 不同，不要求 alpha 为正。`merge(self)` 消耗适配器，生成不含适配器 dropout 的冻结稠密投影，不转换优化器状态，也不能用于恢复 LoRA 训练。见 [Rust 实现](../../crates/ruda-nn/src/modules/lora.rs)。
+Rust 要求 `rank > 0`、`alpha` 有限、`0 <= dropout < 1`，无效配置触发断言；与 Python 不同，不要求 alpha 为正。`merge(self)` 消耗适配器，生成不含适配器 dropout 的冻结稠密投影，不转换优化器状态，也不能用于恢复 LoRA 训练。见 [Rust 实现](../../ruda-nn/src/modules/lora.rs)。
 
 ## 打包冻结的 NF4 base
 
@@ -148,12 +148,12 @@ RUDA 上具备 NF4 matmul API 1 时，FP16／BF16 使用融合分块反量化 GE
 
 ## 命令行训练
 
-已有[示例](../../crates/ruda-torch/python/examples/finetune_causal_lm.py) 使用本地模型与 JSONL 输入。先将 `MODEL_DIR`、`DATA_JSONL`、`RUN_DIR`、`BASE_ID`、`BACKBONE`、`HEAD`、`PAD_TOKEN_ID` 和 Bash 数组 `TARGETS` 设置为实际权重、数据、准确模块路径及 tokenizer 的 padding ID。`RUN_DIR` 必须位于仓库外，`BASE_ID` 标识准确的冻结权重及量化配置。CLI `--targets` 接收完整路径，不接收 API 的 `'all-linear'` 特殊字符串。
+已有[示例](../../ruda-torch/python/examples/finetune_causal_lm.py) 使用本地模型与 JSONL 输入。先将 `MODEL_DIR`、`DATA_JSONL`、`RUN_DIR`、`BASE_ID`、`BACKBONE`、`HEAD`、`PAD_TOKEN_ID` 和 Bash 数组 `TARGETS` 设置为实际权重、数据、准确模块路径及 tokenizer 的 padding ID。`RUN_DIR` 必须位于仓库外，`BASE_ID` 标识准确的冻结权重及量化配置。CLI `--targets` 接收完整路径，不接收 API 的 `'all-linear'` 特殊字符串。
 
 先在预期批量／序列形状上运行有界短任务：
 
 ```bash
-python crates/ruda-torch/python/examples/finetune_causal_lm.py \
+python ruda-torch/python/examples/finetune_causal_lm.py \
   --model "$MODEL_DIR" --data "$DATA_JSONL" --output "$RUN_DIR" \
   --base-id "$BASE_ID" --backbone "$BACKBONE" --head "$HEAD" \
   --targets "${TARGETS[@]}" --dtype fp16 --pad-token-id "$PAD_TOKEN_ID" \
@@ -195,7 +195,7 @@ checkpoint／进度文件留在仓库外。扩大工作量前，先评估相同�
 
 NF4Linear、LoRALinear 的 `get_extra_state()`／`set_extra_state(state)` 在普通模块 state-dict 加载时保存并严格检查版本化尺寸／配置，与仅导出适配器的入口不同，不负责加载缺失的冻结 base。
 
-无效元数据／配置抛出 `ValueError`／`TypeError`；缺失原生能力会报错，不改走 CPU。相关实现：[打包及存档](../../crates/ruda-torch/python/ruda_torch/finetuning.py)、[因果训练](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py)，其他训练接口见[原生 API 参考](native-pytorch-api.md)。
+无效元数据／配置抛出 `ValueError`／`TypeError`；缺失原生能力会报错，不改走 CPU。相关实现：[打包及存档](../../ruda-torch/python/ruda_torch/finetuning.py)、[因果训练](../../ruda-torch/python/ruda_torch/causal_finetuning.py)，其他训练接口见[原生 API 参考](native-pytorch-api.md)。
 
 ## DPO、PPO 与 GRPO
 

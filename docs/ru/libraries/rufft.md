@@ -12,10 +12,10 @@ ruFFT вычисляет БПФ и обратные преобразования
 
 ```toml
 [dependencies]
-rufft = { package = "ruda-fft", path = "../RUDA/crates/ruFFT", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rufft = { package = "ruda-fft", path = "../RUDA/ruFFT", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Прямое и обратное преобразование
@@ -115,4 +115,4 @@ fn batched_rfft<R: Runtime>(
 
 N должно быть степенью двойки не менее 2, а действительные и воображаемые фигуры должны совпадать. `signal_len` не может превышать длину входной оси или N. `spec_bins` должно быть не менее 1 и не может превышать длину входной оси спектра или `N / 2 + 1`. Выходные буферы по-прежнему требуют полного выделения; эти интерфейсы позволяют избежать материализации входного хвоста с нулевым дополнением.
 
-API Ссылка: [Тензорный интерфейс](../../../crates/ruFFT/src/tensor.rs), [Прямой запуск](../../../crates/ruFFT/src/fft/rfft.rs), [Обратный запуск](../../../crates/ruFFT/src/fft/irfft.rs).
+API Ссылка: [Тензорный интерфейс](../../../ruFFT/src/tensor.rs), [Прямой запуск](../../../ruFFT/src/fft/rfft.rs), [Обратный запуск](../../../ruFFT/src/fft/irfft.rs).

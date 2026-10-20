@@ -41,9 +41,9 @@ Verwenden Sie `finish_collective` für den regulären Abschluss. `reset_collecti
 
 Die Funktion `cuda` aktiviert das Tensor-Backend CUDA. Führen Sie `cargo run --locked -p ruCCL --features cuda --example all_reduce` aus, um Ring AllReduce mit vier logischen Rängen auf GPU 0 auszuführen. Es überprüft die Summe/den Mittelwert über 257 FP32-Elemente, die Beibehaltung der Eingaben und den Sitzungsausgang.
 
-Geräteadapter befinden sich in [tensor_device](../../../crates/ruCCL/src/tensor_device). Informationen zur Optimierungsschnittstelle finden Sie unter [explizite Ranggradientenreduzierung](../../../crates/ruda-optim/src/optim/grads/collective.rs). Übertragungen umfassen einen vom Host bereitgestellten Pfad, keine Nullkopie P2P.
+Geräteadapter befinden sich in [tensor_device](../../../ruCCL/src/tensor_device). Informationen zur Optimierungsschnittstelle finden Sie unter [explizite Ranggradientenreduzierung](../../../ruda-optim/src/optim/grads/collective.rs). Übertragungen umfassen einen vom Host bereitgestellten Pfad, keine Nullkopie P2P.
 
-Quelle: [kollektiv API](../../../crates/ruCCL/src/api.rs), [Konfiguration](../../../crates/ruCCL/src/config.rs), [Rang](../../../crates/ruCCL/src/rank/mod.rs) und [In-Prozess-Implementierung](../../../crates/ruCCL/src/in_process/mod.rs).
+Quelle: [kollektiv API](../../../ruCCL/src/api.rs), [Konfiguration](../../../ruCCL/src/config.rs), [Rang](../../../ruCCL/src/rank/mod.rs) und [In-Prozess-Implementierung](../../../ruCCL/src/in_process/mod.rs).
 
 ## 6. Kollektive Schulung
 
@@ -58,7 +58,7 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 
 `run` erfordert ein Verzeichnis, das noch nicht existiert. Es speichert das Modell und den Optimierer jedes Rangs nach der ersten Aktualisierung und führt dann die zweite Aktualisierung aus. `resume` stellt dieses Verzeichnis wieder her und führt das zweite Update aus. Wenn CUDA aktiviert ist, verwenden beide logischen Ränge in diesem Beispiel dasselbe Standardgerät.
 
-Die vollständige Anrufsequenz finden Sie im [Beispiel für ein gemeinsames Training](../../../crates/ruda-optim/examples/collective_training.rs). Um auch den Planerstatus und die ausstehenden akkumulierten Verläufe zu speichern, verwenden Sie `TrainingRecord` aus [Trainings- und Speicherstatus](../training.md).
+Die vollständige Anrufsequenz finden Sie im [Beispiel für ein gemeinsames Training](../../../ruda-optim/examples/collective_training.rs). Um auch den Planerstatus und die ausstehenden akkumulierten Verläufe zu speichern, verwenden Sie `TrainingRecord` aus [Trainings- und Speicherstatus](../training.md).
 
 ## 8. Streaming-All-Gather und rank-lokales Matmul
 
@@ -70,4 +70,4 @@ Alle Ranks müssen Aufrufreihenfolge, Shard-Länge und Elementtyp abstimmen. Der
 
 Jedes Shard-Matmul wird vor dem nächsten Shard synchronisiert, damit auch verzögerte Backends während der Host-Kommunikation rechnen. Dies ist host-staged Überlappung, keine GPU-P2P-Übertragung, kein fusionierter Gerätekernel und keine Beschleunigungsgarantie.
 
-[Streaming-Ring](../../../crates/ruCCL/src/rank/device_collective/all_gather_stream.rs), [Tensor-Matmul-Adapter](../../../crates/ruCCL/src/tensor_device/all_gather_matmul.rs).
+[Streaming-Ring](../../../ruCCL/src/rank/device_collective/all_gather_stream.rs), [Tensor-Matmul-Adapter](../../../ruCCL/src/tensor_device/all_gather_matmul.rs).

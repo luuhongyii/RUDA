@@ -16,7 +16,7 @@ ruBLAS は、線形代数演算とデバイス テンソル インターフェ�
 |`tensor-int4`|`rublas::tensor_int4`|
 |`tensor-grouped`|`rublas::tensor_grouped`|
 
-Cargo パッケージは `rublas` です。必要な機能を選択し、汎用パスの不要なデフォルトを無効にします。 [Cargo.toml](../../../crates/ruBLAS/Cargo.toml)を参照してください。
+Cargo パッケージは `rublas` です。必要な機能を選択し、汎用パスの不要なデフォルトを無効にします。 [Cargo.toml](../../../ruBLAS/Cargo.toml)を参照してください。
 
 ## 2. 行列の乗算、ベクトル、および INT4
 
@@ -46,11 +46,11 @@ fn residue_matmul<R: Runtime>(
 
 入力 `[M, K]` および `[K, N]` は、`[M, N]` を生成します。無効なセットアップまたは欠落しているデバイス機能がある場合は、Naive に切り替えるのではなく、`MatmulSetupError` を返します。
 
-[行列乗算エントリ ポイント](../../../crates/ruBLAS/src/tensor_matmul/base.rs) を参照してください。
+[行列乗算エントリ ポイント](../../../ruBLAS/src/tensor_matmul/base.rs) を参照してください。
 
 ### ベクトルの外積
 
-`rublas::tensor_vector::cross(lhs, rhs, dim)` は選択した次元の長さが 3 であることを要求し、デバイステンソルを返します。最後以外の次元で計算する場合は、軸の置換と連続配置への変換を伴います。[cross.rs](../../../crates/ruBLAS/src/tensor_vector/cross.rs) を参照してください。
+`rublas::tensor_vector::cross(lhs, rhs, dim)` は選択した次元の長さが 3 であることを要求し、デバイステンソルを返します。最後以外の次元で計算する場合は、軸の置換と連続配置への変換を伴います。[cross.rs](../../../ruBLAS/src/tensor_vector/cross.rs) を参照してください。
 
 ### AWQ INT4
 
@@ -65,9 +65,9 @@ fn residue_matmul<R: Runtime>(
 |scales|F16|[K/G, N]|
 |bias (オプション)|F16|[N]|
 
-K、N、および G はゼロ以外でなければなりません。 K は G で割り切れ、N は 8 で割り切れる必要があります。入力の最終次元は K で、出力では N に置き換えられます。すべてのオペランドはデバイスを共有する必要があります。パックされたビット順序は [AWQ カーネル](../../../crates/ruBLAS/src/tensor_int4/kernel.rs) と一致する必要があります。任意の INT4 ファイルを直接 qweight として使用することはできません。
+K、N、および G はゼロ以外でなければなりません。 K は G で割り切れ、N は 8 で割り切れる必要があります。入力の最終次元は K で、出力では N に置き換えられます。すべてのオペランドはデバイスを共有する必要があります。パックされたビット順序は [AWQ カーネル](../../../ruBLAS/src/tensor_int4/kernel.rs) と一致する必要があります。任意の INT4 ファイルを直接 qweight として使用することはできません。
 
-オブジェクトとそのチェックについては、[INT4 インターフェイス](../../../crates/ruBLAS/src/tensor_int4/mod.rs) を参照してください。
+オブジェクトとそのチェックについては、[INT4 インターフェイス](../../../ruBLAS/src/tensor_int4/mod.rs) を参照してください。
 
 ## 3. グループ化された行列の乗算
 
@@ -91,7 +91,7 @@ K、N、および G はゼロ以外でなければなりません。 K は G で
 - 関連する要素数は、U32 インデックスに適合する必要があります。
 - 無効な引数は `GroupedMatmulError` を返します。リードバックまたは同期中の非同期実行エラーを処理します。
 
-ソース: [グループ化されたインターフェイス](../../../crates/ruBLAS/src/tensor_grouped/mod.rs) および [カーネル](../../../crates/ruBLAS/src/tensor_grouped/kernel.rs)。
+ソース: [グループ化されたインターフェイス](../../../ruBLAS/src/tensor_grouped/mod.rs) および [カーネル](../../../ruBLAS/src/tensor_grouped/kernel.rs)。
 
 ## 5. 他のライブラリとの統合
 

@@ -90,7 +90,7 @@ use ruda_autodiff::solver_host::{solve_host, cholesky_host,
 ```
 
 FP64 Host 数据要显式建立，不能用默认FP32数据假装64位。示例测试在
-`crates/ruda-autodiff/src/solver_host.rs`，其中直接组合 `.sum().backward()`。
+`ruda-autodiff/src/solver_host.rs`，其中直接组合 `.sum().backward()`。
 目前是**一阶**：反向产生 Host primitive，不构造二阶图。
 现有 Backward trait 不返回 Result；前向尽量提前验证，反向遇到非法 cotangent/算术失败会带上下文 panic，
 不会静默生成零梯度。复数、稀疏、分布式和 GPU 的自动图接入不在本轮范围。

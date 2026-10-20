@@ -74,14 +74,14 @@ def test_preflight_fails_instead_of_skipping(monkeypatch):
 
 def test_source_wiring_is_shared_ir_not_v38_matrix_stage():
     root=TOOLS.parents[1]
-    compiler=(root/'crates/ruda-compiler/src/ascend/mod.rs').read_text()
+    compiler=(root/'ruda-compiler/src/ascend/mod.rs').read_text()
     assert 'impl Compiler for AscendCompiler' in compiler
     assert 'kernel: KernelDefinition' in compiler
     assert 'ruda-ascend-kernels' not in compiler
-    programs=(root/'crates/ruda-compiler/src/ascend/programs.rs').read_text()
+    programs=(root/'ruda-compiler/src/ascend/programs.rs').read_text()
     assert 'KernelDefinition' in programs and 'Arithmetic::' in programs
     assert 'AscendC::' not in programs and 'deep_gemm' not in programs
-    runtime=(root/'crates/ruda-driver-cann/src/tensor/common_ir/mod.rs').read_text()
+    runtime=(root/'ruda-driver-cann/src/tensor/common_ir/mod.rs').read_text()
     assert 'validate_ranges(&ranges)?' in runtime
     assert 'session.quiescent.set(false)' in runtime
     assert 'aclrtSynchronizeStream' in runtime

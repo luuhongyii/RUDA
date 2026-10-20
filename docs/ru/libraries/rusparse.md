@@ -94,4 +94,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Эти методы вычислений возвращают `Result`. Тензоры значений, используемые в разреженных операциях платформы, должны быть неквантованными.
 
-API Ссылка: [Устройство CSR](../../../crates/ruSPARSE/src/tensor/mod.rs), [Рамка CSR](../../../crates/ruda-tensor/src/api/sparse.rs).
+API Ссылка: [Устройство CSR](../../../ruSPARSE/src/tensor/mod.rs), [Рамка CSR](../../../ruda-tensor/src/api/sparse.rs).

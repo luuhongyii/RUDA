@@ -20,10 +20,10 @@ Cargo package 名为 `ruPRIM`，Rust 导入名为 `ruprim`。按所需操作启�
 
 ```toml
 [dependencies]
-ruprim = { package = "ruPRIM", path = "../RUDA/crates/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+ruprim = { package = "ruPRIM", path = "../RUDA/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. 求和、逐行归约与扫描
@@ -175,4 +175,4 @@ fn indexing_example(device: &CudaDevice) -> Result<(), Box<dyn std::error::Error
 
 负指数可使用 `Scalar::Int(-2)`；不要先把整数指数转成浮点指数。索引及逐元素接口直接返回设备张量；需要保留输入供其他操作使用时像示例一样传入克隆句柄，并接收每次操作返回的张量。
 
-接口参考：[归约](../../../crates/ruPRIM/src/reduce/tensor/base.rs)、[扫描](../../../crates/ruPRIM/src/scan/tensor.rs)、[索引](../../../crates/ruPRIM/src/indexing/mod.rs)、[整数幂](../../../crates/ruPRIM/src/elementwise/binary/integer_power.rs)。
+接口参考：[归约](../../../ruPRIM/src/reduce/tensor/base.rs)、[扫描](../../../ruPRIM/src/scan/tensor.rs)、[索引](../../../ruPRIM/src/indexing/mod.rs)、[整数幂](../../../ruPRIM/src/elementwise/binary/integer_power.rs)。

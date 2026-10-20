@@ -86,9 +86,9 @@ def test_incomplete_device_logs_are_not_success(edit):
 
 def test_public_ir_is_reused_not_another_algorithm_wrapper():
     src=TOOLS.parents[1]
-    algorithms=(src/'crates/ruda-compiler/src/ascend/row_programs.rs').read_text()
-    lower=(src/'crates/ruda-compiler/src/ascend/rows.rs').read_text()
-    emit=(src/'crates/ruda-compiler/src/ascend/row_emit.rs').read_text()
+    algorithms=(src/'ruda-compiler/src/ascend/row_programs.rs').read_text()
+    lower=(src/'ruda-compiler/src/ascend/rows.rs').read_text()
+    emit=(src/'ruda-compiler/src/ascend/row_emit.rs').read_text()
     assert 'KernelDefinition' in algorithms and 'Plane::Sum' in algorithms
     assert 'AscendC::' not in algorithms and '#include' not in algorithms and 'aclnn' not in algorithms
     assert 'Operation::Plane' in lower and 'ruda_dim.x != LANES' in lower
@@ -98,7 +98,7 @@ def test_public_ir_is_reused_not_another_algorithm_wrapper():
 
 
 def test_runtime_allocates_each_output_from_its_binding():
-    text=(TOOLS.parents[1]/'crates/ruda-driver-cann/src/tensor/common_ir/mod.rs').read_text()
+    text=(TOOLS.parents[1]/'ruda-driver-cann/src/tensor/common_ir/mod.rs').read_text()
     assert '[(b.bytes / 4) as i64]' in text
     assert 'validate_ranges(&ranges)?' in text
     assert 't.layout.byte_len() as u64!=b.bytes' in text

@@ -26,7 +26,7 @@ use ruda_kernel::dsl::Runtime;
 let client = CudaRuntime::client(&CudaDevice::default());
 ```
 
-完整运行示例见 [ptx-runtime](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)。设备索引标识当前机器的枚举位置，不是跨机器或设备重排后稳定不变的身份标识。
+完整运行示例见 [ptx-runtime](../../ruda-driver-cuda/examples/ptx_runtime.rs)。设备索引标识当前机器的枚举位置，不是跨机器或设备重排后稳定不变的身份标识。
 
 ## 3. 配置入口
 
@@ -44,7 +44,7 @@ let client = CudaRuntime::client(&CudaDevice::default());
 
 后端实现通过 `Runtime` 关联设备、编译器和计算服务；上层通过 `ComputeClient` 使用公共契约。先确认后端的存储、编译错误、同步与能力查询语义，再接入领域库。
 
-源码入口：[CUDA 导出](../../crates/ruda-driver-cuda/src/lib.rs)、[设备类型](../../crates/ruda-driver-cuda/src/device.rs)、[运行时实现](../../crates/ruda-driver-cuda/src/runtime.rs)、[Runtime trait](../../crates/ruda-runtime/src/runtime/backend.rs)。
+源码入口：[CUDA 导出](../../ruda-driver-cuda/src/lib.rs)、[设备类型](../../ruda-driver-cuda/src/device.rs)、[运行时实现](../../ruda-driver-cuda/src/runtime.rs)、[Runtime trait](../../ruda-runtime/src/runtime/backend.rs)。
 
 ## 6. CUDA Stream 与 Event 互操作
 

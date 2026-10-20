@@ -4,17 +4,17 @@ on:
   push:
     branches: [main]
     paths:
-      - 'crates/ruBLAS/**'
-      - 'crates/ruFFT/**'
-      - 'crates/ruDNN/**'
-      - 'crates/ruPRIM/**'
-      - 'crates/ruRAND/**'
-      - 'crates/ruSPARSE/**'
-      - 'crates/ruTENSOR/**'
-      - 'crates/ruCCL/**'
-      - 'crates/ruLLM/**'
-      - 'crates/ruSOLVER/**'
-      - 'crates/ruINTEGRATE/**'
+      - 'ruBLAS/**'
+      - 'ruFFT/**'
+      - 'ruDNN/**'
+      - 'ruPRIM/**'
+      - 'ruRAND/**'
+      - 'ruSPARSE/**'
+      - 'ruTENSOR/**'
+      - 'ruCCL/**'
+      - 'ruLLM/**'
+      - 'ruSOLVER/**'
+      - 'ruINTEGRATE/**'
       - '.github/workflows/mirror-libraries.yml'
   workflow_dispatch:
   workflow_run:
@@ -39,17 +39,17 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          - {prefix: crates/ruBLAS, repository: ruBLAS, secret: MIRROR_RUBLAS_KEY}
-          - {prefix: crates/ruFFT, repository: ruFFT, secret: MIRROR_RUFFT_KEY}
-          - {prefix: crates/ruDNN, repository: ruDNN, secret: MIRROR_RUDNN_KEY}
-          - {prefix: crates/ruPRIM, repository: ruPRIM, secret: MIRROR_RUPRIM_KEY}
-          - {prefix: crates/ruRAND, repository: ruRAND, secret: MIRROR_RURAND_KEY}
-          - {prefix: crates/ruSPARSE, repository: ruSPARSE, secret: MIRROR_RUSPARSE_KEY}
-          - {prefix: crates/ruTENSOR, repository: ruTENSOR, secret: MIRROR_RUTENSOR_KEY}
-          - {prefix: crates/ruCCL, repository: ruCCL, secret: MIRROR_RUCCL_KEY}
-          - {prefix: crates/ruLLM, repository: ruLLM, secret: MIRROR_RULLM_KEY}
-          - {prefix: crates/ruSOLVER, repository: ruSOLVER, secret: MIRROR_RUSOLVER_KEY}
-          - {prefix: crates/ruINTEGRATE, repository: ruINTEGRATE, secret: MIRROR_RUINTEGRATE_KEY}
+          - {prefix: ruBLAS, repository: ruBLAS, secret: MIRROR_RUBLAS_KEY}
+          - {prefix: ruFFT, repository: ruFFT, secret: MIRROR_RUFFT_KEY}
+          - {prefix: ruDNN, repository: ruDNN, secret: MIRROR_RUDNN_KEY}
+          - {prefix: ruPRIM, repository: ruPRIM, secret: MIRROR_RUPRIM_KEY}
+          - {prefix: ruRAND, repository: ruRAND, secret: MIRROR_RURAND_KEY}
+          - {prefix: ruSPARSE, repository: ruSPARSE, secret: MIRROR_RUSPARSE_KEY}
+          - {prefix: ruTENSOR, repository: ruTENSOR, secret: MIRROR_RUTENSOR_KEY}
+          - {prefix: ruCCL, repository: ruCCL, secret: MIRROR_RUCCL_KEY}
+          - {prefix: ruLLM, repository: ruLLM, secret: MIRROR_RULLM_KEY}
+          - {prefix: ruSOLVER, repository: ruSOLVER, secret: MIRROR_RUSOLVER_KEY}
+          - {prefix: ruINTEGRATE, repository: ruINTEGRATE, secret: MIRROR_RUINTEGRATE_KEY}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:

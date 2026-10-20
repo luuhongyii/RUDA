@@ -12,10 +12,10 @@ Das Cargo-Paket ist `ruTENSOR`; Der Rust-Importname lautet `rutensor`. Die Stand
 
 ```toml
 [dependencies]
-rutensor = { package = "ruTENSOR", path = "../RUDA/crates/ruTENSOR" }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rutensor = { package = "ruTENSOR", path = "../RUDA/ruTENSOR" }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Kontraktion, Reduktion und Permutation
@@ -160,6 +160,6 @@ Die vollständige Teilmengen-Dynamikprogrammierung hat exponentiellen Aufwand in
 
 Zwei-Eingabe-Kontraktionen können ruBLAS verwenden: gleicher F16-/BF16-/F32-Speichertyp, F32-Berechnung, genau eine gemeinsame K-Achse und M/N als letzte Ausgabeachsen. Diagonallabel sind ausgeschlossen, unäre Transformationen auf Identity/Conjugate beschränkt; Batch-Achsen dürfen broadcasten. Andere Fälle sowie abgelehnte matmul-Setups verwenden den allgemeinen Kernel. Startfehler werden zurückgegeben, nicht verborgen. Alpha/Beta-Epilog, optionales C und Ausgabedeskriptor bleiben erhalten.
 
-[Pfadplanung](../../../crates/ruTENSOR/src/path.rs), [Matrixdispatch](../../../crates/ruTENSOR/src/matmul.rs), [einsum-Plan](../../../crates/ruTENSOR/src/einsum.rs).
+[Pfadplanung](../../../ruTENSOR/src/path.rs), [Matrixdispatch](../../../ruTENSOR/src/matmul.rs), [einsum-Plan](../../../ruTENSOR/src/einsum.rs).
 
 ruTENSOR macht einen Ruda Rust API sichtbar, nicht den NVIDIA cuTENSOR C ABI. Das Gerät muss die ausgewählten Speicher- und Rechentypen unterstützen.

@@ -12,7 +12,7 @@ These guides follow remote `main` at `04fb9b6b` (2026-10-16), whose workspace ve
 | --- | --- |
 | Run your first GPU kernel | [Installation and quickstart](getting-started.md) → [Programming guide](programming-guide.md) |
 | Use PyTorch on `ruda:0` | [Native PyTorch quickstart](native-pytorch-quickstart.md) → [Native API](native-pytorch-api.md) |
-| Install v0.1.96 wheels or use packed quantization | [Release installation](../../crates/ruda-torch/README.md#release-wheels) → [GPTQ/GGUF and quantized KV](native-pytorch-api.md#packed-quantization-and-checkpoint-import) |
+| Install v0.1.96 wheels or use packed quantization | [Release installation](../../ruda-torch/README.md#release-wheels) → [GPTQ/GGUF and quantized KV](native-pytorch-api.md#packed-quantization-and-checkpoint-import) |
 | Use matrix, sparse, or neural network operations | [Compute libraries](libraries/README.md) → [Tensors and frameworks](tensor-framework.md) |
 | Train models, accumulate gradients, and save state | [Training and saving state](training.md) |
 | Fine-tune a local model with LoRA or NF4 | [Fine-tuning and recovery](finetuning.md) |

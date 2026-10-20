@@ -4,16 +4,16 @@
 
 本页按设备、内存和执行职责介绍当前通用运行时入口。模块位于 `ruda::runtime`，需要 `ruda/runtime` feature；具体后端还需对应驱动 crate。
 
-CUDA 将 shape 和 strides 均为空的零维复制描述符按一个标量元素处理，而不是空张量；某一维长度为零才表示空传输。见 [CUDA 复制实现](../../crates/ruda-driver-cuda/src/execution/command.rs)。
+CUDA 将 shape 和 strides 均为空的零维复制描述符按一个标量元素处理，而不是空张量；某一维长度为零才表示空传输。见 [CUDA 复制实现](../../ruda-driver-cuda/src/execution/command.rs)。
 
 ## 1. 核心类型
 
 | 类型 | 职责 | 定义 |
 | --- | --- | --- |
-| `Runtime` | 关联 Compiler、Server、Device，获取设备客户端 | [backend.rs](../../crates/ruda-runtime/src/runtime/backend.rs) |
-| `ComputeClient<R>` | 内存分配、Kernel 提交、回读、同步及能力查询 | [client.rs](../../crates/ruda-runtime/src/runtime/client.rs) |
-| `ComputeServer` | 设备后端执行契约 | [server 模块](../../crates/ruda-runtime/src/runtime/server/mod.rs) |
-| `RudaTensor<R>` | 设备存储与张量元数据 | [张量定义](../../crates/ruda-kernel/src/tensor/base.rs) |
+| `Runtime` | 关联 Compiler、Server、Device，获取设备客户端 | [backend.rs](../../ruda-runtime/src/runtime/backend.rs) |
+| `ComputeClient<R>` | 内存分配、Kernel 提交、回读、同步及能力查询 | [client.rs](../../ruda-runtime/src/runtime/client.rs) |
+| `ComputeServer` | 设备后端执行契约 | [server 模块](../../ruda-runtime/src/runtime/server/mod.rs) |
+| `RudaTensor<R>` | 设备存储与张量元数据 | [张量定义](../../ruda-kernel/src/tensor/base.rs) |
 
 `R::client(&device)` 获取对应运行时的客户端。`R::Device` 决定设备类型；同一个泛型参数并不意味着不同物理设备的存储可以直接互用。
 

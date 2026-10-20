@@ -2,7 +2,7 @@
 
 [Inhalt](README.md) · [API](native-pytorch-api.md) · [Detaillierte Verträge](../en/finetuning.md)
 
-Rust nutzt ruda_nn::LoRALinearConfig, PyTorch inject_lora, lokale HF-safetensors load_hf_nf4_model/load_nf4_safetensors. Modellfamilie, Targets und Backbone/Head werden nicht geraten; keine Downloads oder fehlenden Geräteoperatoren werden ergänzt. Passende [native Komponenten](../../crates/ruda-torch/README.md) vorbereiten. Streaming benötigt safetensors, der HF-Helper außerdem transformers/accelerate ohne Remote-Code.
+Rust nutzt ruda_nn::LoRALinearConfig, PyTorch inject_lora, lokale HF-safetensors load_hf_nf4_model/load_nf4_safetensors. Modellfamilie, Targets und Backbone/Head werden nicht geraten; keine Downloads oder fehlenden Geräteoperatoren werden ergänzt. Passende [native Komponenten](../../ruda-torch/README.md) vorbereiten. Streaming benötigt safetensors, der HF-Helper außerdem transformers/accelerate ohne Remote-Code.
 
 ## Reihenfolge
 
@@ -42,4 +42,4 @@ adapter_state_dict/load_adapter_state_dict speichern CPU A/B und strikte Namen/R
 
 SFTTrainer.save schreibt/geprüft next.pt und rotiert latest nach previous; resume verlangt exakte run_config und Scheduler. write_progress schreibt lokal, RUDA GPU-Peak bleibt unbekannt. Low-level API erfasst nicht automatisch Python/NumPy-RNG, externe Sampler oder unabhängigen RUDA-RNG. merge_lora nur für eval-Dense ohne geteilte Base-Gewichte, nicht NF4.
 
-[CLI](../../crates/ruda-torch/python/examples/finetune_causal_lm.py): model/data/output/base-id/backbone/head, exakte targets, max-length/steps angeben. Output außerhalb Repo; targets nimmt Pfade, nicht all-linear. Zuerst begrenzte reale Input-Shapes, dann dieselbe Konfiguration mit --resume. --steps ist das neue Gesamtziel. Ein Dateidurchlauf, kein implizites Repeat/Shuffle. --chat/--truncate/--train-on-prompt nur mit beabsichtigter Supervision; --compile bedeutet nicht vollständig native Ausführung.
+[CLI](../../ruda-torch/python/examples/finetune_causal_lm.py): model/data/output/base-id/backbone/head, exakte targets, max-length/steps angeben. Output außerhalb Repo; targets nimmt Pfade, nicht all-linear. Zuerst begrenzte reale Input-Shapes, dann dieselbe Konfiguration mit --resume. --steps ist das neue Gesamtziel. Ein Dateidurchlauf, kein implizites Repeat/Shuffle. --chat/--truncate/--train-on-prompt nur mit beabsichtigter Supervision; --compile bedeutet nicht vollständig native Ausführung.

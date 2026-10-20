@@ -8,7 +8,7 @@ The application launches processes, chooses each physical CUDA ordinal before na
 
 `ParallelMesh(data_parallel=..., tensor_parallel=..., pipeline_parallel=...)` covers the entire initialized process group. Its shape is `(DP, PP, TP)`, its coordinates are `(data_rank, pipeline_rank, tensor_rank)`, and global rank is `(data_rank * PP + pipeline_rank) * TP + tensor_rank`. Every rank supplies identical configuration and creates groups in the same order. `mesh.data`, `mesh.pipeline`, `mesh.tensor`, and `mesh.stage` are different communication scopes; `close()` releases owned groups. The mesh neither launches workers nor infers stage partitions.
 
-Sources: [ParallelMesh and TensorParallelGroup](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py), [ReplicaGroup](../../crates/ruda-torch/python/ruda_torch/distributed_training.py).
+Sources: [ParallelMesh and TensorParallelGroup](../../ruda-torch/python/ruda_torch/parallel_mesh.py), [ReplicaGroup](../../ruda-torch/python/ruda_torch/distributed_training.py).
 
 ## Tensor-parallel model conversion
 
@@ -25,7 +25,7 @@ The model-parallel derivative pairs are: `copy_to_tensor_parallel` copies forwar
 
 `tensor_parallel_state_dict` collectively reconstructs full state on every rank; `load_tensor_parallel_state_dict` loads an ordinary full dictionary into the prepared partition. Full reconstruction can consume full-model host memory. For large local safetensors checkpoints, `load_tensor_parallel_safetensors` fills an already partitioned meta model directly; caller-provided dtype maps and exact NF4 targets remain explicit.
 
-Source: [parallel projections, conversion and state](../../crates/ruda-torch/python/ruda_torch/parallel_training.py), [streamed checkpoint loading](../../crates/ruda-torch/python/ruda_torch/parallel_checkpoint_io.py).
+Source: [parallel projections, conversion and state](../../ruda-torch/python/ruda_torch/parallel_training.py), [streamed checkpoint loading](../../ruda-torch/python/ruda_torch/parallel_checkpoint_io.py).
 
 ## NF4 and LoRA partitions and interoperability
 
@@ -37,7 +37,7 @@ Source: [parallel projections, conversion and state](../../crates/ruda-torch/pyt
 - `load_tensor_parallel_bnb_nf4_safetensors` streams prequantized bases into rank-local packed TP projections.
 - `load_peft_adapter` loads explicit PEFT A/B matrices with caller-specified paths; `save_peft_adapter` exports full matrices to a new directory. It does not infer model-family target paths.
 
-Sources: [parallel adapters](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py), [NF4 checkpoint formats](../../crates/ruda-torch/python/ruda_torch/quantization_interop.py), [PEFT adapter files](../../crates/ruda-torch/python/ruda_torch/adapter_interop.py).
+Sources: [parallel adapters](../../ruda-torch/python/ruda_torch/parallel_adapters.py), [NF4 checkpoint formats](../../ruda-torch/python/ruda_torch/quantization_interop.py), [PEFT adapter files](../../ruda-torch/python/ruda_torch/adapter_interop.py).
 
 ## FSDP, ZeRO, and exact Muon updates
 
@@ -56,7 +56,7 @@ Sources: [parallel adapters](../../crates/ruda-torch/python/ruda_torch/parallel_
 
 Do not independently average TP ranks that share one loss, or apply full-matrix Muon to a fragment as though it were the whole parameter. Exact constructor/group/optimizer options are in the [signature reference](python-api-signatures.md).
 
-Sources: [FSDP/ZeRO](../../crates/ruda-torch/python/ruda_torch/sharded_training.py), [hybrid coordination](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py), [nested FSDP/TP](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py), [sharded Muon](../../crates/ruda-torch/python/ruda_torch/sharded_optim.py), [TP/mesh Muon](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py).
+Sources: [FSDP/ZeRO](../../ruda-torch/python/ruda_torch/sharded_training.py), [hybrid coordination](../../ruda-torch/python/ruda_torch/hybrid_parallel.py), [nested FSDP/TP](../../ruda-torch/python/ruda_torch/sharded_mesh.py), [sharded Muon](../../ruda-torch/python/ruda_torch/sharded_optim.py), [TP/mesh Muon](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py).
 
 ## Pipeline boundaries and optimizer steps
 
@@ -66,7 +66,7 @@ Sources: [FSDP/ZeRO](../../crates/ruda-torch/python/ruda_torch/sharded_training.
 
 `PipelineTiedParameters` binds the same logical weight through explicit symbols on owner stages and validates its optimizer ownership. Save/resume uses the trainer's all-stage recovery methods; retrying a partially updated stage without restore is not recovery.
 
-Sources: [tensor pipeline](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py), [tree boundaries](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py), [trainer](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py), [stage ties](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py).
+Sources: [tensor pipeline](../../ruda-torch/python/ruda_torch/pipeline_training.py), [tree boundaries](../../ruda-torch/python/ruda_torch/structured_pipeline.py), [trainer](../../ruda-torch/python/ruda_torch/pipeline_trainer.py), [stage ties](../../ruda-torch/python/ruda_torch/pipeline_ties.py).
 
 ## Committed data cursors and packed supervision
 
@@ -74,7 +74,7 @@ Sources: [tensor pipeline](../../crates/ruda-torch/python/ruda_torch/pipeline_tr
 
 `TokenBudgetBatchSampler` batches using actual caller-provided token costs while retaining sampler order. `collate_varlen_causal_lm` packs explicit labels without cross-document next-token targets or implicit truncation. `PackedCausalLMFinetuner` expects a flat-token backbone/head contract; `CausalLMTrainer` provides full-parameter training instead of SFTTrainer's adapter-only snapshots.
 
-Sources: [sampler and token budgets](../../crates/ruda-torch/python/ruda_torch/training_data.py), [causal trainers](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py).
+Sources: [sampler and token budgets](../../ruda-torch/python/ruda_torch/training_data.py), [causal trainers](../../ruda-torch/python/ruda_torch/causal_finetuning.py).
 
 ## Full-model and all-rank checkpoints
 
@@ -86,13 +86,13 @@ Sources: [sampler and token budgets](../../crates/ruda-torch/python/ruda_torch/t
 
 PipelineTrainer's `save_distributed`/`resume_distributed` cover all stages; consolidated restoration takes explicit application resharding and optional stage transformation. Keep checkpoint files outside the repository.
 
-Sources: [full snapshot](../../crates/ruda-torch/python/ruda_torch/training_checkpoint.py), [all-rank generations](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py), [all-stage recovery](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py).
+Sources: [full snapshot](../../ruda-torch/python/ruda_torch/training_checkpoint.py), [all-rank generations](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py), [all-stage recovery](../../ruda-torch/python/ruda_torch/pipeline_trainer.py).
 
 ## Whole-update autotuning
 
 `TrainingAutotuner` measures actual training windows and searches microbatch and LM-head chunk layouts without consuming a lasting optimizer update. Trials snapshot and restore parameters, optimizer/scaler/scheduler, mutable state, RNG, counters, and gradients. The snapshot itself consumes memory; use actual intended geometry, not a smaller surrogate. `TrainingPlan.apply` checks batch geometry and preserves supervised token count.
 
-`PipelineAutotuner` compares native 1F1B and fill/drain schedules on the unchanged stage mesh. This is separate from [operator-level stack autotuning](stack-autotuning.md). Signature options, candidate budgets and policy controls are in [training_autotune.py](../../crates/ruda-torch/python/ruda_torch/training_autotune.py).
+`PipelineAutotuner` compares native 1F1B and fill/drain schedules on the unchanged stage mesh. This is separate from [operator-level stack autotuning](stack-autotuning.md). Signature options, candidate budgets and policy controls are in [training_autotune.py](../../ruda-torch/python/ruda_torch/training_autotune.py).
 
 ## Attention selection
 
@@ -104,4 +104,4 @@ Sources: [full snapshot](../../crates/ruda-torch/python/ruda_torch/training_chec
 | `vocab_parallel_cross_entropy` | Local contiguous vocabulary intervals, identical logical targets/order across TP ranks, optional padded vocabulary; returns one logical loss, not a DP rank sum. |
 | `register_transformers_attention` | Opt-in distinct `ruda_` name for Transformers AttentionInterface plus its standard mask adapter. It does not patch a model or override built-ins. |
 
-Block score storage is bounded by tiles, but a Transformers-provided dense mask can still consume quadratic memory. Output attention weights, head masks and soft-capped logits are not supplied by this registration path. Sources: [dense attention](../../crates/ruda-torch/python/ruda_torch/attention.py), [block attention](../../crates/ruda-torch/python/ruda_torch/block_attention.py), [varlen attention](../../crates/ruda-torch/python/ruda_torch/varlen_attention.py), [vocabulary loss](../../crates/ruda-torch/python/ruda_torch/parallel_loss.py), [Transformers registration](../../crates/ruda-torch/python/ruda_torch/transformers_attention.py).
+Block score storage is bounded by tiles, but a Transformers-provided dense mask can still consume quadratic memory. Output attention weights, head masks and soft-capped logits are not supplied by this registration path. Sources: [dense attention](../../ruda-torch/python/ruda_torch/attention.py), [block attention](../../ruda-torch/python/ruda_torch/block_attention.py), [varlen attention](../../ruda-torch/python/ruda_torch/varlen_attention.py), [vocabulary loss](../../ruda-torch/python/ruda_torch/parallel_loss.py), [Transformers registration](../../ruda-torch/python/ruda_torch/transformers_attention.py).

@@ -147,7 +147,7 @@ Router 在本地张量后端之间选择执行位置，Remote 将张量操作发
 
 ## 源码入口
 
-- [注册式 API](../../crates/ruCCL/src/api.rs)、[配置](../../crates/ruCCL/src/config.rs)、[全局节点](../../crates/ruCCL/src/global/node/base.rs)。
-- [Rank 通信器](../../crates/ruCCL/src/rank/communicator/mod.rs)与[连接方法](../../crates/ruCCL/src/rank/communicator/connect.rs)。
-- [张量适配](../../crates/ruCCL/src/tensor_device/mod.rs)、[进程内所有权](../../crates/ruCCL/src/in_process/owner.rs)、[张量示例](../../crates/ruCCL/examples/tensor_collectives.rs)。
-- [显式 rank 梯度归约](../../crates/ruda-optim/src/optim/grads/collective.rs)与[训练示例](../../crates/ruda-optim/examples/collective_training.rs)。
+- [注册式 API](../../ruCCL/src/api.rs)、[配置](../../ruCCL/src/config.rs)、[全局节点](../../ruCCL/src/global/node/base.rs)。
+- [Rank 通信器](../../ruCCL/src/rank/communicator/mod.rs)与[连接方法](../../ruCCL/src/rank/communicator/connect.rs)。
+- [张量适配](../../ruCCL/src/tensor_device/mod.rs)、[进程内所有权](../../ruCCL/src/in_process/owner.rs)、[张量示例](../../ruCCL/examples/tensor_collectives.rs)。
+- [显式 rank 梯度归约](../../ruda-optim/src/optim/grads/collective.rs)与[训练示例](../../ruda-optim/examples/collective_training.rs)。

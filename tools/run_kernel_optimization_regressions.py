@@ -20,7 +20,7 @@ def plans(suite,compiler,logs,offline=False,batch=256,order=16,rhs=4,samples=7,i
         required=[sys.executable];commands=[([sys.executable,'tools/kernel_optimization/oracle.py','--out',str(logs/'oracle.json')],env)]
     elif suite=='plan':
         required=['rustc'];exe=logs/('plan-tests.exe'if os.name=='nt'else'plan-tests')
-        commands=[(['rustc','--edition=2024','--test','crates/ruSOLVER/src/kernel_plan.rs','-o',str(exe)],env),([str(exe)],env)]
+        commands=[(['rustc','--edition=2024','--test','ruSOLVER/src/kernel_plan.rs','-o',str(exe)],env),([str(exe)],env)]
     elif suite=='host':
         required=['cargo','rustc'];commands=[(base+['test',*common,'--lib','kernel_plan::tests'],env)]
     elif suite=='build':
@@ -63,7 +63,7 @@ def main():
     if a.dry_run:print(json.dumps({'status':'planned_only','suite':a.suite,'commands':public},indent=2));return 0
     logs.mkdir(parents=True,exist_ok=True)
     if(logs/'results.json').exists():p.error('log directory contains results.json; choose a fresh directory')
-    sources=list((ROOT/'crates/ruSOLVER/src/tensor').glob('*.rs'))+[ROOT/'crates/ruSOLVER/src/kernel_plan.rs',ROOT/'crates/ruSOLVER/tests/device_warp.rs',ROOT/'crates/ruSOLVER/examples/solver_warp_bench.rs']
+    sources=list((ROOT/'ruSOLVER/src/tensor').glob('*.rs'))+[ROOT/'ruSOLVER/src/kernel_plan.rs',ROOT/'ruSOLVER/tests/device_warp.rs',ROOT/'ruSOLVER/examples/solver_warp_bench.rs']
     report={'schema':'ruda.warp_direct.validation.v1','suite':a.suite,'status':'running','started_utc':now.isoformat(),'planned':public,'results':[],
         'source_sha256':{str(f.relative_to(ROOT)):hashlib.sha256(f.read_bytes()).hexdigest()for f in sources},
         'rust_executed':False,'device_tests_executed':False,'performance_measured':False}

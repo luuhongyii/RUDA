@@ -12,11 +12,11 @@
 
 ```toml
 [dependencies]
-ruda-autodiff = { path = "../RUDA/crates/ruda-autodiff", default-features = false, features = ["std"] }
-ruda-model = { path = "../RUDA/crates/ruda-model", default-features = false, features = ["std"] }
-ruda-nn = { path = "../RUDA/crates/ruda-nn", default-features = false, features = ["std"] }
-ruda-optim = { path = "../RUDA/crates/ruda-optim", default-features = false, features = ["std"] }
-ruda-tensor-device = { path = "../RUDA/crates/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
+ruda-autodiff = { path = "../RUDA/ruda-autodiff", default-features = false, features = ["std"] }
+ruda-model = { path = "../RUDA/ruda-model", default-features = false, features = ["std"] }
+ruda-nn = { path = "../RUDA/ruda-nn", default-features = false, features = ["std"] }
+ruda-optim = { path = "../RUDA/ruda-optim", default-features = false, features = ["std"] }
+ruda-tensor-device = { path = "../RUDA/ruda-tensor/device", default-features = false, features = ["std", "cuda"] }
 ```
 
 ## Прямое, обратное обновление и обновление параметров.
@@ -144,7 +144,7 @@ fn restore_training(
 
 `ruda_optim` также предоставляет `SgdConfig`, `AdamWConfig`, `AdaGradConfig`, `RmsPropConfig`, `AdanConfig`, `MuonConfig` и `LBFGSConfig`. При переключении оптимизаторов измените как конфигурацию, так и тип состояния. См. [ruCCL](libraries/ruccl.md) для интеграции коллективного обучения.
 
-API Ссылка: [Оптимизаторы](../../crates/ruda-optim/src/optim/mod.rs), [Записи обучения](../../crates/ruda-optim/src/training.rs).
+API Ссылка: [Оптимизаторы](../../ruda-optim/src/optim/mod.rs), [Записи обучения](../../ruda-optim/src/training.rs).
 
 ### Muon и группы параметров Muon + AdamW
 
@@ -152,7 +152,7 @@ API Ссылка: [Оптимизаторы](../../crates/ruda-optim/src/optim/m
 
 Получите градиенты через `GradientsParams::from_grads(loss.backward(), &model)`, вызовите `try_step_with_lrs(muon_lr, adamw_lr, model, gradients)` и сохраните возвращённую модель. Скорости обучения независимы. При `Optimizer::step(lr, ...)` Muon использует `lr`, AdamW — `lr * adamw_lr_ratio`; значение отношения по умолчанию — `0.015`. `MuonMomentumMode::Ema`, `with_stable_normalization(true)` и `MuonMatrixLayout::InputOutput` выбираются явно. Стабильная нормализация требует FP32 для параметров, градиентов и momentum.
 
-Сохраняйте модель и оптимизатор вместе, при восстановлении сохраняйте исходные `ParamId`, группы и конфигурацию. `try_load_record` отклоняет несовместимое состояние. Обратное масштабирование, проверка конечности градиентов и согласование пропуска шага между репликами выполняются вызывающим кодом. См. [конфигурацию Muon](../../crates/ruda-optim/src/optim/muon/mod.rs), [групповой оптимизатор](../../crates/ruda-optim/src/optim/muon/grouped.rs) и [полный пример обучения на Host](../../crates/ruda-optim/examples/muon_training.rs).
+Сохраняйте модель и оптимизатор вместе, при восстановлении сохраняйте исходные `ParamId`, группы и конфигурацию. `try_load_record` отклоняет несовместимое состояние. Обратное масштабирование, проверка конечности градиентов и согласование пропуска шага между репликами выполняются вызывающим кодом. См. [конфигурацию Muon](../../ruda-optim/src/optim/muon/mod.rs), [групповой оптимизатор](../../ruda-optim/src/optim/muon/grouped.rs) и [полный пример обучения на Host](../../ruda-optim/examples/muon_training.rs).
 
 ```bash
 cargo run --release --locked -p ruda-optim --example muon-training -- 20
@@ -164,8 +164,8 @@ cargo run --release --locked -p ruda-optim --example muon-training -- 20
 
 | Feature `ruda-optim` | Интерфейс и применение |
 | --- | --- |
-| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../crates/ruda-optim/src/fused_adamw/device.rs) принимает параметры, градиенты, необязательное состояние momentum, `AdamWOptions` и `StepControl`. Параметры/momentum — FP32, градиенты — F32/F16/BF16. Нужны непрерывное размещение и одинаковые устройство/очередь; результаты имеют отдельные буферы параметров и состояния. |
-| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../crates/ruda-optim/src/fused_adamw/guard_device.rs) принимает группу `AdamWEntry` и `GradientGuardOptions`. После обратного масштабирования в FP32 проверяет NaN/Inf, вычисляет одну L2-норму выбранной группы на одном устройстве/очереди и ограничивает обновления общим коэффициентом. |
+| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../ruda-optim/src/fused_adamw/device.rs) принимает параметры, градиенты, необязательное состояние momentum, `AdamWOptions` и `StepControl`. Параметры/momentum — FP32, градиенты — F32/F16/BF16. Нужны непрерывное размещение и одинаковые устройство/очередь; результаты имеют отдельные буферы параметров и состояния. |
+| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../ruda-optim/src/fused_adamw/guard_device.rs) принимает группу `AdamWEntry` и `GradientGuardOptions`. После обратного масштабирования в FP32 проверяет NaN/Inf, вычисляет одну L2-норму выбранной группы на одном устройстве/очереди и ограничивает обновления общим коэффициентом. |
 
 `StepControl::gradient_scale` — конечный положительный loss scale, одинаковый во всём окне накопления; `skip_update` явно пропускает обновления. `max_norm=None` отключает только ограничение нормы. `NonFinitePolicy::Skip` пропускает обновление параметров, decay и счётчика шагов всей группы; `Error` возвращает ошибку до отправки обновлений. Эта норма не является распределённой глобальной нормой между rank.
 
@@ -173,7 +173,7 @@ cargo run --release --locked -p ruda-optim --example muon-training -- 20
 
 ## Нативное обучение PyTorch на `ruda:0`
 
-Этот путь отделён от примеров Rust `Autodiff<Cuda<...>>` выше. Используйте библиотеку Rust и расширение C++ из одного исходного состояния либо совместимый готовый bundle: базовый ABI 10, training API 4, router API 1, paged-backward API 2, graph API 3. См. [руководство PyTorch](../../crates/ruda-torch/README.md) и [контракты API](native-pytorch-api.md).
+Этот путь отделён от примеров Rust `Autodiff<Cuda<...>>` выше. Используйте библиотеку Rust и расширение C++ из одного исходного состояния либо совместимый готовый bundle: базовый ABI 10, training API 4, router API 1, paged-backward API 2, graph API 3. См. [руководство PyTorch](../../ruda-torch/README.md) и [контракты API](native-pytorch-api.md).
 
 `ruda_torch.RMSNorm`/`rms_norm`, `LayerNorm`/`layer_norm` и `silu_mul` поддерживают нативное обучение первого порядка. Нормализация выполняется по последней оси, статистика — FP32, выход сохраняет dtype активации; аффинные параметры допускают dtype входа или FP32. Стандартный `torch.nn.LayerNorm` выбирает нативный путь для поддерживаемых непрерывных входов с нормализацией по последней оси. Высшие производные и захват графа обучения не поддерживаются.
 

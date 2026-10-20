@@ -12,10 +12,10 @@ ruTENSOR обеспечивает сжатие тензоров по имено�
 
 ```toml
 [dependencies]
-rutensor = { package = "ruTENSOR", path = "../RUDA/crates/ruTENSOR" }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rutensor = { package = "ruTENSOR", path = "../RUDA/ruTENSOR" }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Свёртка тензоров, редукция и перестановка
@@ -160,6 +160,6 @@ fn execute<R: Runtime>(
 
 Два входа могут направляться в ruBLAS при одинаковом F16/BF16/F32, вычислениях F32, единственной общей оси K и последних выходных осях M/N. Диагональные метки исключены, унарные операции — Identity/Conjugate; batch-оси допускают broadcasting. Остальные случаи и отклонённый matmul setup используют общий kernel; ошибка запуска возвращается, а не скрывается. Эпилог alpha/beta, необязательный C и выходной дескриптор сохраняются.
 
-[Поиск пути](../../../crates/ruTENSOR/src/path.rs), [матричная диспетчеризация](../../../crates/ruTENSOR/src/matmul.rs), [план einsum](../../../crates/ruTENSOR/src/einsum.rs).
+[Поиск пути](../../../ruTENSOR/src/path.rs), [матричная диспетчеризация](../../../ruTENSOR/src/matmul.rs), [план einsum](../../../ruTENSOR/src/einsum.rs).
 
 ruTENSOR предоставляет Ruda Rust API, а не NVIDIA cuTENSOR C ABI. Устройство должно поддерживать выбранные типы хранилища и вычислений.

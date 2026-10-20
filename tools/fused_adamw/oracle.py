@@ -101,7 +101,7 @@ def main() -> int:
         report = {"status": "failed", "reason": f"{type(exc).__name__}: {exc}", "ruda_gpu_executed": False}
     else:
         if args.write_fixtures:
-            path = ROOT / "crates/ruda-optim/tests/fused_adamw/pytorch_fixtures.json"
+            path = ROOT / "ruda-optim/tests/fused_adamw/pytorch_fixtures.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(document, indent=2, allow_nan=False) + "\n", encoding="utf-8")
             report["fixture_path"] = str(path.relative_to(ROOT))

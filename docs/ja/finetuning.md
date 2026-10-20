@@ -2,7 +2,7 @@
 
 [目次](README.md) · [API](native-pytorch-api.md) · [完全な API 契約](../en/finetuning.md)
 
-Rust モデルは ruda_nn::LoRALinearConfig、PyTorch モデルは inject_lora、ローカル HF safetensors は load_hf_nf4_model / load_nf4_safetensors を使います。モデル family、target、backbone/head を推測せず、重みダウンロードや不足デバイス演算の追加はしません。[ネイティブ部品](../../crates/ruda-torch/README.md)を準備し、streaming は safetensors、HF helper は transformers/accelerate も必要です。
+Rust モデルは ruda_nn::LoRALinearConfig、PyTorch モデルは inject_lora、ローカル HF safetensors は load_hf_nf4_model / load_nf4_safetensors を使います。モデル family、target、backbone/head を推測せず、重みダウンロードや不足デバイス演算の追加はしません。[ネイティブ部品](../../ruda-torch/README.md)を準備し、streaming は safetensors、HF helper は transformers/accelerate も必要です。
 
 ## 準備の順序と対象
 
@@ -42,4 +42,4 @@ adapter_state_dict / load_adapter_state_dict は CPU A/B と厳密な名前・ra
 
 SFTTrainer.save は next.pt を書いて確認、latest を previous へ回転。resume は同一 run_config/scheduler を要求。write_progress は local progress.json で、RUDA GPU peak は未知。Python/NumPy、外部 sampler、独立 RUDA RNG は low-level API が自動保存しません。merge_lora は eval dense 層だけで、NF4/tied weight は融合しません。
 
-[CLI](../../crates/ruda-torch/python/examples/finetune_causal_lm.py)では model/data/output/base-id/backbone/head、正確な targets、max-length/steps を明示。output は repo 外。targets は path 列で all-linear 特殊文字列ではありません。まず実際の shape で有界 step を実行し、同一設定へ --resume を追加して再開。--steps は新しい総目標。ファイルは一度だけ走査し、暗黙 repeat/shuffle はありません。--chat、--truncate、--train-on-prompt は意図した監督方針でのみ選択し、--compile は全演算の native 化を意味しません。
+[CLI](../../ruda-torch/python/examples/finetune_causal_lm.py)では model/data/output/base-id/backbone/head、正確な targets、max-length/steps を明示。output は repo 外。targets は path 列で all-linear 特殊文字列ではありません。まず実際の shape で有界 step を実行し、同一設定へ --resume を追加して再開。--steps は新しい総目標。ファイルは一度だけ走査し、暗黙 repeat/shuffle はありません。--chat、--truncate、--train-on-prompt は意図した監督方針でのみ選択し、--compile は全演算の native 化を意味しません。

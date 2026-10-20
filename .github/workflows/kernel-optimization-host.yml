@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'crates/ruSOLVER/**'
+      - 'ruSOLVER/**'
       - 'tools/kernel_optimization/**'
       - 'tools/run_kernel_optimization_regressions.py'
       - 'tools/run_safety_regressions.py'

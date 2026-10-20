@@ -21,11 +21,11 @@ The tensor framework dispatches operations to compute libraries. Applications do
 | `Tensor<T>` | Kernel tensor access with shape and stride metadata |
 | `Runtime` | Associates compiler, compute server, and device types |
 
-For corresponding CUDA concepts, see the [compatibility guide](compatibility.md). Public exports are in the [DSL prelude](../../crates/ruda-kernel/src/dsl/prelude.rs).
+For corresponding CUDA concepts, see the [compatibility guide](compatibility.md). Public exports are in the [DSL prelude](../../ruda-kernel/src/dsl/prelude.rs).
 
 ## 3. Your first kernel
 
-This kernel comes from the [ptx-runtime example](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs), which includes the complete host program and execution checks:
+This kernel comes from the [ptx-runtime example](../../ruda-driver-cuda/examples/ptx_runtime.rs), which includes the complete host program and execution checks:
 
 ```rust
 use ruda_kernel::dsl::prelude::*;

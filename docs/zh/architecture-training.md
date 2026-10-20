@@ -107,4 +107,4 @@ optimizer = r.MuonAdamW.from_model(
 
 只有指定的可训练矩阵进入 Muon，embedding、显式排除项及其余可训练参数使用 AdamW。共享参数只出现一次，AdamW 排除优先；没有合格指定矩阵会报错。手动构造时各组须显式 `use_muon=True/False`。保存模型、优化器与可选 scaler，不混用 Rust Muon Record 和 Python state 格式。
 
-源码：[mHC](../../crates/ruda-torch/python/ruda_torch/mhc.py)、[索引／压缩／缓存](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py)、[混合模型](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py)、[Python Muon](../../crates/ruda-torch/python/ruda_torch/optim.py)。已有[组合示例](../../crates/ruda-torch/python/examples/train_hybrid_attention.py)与真实预训练权重微调、性能 baseline 是不同任务。
+源码：[mHC](../../ruda-torch/python/ruda_torch/mhc.py)、[索引／压缩／缓存](../../ruda-torch/python/ruda_torch/sparse_attention.py)、[混合模型](../../ruda-torch/python/ruda_torch/hybrid_model.py)、[Python Muon](../../ruda-torch/python/ruda_torch/optim.py)。已有[组合示例](../../ruda-torch/python/examples/train_hybrid_attention.py)与真实预训练权重微调、性能 baseline 是不同任务。

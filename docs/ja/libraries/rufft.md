@@ -12,10 +12,10 @@ Cargo パッケージは `ruda-fft` です。 Rust インポート名は `rufft`
 
 ```toml
 [dependencies]
-rufft = { package = "ruda-fft", path = "../RUDA/crates/ruFFT", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rufft = { package = "ruda-fft", path = "../RUDA/ruFFT", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. 順変換と逆変換
@@ -115,4 +115,4 @@ Tensor インターフェイスは出力を割り当て、必要に応じてパ�
 
 N は少なくとも 2 の 2 のべき乗でなければならず、実数と虚数の形状は一致する必要があります。 `signal_len` は入力軸の長さまたは N を超えることはできません。`spec_bins` は少なくとも 1 である必要があり、入力スペクトル軸の長さまたは `N / 2 + 1` を超えることはできません。出力バッファには依然として完全な割り当てが必要です。これらのインターフェイスは、ゼロ埋めされた入力末尾の実現を回避します。
 
-API 参照: [Tensor インターフェイス](../../../crates/ruFFT/src/tensor.rs)、[前方起動](../../../crates/ruFFT/src/fft/rfft.rs)、[逆起動](../../../crates/ruFFT/src/fft/irfft.rs)。
+API 参照: [Tensor インターフェイス](../../../ruFFT/src/tensor.rs)、[前方起動](../../../ruFFT/src/fft/rfft.rs)、[逆起動](../../../ruFFT/src/fft/irfft.rs)。

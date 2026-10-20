@@ -10,7 +10,7 @@ Explizite NVIDIA-Pfade verwenden cuBLAS/cuBLASLt, cuSOLVER oder cuFFT auf RUDA-A
 
 Bibliothekspfade werden über `RUDA_TORCH_CUBLAS_LIBRARY`, `RUDA_TORCH_CUBLASLT_LIBRARY`, `RUDA_TORCH_CUSOLVER_LIBRARY` und `RUDA_TORCH_CUFFT_LIBRARY` angegeben. `RUDA_TORCH_DLL_DIR` ergänzt Suchverzeichnisse; `RUDA_TORCH_CUDA_LIBRARY` benennt den Treiber. Wheels binden sich an die Python-Minor-Version und exakte PyTorch-Version des Builds. Rust und C++ müssen bei einem Umgebungswechsel gemeinsam neu gebaut werden.
 
-Komplexes linalg, LDL, allgemeine Eigenwerte, Matrixexponential und FP16-/complex32-FFT sind in der [ausführlichen API](../en/native-pytorch-api.md#scientific-operations) beschrieben. [Auswahl](../../crates/ruda-torch/python/ruda_torch/math_backend.py), [Bibliothekssuche](../../crates/ruda-torch/python/ruda_torch/_vendor_runtime.py), [Buildmetadaten](../../crates/ruda-torch/python/setup.py).
+Komplexes linalg, LDL, allgemeine Eigenwerte, Matrixexponential und FP16-/complex32-FFT sind in der [ausführlichen API](../en/native-pytorch-api.md#scientific-operations) beschrieben. [Auswahl](../../ruda-torch/python/ruda_torch/math_backend.py), [Bibliothekssuche](../../ruda-torch/python/ruda_torch/_vendor_runtime.py), [Buildmetadaten](../../ruda-torch/python/setup.py).
 
 ## Packed-Quantisierung und quantisierte KV-Caches
 
@@ -24,7 +24,7 @@ Die Importer unterstützen Standard-GPTQ 2/3/4/8-bit mit `g_idx` und v1/v2 sowie
 
 `Generator(seed=None)` verwendet Philox4x32-10. `manual_seed`/`manual_seed_all` initialisieren den Standardgenerator für das einzelne Gerät; Seeds sind vorzeichenbehaftete oder vorzeichenlose 64-Bit-Ganzzahlen. `get_rng_state`/`set_rng_state` und Generator `get_state`/`set_state` verwenden einen RUDA-spezifischen CPU-uint8-Zustand mit 24 Bytes, keinen CUDA-RNG-Zustand. Die `_all`-Varianten verwenden eine Liste mit einem Zustand.
 
-`uniform_`, `normal_` und `bernoulli_` füllen FP32/FP16/BF16-RUDA-Tensoren über native random API 1. Parameter müssen endlich, Grenzen geordnet, Standardabweichung nichtnegativ und Wahrscheinlichkeit in `[0,1]` sein. `generator` ist ein RUDA Generator; ohne Angabe gilt `default_generator`. Reservierte Counter eines fehlgeschlagenen Dispatch werden nicht wiederverwendet. `get_amp_supported_dtype` liefert FP16/BF16, `is_initialized` den Initialisierungszustand. `register_random_ops` läuft beim Import; keine erneute Registrierung ist nötig. [Quellcode](../../crates/ruda-torch/python/ruda_torch/random.py).
+`uniform_`, `normal_` und `bernoulli_` füllen FP32/FP16/BF16-RUDA-Tensoren über native random API 1. Parameter müssen endlich, Grenzen geordnet, Standardabweichung nichtnegativ und Wahrscheinlichkeit in `[0,1]` sein. `generator` ist ein RUDA Generator; ohne Angabe gilt `default_generator`. Reservierte Counter eines fehlgeschlagenen Dispatch werden nicht wiederverwendet. `get_amp_supported_dtype` liefert FP16/BF16, `is_initialized` den Initialisierungszustand. `register_random_ops` läuft beim Import; keine erneute Registrierung ist nötig. [Quellcode](../../ruda-torch/python/ruda_torch/random.py).
 
 Import ruda_torch registriert PrivateUse1; kein anderer Backend im selben Prozess. ruda:0 und torch.cuda verwenden verschiedene Allokationen. device_count1/current_device0. is_available zeigt Initialisierung, nicht vollständige Hardwarefähigkeit. execution_stats sind kumulative Zähler, keine Timer.
 

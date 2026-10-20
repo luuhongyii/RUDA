@@ -22,7 +22,7 @@ def test_failure_zero_and_ignored_are_not_success(old,new):
     with pytest.raises(ValueError):v.require_infer_success(valid().replace(old,new))
 
 def test_testlist_matches_real_rust_source():
-    source=Path(__file__).resolve().parents[2]/'crates/ruda-driver-cuda/tests/graph_infer.rs'
+    source=Path(__file__).resolve().parents[2]/'ruda-driver-cuda/tests/graph_infer.rs'
     import re
     names=set(re.findall(r'fn (graph_infer_\w+)\(',source.read_text()))-{'graph_infer_benchmark'}
     assert names==v.REQUIRED

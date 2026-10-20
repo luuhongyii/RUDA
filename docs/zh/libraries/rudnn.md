@@ -17,7 +17,7 @@ ruDNN 组织神经网络计算算子，Cargo package 为 `ruDNN`，Rust crate �
 | `tensor-normalization` | 通用设备归一化，供模型层复用 |
 | `tensor-gated-delta` | gated-delta 计算，供 Qwen3.5 等混合结构接入 |
 
-注意力和卷积还各有对应的 autotune feature。完整声明见 [Cargo.toml](../../../crates/ruDNN/Cargo.toml)，模块入口见 [lib.rs](../../../crates/ruDNN/src/lib.rs)。
+注意力和卷积还各有对应的 autotune feature。完整声明见 [Cargo.toml](../../../ruDNN/Cargo.toml)，模块入口见 [lib.rs](../../../ruDNN/src/lib.rs)。
 
 ## 2. 注意力与卷积
 
@@ -27,7 +27,7 @@ ruDNN 组织神经网络计算算子，Cargo package 为 `ruDNN`，Rust crate �
 
 策略包括 FlashBlackboxAccelerated、FlashUnit、Fallback，以及启用对应 feature 后的 Autotune。未启用 autotune 时默认 Fallback，启用后默认 Autotune；Fallback 是同一设备计算的多 Kernel 实现，不是 CPU 后端切换。
 
-数据布局、mask 和精度要求需要匹配所选策略。入口见[注意力实现](../../../crates/ruDNN/src/attention/tensor/base.rs)。
+数据布局、mask 和精度要求需要匹配所选策略。入口见[注意力实现](../../../ruDNN/src/attention/tensor/base.rs)。
 
 ### 卷积
 
@@ -35,7 +35,7 @@ ruDNN 组织神经网络计算算子，Cargo package 为 `ruDNN`，Rust crate �
 
 策略包括 Direct、ImplicitGemm 及可选 Autotune。当前入口对三维 F32 使用 Direct；分组卷积选择 ImplicitGemm 时也会进入 Direct。因此策略参数不能一概理解为绝不替换算法的强制选项。
 
-同模块还包含 conv_data_backward 与 conv_weight_backward。各方向需分别核对形状、选项和执行支持，定义见[卷积入口](../../../crates/ruDNN/src/convolution/tensor/base.rs)。
+同模块还包含 conv_data_backward 与 conv_weight_backward。各方向需分别核对形状、选项和执行支持，定义见[卷积入口](../../../ruDNN/src/convolution/tensor/base.rs)。
 
 ## 3. MoE 调用流程
 
@@ -69,7 +69,7 @@ softmax 以 FP32 在全部专家上计算，再选择 top-k；相等时优先较
 
 分发不按容量丢弃 token；专家内部的原子排位顺序不保证固定，恢复顺序使用保存的映射。前向入口接收已有 logits，不负责模型 gate 投影或权重文件加载。
 
-源码：[路由](../../../crates/ruDNN/src/moe/routing.rs)、[分发与合并](../../../crates/ruDNN/src/moe/dispatch.rs)、[专家](../../../crates/ruDNN/src/moe/experts.rs)、[测试](../../../crates/ruDNN/src/moe/tests.rs)。
+源码：[路由](../../../ruDNN/src/moe/routing.rs)、[分发与合并](../../../ruDNN/src/moe/dispatch.rs)、[专家](../../../ruDNN/src/moe/experts.rs)、[测试](../../../ruDNN/src/moe/tests.rs)。
 
 ## 6. 调用 MoE
 
@@ -196,7 +196,7 @@ fn delta_prefill<R: Runtime>(
 
 `DevicePlan::attention(q, k, v, scale, causal)` 直接读取物理缓存页，处理打包的变长预填充与解码。Q 为 `[queries, Hq, D]`，K 为 `[pages, page_size, Hkv, D]`，V 为 `[pages, page_size, Hkv, Dv]`，输出为 `[queries, Hq, Dv]`；`Hq` 必须能被 `Hkv` 整除。输入须连续、非量化，使用相同的 F32/F16/BF16 dtype、设备和队列。Q/K/V 须为有限值，scale 须有限且为正。`D`、`Dv` 范围为 `1..=1024`；设备需支持 32 或 64 lane 的 plane 及所需启动网格。这些浮点缓存方法支持前向与一阶反向，不支持任意外部掩码。
 
-`DevicePlan::attention_quantized(q, k, v, position, scale, causal, workspace)` 是独立的压缩缓存推理入口，由同一 feature 启用。K／V 为 `ruda_kernel::quantization::packed::PackedTensor`，逻辑页几何不变；可选的位置 query／cache 参数选择 MLA。内核直接将压缩值解码到寄存器，可使用 split 工作区，不提供量化缓存反向。见[实现](../../../crates/ruDNN/src/paged_attention/quantized.rs)和 [Python 缓存 API](../native-pytorch-api.md#量化-kv-注意力)。
+`DevicePlan::attention_quantized(q, k, v, position, scale, causal, workspace)` 是独立的压缩缓存推理入口，由同一 feature 启用。K／V 为 `ruda_kernel::quantization::packed::PackedTensor`，逻辑页几何不变；可选的位置 query／cache 参数选择 MLA。内核直接将压缩值解码到寄存器，可使用 split 工作区，不提供量化缓存反向。见[实现](../../../ruDNN/src/paged_attention/quantized.rs)和 [Python 缓存 API](../native-pytorch-api.md#量化-kv-注意力)。
 
 `DevicePlan::mla(q, qp, latent, kp, scale, causal)` 接收吸收投影后的查询 `[queries, H, R]`、位置查询 `[queries, H, P]`、共享潜在缓存 `[pages, page_size, 1, R]` 和位置缓存 `[pages, page_size, 1, P]`。输出压缩上下文 `[queries, H, R]`；`P` 范围为 `1..=256`。位置编码在调用前完成，value/output 投影在调用后完成。scale 使用原模型 QK 缩放，而非按压缩秩推算。
 

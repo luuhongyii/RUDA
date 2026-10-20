@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'crates/ruda-torch/python/ruda_torch/**'
-      - 'crates/ruda-torch/python/tests/**'
-      - 'crates/ruda-torch/python/examples/train_hybrid_attention.py'
+      - 'ruda-torch/python/ruda_torch/**'
+      - 'ruda-torch/python/tests/**'
+      - 'ruda-torch/python/examples/train_hybrid_attention.py'
       - 'tools/validation/validate_architecture_round.py'
-      - 'crates/ruda-nn/src/modules/mhc.rs'
+      - 'ruda-nn/src/modules/mhc.rs'
       - '.github/workflows/architecture-components-host.yml'
 jobs:
   host:

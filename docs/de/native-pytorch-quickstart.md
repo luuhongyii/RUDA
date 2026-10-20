@@ -31,7 +31,7 @@ export RUDA_PTX_VERSION=8.0
 
 Die [PTX-Version](ptx.md) muss zur GPU und zum Treiber passen. `RUDA_CUDA_COMPILER=nvrtc` wählt CUDA C++/NVRTC. Der Loader sucht zuerst die mitgelieferte native Bibliothek, danach den debug-Build des Repositorys. Setzen Sie vor dem Import `RUDA_TORCH_LIBRARY` für einen release-Build oder einen anderen Pfad. Rust-Bibliothek und C++-Erweiterung benötigen beide ABI 10.
 
-[v0.1.96-Wheels](../../crates/ruda-torch/README.md#release-wheels) ersetzen den lokalen Rust/C++-Build: CPython 3.13, Linux x86_64 mit PyTorch `2.10.0+cu126` (Build auf Ubuntu 24.04) oder Windows x86_64 mit `2.13.0+cu130`. Die native Bibliothek ist enthalten; kein eigener `RUDA_TORCH_LIBRARY`-Pfad ist nötig. Für die separaten Linux/Colab-Bundles gelten weiterhin deren [Installationsvorgaben](../../crates/ruda-torch/README.md#linuxcolab-precompiled-bundle).
+[v0.1.96-Wheels](../../ruda-torch/README.md#release-wheels) ersetzen den lokalen Rust/C++-Build: CPython 3.13, Linux x86_64 mit PyTorch `2.10.0+cu126` (Build auf Ubuntu 24.04) oder Windows x86_64 mit `2.13.0+cu130`. Die native Bibliothek ist enthalten; kein eigener `RUDA_TORCH_LIBRARY`-Pfad ist nötig. Für die separaten Linux/Colab-Bundles gelten weiterhin deren [Installationsvorgaben](../../ruda-torch/README.md#linuxcolab-precompiled-bundle).
 
 ## 2. Daten übertragen und Ergebnis lesen
 

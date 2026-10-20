@@ -552,7 +552,7 @@ The direct-store BF16 algorithm, persistent scheduler, tile offsets and pipeline
 protocol are translated/adapted from DeepGEMM-Ascend, copyright 2026 DeepSeek,
 MIT license. Source commit: 8491bbb4b8c02a094a2318965f50c70438a3e73c.
 The Rust port retains MIT licensing, the upstream notice and source digests in
-`crates/ruda-ascend-kernels/LICENSE` and `crates/ruda-ascend-kernels/UPSTREAM.json`.
+`ruda-ascend-kernels/LICENSE` and `ruda-ascend-kernels/UPSTREAM.json`.
 
 The nine original C++ device headers shipped by v37 are removed. They are not
 compiled, linked, included, or redistributed by the new source tree. The Rust
@@ -562,19 +562,19 @@ CANN/DeepJIT/torch_npu binaries and toolchains are not redistributed.
 
 ## PyTorch matrix exponential
 
-`crates/ruSOLVER/src/tensor/matrix_exp.rs` and `matrix_exp_kernel.rs` adapt the optimized
+`ruSOLVER/src/tensor/matrix_exp.rs` and `matrix_exp_kernel.rs` adapt the optimized
 Taylor matrix-exponential evaluation in PyTorch `ATen/native/LinearAlgebra.cpp`,
 revision `cf30153c4c131c8164ee7798e5022d810682e2cb`. The complete PyTorch copyright
 and BSD-style license notice is retained in `matrix_exp.rs`.
 
 ## LAPACK complex division, Householder reflectors, LDL and general eigen decomposition
 
-The complex division routines in `crates/ruSOLVER/src/tensor/complex_kernel.rs` adapt
+The complex division routines in `ruSOLVER/src/tensor/complex_kernel.rs` adapt
 SLADIV/DLADIV from Reference-LAPACK 3.12.1. The reflector generation in
-`crates/ruSOLVER/src/tensor/complex_qr_kernel.rs` adapts CLARFG/ZLARFG from the same release.
-The lower Bunch-Kaufman routines in `crates/ruSOLVER/src/tensor/ldl_kernel.rs` adapt
+`ruSOLVER/src/tensor/complex_qr_kernel.rs` adapts CLARFG/ZLARFG from the same release.
+The lower Bunch-Kaufman routines in `ruSOLVER/src/tensor/ldl_kernel.rs` adapt
 ZHETF2/ZSYTF2/ZHETRS/ZSYTRS from that release.
-The general eigen routines in `crates/ruSOLVER/src/tensor/general_eig_kernel.rs` adapt
+The general eigen routines in `ruSOLVER/src/tensor/general_eig_kernel.rs` adapt
 ZGEBAL scaling, ZLARFG, ZLAHQR and ZTREVC eigenvector conventions from that release.
 
 Copyright (c) 1992-2023 The University of Tennessee and The University

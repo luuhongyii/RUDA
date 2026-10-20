@@ -27,7 +27,7 @@ NVIDIA は 2 つのコンパイル パスを提供します。
 | `ruda-compiler/ptx` |直接 PTX コンパイラ |
 | `ruda-driver-cuda/direct-ptx` | CUDA バックエンドでの直接 PTX 選択を有効にします。|
 
-機能により、どのコードが構築されるかが決まります。環境変数は実行時にパスを選択します。これらは別個のコントロールです。 [CUDA マニフェスト](../../crates/ruda-driver-cuda/Cargo.toml) および [コンパイラー マニフェスト](../../crates/ruda-compiler/Cargo.toml) を参照してください。
+機能により、どのコードが構築されるかが決まります。環境変数は実行時にパスを選択します。これらは別個のコントロールです。 [CUDA マニフェスト](../../ruda-driver-cuda/Cargo.toml) および [コンパイラー マニフェスト](../../ruda-compiler/Cargo.toml) を参照してください。
 
 ## 3. 環境変数
 
@@ -38,7 +38,7 @@ NVIDIA は 2 つのコンパイル パスを提供します。
 | `CUDA_PATH` | CUDA ツールキットのインストール ルート |
 | `RUDA_PTX_TEST_CACHE` | ptx-runtime サンプルだけが読み取るキャッシュディレクトリの上書き設定 |
 
-不明なコンパイラ値によりエラーが発生します。 `direct-ptx` を有効にせずに `ptx` を選択すると、NVRTC に切り替えるのではなく、エラーが発生します。 [compiler_backend.rs](../../crates/ruda-driver-cuda/src/compiler_backend.rs)を参照してください。
+不明なコンパイラ値によりエラーが発生します。 `direct-ptx` を有効にせずに `ptx` を選択すると、NVRTC に切り替えるのではなく、エラーが発生します。 [compiler_backend.rs](../../ruda-driver-cuda/src/compiler_backend.rs)を参照してください。
 
 ## 4. ターゲットとキャッシュ
 
@@ -60,4 +60,4 @@ Triton の import 前に `TRITON_DEFAULT_BACKEND=ruda` を設定します。既�
 
 Triton が対象で Gluon は対象外です。未対応 TTIR は lowering エラーになります。Rust Kernel DSL とは別経路で、すべての Triton kernel への対応を意味しません。GX1 モードにはこの workspace 外の独立ライブラリが必要です。
 
-[依存関係](../../crates/ruda-triton/python/pyproject.toml)・[コンパイラー](../../crates/ruda-triton/python/ruda_triton/compiler.py)・[デバイス／stream](../../crates/ruda-triton/python/ruda_triton/driver.py)。
+[依存関係](../../ruda-triton/python/pyproject.toml)・[コンパイラー](../../ruda-triton/python/ruda_triton/compiler.py)・[デバイス／stream](../../ruda-triton/python/ruda_triton/driver.py)。

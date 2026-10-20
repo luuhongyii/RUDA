@@ -81,7 +81,7 @@ def test_expert_matrix_reference_autograd(dtype):
     np.testing.assert_allclose(got[1],dw.numpy(),rtol=2e-5,atol=2e-5)
 
 def test_kernel_contract_no_atomics_or_divergent_early_exit():
-    text=(ROOT/'crates/ruBLAS/src/tensor_grouped/backward_tensorcore.rs').read_text()
+    text=(ROOT/'ruBLAS/src/tensor_grouped/backward_tensorcore.rs').read_text()
     assert 'Atomic<' not in text and 'terminate!(' not in text
     assert text.count('cmma::execute')==2
     assert 'let acc = cmma::Matrix::<f32>' in text
@@ -89,7 +89,7 @@ def test_kernel_contract_no_atomics_or_divergent_early_exit():
     assert 'SharedMemory::<f32>::new_aligned(256usize' in text
 
 def test_default_and_strict_capability_policy():
-    text=(ROOT/'crates/ruBLAS/src/tensor_grouped/mod.rs').read_text()
+    text=(ROOT/'ruBLAS/src/tensor_grouped/mod.rs').read_text()
     wrapper=text.split('pub unsafe fn grouped_matmul_nt_backward_segmented<R')[1].split('/// Opt-in')[0]
     assert 'GroupedStrategy::Scalar' in wrapper
     selected=text.split('pub unsafe fn grouped_matmul_nt_backward_segmented_selected<R')[1]
@@ -106,7 +106,7 @@ def test_default_and_strict_capability_policy():
     assert 'Shape::from([0,n,k]),DType::F32)' in selected
 
 def test_expert_chain_reuses_public_strategy():
-    text=(ROOT/'crates/ruDNN/src/moe/experts.rs').read_text()
+    text=(ROOT/'ruDNN/src/moe/experts.rs').read_text()
     calls=re.findall(r'grouped_matmul_nt_backward_segmented_selected\(([^;]*?GroupedGradientSelection)',text,re.S)
     # down, gate and up projections all forward the caller's strategy.
     assert len(calls)==3
@@ -116,7 +116,7 @@ def test_expert_chain_reuses_public_strategy():
     assert 'kernels::experts::swiglu_out::launch' in text
 
 def test_public_gradients_keep_intermediate_rounding():
-    text=(ROOT/'crates/ruDNN/src/moe/kernels/experts.rs').read_text().split('pub(crate) fn swiglu_backward')[1]
+    text=(ROOT/'ruDNN/src/moe/kernels/experts.rs').read_text().split('pub(crate) fn swiglu_backward')[1]
     assert 'let intermediate = F::cast_from(dy * u)' in text
     assert 'let silu = F::cast_from(g /' in text
     assert 'f32::cast_from(intermediate)' in text and 'dy * f32::cast_from(silu)' in text

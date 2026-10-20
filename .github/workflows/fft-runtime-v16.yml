@@ -12,10 +12,10 @@ on:
         description: PTX version supported by the actual runner driver
   pull_request:
     paths:
-      - 'crates/ruFFT/src/**'
-      - 'crates/ruFFT/tests/host/**'
+      - 'ruFFT/src/**'
+      - 'ruFFT/tests/host/**'
       - 'tools/gpu_validation/**'
-      - 'crates/ruda-driver-cuda/src/execution/context/**'
+      - 'ruda-driver-cuda/src/execution/context/**'
       - '.github/workflows/fft-runtime-v16.yml'
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
       - run: |
           python3 -m venv .v16-venv
           .v16-venv/bin/python -m pip install numpy==2.3.5 pytest==9.0.2
-          .v16-venv/bin/python -m pytest -q crates/ruFFT/tests/host tools/gpu_validation
+          .v16-venv/bin/python -m pytest -q ruFFT/tests/host tools/gpu_validation
   real-gpu-acceptance:
     if: github.event_name == 'workflow_dispatch' && inputs.run_gpu
     runs-on: [self-hosted, linux, x64, ruda-gpu]

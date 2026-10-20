@@ -4,16 +4,16 @@
 
 The general-purpose runtime is in `ruda::runtime`, enabled by the `ruda/runtime` feature. Each backend also requires its corresponding driver crate.
 
-CUDA treats a rank-zero copy descriptor with empty shape and strides as one scalar element, not as an empty tensor. A dimension of size zero instead describes an empty transfer. See the [CUDA copy implementation](../../crates/ruda-driver-cuda/src/execution/command.rs).
+CUDA treats a rank-zero copy descriptor with empty shape and strides as one scalar element, not as an empty tensor. A dimension of size zero instead describes an empty transfer. See the [CUDA copy implementation](../../ruda-driver-cuda/src/execution/command.rs).
 
 ## 1. Core types
 
 | Type | Responsibility | Definition |
 | --- | --- | --- |
-| `Runtime` | Associates Compiler, Server, and Device; provides device clients | [backend.rs](../../crates/ruda-runtime/src/runtime/backend.rs) |
-| `ComputeClient<R>` | Allocation, kernel submission, readback, synchronization, and capability queries | [client.rs](../../crates/ruda-runtime/src/runtime/client.rs) |
-| `ComputeServer` | Backend execution contract | [server module](../../crates/ruda-runtime/src/runtime/server/mod.rs) |
-| `RudaTensor<R>` | Device storage and tensor metadata | [Tensor definition](../../crates/ruda-kernel/src/tensor/base.rs) |
+| `Runtime` | Associates Compiler, Server, and Device; provides device clients | [backend.rs](../../ruda-runtime/src/runtime/backend.rs) |
+| `ComputeClient<R>` | Allocation, kernel submission, readback, synchronization, and capability queries | [client.rs](../../ruda-runtime/src/runtime/client.rs) |
+| `ComputeServer` | Backend execution contract | [server module](../../ruda-runtime/src/runtime/server/mod.rs) |
+| `RudaTensor<R>` | Device storage and tensor metadata | [Tensor definition](../../ruda-kernel/src/tensor/base.rs) |
 
 `R::client(&device)` obtains the runtime's client. `R::Device` determines the device type; sharing a runtime type does not make storage on different physical devices interchangeable.
 

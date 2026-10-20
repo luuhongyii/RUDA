@@ -337,6 +337,6 @@ def main():
     let expected=[{array(f['pinv'])}];let p=s.pseudo_inverse().unwrap();
     for(g,e)in p.values().iter().zip(expected){{assert!((g-e).abs()<1e-9*(1.+e.abs()));}}
 }}''')
-        (here.parents[1]/'crates/ruSOLVER/src/advanced_fixtures.rs').write_text('\n'.join(parts)+'\n')
+        (here.parents[1]/'ruSOLVER/src/advanced_fixtures.rs').write_text('\n'.join(parts)+'\n')
     print(json.dumps({k:v for k,v in r.items()if k not in ['checks','bdf1_formula_counters']},indent=2))
 if __name__=='__main__':main()

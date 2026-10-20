@@ -12,10 +12,10 @@ Cargo パッケージは `ruRAND` です。 Rust インポート名は `rurand` 
 
 ```toml
 [dependencies]
-rurand = { package = "ruRAND", path = "../RUDA/crates/ruRAND", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rurand = { package = "ruRAND", path = "../RUDA/ruRAND", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. ランダム テンソルを生成する
@@ -118,4 +118,4 @@ fn fill_uniform<R: Runtime>(
 
 Tensor レベルの関数は、起動時にエラーが返された場合にパニックを起こします。上記の基になるエントリ ポイントは `Result<(), LaunchError>` を返します。送信が成功しても、GPU の実行が完了したわけではありません。テンソルを読み取るか、クライアントの同期を待ちます。 `into_data_sync` はリードバック失敗時にパニックを起こします。非同期 `into_data(tensor).await` を使用してリードバック エラーを伝播します。
 
-API リファレンス: [Tensor インターフェイス](../../../crates/ruRAND/src/tensor/mod.rs)、[シード状態](../../../crates/ruRAND/src/state.rs)、[ディストリビューション](../../../crates/ruRAND/src/distributions/mod.rs)。
+API リファレンス: [Tensor インターフェイス](../../../ruRAND/src/tensor/mod.rs)、[シード状態](../../../ruRAND/src/state.rs)、[ディストリビューション](../../../ruRAND/src/distributions/mod.rs)。

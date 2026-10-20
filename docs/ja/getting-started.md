@@ -33,7 +33,7 @@ cargo metadata --no-deps --format-version 1 --offline --locked
 
 これらのコマンドは、Ruda をコンパイルしません。 `--offline` では、解決に必要な依存関係をローカルにキャッシュする必要があります。
 
-`CUDA_PATH` を設定して、CUDA ツールキット ルートを選択します。 Windows では、複数のバージョンを含む親ではなく、インストールされているバージョンのディレクトリを指します。 [CUDA インストール パス インターフェイス](../../crates/ruda-driver-cuda/src/lib.rs) を参照してください。
+`CUDA_PATH` を設定して、CUDA ツールキット ルートを選択します。 Windows では、複数のバージョンを含む親ではなく、インストールされているバージョンのディレクトリを指します。 [CUDA インストール パス インターフェイス](../../ruda-driver-cuda/src/lib.rs) を参照してください。
 
 ## 3. サンプルをビルドする
 

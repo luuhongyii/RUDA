@@ -12,10 +12,10 @@ Cargo パッケージは `ruTENSOR` です。 Rust インポート名は `rutens
 
 ```toml
 [dependencies]
-rutensor = { package = "ruTENSOR", path = "../RUDA/crates/ruTENSOR" }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rutensor = { package = "ruTENSOR", path = "../RUDA/ruTENSOR" }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. 縮約、帰約、置換
@@ -160,6 +160,6 @@ fn execute<R: Runtime>(
 
 同じ F16／BF16／F32 ストレージの 2 入力、F32 計算、共有 K 軸が 1 本、出力末尾の軸が M／N である行列縮約は ruBLAS を利用できます。対角ラベルは不可、単項変換は Identity／Conjugate に限り、バッチ軸はブロードキャストできます。対象外の縮約や適用できない matmul setup は汎用カーネルを使いますが、起動エラーは返されます。alpha／beta、任意の C、出力記述子は保持されます。
 
-[経路探索](../../../crates/ruTENSOR/src/path.rs)・[行列ディスパッチ](../../../crates/ruTENSOR/src/matmul.rs)・[einsum plan](../../../crates/ruTENSOR/src/einsum.rs)。
+[経路探索](../../../ruTENSOR/src/path.rs)・[行列ディスパッチ](../../../ruTENSOR/src/matmul.rs)・[einsum plan](../../../ruTENSOR/src/einsum.rs)。
 
 ruTENSOR は、NVIDIA cuTENSOR C ABI ではなく、Ruda Rust API を公開します。デバイスは、選択したストレージとコンピューティングの種類をサポートする必要があります。

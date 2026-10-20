@@ -45,13 +45,13 @@ def main():
         import torch
         report['torch']=torch.__version__
         report['python']=sys.version
-        prefix='crates/ruda-torch/python/tests/'
+        prefix='ruda-torch/python/tests/'
         tests('regression',[prefix+'test_'+n+'.py' for n in ['static_graph_spec','static_graph_optimizer','static_graph_training','model_compile']]+['tools/validation/test_feature_reference.py'])
         tests('native-region-simulator',[prefix+'test_compile_native.py',prefix+'test_compile_native_extended.py'])
         tests('learned-fake-quantization',[prefix+'test_learned_quantization.py'])
         tests('packed-awq-algorithm-oracle',['tools/validation/test_awq_packed_reference.py'])
         cpp=out/'cpp'
-        command=[sys.executable,'crates/ruda-torch/tools/check_cpp_bridge.py','--output',str(cpp),'--compiler',args.compiler,'--static-graph']
+        command=[sys.executable,'ruda-torch/tools/check_cpp_bridge.py','--output',str(cpp),'--compiler',args.compiler,'--static-graph']
         if run('cpp-build',command):raise RuntimeError('C++ bridge build/protocol check failed')
         cpp_report=json.loads((cpp/'result.json').read_text());report['cpp']=cpp_report
         libs=list(cpp.glob('_C*.so'))
@@ -63,7 +63,7 @@ def main():
         report['host_passed']=True;code=0
         if args.gpu:
             target=out/'gpu.json'
-            gpu_rc=run('gpu-acceptance',[sys.executable,'crates/ruda-torch/tools/validate_model_compile.py','--output',str(target)])
+            gpu_rc=run('gpu-acceptance',[sys.executable,'ruda-torch/tools/validate_model_compile.py','--output',str(target)])
             report['gpu']=json.loads(target.read_text()) if target.exists() else {'error':'no device report'}
             report['gpu_executed']=bool(report['gpu'].get('gpu_executed'))
             if gpu_rc or not report['gpu_executed'] or report['gpu'].get('status') != 'passed':code=2

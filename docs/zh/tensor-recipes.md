@@ -113,12 +113,12 @@ fn main() {
 
 量化存储和量化感知训练是不同操作。当前自动微分量化实现接受未跟踪梯度的输入；`quantize` 拒绝跟踪梯度的输入张量或 scale 张量，`quantize_dynamic` 拒绝跟踪梯度的输入张量。添加 `Autodiff` 不会补出缺失的量化梯度规则。
 
-`dequantize` 从内层后端的结果创建自动微分张量，不会重新连接之前量化操作的梯度路径。将量化推理权重与浮点训练组合时需区分这两种语义，见[量化自动微分操作](../../crates/ruda-autodiff/src/ops/qtensor.rs)。
+`dequantize` 从内层后端的结果创建自动微分张量，不会重新连接之前量化操作的梯度路径。将量化推理权重与浮点训练组合时需区分这两种语义，见[量化自动微分操作](../../ruda-autodiff/src/ops/qtensor.rs)。
 
 ## API 入口
 
-- [张量创建、形状、切片与迁移](../../crates/ruda-tensor/src/api/base.rs)。
-- [算术、归约与矩阵乘](../../crates/ruda-tensor/src/api/numeric.rs)。
-- [自动微分张量方法](../../crates/ruda-tensor/src/api/autodiff.rs)。
-- [创建选项与 dtype 策略](../../crates/ruda-tensor/src/api/options.rs)。
-- [Host 后端与运行时 dtype 分发](../../crates/ruda-tensor-host/src/backend.rs)。
+- [张量创建、形状、切片与迁移](../../ruda-tensor/src/api/base.rs)。
+- [算术、归约与矩阵乘](../../ruda-tensor/src/api/numeric.rs)。
+- [自动微分张量方法](../../ruda-tensor/src/api/autodiff.rs)。
+- [创建选项与 dtype 策略](../../ruda-tensor/src/api/options.rs)。
+- [Host 后端与运行时 dtype 分发](../../ruda-tensor/host/src/backend.rs)。

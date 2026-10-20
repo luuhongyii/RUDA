@@ -14,7 +14,7 @@ ruBLAS 组织线性代数计算及其设备 Tensor 入口。
 | `tensor-int4` | `rublas::tensor_int4` |
 | `tensor-grouped` | `rublas::tensor_grouped` |
 
-Cargo package 为 `rublas`。通用路径选择所需 feature，并关闭不需要的默认功能。定义见 [Cargo.toml](../../../crates/ruBLAS/Cargo.toml)。
+Cargo package 为 `rublas`。通用路径选择所需 feature，并关闭不需要的默认功能。定义见 [Cargo.toml](../../../ruBLAS/Cargo.toml)。
 
 ## 2. 矩阵乘、向量与 INT4
 
@@ -33,7 +33,7 @@ Cargo package 为 `rublas`。通用路径选择所需 feature，并关闭不需�
 
 Python 提供带一阶 autograd 的 `ruda_torch.gemm`、`fused_gemm`、`grouped_gemm`、`triangular_solve`。其 grouped 入口接受任意顺序 int32／int64 专家 ID，不同于下文低层 segmented 的 U32／offset 接口。详见 [PyTorch 科学计算契约](../native-pytorch-api.md#科学计算算子)。
 
-源码：[实数 GEMM](../../../crates/ruBLAS/src/tensor_matmul/gemm.rs)、[复数 GEMM](../../../crates/ruBLAS/src/tensor_matmul/complex.rs)、[三角求解](../../../crates/ruBLAS/src/tensor_matmul/triangular.rs)、[融合 epilogue](../../../crates/ruBLAS/src/tensor_matmul/fused.rs)。
+源码：[实数 GEMM](../../../ruBLAS/src/tensor_matmul/gemm.rs)、[复数 GEMM](../../../ruBLAS/src/tensor_matmul/complex.rs)、[三角求解](../../../ruBLAS/src/tensor_matmul/triangular.rs)、[融合 epilogue](../../../ruBLAS/src/tensor_matmul/fused.rs)。
 
 ### 张量矩阵乘
 
@@ -61,11 +61,11 @@ fn residue_matmul<R: Runtime>(
 
 输入为 `[M, K]` 和 `[K, N]` 时输出为 `[M, N]`。设置或设备能力不满足时返回 `MatmulSetupError`，不会改用 Naive。
 
-定义见[矩阵乘入口](../../../crates/ruBLAS/src/tensor_matmul/base.rs)。
+定义见[矩阵乘入口](../../../ruBLAS/src/tensor_matmul/base.rs)。
 
 ### 向量叉积
 
-`rublas::tensor_vector::cross(lhs, rhs, dim)` 要求指定维度长度为 3，返回设备张量。非末维计算涉及维度置换与连续化。定义见[叉积实现](../../../crates/ruBLAS/src/tensor_vector/cross.rs)。
+`rublas::tensor_vector::cross(lhs, rhs, dim)` 要求指定维度长度为 3，返回设备张量。非末维计算涉及维度置换与连续化。定义见[叉积实现](../../../ruBLAS/src/tensor_vector/cross.rs)。
 
 ### AWQ INT4
 
@@ -80,9 +80,9 @@ fn residue_matmul<R: Runtime>(
 | scales | F16 | [K/G, N] |
 | bias，可选 | F16 | [N] |
 
-K、N、G 非零，K 能被 G 整除，N 能被 8 整除。输入最后一维为 K，输出替换为 N；所有操作数需同设备。打包位序必须匹配[AWQ 内核](../../../crates/ruBLAS/src/tensor_int4/kernel.rs)，不能把任意 INT4 文件直接作为 qweight 使用。
+K、N、G 非零，K 能被 G 整除，N 能被 8 整除。输入最后一维为 K，输出替换为 N；所有操作数需同设备。打包位序必须匹配[AWQ 内核](../../../ruBLAS/src/tensor_int4/kernel.rs)，不能把任意 INT4 文件直接作为 qweight 使用。
 
-对象和检查定义见[INT4 入口](../../../crates/ruBLAS/src/tensor_int4/mod.rs)。
+对象和检查定义见[INT4 入口](../../../ruBLAS/src/tensor_int4/mod.rs)。
 
 ## 3. 分组矩阵乘
 
@@ -106,7 +106,7 @@ K、N、G 非零，K 能被 G 整除，N 能被 8 整除。输入最后一维为
 - 相关元素数量不能超过 U32 索引范围。
 - 参数不满足约定时返回 `GroupedMatmulError`；异步执行错误还需在回读或同步阶段处理。
 
-源码：[分组矩阵乘入口](../../../crates/ruBLAS/src/tensor_grouped/mod.rs)、[内核](../../../crates/ruBLAS/src/tensor_grouped/kernel.rs)。
+源码：[分组矩阵乘入口](../../../ruBLAS/src/tensor_grouped/mod.rs)、[内核](../../../ruBLAS/src/tensor_grouped/kernel.rs)。
 
 ## 5. 与其他库协作
 

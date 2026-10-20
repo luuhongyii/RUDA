@@ -39,7 +39,7 @@ Behalten Sie beim Aufruf der Ausführungsschicht das Argumentlayout, den Einstie
 
 Nicht unterstützt. IR gibt `CompilationError::UnsupportedInstruction` zurück. Eine ungültige Konfiguration oder Struktur gibt `CompilationError::Validation` zurück. Die Diagnose umfasst das Präfix `Direct PTX:`. Das Backend greift nicht automatisch auf NVRTC zurück.
 
-Definitionen: [PTX-Modul](../../crates/ruda-compiler/src/ptx/mod.rs), [Compiler-Tests](../../crates/ruda-compiler/src/ptx/tests.rs) und [Laufzeit-Backend-Auswahl](../../crates/ruda-driver-cuda/src/compiler_backend.rs).
+Definitionen: [PTX-Modul](../../ruda-compiler/src/ptx/mod.rs), [Compiler-Tests](../../ruda-compiler/src/ptx/tests.rs) und [Laufzeit-Backend-Auswahl](../../ruda-driver-cuda/src/compiler_backend.rs).
 
 ## 5. Packed-FP4-Transport und NVFP4-Scaled-MMA
 
@@ -47,4 +47,4 @@ Definitionen: [PTX-Modul](../../crates/ruda-compiler/src/ptx/mod.rs), [Compiler-
 
 `CoopMma::ExecuteScaled` akzeptiert nur SM 120 mit PTX ab 8.7, ein `16×8×64`-Tile, gepacktes E2M1x2 für A/B, F32 für C/D, E4M3-Skalen und `scales_factor = 4`. Es erzeugt `mxf4nvf4.block_scale.scale_vec::4X` und setzt das Ausgabeziel auf `sm_120a`. Andere Architekturen, Tile-Formen, Skalenformate oder Faktoren werden abgelehnt; ausreichende Fragmentregister sind ebenfalls erforderlich.
 
-[Packed-Verarbeitung](../../crates/ruda-compiler/src/ptx/packed.rs), [Scaled-MMA](../../crates/ruda-compiler/src/ptx/matrix/scaled.rs), [Transport-/Layoutbeispiel](../../crates/ruda-driver-cuda/examples/ptx_packed.rs). Das Beispiel liest exportierte PTX-Dateien und prüft Bytetransport sowie Fragmentkoordinaten, führt aber keine NVFP4-MMA-Arithmetik aus.
+[Packed-Verarbeitung](../../ruda-compiler/src/ptx/packed.rs), [Scaled-MMA](../../ruda-compiler/src/ptx/matrix/scaled.rs), [Transport-/Layoutbeispiel](../../ruda-driver-cuda/examples/ptx_packed.rs). Das Beispiel liest exportierte PTX-Dateien und prüft Bytetransport sowie Fragmentkoordinaten, führt aber keine NVFP4-MMA-Arithmetik aus.

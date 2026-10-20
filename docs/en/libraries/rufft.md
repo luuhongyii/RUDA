@@ -43,7 +43,7 @@ Plans own retained buffers/tables and are bound to their construction queue, dty
 
 The [PyTorch FFT interface](../native-pytorch-api.md#scientific-operations) uses standard interleaved complex64/complex128 storage and provides the six complex/real/Hermitian families in 1D/2D/nD, shifts, frequencies, native adjoint gradients and explicit `ruda_torch.fft.FFTPlan` ownership. It rejects FP16/BF16/complex32 rather than silently changing dtype and does not install a global monkeypatch or unbounded plan cache.
 
-Sources: [multi-axis plan](../../../crates/ruFFT/src/multidim.rs), [FP64 plan](../../../crates/ruFFT/src/double.rs), [spectral layout kernels](../../../crates/ruFFT/src/spectral_layout.rs), [Python FFT](../../../crates/ruda-torch/python/ruda_torch/fft.py).
+Sources: [multi-axis plan](../../../ruFFT/src/multidim.rs), [FP64 plan](../../../ruFFT/src/double.rs), [spectral layout kernels](../../../ruFFT/src/spectral_layout.rs), [Python FFT](../../../ruda-torch/python/ruda_torch/fft.py).
 
 ## 1. Configure dependencies
 
@@ -51,10 +51,10 @@ The Cargo package is `ruda-fft`; its Rust import name is `rufft`. Feature `tenso
 
 ```toml
 [dependencies]
-rufft = { package = "ruda-fft", path = "../RUDA/crates/ruFFT", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rufft = { package = "ruda-fft", path = "../RUDA/ruFFT", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Forward and inverse transforms
@@ -154,4 +154,4 @@ To avoid materializing zero-padded input when managing buffers, use these entry 
 
 N must be a power of two of at least 2, and real/imaginary shapes must match. `signal_len` cannot exceed the input axis length or N. `spec_bins` must be at least 1 and cannot exceed the input spectrum axis length or `N / 2 + 1`. Output buffers still require full allocation; these interfaces avoid materializing the zero-padded input tail.
 
-API reference: [Tensor interface](../../../crates/ruFFT/src/tensor.rs), [Forward launch](../../../crates/ruFFT/src/fft/rfft.rs), [Inverse launch](../../../crates/ruFFT/src/fft/irfft.rs).
+API reference: [Tensor interface](../../../ruFFT/src/tensor.rs), [Forward launch](../../../ruFFT/src/fft/rfft.rs), [Inverse launch](../../../ruFFT/src/fft/irfft.rs).

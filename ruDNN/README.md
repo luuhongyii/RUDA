@@ -1,0 +1,284 @@
+# ruDNN
+
+**English** | [简体中文](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/docs/zh/README.md) | [日本語](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/docs/ja/README.md) | [Deutsch](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/docs/de/README.md) | [Русский](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/docs/ru/README.md)
+
+Neural network operators for Ruda.
+
+- Cargo package: `ruDNN`
+- Rust crate: `rudnn`
+
+## Features
+
+| Feature | Operations |
+| --- | --- |
+| `tensor-attention` | Attention |
+| `tensor-paged-attention` | Paged MHA/GQA/MLA |
+| `tensor-convolution` | Convolution |
+| `tensor-normalization` | LayerNorm, RMSNorm, and softmax |
+| `tensor-moe` | MoE routing, dispatch, and expert computation |
+| `tensor-gated-delta` | Gated-delta computation |
+| `pooling` | Pooling |
+| `interpolation` | Interpolation |
+| `grid-sample` | Grid sampling |
+| `ctc` | CTC loss |
+
+## Quick Start
+
+Build from the RUDA workspace:
+
+```sh
+git clone https://github.com/shuqi2077/RUDA.git
+cd RUDA
+cargo build --release --locked -p ruDNN --features tensor-normalization
+```
+
+## Documentation
+
+- [User guide](https://github.com/shuqi2077/RUDA/blob/main/docs/en/libraries/rudnn.md)
+- [Environment setup](https://github.com/shuqi2077/RUDA/blob/main/docs/en/getting-started.md)
+- [Cargo features](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/Cargo.toml) · [Module exports](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/src/lib.rs)
+
+## ruDNN User Guide
+
+[Compute libraries](https://github.com/shuqi2077/RUDA/blob/main/docs/en/libraries/README.md) · [ruBLAS](https://github.com/shuqi2077/RUDA/blob/main/docs/en/libraries/rublas.md) · [Tensors and frameworks](https://github.com/shuqi2077/RUDA/blob/main/docs/en/tensor-framework.md) · [中文](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/docs/zh/README.md)
+
+### 1. Overview and features
+
+ruDNN provides neural network operations. The Cargo package is `ruDNN` and the Rust crate is `rudnn`.
+
+| Feature | Operations |
+| --- | --- |
+| `tensor-attention` | Tensor attention |
+| `tensor-paged-attention` | Paged MHA/GQA/MLA |
+| `tensor-convolution` | Tensor convolution |
+| `pooling`, `interpolation` | Pooling and interpolation |
+| `grid-sample`, `ctc` | Grid sampling and CTC |
+| `tensor-moe` | Device MoE routing and expert computation |
+| `tensor-normalization` | General-purpose device normalization for model layers |
+| `tensor-gated-delta` | Gated-delta computation for hybrid architectures such as Qwen3.5 |
+
+Attention and convolution each have corresponding autotune features. See [Cargo.toml](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/Cargo.toml) and [module exports](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/src/lib.rs).
+
+### 2. Attention and convolution
+
+#### Attention
+
+`rudnn::attention::tensor::attention` takes query, key, value, optional mask, optional attn_bias, AttentionModuleOptions, and AttentionStrategy. It returns a device tensor or AttentionSetupError.
+
+Strategies include FlashBlackboxAccelerated, FlashUnit, Fallback, and Autotune when its feature is enabled. The default is Fallback without autotuning and Autotune with it. Fallback uses multiple kernels on the same device, not a CPU backend.
+
+Match layout, mask, and precision to the selected strategy. See the [attention interface](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/src/attention/tensor/base.rs).
+
+#### Convolution
+
+`rudnn::convolution::tensor::conv_forward` takes input, weight, optional bias, ConvOptions<N>, and ConvStrategy. It returns a device tensor or ConvSetupError. It converts inputs to channels-last layout for execution and converts the output back. `conv_forward_nhwc` uses channels-last layout directly.
+
+Strategies include Direct, ImplicitGemm, and optional Autotune. The entry point uses Direct for three-dimensional F32 convolution. Grouped convolution also uses Direct when ImplicitGemm is selected. The strategy parameter is therefore not always a strict request to retain one algorithm.
+
+The same module provides conv_data_backward and conv_weight_backward. Check shape, options, and execution requirements for each direction. See the [convolution interface](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/src/convolution/tensor/base.rs).
+
+### 3. MoE workflow
+
+`rudnn::moe` provides this local computation sequence:
+
+Input logits → softmax/top-k → compact dispatch → SwiGLU experts → weighted combine.
+
+| API | Purpose |
+| --- | --- |
+| `route(logits, RoutingOptions)` | Creates a RoutingPlan |
+| `RoutingPlan::expert_indices()`, `weights()` | Accesses selected experts and weights |
+| `RoutingPlan::dispatch(input)` | Dispatches tokens by expert |
+| `SwiGluExperts::new(gate, up, down)` | Creates bias-free expert weights |
+| `SwiGluExperts::forward_dispatched` | Computes dispatched tokens |
+| `DispatchedTokens::combine` | Restores token order and combines weighted results |
+| `SwiGluExperts::forward(input, logits, options)` | Executes the complete local forward sequence |
+
+These interfaces use `RudaTensor<R>`. Computation entry points return `Result` with `MoeError` for invalid shapes, dtypes, or other arguments.
+
+### 4. Routing contract
+
+Logits have shape [T, E] and use non-quantized F32, F16, or BF16. `RoutingOptions` contains `top_k: usize` and `renormalize: bool`, with 1 ≤ top_k ≤ E.
+
+Softmax computes over all experts in FP32 before top-k selection. Ties favor lower expert IDs. With renormalize enabled, selected weights are renormalized, then cast to the logits dtype. Rows containing NaN, positive infinity, or only negative infinity retain NaN weights rather than using a uniform distribution.
+
+Selected expert indices and weights both have shape [T, top_k]. Indices use U32.
+
+### 5. Expert weights and dispatch
+
+Input tokens have shape [T, H]; gate and up have shape [E, I, H]; down has shape [E, H, I]. Weights must share a floating-point dtype and device. Expert counts and dimensions must match routing and input.
+
+Dispatch does not drop tokens to enforce capacity. Atomic assignment order within an expert is not fixed; a saved mapping restores token order. The forward entry point takes precomputed logits rather than performing the model's gate projection or loading weight files.
+
+Source: [routing](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/src/moe/routing.rs), [dispatch and combine](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/src/moe/dispatch.rs), [experts](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/src/moe/experts.rs), and [tests](https://github.com/shuqi2077/RUDA/blob/main/ruDNN/src/moe/tests.rs).
+
+### 6. Call MoE
+
+Enable `tensor-moe` on your `ruDNN` dependency. Prepare device tensors with the layouts above, then create expert weights and run the forward operation:
+
+```rust
+use rudnn::moe::{RoutingOptions, SwiGluExperts};
+
+let experts = SwiGluExperts::new(gate, up, down)?;
+let options = RoutingOptions {
+    top_k: 2,
+    renormalize: true,
+};
+let output = experts.forward(input, logits, options)?;
+```
+
+This selects two experts per token, so `E` must be at least 2. `input` has shape `[T, H]`, `logits` has shape `[T, E]`, and `output` has shape `[T, H]`. Reuse `experts` across subsequent input batches without recreating the weight object.
+
+To inspect routing or insert your own processing between stages, call them separately:
+
+```rust
+use rudnn::moe::route;
+
+let routing = route(logits, options)?;
+let selected_experts = routing.expert_indices();
+let selected_weights = routing.weights();
+let dispatched = routing.dispatch(input)?;
+let expert_output = experts.forward_dispatched(&dispatched)?;
+let output = dispatched.combine(expert_output)?;
+```
+
+These are alternative forms; the second starts with a fresh batch of `input` and `logits`. `combine` uses the dispatch mapping to restore token order and merges expert outputs using routing weights.
+
+Shape, dtype, or device mismatches return `MoeError`. To read results on the host, use `ruda_kernel::tensor::readback::into_data_sync(output)`, which waits for device results and returns `TensorData`.
+
+### 7. LayerNorm, RMSNorm, and Softmax
+
+Enable `tensor-normalization` and import these functions from `rudnn::normalization`. All operate on the final input axis and preserve shape:
+
+| Function | Input | Parameters |
+| --- | --- | --- |
+| `layer_norm(input, gamma, beta, epsilon)` | F32/F16/BF16 | F32 vector `gamma`, optional F32 vector `beta` |
+| `rms_norm(input, gamma, epsilon)` | F32/F16/BF16 | F32 vector `gamma` |
+| `softmax_last_axis(input)` | F32 | No additional parameters |
+
+Input must be unquantized with a nonempty final axis. For final-axis length H, `gamma` and `beta` must have shape `[H]`, be unquantized, and share the input device. `epsilon` must be finite and positive. Affine parameters remain F32 even for BF16/F16 inputs. Statistics and affine arithmetic use FP32, with the output cast to the input dtype.
+
+```rust
+use ruda_kernel::{dsl::Runtime, tensor::RudaTensor};
+use rudnn::normalization::{NormalizationError, layer_norm, rms_norm, softmax_last_axis};
+
+fn normalize<R: Runtime>(
+    input: RudaTensor<R>,
+    gamma: RudaTensor<R>,
+    beta: Option<RudaTensor<R>>,
+    epsilon: f32,
+) -> Result<RudaTensor<R>, NormalizationError> {
+    layer_norm(input, gamma, beta, epsilon)
+}
+
+fn normalize_rms<R: Runtime>(
+    input: RudaTensor<R>,
+    gamma: RudaTensor<R>,
+    epsilon: f32,
+) -> Result<RudaTensor<R>, NormalizationError> {
+    rms_norm(input, gamma, epsilon)
+}
+
+fn probabilities<R: Runtime>(
+    logits: RudaTensor<R>,
+) -> Result<RudaTensor<R>, NormalizationError> {
+    softmax_last_axis(logits)
+}
+```
+
+### 8. Gated-delta prefill and recurrence
+
+Enable `tensor-gated-delta`. Use `chunk_gated_delta_rule(input, chunk_size)` for chunked sequence prefill and `gated_delta_rule(input)` for token-by-token recurrence. Both take `GatedDeltaInput<R>`:
+
+| Field | Shape/type |
+| --- | --- |
+| `query`, `key` | `[B, H, T, K]`, matching F32/F16/BF16 |
+| `value` | `[B, H, T, V]`, same dtype as query |
+| `beta` | `[B, H, T]`, same dtype as query |
+| `log_decay` | `[B, H, T]`, F32 |
+| `initial_state` | `[B, H, K, V]`, F32 |
+| `query_scale` | Finite f32, supplied according to model configuration |
+
+All tensors must be unquantized and on the same device. Supply Q/K after model-specific normalization; the entry point does not perform it for you. This function reuses the preceding `Runtime` and `RudaTensor` imports:
+
+```rust
+use rudnn::gated_delta::{
+    GatedDeltaError, GatedDeltaInput, GatedDeltaOutput, chunk_gated_delta_rule,
+};
+
+fn delta_prefill<R: Runtime>(
+    query: RudaTensor<R>,
+    key: RudaTensor<R>,
+    value: RudaTensor<R>,
+    beta: RudaTensor<R>,
+    log_decay: RudaTensor<R>,
+    initial_state: RudaTensor<R>,
+    query_scale: f32,
+    chunk_size: usize,
+) -> Result<GatedDeltaOutput<R>, GatedDeltaError> {
+    chunk_gated_delta_rule(
+        GatedDeltaInput {
+            query, key, value, beta, log_decay, initial_state, query_scale,
+        },
+        chunk_size,
+    )
+}
+```
+
+The returned `output` has shape `[B, H, T, V]` and query dtype. `final_state` is F32 with shape `[B, H, K, V]`. For the next segment of the same sequence, pass that `final_state` as `initial_state`. Keep separate state for different sequences. Initial state is not overwritten in place.
+
+`chunk_size` must be positive, and the triangular workspace of `4 × (chunk_size² + chunk_size)` bytes must fit the device's per-workgroup shared-memory limit. The entry point pads the final chunk; padding is excluded from the output. Invalid arguments return `GatedDeltaError`.
+
+For model-level text and image calls, see the [ruLLM inference guide](https://github.com/shuqi2077/RUDA/blob/main/docs/en/model-inference.md).
+
+### 9. Paged attention and MLA
+
+Enable `tensor-paged-attention` and use `rudnn::paged_attention`. `HostPlan::new(page_size, pages, tables, lengths, sequence_ids, positions)` validates host scheduling metadata; positions are absolute, zero-based positions within each sequence. `DevicePlan::upload(host, &q)` uploads that metadata to the query's device and execution queue. Reuse the plan only while its schedule is unchanged.
+
+`DevicePlan::attention(q, k, v, scale, causal)` reads physical cache pages directly for packed, variable-length prefill/decode. Q has shape `[queries, Hq, D]`, K `[pages, page_size, Hkv, D]`, V `[pages, page_size, Hkv, Dv]`, and the result `[queries, Hq, Dv]`; `Hq` must be divisible by `Hkv`. Inputs must be contiguous, unquantized F32/F16/BF16 with matching dtype, device and queue. Supply finite Q/K/V and a finite positive scale. `D` and `Dv` are in `1..=1024`; the device must support a 32- or 64-lane plane and the required launch grid. Forward and first-order backward are available; arbitrary external masks and quantized KV caches are not supported.
+
+`DevicePlan::mla(q, qp, latent, kp, scale, causal)` takes absorbed queries `[queries, H, R]`, positional queries `[queries, H, P]`, a shared latent cache `[pages, page_size, 1, R]` and positional cache `[pages, page_size, 1, P]`. It returns compressed context `[queries, H, R]`; `P` is in `1..=256`. Apply positional encoding before the call and value/output projections afterward. Use the model's original QK scale, not a scale derived from the compressed rank.
+
+The methods above use the unsplit path. To split a history, create `SplitWorkspace::new(&q, queries, heads, value_dim, splits)` with `2..=32` splits and call `attention_with_workspace` or `mla_with_workspace`. Partial statistics and merging use FP32. A workspace is limited to 64 MiB and can be reused only with matching shape and the same ordered execution queue.
+
+`DevicePlan::append(k, v, key_cache, value_cache)` returns the cache tensors to retain for subsequent calls. Shared cache allocations are copied before mutation; shared-prefix physical pages additionally require scheduler-level copy-on-write. Duplicate physical writes are rejected.
+
+### 10. Group-limited sigmoid MoE routing
+
+With `tensor-moe`, `route_sigmoid_grouped(logits, bias, options)` returns a `RoutingPlan`. Logits are `[tokens, experts]` in F32/F16/BF16; optional correction bias is FP32 `[experts]` on the same device and queue. Bias affects selection only. Returned weights use the original sigmoid scores, optional renormalization and `scale`; exact ties favor lower IDs.
+
+`GroupRoutingOptions` contains `top_k`, `groups`, `selected_groups`, `group_top_two`, `renormalize` and `scale`. Expert count is `1..=1024`, groups `1..=128` and top-k `1..=64`; experts must divide evenly into groups, selected groups must be valid, and top-k cannot exceed their combined expert count. `group_top_two=true` sums the two largest corrected scores per group and requires at least two experts per group; otherwise the group score is its maximum. Scale must be finite and positive.
+
+`SwiGluExperts::forward_sigmoid_grouped(input, logits, bias, options, strategy)` runs routing, dispatch, expert computation and combination. `forward_dispatched_with_strategy` selects `GroupedStrategy::Scalar`, `Auto` or `TensorCore`; the existing `forward` and `forward_dispatched` methods retain `Scalar`. Tensor Core execution requires supported F16/BF16 hardware. `Auto` falls back only for unsupported setup, not compilation or execution failures. Model projections, shared experts and residual branches remain caller-owned.
+
+### 11. Paged attention backward and ordered history
+
+`DevicePlan::attention_backward(q, k, v, grad_out, scale, causal)` returns `AttentionBackward { dq, dk, dv }`. `mla_backward(q, qp, latent, kp, grad_out, scale, causal)` returns `MlaBackward { dq, dqp, dlatent, dkp }`; `dlatent` includes both key and value contributions. Backward recomputes probabilities rather than retaining a full score matrix.
+
+The unsafe `attention_backward_selected_into` and `mla_backward_selected_into` accept independently optional gradient buffers. `None` omits that output and its branch-specific history scratch; the input values may still be needed for other derivatives. Outputs must not alias inputs or each other, and all accesses must use the plan's ordered queue. History gradients on this path use FP32 atomics, so accumulation is not bitwise deterministic.
+
+For atomic-free history reduction, create `OrderedBackwardWorkspace::new(&plan, &q)?` and pass it mutably to `attention_backward_ordered_into` or `mla_backward_ordered_into`. The same output-aliasing rules apply, including workspace storage. Reuse it only with compatible immutable scheduling metadata, query count/head count, device and queue. Statistics and inverse metadata share a 64 MiB workspace budget. A fixed accumulation order does not promise identical bits across devices or equality with the atomic path.
+
+| Ordered workspace option | Default | Effect |
+| --- | --- | --- |
+| `set_query_pruning(bool)` | `true` | Skips provably causally invisible queries without changing the surviving summation order. |
+| `set_history_row_cache(bool)` | `false` | Reuses history-row values in thread-local storage; no extra device tensor, but register pressure may increase. |
+| `set_history_compaction(bool)?` | `false` | Computes history gradients only for active physical pages and explicitly zeroes inactive pages. |
+
+`RUDA_PAGED_ORDERED_CACHE_ROWS=1` and `RUDA_PAGED_ORDERED_COMPACT_HISTORY=1` select the latter two options at workspace construction; unset or `0` disables them, and other values are errors. Changing the environment does not change an existing workspace.
+
+Compaction uses pages reachable through effective KV lengths of sequences that have queries, not table capacity or a count of nonzero gradients. The first enable uploads a `physical_pages * 4` byte index within the same budget; later toggles reuse it. Disabling retains the allocation. `history_compaction_pages()` returns `Option<(active_pages, inactive_pages)>` and `bytes()` includes retained storage. A budget error leaves the previous mode intact. These options do not change the atomic default in the PyTorch adapter or guarantee a speedup.
+
+### 12. MoE first-order training
+
+`selected_router_weights(&logits, &indices, options)` returns FP32 `[T, top_k]` weights; `selected_router_backward(&logits, &indices, &grad_weights, options)` returns `[T, E]` gradients in the logits dtype. Logits are contiguous F32/F16/BF16; indices are contiguous U32/I32/I64, with `1 <= top_k <= min(E, 64)`; operands share device and queue. `RouterWeightOptions` selects `RouterScoring::Softmax` or `Sigmoid`, optional selected-weight renormalization, then a finite positive `scale`. `grad_weights` is FP32.
+
+Repeated indices have gather semantics; invalid indices produce NaNs for the entire row without out-of-bounds reads or host synchronization. This differentiates continuous weights for a fixed selection, not top-k/group decisions or correction bias. `RoutingPlan::into_training(logits, options)` preserves that selection and recomputes its weights; use the returned `RouterTrainingPlan::routing()` for dispatch and `backward(&grad_weights)` for logits gradients. Keep saved input values unchanged.
+
+For expert training, call `SwiGluExperts::forward_dispatched_training(&dispatched, strategy)` and retain its `output` and `cache`. The backward chain is:
+
+1. `dispatched.combine_backward(&expert_output, grad_output)` returns `dexpert` and FP32 `dweights`.
+2. `cache.backward(dexpert)` returns dispatched `dinput` and FP32 `dgate`, `dup`, `ddown`.
+3. `dispatched.dispatch_backward(dinput)` sums the selected rows back to each input token without multiplying routing weights again.
+4. Pass `dweights` to the router-training backward for logits gradients.
+
+`combine_backward` defaults to `CombineGradientStrategy::Serial`; `combine_backward_with_strategy` permits `Plane`. Expert `backward` defaults to scalar independently of the forward strategy; `backward_with_strategy` accepts `GroupedStrategy::Scalar`, `Auto` or `TensorCore`. Tensor Core backward requires supported F16/BF16 hardware; `Auto` falls back only for unsupported capabilities, not compilation or execution failures.

@@ -122,7 +122,7 @@ All three stores are enabled by `ruda-store` defaults. For PyTorch dictionaries 
 
 Filters such as `with_regex` select parameter paths. Safetensors and PyTorch stores use `with_key_remapping` to map parameter names; Rudapack uses `with_remap_pattern` or `remap(KeyRemapper)`. `allow_partial(true)` explicitly permits a partial load; the default is false. Examine `ApplyResult.applied`, `skipped`, `missing`, `unused`, and `errors` to distinguish loaded weights from omitted or incompatible entries. Shape and dtype mismatches are different errors.
 
-`HalfPrecisionAdapter` converts floating-point snapshots for storage. Apply it with `with_to_adapter` when saving and `with_from_adapter` when loading. Its `without_module("LayerNorm")` option can keep normalization parameters at full precision; see the [complete half-precision example](../../crates/ruda-store/examples/half_precision.rs).
+`HalfPrecisionAdapter` converts floating-point snapshots for storage. Apply it with `with_to_adapter` when saving and `with_from_adapter` when loading. Its `without_module("LayerNorm")` option can keep normalization parameters at full precision; see the [complete half-precision example](../../ruda-store/examples/half_precision.rs).
 
 ## Weights versus training state
 
@@ -130,6 +130,6 @@ Loading weights is sufficient to restore model parameters, not an exact training
 
 ## API entry points
 
-- [Dataset implementations](../../crates/ruda-dataset/src/dataset/mod.rs) and [transform adapters](../../crates/ruda-dataset/src/transform/mod.rs).
-- [Batcher contract](../../crates/ruda-model/src/data/dataloader/batcher.rs) and [loader builder](../../crates/ruda-model/src/data/dataloader/builder.rs).
-- [Storage API exports](../../crates/ruda-store/src/lib.rs), [Rudapack store](../../crates/ruda-store/src/rudapack/store.rs), and [PyTorch store](../../crates/ruda-store/src/pytorch/store.rs).
+- [Dataset implementations](../../ruda-dataset/src/dataset/mod.rs) and [transform adapters](../../ruda-dataset/src/transform/mod.rs).
+- [Batcher contract](../../ruda-model/src/data/dataloader/batcher.rs) and [loader builder](../../ruda-model/src/data/dataloader/builder.rs).
+- [Storage API exports](../../ruda-store/src/lib.rs), [Rudapack store](../../ruda-store/src/rudapack/store.rs), and [PyTorch store](../../ruda-store/src/pytorch/store.rs).

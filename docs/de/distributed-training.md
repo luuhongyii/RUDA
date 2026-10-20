@@ -15,7 +15,7 @@ Allen Ranks dieselbe erreichbare Adresse, eine gemeinsame UniqueId, verschiedene
 - TCP-/Heartbeat-Timeouts, Rails und Transport konsistent konfigurieren. Automatische torchrun/NCCL-Umgebungsinterpretation wird nicht bereitgestellt.
 - Standard-TCP-Tensortransport ist host-staged; TCP-Peers sind nicht automatisch GPU-P2P/NVLink/RDMA.
 
-Cargo-Abhängigkeiten: ruCCL, ruda-autodiff, ruda-nn, ruda-optim mit collective, ruda-tensor-device mit cuda-default. [Vollständige Initialisierung](../en/distributed-training.md#rendezvous-and-rank-connection) und [Verbindungs-API](../../crates/ruCCL/src/rank/communicator/connect.rs) zeigen die Fehlerkonvertierung. Eigener nativer Transport implementiert DataParallelCommunicator inklusive geordneter Metadaten und Broadcast/Reduce-Verträge.
+Cargo-Abhängigkeiten: ruCCL, ruda-autodiff, ruda-nn, ruda-optim mit collective, ruda-tensor-device mit cuda-default. [Vollständige Initialisierung](../en/distributed-training.md#rendezvous-and-rank-connection) und [Verbindungs-API](../../ruCCL/src/rank/communicator/connect.rs) zeigen die Fehlerkonvertierung. Eigener nativer Transport implementiert DataParallelCommunicator inklusive geordneter Metadaten und Broadcast/Reduce-Verträge.
 
 ## Trainingsreihenfolge
 

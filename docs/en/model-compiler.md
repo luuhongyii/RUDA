@@ -52,7 +52,7 @@ Native matching uses exact overloads, not similar names:
 
 | Family | Supported overloads / restrictions |
 | --- | --- |
-| Copy / unary | `aten.clone.default`; `.default` unary operators from [`UNARY_CODES`](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py), including ReLU, SiLU, sigmoid, tanh, exp, log, sqrt and rsqrt. |
+| Copy / unary | `aten.clone.default`; `.default` unary operators from [`UNARY_CODES`](../../ruda-torch/python/ruda_torch/_graph_spec.py), including ReLU, SiLU, sigmoid, tanh, exp, log, sqrt and rsqrt. |
 | Arithmetic | `add/sub/mul/div.Tensor` and `.Scalar`; tensor pairs have identical shapes/dtypes, without broadcasting or promotion; scalar values are finite FP32. |
 | Matrix multiplication | `aten.mm.default`, `aten.bmm.default`; equal-dtype rank-2/rank-3 inputs, matching inner and batch dimensions, no batch broadcasting. |
 | Reduction | `aten.sum.dim_IntList`, `aten.mean.dim`; `keepdim=True`, no explicit dtype conversion. |
@@ -61,7 +61,7 @@ Native matching uses exact overloads, not similar names:
 
 Runtime inputs must be dense strided `ruda:0` tensors without unresolved conjugate/negative views. Supported specs are nonempty rank 1–8 FP32/FP16/BF16, with at most uint32 elements. Inputs are staged into contiguous storage; eligible operation outputs must have contiguous metadata. Each region allows at most 256 operations and 512 tensors. Explicit GraphOp RMSNorm/SiLU-mul nodes do not mean AOT automatically recognizes those composite operations.
 
-Views, mutations, RNG and unsupported operations keep original-device execution in auto mode, or cause a required-mode error. Missing original-device kernels still fail; auto mode is not CPU fallback. Exact lowering and argument guards: [`_compile_native.py`](../../crates/ruda-torch/python/ruda_torch/_compile_native.py).
+Views, mutations, RNG and unsupported operations keep original-device execution in auto mode, or cause a required-mode error. Missing original-device kernels still fail; auto mode is not CPU fallback. Exact lowering and argument guards: [`_compile_native.py`](../../ruda-torch/python/ruda_torch/_compile_native.py).
 
 ## State, gradients, memory and streams
 
@@ -97,4 +97,4 @@ backend.close()
 
 `make_backend()` is for external `torch.compile` calls; the convenience wrapper additionally checks public inputs and module devices. External compiler configuration remains the caller's responsibility. Custom operators need device kernels, FakeTensor/meta rules and training autograd rules. `decompositions={exact_overload: callable}` is an explicit caller-owned mathematical transformation, not permission to replace precise activations with approximations.
 
-Related guides: [fixed-address graphs](static-pytorch-graphs.md), [fine-tuning](finetuning.md), [native components](../../crates/ruda-torch/README.md). Implementation: [compiler.py](../../crates/ruda-torch/python/ruda_torch/compiler.py).
+Related guides: [fixed-address graphs](static-pytorch-graphs.md), [fine-tuning](finetuning.md), [native components](../../ruda-torch/README.md). Implementation: [compiler.py](../../ruda-torch/python/ruda_torch/compiler.py).

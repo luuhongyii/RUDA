@@ -27,7 +27,7 @@ NVIDIA предлагает два пути компиляции:
 |`ruda-compiler/ptx`|Прямой компилятор PTX|
 |`ruda-driver-cuda/direct-ptx`|Позволяет прямой выбор PTX в бэкенда CUDA.|
 
-Функции определяют, какой код будет построен; переменные среды выбирают путь во время выполнения. Это отдельные элементы управления. См. [манифест CUDA](../../crates/ruda-driver-cuda/Cargo.toml) и [манифест компилятора](../../crates/ruda-compiler/Cargo.toml).
+Функции определяют, какой код будет построен; переменные среды выбирают путь во время выполнения. Это отдельные элементы управления. См. [манифест CUDA](../../ruda-driver-cuda/Cargo.toml) и [манифест компилятора](../../ruda-compiler/Cargo.toml).
 
 ## 3. Переменные среды
 
@@ -38,7 +38,7 @@ NVIDIA предлагает два пути компиляции:
 |`CUDA_PATH`|CUDA Корень установки Toolkit|
 |`RUDA_PTX_TEST_CACHE`| Переопределение каталога кеша, считываемое только примером ptx-runtime |
 
-Неизвестные значения компилятора приводят к ошибке. Выбор `ptx` без включения `direct-ptx` также приводит к ошибке вместо переключения на NVRTC. См. [compiler_backend.rs](../../crates/ruda-driver-cuda/src/compiler_backend.rs).
+Неизвестные значения компилятора приводят к ошибке. Выбор `ptx` без включения `direct-ptx` также приводит к ошибке вместо переключения на NVRTC. См. [compiler_backend.rs](../../ruda-driver-cuda/src/compiler_backend.rs).
 
 ## 4. Цели и кэши
 
@@ -60,4 +60,4 @@ NVIDIA предлагает два пути компиляции:
 
 Поддерживается Triton, не Gluon; неподдерживаемый TTIR вызывает ошибку lowering. Это отдельный от Rust Kernel DSL путь, не обещание совместимости с любым Triton-kernel. Режим GX1 требует отдельной библиотеки, отсутствующей в этом software workspace.
 
-[Метаданные установки](../../crates/ruda-triton/python/pyproject.toml), [этапы компиляции](../../crates/ruda-triton/python/ruda_triton/compiler.py), [устройства и stream](../../crates/ruda-triton/python/ruda_triton/driver.py).
+[Метаданные установки](../../ruda-triton/python/pyproject.toml), [этапы компиляции](../../ruda-triton/python/ruda_triton/compiler.py), [устройства и stream](../../ruda-triton/python/ruda_triton/driver.py).

@@ -22,10 +22,10 @@ Diese Konfiguration platziert das Anwendungsverzeichnis neben dem `RUDA`-Quellve
 
 ```toml
 [dependencies]
-ruprim = { package = "ruPRIM", path = "../RUDA/crates/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+ruprim = { package = "ruPRIM", path = "../RUDA/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Summe, Zeilenreduzierungen und Scans
@@ -177,4 +177,4 @@ Ganzzahlige Potenzen sind in `ruprim::elementwise::binary::integer_power`:
 
 Verwenden Sie `Scalar::Int(-2)` für einen negativen Exponenten, anstatt den Exponenten in einen Gleitkommawert umzuwandeln. Indizierung und elementweise Schnittstellen geben Gerätetensoren direkt zurück. Um eine Eingabe für andere Operationen beizubehalten, übergeben Sie geklonte Handles wie im Beispiel und behalten Sie den von jeder Operation zurückgegebenen Tensor bei.
 
-API Referenz: [Reduktionen](../../../crates/ruPRIM/src/reduce/tensor/base.rs), [Scans](../../../crates/ruPRIM/src/scan/tensor.rs), [Indizierung](../../../crates/ruPRIM/src/indexing/mod.rs), [Ganzzahlpotenzen](../../../crates/ruPRIM/src/elementwise/binary/integer_power.rs).
+API Referenz: [Reduktionen](../../../ruPRIM/src/reduce/tensor/base.rs), [Scans](../../../ruPRIM/src/scan/tensor.rs), [Indizierung](../../../ruPRIM/src/indexing/mod.rs), [Ganzzahlpotenzen](../../../ruPRIM/src/elementwise/binary/integer_power.rs).

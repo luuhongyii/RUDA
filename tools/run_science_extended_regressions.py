@@ -38,9 +38,9 @@ def main():
     if logs.exists()and any(logs.iterdir()):p.error('use a new/empty log directory; prior evidence is retained')
     logs.mkdir(parents=True,exist_ok=True)
     sources=[]
-    for folder in['crates/ruSOLVER','crates/ruINTEGRATE','tools/science_extended']:
+    for folder in['ruSOLVER','ruINTEGRATE','tools/science_extended']:
         sources +=[f for f in(ROOT/folder).rglob('*')if f.is_file()and f.suffix in('.rs','.toml','.json','.py')]
-    sources +=[ROOT/q for q in['Cargo.toml','Cargo.lock','crates/ruda-autodiff/Cargo.toml','crates/ruda-autodiff/src/solver_host.rs','crates/ruda-autodiff/src/lib.rs','tools/run_science_regressions.py','tools/run_science_extended_regressions.py']]
+    sources +=[ROOT/q for q in['Cargo.toml','Cargo.lock','ruda-autodiff/Cargo.toml','ruda-autodiff/src/solver_host.rs','ruda-autodiff/src/lib.rs','tools/run_science_regressions.py','tools/run_science_extended_regressions.py']]
     report={'schema':'ruda.science.extended.validation.v1','suite':a.suite,'started_utc':now.isoformat(),'status':'running','plans':public,'results':[],
         'performance_measured':False,'source_sha256':{str(f.relative_to(ROOT)):hashlib.sha256(f.read_bytes()).hexdigest()for f in sources}}
     def save():

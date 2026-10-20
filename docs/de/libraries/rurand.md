@@ -12,10 +12,10 @@ Das Cargo-Paket ist `ruRAND`; Sein Rust-Importname ist `rurand`. Die Funktion `t
 
 ```toml
 [dependencies]
-rurand = { package = "ruRAND", path = "../RUDA/crates/ruRAND", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+rurand = { package = "ruRAND", path = "../RUDA/ruRAND", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Generieren Sie zufällige Tensoren
@@ -118,4 +118,4 @@ Die Funktion ruft keinen Tensor-Allokator auf. Andere Handles, die diesen Speich
 
 Funktionen auf Tensorebene geraten in Panik, wenn beim Starten ein Fehler zurückgegeben wird. Der zugrunde liegende Einstiegspunkt oben gibt `Result<(), LaunchError>` zurück. Eine erfolgreiche Übermittlung bedeutet nicht, dass die Ausführung von GPU abgeschlossen ist. Lesen Sie den Tensor zurück oder warten Sie auf die Client-Synchronisierung. `into_data_sync` gerät bei Rücklesefehler in Panik; Verwenden Sie asynchrones `into_data(tensor).await`, um Rücklesefehler weiterzugeben.
 
-API Referenz: [Tensorschnittstellen](../../../crates/ruRAND/src/tensor/mod.rs), [Seed-Status](../../../crates/ruRAND/src/state.rs), [Verteilungen](../../../crates/ruRAND/src/distributions/mod.rs).
+API Referenz: [Tensorschnittstellen](../../../ruRAND/src/tensor/mod.rs), [Seed-Status](../../../ruRAND/src/state.rs), [Verteilungen](../../../ruRAND/src/distributions/mod.rs).

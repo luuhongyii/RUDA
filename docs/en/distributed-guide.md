@@ -147,7 +147,7 @@ Router selects among local tensor backends; Remote sends tensor operations to a 
 
 ## Source entry points
 
-- [Registered API](../../crates/ruCCL/src/api.rs), [configuration](../../crates/ruCCL/src/config.rs), [global node](../../crates/ruCCL/src/global/node/base.rs).
-- [Rank communicator](../../crates/ruCCL/src/rank/communicator/mod.rs) and [connection methods](../../crates/ruCCL/src/rank/communicator/connect.rs).
-- [Tensor adapters](../../crates/ruCCL/src/tensor_device/mod.rs), [in-process ownership](../../crates/ruCCL/src/in_process/owner.rs), [tensor example](../../crates/ruCCL/examples/tensor_collectives.rs).
-- [Explicit-rank gradient reduction](../../crates/ruda-optim/src/optim/grads/collective.rs) and [training example](../../crates/ruda-optim/examples/collective_training.rs).
+- [Registered API](../../ruCCL/src/api.rs), [configuration](../../ruCCL/src/config.rs), [global node](../../ruCCL/src/global/node/base.rs).
+- [Rank communicator](../../ruCCL/src/rank/communicator/mod.rs) and [connection methods](../../ruCCL/src/rank/communicator/connect.rs).
+- [Tensor adapters](../../ruCCL/src/tensor_device/mod.rs), [in-process ownership](../../ruCCL/src/in_process/owner.rs), [tensor example](../../ruCCL/examples/tensor_collectives.rs).
+- [Explicit-rank gradient reduction](../../ruda-optim/src/optim/grads/collective.rs) and [training example](../../ruda-optim/examples/collective_training.rs).

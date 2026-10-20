@@ -15,7 +15,7 @@ rank 数は GPU 数ではありません。register ベースの collective_trai
 - TCP/heartbeat timeout、rail、transport は実際に対応する設定を統一します。標準の torchrun/NCCL 環境変数を自動認識する launcher はありません。
 - 既定 TCP Tensor adapter は host-staged。TCP peer は自動的に GPU P2P/NVLink/RDMA になりません。
 
-必要な Cargo 側は ruCCL、ruda-autodiff、ruda-nn、collective 有効の ruda-optim、cuda-default 有効の ruda-tensor-device。[完全な初期化関数](../en/distributed-training.md#rendezvous-and-rank-connection)と[接続 API](../../crates/ruCCL/src/rank/communicator/connect.rs)を参照してください。別のネイティブ communicator は DataParallelCommunicator の metadata/broadcast/reduce 契約を実装します。
+必要な Cargo 側は ruCCL、ruda-autodiff、ruda-nn、collective 有効の ruda-optim、cuda-default 有効の ruda-tensor-device。[完全な初期化関数](../en/distributed-training.md#rendezvous-and-rank-connection)と[接続 API](../../ruCCL/src/rank/communicator/connect.rs)を参照してください。別のネイティブ communicator は DataParallelCommunicator の metadata/broadcast/reduce 契約を実装します。
 
 ## 学習の順序
 

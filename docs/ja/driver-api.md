@@ -28,7 +28,7 @@ use ruda_kernel::dsl::Runtime;
 let client = CudaRuntime::client(&CudaDevice::default());
 ```
 
-完全な実行可能な例については、[ptx-runtime](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs) を参照してください。デバイス インデックスは、現在のマシンの列挙位置を識別するものであり、マシン間での安定した ID や列挙順序の変更を識別するものではありません。
+完全な実行可能な例については、[ptx-runtime](../../ruda-driver-cuda/examples/ptx_runtime.rs) を参照してください。デバイス インデックスは、現在のマシンの列挙位置を識別するものであり、マシン間での安定した ID や列挙順序の変更を識別するものではありません。
 
 ## 3. 設定
 
@@ -46,7 +46,7 @@ PTX を直接生成すると、カーネルの CUDA C++/NVRTC コンパイル �
 
 バックエンドは、`Runtime` を使用して、デバイス、コンパイラー、およびコンピューティング サーバーを関連付けます。上位層は、`ComputeClient` を通じてコントラクトにアクセスします。計算ライブラリを統合する前に、ストレージ、コンパイル エラー、同期、機能クエリのセマンティクスを確立します。
 
-ソース エントリ ポイント: [CUDA エクスポート](../../crates/ruda-driver-cuda/src/lib.rs)、[デバイス タイプ](../../crates/ruda-driver-cuda/src/device.rs)、[ランタイム実装](../../crates/ruda-driver-cuda/src/runtime.rs)、および [ランタイム特性](../../crates/ruda-runtime/src/runtime/backend.rs)。
+ソース エントリ ポイント: [CUDA エクスポート](../../ruda-driver-cuda/src/lib.rs)、[デバイス タイプ](../../ruda-driver-cuda/src/device.rs)、[ランタイム実装](../../ruda-driver-cuda/src/runtime.rs)、および [ランタイム特性](../../ruda-runtime/src/runtime/backend.rs)。
 
 ## 6. CUDA ストリームとイベントの相互運用
 

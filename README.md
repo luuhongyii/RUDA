@@ -26,7 +26,7 @@ Requires Git, Rust/Cargo, a linker toolchain, an NVIDIA GPU and driver, and the 
 cargo add ruda --features cuda
 ```
 
-Add the [CUDA backend](https://crates.io/crates/ruda-driver-cuda) to your application's `Cargo.toml`:
+Add the [CUDA backend](https://crates.io/ruda-driver-cuda) to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -82,7 +82,7 @@ The example prints the generated text and token IDs. To use the CUDA C++ / NVRTC
 
 ```sh
 cargo build --locked -p ruda-torch-native
-python -m pip install --no-build-isolation --no-deps -e ./crates/ruda-torch/python
+python -m pip install --no-build-isolation --no-deps -e ./ruda-torch/python
 ```
 
 The default loader finds this debug build automatically. Set `RUDA_TORCH_LIBRARY` to the library path when using a release build or another location. The Rust library and C++ extension must both use **ABI 10**; rebuild them together.
@@ -95,9 +95,9 @@ x = torch.arange(4, dtype=torch.float32).to("ruda:0")
 print((x + x).cpu())
 ```
 
-[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) provides Linux and Windows x86_64 wheels containing the Python package, C++ extension and Rust native library. Both require CPython 3.13; Linux uses PyTorch `2.10.0+cu126` (built on Ubuntu 24.04), Windows uses `2.13.0+cu130`. The wheel package version is `ruda-torch==0.1.1`. See [release installation](crates/ruda-torch/README.md#release-wheels) for matching packages and commands. `ruda-torch-native` is a source-build component, not a crates.io package.
+[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) provides Linux and Windows x86_64 wheels containing the Python package, C++ extension and Rust native library. Both require CPython 3.13; Linux uses PyTorch `2.10.0+cu126` (built on Ubuntu 24.04), Windows uses `2.13.0+cu130`. The wheel package version is `ruda-torch==0.1.1`. See [release installation](ruda-torch/README.md#release-wheels) for matching packages and commands. `ruda-torch-native` is a source-build component, not a crates.io package.
 
-Linux/Colab users can use [precompiled bundles](crates/ruda-torch/README.md#linuxcolab-precompiled-bundle) from GitHub Releases without compiling Rust or C++ locally. These are not pip wheels; use the matching source revision and the Python, PyTorch and glibc requirements recorded in the bundle manifest.
+Linux/Colab users can use [precompiled bundles](ruda-torch/README.md#linuxcolab-precompiled-bundle) from GitHub Releases without compiling Rust or C++ locally. These are not pip wheels; use the matching source revision and the Python, PyTorch and glibc requirements recorded in the bundle manifest.
 
 ## Stack Organization
 

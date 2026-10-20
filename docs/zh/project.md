@@ -12,7 +12,7 @@ Ruda 面向 PTX、HIP 及自有 ISA 构建 Rust 编译与执行路径，同时�
 
 ### 使用已发布的 crate
 
-在应用的 `Cargo.toml` 中添加 [CUDA 后端](https://crates.io/crates/ruda-driver-cuda)：
+在应用的 `Cargo.toml` 中添加 [CUDA 后端](https://crates.io/ruda-driver-cuda)：
 
 ```toml
 [dependencies]
@@ -81,7 +81,7 @@ x = torch.arange(4, dtype=torch.float32).to("ruda:0")
 print((x + x).cpu())
 ```
 
-[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) 提供包含 Python 包、C++ 扩展和 Rust 原生库的 Linux／Windows x86_64 wheel。均要求 CPython 3.13；Linux 使用 PyTorch `2.10.0+cu126`（Ubuntu 24.04 构建），Windows 使用 `2.13.0+cu130`。Python 子包版本为 `ruda-torch==0.1.1`；安装命令与兼容要求见 [Release 安装](../../crates/ruda-torch/README.md#release-wheels)。`ruda-torch-native` 由源码构建，不作为 crates.io 包提供。
+[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) 提供包含 Python 包、C++ 扩展和 Rust 原生库的 Linux／Windows x86_64 wheel。均要求 CPython 3.13；Linux 使用 PyTorch `2.10.0+cu126`（Ubuntu 24.04 构建），Windows 使用 `2.13.0+cu130`。Python 子包版本为 `ruda-torch==0.1.1`；安装命令与兼容要求见 [Release 安装](../../ruda-torch/README.md#release-wheels)。`ruda-torch-native` 由源码构建，不作为 crates.io 包提供。
 
 ## 软件栈组织
 

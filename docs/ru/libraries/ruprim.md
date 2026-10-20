@@ -22,10 +22,10 @@ ruPRIM обеспечивает сокращение тензора устрой
 
 ```toml
 [dependencies]
-ruprim = { package = "ruPRIM", path = "../RUDA/crates/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+ruprim = { package = "ruPRIM", path = "../RUDA/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Сумма, сокращение строк и сканирование
@@ -177,4 +177,4 @@ fn indexing_example(device: &CudaDevice) -> Result<(), Box<dyn std::error::Error
 
 Используйте `Scalar::Int(-2)` для отрицательного показателя степени, а не для преобразования показателя степени в формат с плавающей запятой. Индексирующие и поэлементные интерфейсы напрямую возвращают тензоры устройств. Чтобы сохранить входные данные для других операций, передайте клонированные дескрипторы, как в примере, и сохраните тензор, возвращаемый каждой операцией.
 
-API Ссылка: [Сокращение](../../../crates/ruPRIM/src/reduce/tensor/base.rs), [Сканирование](../../../crates/ruPRIM/src/scan/tensor.rs), [Индексирование](../../../crates/ruPRIM/src/indexing/mod.rs), [Целые степени](../../../crates/ruPRIM/src/elementwise/binary/integer_power.rs).
+API Ссылка: [Сокращение](../../../ruPRIM/src/reduce/tensor/base.rs), [Сканирование](../../../ruPRIM/src/scan/tensor.rs), [Индексирование](../../../ruPRIM/src/indexing/mod.rs), [Целые степени](../../../ruPRIM/src/elementwise/binary/integer_power.rs).

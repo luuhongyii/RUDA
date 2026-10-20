@@ -60,7 +60,7 @@ def main(argv=None):
         report['hardware']=gpu_info()
         if tools and not shutil.which('compute-sanitizer'):raise RuntimeError('compute-sanitizer unavailable')
         report['source_sha256']={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted((ROOT/'crates/ruDNN/src/paged_attention').glob('*.rs'))}
+            for p in sorted((ROOT/'ruDNN/src/paged_attention').glob('*.rs'))}
         report['cargo_lock_sha256']=hashlib.sha256((ROOT/'Cargo.lock').read_bytes()).hexdigest()
         code,_=run('rust-host',[sys.executable,str(ROOT/'tools/gpu_validation/rust_host_v34.py'),'--output',str(out/'rust-host')])
         if code:raise RuntimeError('production Rust host test failed')
@@ -84,7 +84,7 @@ def main(argv=None):
             check_rust_report(text,code,1,MARKER);report['benchmark_samples']=benchmark_samples(text)
             report['benchmark_measured']=True;save()
         if args.build:
-            code,_=run('pytorch',[sys.executable,str(ROOT/'crates/ruda-torch/tools/validate_paged_pruning.py'),'--build',
+            code,_=run('pytorch',[sys.executable,str(ROOT/'ruda-torch/tools/validate_paged_pruning.py'),'--build',
                                 '--sanitizers',args.sanitizers,'--output',str(out/'pytorch')])
             if code:raise RuntimeError('native PyTorch acceptance failed')
             child=json.loads((out/'pytorch/summary.json').read_text())

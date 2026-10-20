@@ -6,7 +6,7 @@
 
 ## 1. Пример выполнения NVIDIA
 
-Точка входа: [ptx-runtime](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs).
+Точка входа: [ptx-runtime](../../ruda-driver-cuda/examples/ptx_runtime.rs).
 
 В базовом случае сложение FP32 выполняется дважды для каждой длины: 1, 63, 64, 65 и 257. Он проверяет каждый результат и 16 хвостовых контрольных значений. Он демонстрирует выбор устройства, загрузку, привязку аргументов, хвостовые границы, обратное чтение и повторное выполнение.
 
@@ -22,13 +22,13 @@ cargo run --locked -p ruda-driver-cuda --features direct-ptx --example ptx-runti
 
 |Аргумент|Поведение|Пример источника|
 | --- | --- | --- |
-|`--tensor`|Проверка метаданных и макета тензора|[tensor.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/tensor.rs)|
-|`--shared`|Проверка общей памяти|[shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
-|`--half`|FP16/BF16 проверки|[half_precision.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/half_precision.rs)|
-|`--bitwise`|Проверка побитовых операций|[побитовый.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/bitwise.rs)|
-|`--shared-over-limit`|Диагностика ограничения общей памяти|[shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
-|`--expect-cold`|Компиляция утверждений произошла без обращения к дисковому кэшу|[Основная точка входа](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)|
-|`--expect-warm`|Подтверждает попадание в дисковый кэш без перекомпиляции.|[Основная точка входа](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)|
+|`--tensor`|Проверка метаданных и макета тензора|[tensor.rs](../../ruda-driver-cuda/examples/ptx_runtime/tensor.rs)|
+|`--shared`|Проверка общей памяти|[shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
+|`--half`|FP16/BF16 проверки|[half_precision.rs](../../ruda-driver-cuda/examples/ptx_runtime/half_precision.rs)|
+|`--bitwise`|Проверка побитовых операций|[побитовый.rs](../../ruda-driver-cuda/examples/ptx_runtime/bitwise.rs)|
+|`--shared-over-limit`|Диагностика ограничения общей памяти|[shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
+|`--expect-cold`|Компиляция утверждений произошла без обращения к дисковому кэшу|[Основная точка входа](../../ruda-driver-cuda/examples/ptx_runtime.rs)|
+|`--expect-warm`|Подтверждает попадание в дисковый кэш без перекомпиляции.|[Основная точка входа](../../ruda-driver-cuda/examples/ptx_runtime.rs)|
 
 `--shared-over-limit` занимает отдельную ветвь раннего возврата. Не комбинируйте его с проверками холодного/теплого кэша.
 

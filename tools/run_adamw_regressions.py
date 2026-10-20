@@ -76,7 +76,7 @@ def main() -> int:
     logs.mkdir(parents=True, exist_ok=True)
     report_path = logs / "results.json"
     if report_path.exists(): parser.error("results.json already exists; choose another log directory")
-    files = sorted((ROOT / "crates/ruda-optim/src/fused_adamw").glob("*.rs")) + [ROOT / "Cargo.lock", ROOT / "crates/ruda-optim/Cargo.toml"]
+    files = sorted((ROOT / "ruda-optim/src/fused_adamw").glob("*.rs")) + [ROOT / "Cargo.lock", ROOT / "ruda-optim/Cargo.toml"]
     report = {"suite": args.suite, "started_utc": now.isoformat(), "status": "running", "plans": public_plans, "results": [],
         "source_sha256": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
         "performance_measured": False, "environment": {"RUDA_PTX_VERSION": env.get("RUDA_PTX_VERSION")}}

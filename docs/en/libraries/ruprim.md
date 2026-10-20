@@ -20,10 +20,10 @@ This configuration places the application directory alongside the `RUDA` source 
 
 ```toml
 [dependencies]
-ruprim = { package = "ruPRIM", path = "../RUDA/crates/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+ruprim = { package = "ruPRIM", path = "../RUDA/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Sum, row reductions, and scans
@@ -175,4 +175,4 @@ Integer powers are in `ruprim::elementwise::binary::integer_power`:
 
 Use `Scalar::Int(-2)` for a negative exponent rather than converting the exponent to floating point. Indexing and elementwise interfaces return device tensors directly. To retain an input for other operations, pass cloned handles as in the example and keep the tensor returned by each operation.
 
-API reference: [Reductions](../../../crates/ruPRIM/src/reduce/tensor/base.rs), [Scans](../../../crates/ruPRIM/src/scan/tensor.rs), [Indexing](../../../crates/ruPRIM/src/indexing/mod.rs), [Integer powers](../../../crates/ruPRIM/src/elementwise/binary/integer_power.rs).
+API reference: [Reductions](../../../ruPRIM/src/reduce/tensor/base.rs), [Scans](../../../ruPRIM/src/scan/tensor.rs), [Indexing](../../../ruPRIM/src/indexing/mod.rs), [Integer powers](../../../ruPRIM/src/elementwise/binary/integer_power.rs).

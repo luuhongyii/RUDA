@@ -10,7 +10,7 @@
 
 | Node kind | Metadata / scalar contract |
 | --- | --- |
-| `copy` and unary pointwise operations | One input; no right tensor, canonical zero scalar; see [`UNARY_CODES`](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py). |
+| `copy` and unary pointwise operations | One input; no right tensor, canonical zero scalar; see [`UNARY_CODES`](../../ruda-torch/python/ruda_torch/_graph_spec.py). |
 | `add`, `mul`, `div`, activation backward, `silu_mul` | Equal-shape/dtype tensor pair, no broadcasting. Add's scalar is alpha; other scalar fields are zero. |
 | `add_scalar`, `mul_scalar`, `div_scalar` | One tensor and a finite FP32 scalar, no right tensor. Subtraction can be represented by an explicit negative add scalar/alpha. |
 | `mm`, `bmm` | Equal-dtype rank-2/rank-3 matrices; matching inner and batch dimensions, no broadcast; zero scalar. |
@@ -18,7 +18,7 @@
 | `softmax`, `log_softmax` and their backward nodes | Scalar is a canonical nonnegative axis; backward uses a matching gradient/output tensor pair. |
 | `sum_keepdim`, `mean_keepdim` | Scalar is a nonempty in-range dimension bitmask, not a result shape. Reduced dimensions remain size one. |
 
-`GraphOp(kind, output, left, right=None, scalar=0.)` is the general constructor. Convenience constructors are `copy`, `add(alpha=...)`, `mul`, `silu`, `silu_mul` and `rms_norm(eps=...)`. Every scalar is fixed at construction; replace the plan to change geometry or scalar values. Complete codes and checks: [`_graph_spec.py`](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py).
+`GraphOp(kind, output, left, right=None, scalar=0.)` is the general constructor. Convenience constructors are `copy`, `add(alpha=...)`, `mul`, `silu`, `silu_mul` and `rms_norm(eps=...)`. Every scalar is fixed at construction; replace the plan to change geometry or scalar values. Complete codes and checks: [`_graph_spec.py`](../../ruda-torch/python/ruda_torch/_graph_spec.py).
 
 ```python
 import torch
@@ -70,4 +70,4 @@ with r.StaticGraph(
 
 Do not modify original inputs/parameters before the corresponding backward finishes; snapshots do not disable PyTorch version checks. Finish backward before closing a training graph. Use the general AOT model entry point when PyTorch-generated derivatives and automatic native partitioning are wanted; `StaticGraph.from_model` returns that callable wrapper, not this fixed-input plan.
 
-Current native components require base ABI 10 and graph API 3. Prepare both from the same source or a matching [precompiled bundle](../../crates/ruda-torch/README.md#linuxcolab-precompiled-bundle). This API exposes one native NVIDIA device; it does not provide AMD/Intel graph adapters, hidden broadcasts, attention/MoE nodes or whole-optimizer capture. Implementation: [`_graph.py`](../../crates/ruda-torch/python/ruda_torch/_graph.py), [autograd bridge](../../crates/ruda-torch/python/ruda_torch/_graph_autograd.py).
+Current native components require base ABI 10 and graph API 3. Prepare both from the same source or a matching [precompiled bundle](../../ruda-torch/README.md#linuxcolab-precompiled-bundle). This API exposes one native NVIDIA device; it does not provide AMD/Intel graph adapters, hidden broadcasts, attention/MoE nodes or whole-optimizer capture. Implementation: [`_graph.py`](../../ruda-torch/python/ruda_torch/_graph.py), [autograd bridge](../../ruda-torch/python/ruda_torch/_graph_autograd.py).

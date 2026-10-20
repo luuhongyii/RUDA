@@ -10,7 +10,7 @@ NVIDIA 経路は RUDA の allocation と device service 上で cuBLAS／cuBLASLt
 
 `RUDA_TORCH_CUBLAS_LIBRARY`／`CUBLASLT_LIBRARY`／`CUSOLVER_LIBRARY`／`CUFFT_LIBRARY` はそれぞれ完全な `RUDA_TORCH_` 接頭辞で指定します。`RUDA_TORCH_DLL_DIR` は検索ディレクトリ、`RUDA_TORCH_CUDA_LIBRARY` は driver の指定です。wheel はビルド時の Python minor と正確な PyTorch バージョンに結び付き、環境変更時には Rust と C++ を同時に再ビルドします。
 
-複素 linalg、LDL／一般固有値／行列指数、FP16／complex32 FFT の条件は[英語 API](../en/native-pytorch-api.md#scientific-operations)を参照してください。[選択実装](../../crates/ruda-torch/python/ruda_torch/math_backend.py)・[ライブラリ探索](../../crates/ruda-torch/python/ruda_torch/_vendor_runtime.py)・[ビルド設定](../../crates/ruda-torch/python/setup.py)。
+複素 linalg、LDL／一般固有値／行列指数、FP16／complex32 FFT の条件は[英語 API](../en/native-pytorch-api.md#scientific-operations)を参照してください。[選択実装](../../ruda-torch/python/ruda_torch/math_backend.py)・[ライブラリ探索](../../ruda-torch/python/ruda_torch/_vendor_runtime.py)・[ビルド設定](../../ruda-torch/python/setup.py)。
 
 ## Packed 量子化と量子化 KV キャッシュ
 
@@ -24,7 +24,7 @@ Packed API 1 は `PackedQuantizedTensor`、`PackedLinear`、`PackedEmbedding` �
 
 `Generator(seed=None)` は Philox4x32-10 を使います。`manual_seed`／`manual_seed_all` は単一デバイスの既定生成器を初期化し、seed は符号付き／符号なし 64 bit 整数です。`get_rng_state`／`set_rng_state` と Generator の `get_state`／`set_state` は RUDA 固有の 24 byte CPU uint8 状態を扱います。CUDA RNG 状態ではありません。`_all` 版は状態 1 個のリストを扱います。
 
-`uniform_`、`normal_`、`bernoulli_` は native random API 1 で FP32/FP16/BF16 RUDA tensor を埋めます。有限パラメータ、順序付き一様分布境界、非負の標準偏差、`[0,1]` の確率が必要です。`generator` は RUDA Generator、省略時は `default_generator`。失敗した dispatch の予約 counter は再利用されません。`get_amp_supported_dtype` は FP16/BF16、`is_initialized` は初期化状態を返します。`register_random_ops` は import 時に呼ばれるため再登録は不要です。[ソース](../../crates/ruda-torch/python/ruda_torch/random.py)。
+`uniform_`、`normal_`、`bernoulli_` は native random API 1 で FP32/FP16/BF16 RUDA tensor を埋めます。有限パラメータ、順序付き一様分布境界、非負の標準偏差、`[0,1]` の確率が必要です。`generator` は RUDA Generator、省略時は `default_generator`。失敗した dispatch の予約 counter は再利用されません。`get_amp_supported_dtype` は FP16/BF16、`is_initialized` は初期化状態を返します。`register_random_ops` は import 時に呼ばれるため再登録は不要です。[ソース](../../ruda-torch/python/ruda_torch/random.py)。
 
 import ruda_torch は PrivateUse1 を登録し、別 backend と同じプロセスでは使えません。ruda:0 と torch.cuda の storage は別です。device_count=1、current_device=0。is_available は統合初期化を示し、すべての GPU 命令への対応を保証しません。execution_stats は累積 counter で timer ではありません。
 

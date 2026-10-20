@@ -34,8 +34,8 @@ def plans(suite: str, compiler: str, logs: Path, offline: bool = False):
             # Compile each real library, then its tests and examples; do not
             # substitute a Python model for a Rust execution result.
             for package, name, examples in [
-                ('crates/ruSOLVER', 'rusolver', ['solver_demo', 'advanced_solver']),
-                ('crates/ruINTEGRATE', 'ruintegrate', ['integrate_demo', 'advanced_integrate']),
+                ('ruSOLVER', 'rusolver', ['solver_demo', 'advanced_solver']),
+                ('ruINTEGRATE', 'ruintegrate', ['integrate_demo', 'advanced_integrate']),
             ]:
                 binary = str(logs/(name+'-tests'+exe))
                 library = str(logs/('lib'+name+'.rlib'))
@@ -62,13 +62,13 @@ def plans(suite: str, compiler: str, logs: Path, offline: bool = False):
             binary = str(logs/('sparse-tests'+exe))
             demo = str(logs/('sparse-poisson'+exe))
             commands.extend([
-                (common+['--crate-name', 'rusparse', '--crate-type=rlib', 'crates/ruSPARSE/src/lib.rs', '-o', sparse_lib], env),
+                (common+['--crate-name', 'rusparse', '--crate-type=rlib', 'ruSPARSE/src/lib.rs', '-o', sparse_lib], env),
                 (common+['--crate-name', 'rusolver', '--cfg', 'feature="sparse"', '--extern', 'rusparse='+sparse_lib,
-                         '--test', 'crates/ruSOLVER/src/lib.rs', '-o', binary], env),
+                         '--test', 'ruSOLVER/src/lib.rs', '-o', binary], env),
                 ([binary, '--test-threads=1'], env),
                 (common+['--crate-name', 'rusolver', '--cfg', 'feature="sparse"', '--extern', 'rusparse='+sparse_lib,
-                         '--crate-type=rlib', 'crates/ruSOLVER/src/lib.rs', '-o', solver_lib], env),
-                (common+['crates/ruSOLVER/examples/sparse_poisson.rs', '--extern', 'rusparse='+sparse_lib,
+                         '--crate-type=rlib', 'ruSOLVER/src/lib.rs', '-o', solver_lib], env),
+                (common+['ruSOLVER/examples/sparse_poisson.rs', '--extern', 'rusparse='+sparse_lib,
                          '--extern', 'rusolver='+solver_lib, '-L', 'dependency='+str(logs), '-o', demo], env),
                 ([demo], env),
             ])
@@ -110,8 +110,8 @@ def main():
         parser.error('choose an empty/new log directory; evidence is never overwritten')
     logs.mkdir(parents=True,exist_ok=True)
     result_file = logs/'results.json'
-    sources = list((ROOT/'crates/ruSOLVER').rglob('*.rs')) + list((ROOT/'crates/ruINTEGRATE').rglob('*.rs'))
-    sources += [ROOT/'Cargo.toml', ROOT/'Cargo.lock', ROOT/'crates/ruSOLVER/Cargo.toml', ROOT/'crates/ruINTEGRATE/Cargo.toml',
+    sources = list((ROOT/'ruSOLVER').rglob('*.rs')) + list((ROOT/'ruINTEGRATE').rglob('*.rs'))
+    sources += [ROOT/'Cargo.toml', ROOT/'Cargo.lock', ROOT/'ruSOLVER/Cargo.toml', ROOT/'ruINTEGRATE/Cargo.toml',
                 ROOT/'tools/science/oracle.py', ROOT/'tools/science/fixtures.json', Path(__file__).resolve()]
     report = {'schema':'ruda.science.validation.v1','suite':args.suite,'started_utc':now.isoformat(),
               'status':'running','plans':public,'results':[],'performance_measured':False,

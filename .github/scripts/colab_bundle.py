@@ -122,8 +122,8 @@ def build_one(label, output):
     if label == 'cpp-extension':
         import torch
         assert torch.__version__ == '2.10.0+cu126' and torch.version.cuda == '12.6'
-        build([sys.executable, 'setup.py', 'build_ext', '--inplace'], root/'crates/ruda-torch/python', state_path)
-        matches = list((root/'crates/ruda-torch/python/ruda_torch').glob('_C*.so'))
+        build([sys.executable, 'setup.py', 'build_ext', '--inplace'], root/'ruda-torch/python', state_path)
+        matches = list((root/'ruda-torch/python/ruda_torch').glob('_C*.so'))
         compatibility = dict(python=f'{sys.version_info.major}.{sys.version_info.minor}',
                              torch=torch.__version__, cuda=torch.version.cuda,
                              cxx11_abi=bool(torch._C._GLIBCXX_USE_CXX11_ABI))

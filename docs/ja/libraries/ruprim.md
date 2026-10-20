@@ -22,10 +22,10 @@ Cargo パッケージは `ruPRIM` です。 Rust インポート名は `ruprim` 
 
 ```toml
 [dependencies]
-ruprim = { package = "ruPRIM", path = "../RUDA/crates/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
-ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
+ruprim = { package = "ruPRIM", path = "../RUDA/ruPRIM", default-features = false, features = ["std", "tensor-reduce", "tensor-scan", "indexing"] }
+ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. 合計、行削減、およびスキャン
@@ -177,4 +177,4 @@ fn indexing_example(device: &CudaDevice) -> Result<(), Box<dyn std::error::Error
 
 負の指数には、指数を浮動小数点に変換するのではなく、`Scalar::Int(-2)` を使用します。インデックス作成および要素ごとのインターフェイスは、デバイス テンソルを直接返します。他の操作の入力を保持するには、例のようにクローンされたハンドルを渡し、各操作によって返されたテンソルを保持します。
 
-API 参照: [縮小](../../../crates/ruPRIM/src/reduce/tensor/base.rs)、[スキャン](../../../crates/ruPRIM/src/scan/tensor.rs)、[インデックス作成](../../../crates/ruPRIM/src/indexing/mod.rs)、[整数乗](../../../crates/ruPRIM/src/elementwise/binary/integer_power.rs)。
+API 参照: [縮小](../../../ruPRIM/src/reduce/tensor/base.rs)、[スキャン](../../../ruPRIM/src/scan/tensor.rs)、[インデックス作成](../../../ruPRIM/src/indexing/mod.rs)、[整数乗](../../../ruPRIM/src/elementwise/binary/integer_power.rs)。

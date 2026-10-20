@@ -4,8 +4,8 @@ import unittest
 ROOT=Path(__file__).resolve().parents[2]
 class ContextWiringTests(unittest.TestCase):
     def setUp(self):
-        self.server=(ROOT/'crates/ruda-driver-cuda/src/execution/server.rs').read_text()
-        self.graph=(ROOT/'crates/ruda-driver-cuda/src/execution/server/graph.rs').read_text()
+        self.server=(ROOT/'ruda-driver-cuda/src/execution/server.rs').read_text()
+        self.graph=(ROOT/'ruda-driver-cuda/src/execution/server/graph.rs').read_text()
     def test_command_propagates_context_error(self):
         body=self.server.split('fn command<',1)[1].split('fn flush_errors',1)[0]
         self.assertIn('self.set_current_checked()?;',body)
