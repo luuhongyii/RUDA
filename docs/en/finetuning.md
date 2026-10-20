@@ -12,7 +12,7 @@
 | Local Hugging Face safetensors checkpoint | `load_hf_nf4_model` or the architecture-independent `load_nf4_safetensors` |
 | Causal language-model training | `CausalLMFinetuner`, `SFTCollator`, `SFTTrainer` |
 
-The model-independent APIs do not select a model family, infer adapter targets, download weights or install missing device operators. The model's actual forward and backward operations must be supported by its execution backend. Native PyTorch uses `ruda:0`, not `torch.cuda` storage. Prepare the matching [native components](../../ruda-torch/README.md#build-and-install), including the NF4 extensions when using packed weights.
+The model-independent APIs do not select a model family, infer adapter targets, download weights or install missing device operators. The model's actual forward and backward operations must be supported by its execution backend. Native PyTorch uses `ruda:0`, not `torch.cuda` storage. Prepare the matching [native components](../../crates/ruda-torch/README.md#build-and-install), including the NF4 extensions when using packed weights.
 
 For Python safetensors streaming, install `safetensors`. The Python Hugging Face helper and command-line example also require `transformers` and `accelerate`. The selected architecture must exist in the installed Transformers version without remote code. FP16 is the low-precision option for T4; do not select BF16 on hardware without the required support.
 
@@ -89,7 +89,7 @@ Each `LoRALinear` computes `base(x) + (alpha / rank) * B(A(x))`. The base is `to
 
 `LoRALinearConfig::new(rank, alpha).with_dropout(p).init(base)` consumes an existing Rust `Linear<B>` and freezes its base without changing base parameter IDs. A maps input width to rank, B maps rank to output width and starts at zero. Both use the base weight dtype. `forward` preserves supported leading dimensions.
 
-Rust requires `rank > 0`, finite `alpha`, and `0 <= dropout < 1`; invalid configuration asserts. Unlike the Python API, Rust does not require positive alpha. `merge(self)` consumes the adapter and produces a frozen dense projection without adapter dropout. It is not an optimizer-state conversion or a checkpoint for resuming LoRA training. See [Rust implementation](../../ruda-nn/src/modules/lora.rs).
+Rust requires `rank > 0`, finite `alpha`, and `0 <= dropout < 1`; invalid configuration asserts. Unlike the Python API, Rust does not require positive alpha. `merge(self)` consumes the adapter and produces a frozen dense projection without adapter dropout. It is not an optimizer-state conversion or a checkpoint for resuming LoRA training. See [Rust implementation](../../crates/ruda-nn/src/modules/lora.rs).
 
 ## Pack a frozen NF4 base
 
@@ -148,12 +148,12 @@ Metrics include attempted step/window number, microbatch cursor, supervised toke
 
 ## Command-line training
 
-The existing [example](../../ruda-torch/python/examples/finetune_causal_lm.py) uses local model files and JSONL input. Set `MODEL_DIR`, `DATA_JSONL`, `RUN_DIR`, `BASE_ID`, `BACKBONE`, `HEAD`, `PAD_TOKEN_ID`, and the Bash array `TARGETS` to your actual checkpoint, dataset, exact module paths and tokenizer padding ID. `RUN_DIR` must be outside the repository; `BASE_ID` identifies the exact frozen weights and quantization configuration. CLI `--targets` takes exact paths, not the API's `'all-linear'` string.
+The existing [example](../../crates/ruda-torch/python/examples/finetune_causal_lm.py) uses local model files and JSONL input. Set `MODEL_DIR`, `DATA_JSONL`, `RUN_DIR`, `BASE_ID`, `BACKBONE`, `HEAD`, `PAD_TOKEN_ID`, and the Bash array `TARGETS` to your actual checkpoint, dataset, exact module paths and tokenizer padding ID. `RUN_DIR` must be outside the repository; `BASE_ID` identifies the exact frozen weights and quantization configuration. CLI `--targets` takes exact paths, not the API's `'all-linear'` string.
 
 Start with a bounded trial on the intended batch/sequence shapes:
 
 ```bash
-python ruda-torch/python/examples/finetune_causal_lm.py \
+python crates/ruda-torch/python/examples/finetune_causal_lm.py \
   --model "$MODEL_DIR" --data "$DATA_JSONL" --output "$RUN_DIR" \
   --base-id "$BASE_ID" --backbone "$BACKBONE" --head "$HEAD" \
   --targets "${TARGETS[@]}" --dtype fp16 --pad-token-id "$PAD_TOKEN_ID" \
@@ -195,7 +195,7 @@ For direct APIs, serialize the returned mapping with `torch.save` and load with 
 
 NF4Linear and LoRALinear `get_extra_state()` / `set_extra_state(state)` store and strictly check their versioned geometry/configuration during ordinary module state-dict loading. They are separate from adapter-only export and do not load a missing frozen base.
 
-Invalid metadata/configuration raises `ValueError`/`TypeError`; missing native capabilities raise errors rather than CPU fallback. Read [packing and checkpoint implementation](../../ruda-torch/python/ruda_torch/finetuning.py), [causal training implementation](../../ruda-torch/python/ruda_torch/causal_finetuning.py), and the [native API reference](native-pytorch-api.md) for adjacent training interfaces.
+Invalid metadata/configuration raises `ValueError`/`TypeError`; missing native capabilities raise errors rather than CPU fallback. Read [packing and checkpoint implementation](../../crates/ruda-torch/python/ruda_torch/finetuning.py), [causal training implementation](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py), and the [native API reference](native-pytorch-api.md) for adjacent training interfaces.
 
 ## DPO, PPO and GRPO
 

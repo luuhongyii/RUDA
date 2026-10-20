@@ -32,7 +32,7 @@ cargo metadata --no-deps --format-version 1 --offline --locked
 
 这些命令不编译 Ruda。`--offline` 要求解析所需的依赖已在本机缓存。
 
-`CUDA_PATH` 可指定 CUDA Toolkit 根目录。Windows 上应指向实际安装的版本目录，而不是只有多个版本子目录的父目录。定位实现见 [CUDA 安装路径接口](../../ruda-driver-cuda/src/lib.rs)。
+`CUDA_PATH` 可指定 CUDA Toolkit 根目录。Windows 上应指向实际安装的版本目录，而不是只有多个版本子目录的父目录。定位实现见 [CUDA 安装路径接口](../../crates/ruda-driver-cuda/src/lib.rs)。
 
 ## 3. 构建已有示例
 

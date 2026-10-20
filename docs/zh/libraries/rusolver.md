@@ -78,7 +78,7 @@ CG 默认每 32 步重算真实残差 `b-Ax`，在准备报告收敛前也重算
 
 [PyTorch linalg 后端](../native-pytorch-api.md#科学计算算子) 接入标准求解／分解、QR／特征／SVD、逆矩阵／行列式及最小二乘，并保留 PyTorch 自身 autograd 公式。PyTorch pivots 转换为从 1 开始的 int32。其最小二乘仅接受 `None`／`gels` 驱动，SVD 仅接受使用原生 Jacobi 的 `None`，不冒充 NVIDIA 命名驱动；完整 Q／SVD 基不以薄矩阵替代。
 
-源码：[分解](../../../ruSOLVER/src/tensor/factorization.rs)、[因子复用及最小二乘](../../../ruSOLVER/src/tensor/linear.rs)、[Jacobi](../../../ruSOLVER/src/tensor/jacobi.rs)、[Python 注册](../../../ruda-torch/python/ruda_torch/linalg.py)。
+源码：[分解](../../../crates/ruSOLVER/src/tensor/factorization.rs)、[因子复用及最小二乘](../../../crates/ruSOLVER/src/tensor/linear.rs)、[Jacobi](../../../crates/ruSOLVER/src/tensor/jacobi.rs)、[Python 注册](../../../crates/ruda-torch/python/ruda_torch/linalg.py)。
 
 ## 小矩阵批量 Cholesky 设备路径
 

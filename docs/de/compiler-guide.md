@@ -27,7 +27,7 @@ Beide werden über den NVIDIA-Treiber ausgeführt. Der C++-Kompilierungspfad CUD
 |`ruda-compiler/ptx`|Direkter PTX-Compiler|
 |`ruda-driver-cuda/direct-ptx`|Ermöglicht die direkte PTX-Auswahl im CUDA-Backend|
 
-Funktionen bestimmen, welcher Code erstellt wird; Umgebungsvariablen wählen zur Laufzeit einen Pfad aus. Dies sind separate Steuerelemente. Siehe das [CUDA-Manifest](../../ruda-driver-cuda/Cargo.toml) und das [Compiler-Manifest](../../ruda-compiler/Cargo.toml).
+Funktionen bestimmen, welcher Code erstellt wird; Umgebungsvariablen wählen zur Laufzeit einen Pfad aus. Dies sind separate Steuerelemente. Siehe das [CUDA-Manifest](../../crates/ruda-driver-cuda/Cargo.toml) und das [Compiler-Manifest](../../crates/ruda-compiler/Cargo.toml).
 
 ## 3. Umgebungsvariablen
 
@@ -38,7 +38,7 @@ Funktionen bestimmen, welcher Code erstellt wird; Umgebungsvariablen wählen zur
 |`CUDA_PATH`|CUDA Toolkit-Installationsstammverzeichnis|
 |`RUDA_PTX_TEST_CACHE`| Cache-Verzeichnis-Override, das nur das Beispiel ptx-runtime ausliest |
 
-Unbekannte Compilerwerte führen zu einem Fehler. Auch die Auswahl von `ptx` ohne Aktivierung von `direct-ptx` führt zu einem Fehler, anstatt zu NVRTC zu wechseln. Siehe [compiler_backend.rs](../../ruda-driver-cuda/src/compiler_backend.rs).
+Unbekannte Compilerwerte führen zu einem Fehler. Auch die Auswahl von `ptx` ohne Aktivierung von `direct-ptx` führt zu einem Fehler, anstatt zu NVRTC zu wechseln. Siehe [compiler_backend.rs](../../crates/ruda-driver-cuda/src/compiler_backend.rs).
 
 ## 4. Ziele und Caches
 
@@ -60,4 +60,4 @@ Setzen Sie `TRITON_DEFAULT_BACKEND=ruda` vor dem Triton-Import. Standardmäßig 
 
 Triton wird akzeptiert, Gluon nicht; unbekannte TTIR-Operationen erzeugen Lowering-Fehler. Dieser Pfad ist vom Rust-Kernel-DSL getrennt und garantiert keine Kompatibilität mit jedem Triton-Kernel. GX1-Modus benötigt eine separate Bibliothek außerhalb dieses Software-Workspaces.
 
-[Installation](../../ruda-triton/python/pyproject.toml), [Compilerstufen](../../ruda-triton/python/ruda_triton/compiler.py), [Geräte-/Streamadapter](../../ruda-triton/python/ruda_triton/driver.py).
+[Installation](../../crates/ruda-triton/python/pyproject.toml), [Compilerstufen](../../crates/ruda-triton/python/ruda_triton/compiler.py), [Geräte-/Streamadapter](../../crates/ruda-triton/python/ruda_triton/driver.py).

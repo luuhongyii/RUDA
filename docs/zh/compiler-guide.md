@@ -25,7 +25,7 @@
 | `ruda-compiler/ptx` | 直接 PTX 编译器 |
 | `ruda-driver-cuda/direct-ptx` | 在 CUDA 驱动后端启用直接 PTX 选择 |
 
-features 控制代码是否参与构建，环境变量控制当前选择；两者不是同一个开关。具体依赖见 [CUDA 清单](../../ruda-driver-cuda/Cargo.toml) 与 [编译器清单](../../ruda-compiler/Cargo.toml)。
+features 控制代码是否参与构建，环境变量控制当前选择；两者不是同一个开关。具体依赖见 [CUDA 清单](../../crates/ruda-driver-cuda/Cargo.toml) 与 [编译器清单](../../crates/ruda-compiler/Cargo.toml)。
 
 ## 3. 环境变量
 
@@ -36,7 +36,7 @@ features 控制代码是否参与构建，环境变量控制当前选择；两�
 | `CUDA_PATH` | CUDA Toolkit 安装根目录 |
 | `RUDA_PTX_TEST_CACHE` | 仅 ptx-runtime 示例读取的缓存位置覆盖变量 |
 
-未知编译器值报错。选择 `ptx` 但未启用 `direct-ptx` 也报错，不会切回 NVRTC。具体解析见 [compiler_backend.rs](../../ruda-driver-cuda/src/compiler_backend.rs)。
+未知编译器值报错。选择 `ptx` 但未启用 `direct-ptx` 也报错，不会切回 NVRTC。具体解析见 [compiler_backend.rs](../../crates/ruda-driver-cuda/src/compiler_backend.rs)。
 
 ## 4. 目标与缓存
 
@@ -58,4 +58,4 @@ CUDA 驱动中的直接 PTX 缓存命名空间包含后端标识、SM 与 PTX �
 
 此前端接收 Triton 而非 Gluon，不支持的 TTIR 操作会返回 lowering 错误。它独立于 Rust Kernel DSL，选择该后端不表示兼容全部 Triton Kernel。GX1 模式需要此软件 workspace 未包含的独立 GX1 库。
 
-源码：[Python 安装元数据](../../ruda-triton/python/pyproject.toml)、[编译阶段](../../ruda-triton/python/ruda_triton/compiler.py)、[设备／流适配](../../ruda-triton/python/ruda_triton/driver.py)。
+源码：[Python 安装元数据](../../crates/ruda-triton/python/pyproject.toml)、[编译阶段](../../crates/ruda-triton/python/ruda_triton/compiler.py)、[设备／流适配](../../crates/ruda-triton/python/ruda_triton/driver.py)。

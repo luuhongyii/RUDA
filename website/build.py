@@ -62,7 +62,7 @@ def document_sources():
         for path in sorted((folder / "libraries").glob("*.md")):
             sources[path.relative_to(ROOT).as_posix()] = (lang, "libraries/" + ("index" if path.stem == "README" else path.stem))
     sources["README.md"] = ("en", "project")
-    sources["ruda-torch/README.md"] = ("en", "native-pytorch")
+    sources["crates/ruda-torch/README.md"] = ("en", "native-pytorch")
     return sources
 
 
@@ -98,7 +98,7 @@ class Site:
         if target == "docs/README.md":
             return self.doc(self.sources[source][0], "index")
         # Crate README links share the same underlying library manual.
-        match = re.fullmatch(r"(ruBLAS|ruDNN|ruFFT|ruPRIM|ruRAND|ruSPARSE|ruTENSOR|ruCCL|ruSOLVER|ruINTEGRATE)/(?:docs/(zh|ja|de|ru)/)?README.md", target)
+        match = re.fullmatch(r"crates/(ruBLAS|ruDNN|ruFFT|ruPRIM|ruRAND|ruSPARSE|ruTENSOR|ruCCL|ruSOLVER|ruINTEGRATE)/(?:docs/(zh|ja|de|ru)/)?README.md", target)
         if match:
             target = f"docs/{match[2] or 'en'}/libraries/{match[1].lower()}.md"
         tail = ("?" + parsed.query if parsed.query else "") + ("#" + parsed.fragment if parsed.fragment else "")

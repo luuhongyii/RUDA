@@ -24,7 +24,7 @@ jobs:
   rust:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.key == 'v36-native' && 40 || 20 }}
+    timeout-minutes: ${{ matrix.key == 'native-cuda' && 40 || 20 }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -46,10 +46,10 @@ jobs:
                 cargo check --locked -p ruda-facade-consumer --features "$features"
               done
               cargo check --locked -p ruda --no-default-features --features cuda,hip,wgpu,runtime-exclusive-memory-only --lib
-          - name: v36 native and CUDA test compilation
-            key: v36-native
+          - name: Native libraries and CUDA compiler checks
+            key: native-cuda
             command: |
-              python3 tools/gpu_validation/rust_host_v36.py --output "$RUNNER_TEMP/v36-rust-host"
+              python3 tools/gpu_validation/paged_attention_host.py --output "$RUNNER_TEMP/paged-attention-host"
               cargo test --locked --release -p ruDNN --lib --features tensor-paged-attention,ruda-test-runtime/cuda --no-run
               cargo build --locked --release -p ruda-torch-native
               cargo check --locked -p ruCCL -p ruda-driver-cuda --features ruCCL/cuda,ruda-driver-cuda/direct-ptx --example tensor_collectives

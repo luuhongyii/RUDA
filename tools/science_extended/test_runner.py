@@ -13,11 +13,11 @@ class RunnerTests(unittest.TestCase):
     def test_host_dependency_compiled_before_integrator(self):
         with tempfile.TemporaryDirectory()as d:
             req,cmds=runner.plans('rust-host','both',Path(d))
-            integrator=[c for c,_ in cmds if 'ruINTEGRATE/src/lib.rs' in c]
+            integrator=[c for c,_ in cmds if 'crates/ruINTEGRATE/src/lib.rs' in c]
             self.assertTrue(integrator)
             for c in integrator:self.assertIn('--extern',c);self.assertTrue(any(x.startswith('rusolver=')for x in c))
-            self.assertTrue(any('ruSOLVER/examples/advanced_solver.rs'in c for c,_ in cmds))
-            self.assertTrue(any('ruINTEGRATE/examples/advanced_integrate.rs'in c for c,_ in cmds))
+            self.assertTrue(any('crates/ruSOLVER/examples/advanced_solver.rs'in c for c,_ in cmds))
+            self.assertTrue(any('crates/ruINTEGRATE/examples/advanced_integrate.rs'in c for c,_ in cmds))
     def test_device_plans_test_both_paths(self):
         _,cmds=runner.plans('cuda','both',Path('/tmp/logs'))
         self.assertEqual(len(cmds),4);self.assertEqual({env['RUDA_CUDA_COMPILER']for _,env in cmds},{'nvrtc','ptx'})

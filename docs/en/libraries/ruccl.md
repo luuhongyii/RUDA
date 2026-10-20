@@ -43,9 +43,9 @@ Use `finish_collective` for normal completion. `reset_collective` forgets in-pro
 
 The `cuda` feature enables the CUDA tensor backend. Run `cargo run --locked -p ruCCL --features cuda --example all_reduce` to execute Ring AllReduce with four logical ranks on GPU 0. It checks Sum/Mean over 257 FP32 elements, input preservation, and session exit.
 
-Device adapters are in [tensor_device](../../../ruCCL/src/tensor_device). For the optimizer interface, see [explicit-rank gradient reduction](../../../ruda-optim/src/optim/grads/collective.rs). Transfers include a host-staged path, not zero-copy P2P.
+Device adapters are in [tensor_device](../../../crates/ruCCL/src/tensor_device). For the optimizer interface, see [explicit-rank gradient reduction](../../../crates/ruda-optim/src/optim/grads/collective.rs). Transfers include a host-staged path, not zero-copy P2P.
 
-Source: [collective API](../../../ruCCL/src/api.rs), [configuration](../../../ruCCL/src/config.rs), [rank](../../../ruCCL/src/rank/mod.rs), and [in-process implementation](../../../ruCCL/src/in_process/mod.rs).
+Source: [collective API](../../../crates/ruCCL/src/api.rs), [configuration](../../../crates/ruCCL/src/config.rs), [rank](../../../crates/ruCCL/src/rank/mod.rs), and [in-process implementation](../../../crates/ruCCL/src/in_process/mod.rs).
 
 ## 6. Collective training
 
@@ -60,7 +60,7 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 
 `run` requires a directory that does not yet exist. It saves each rank's model and optimizer after the first update, then executes the second update. `resume` restores that directory and executes the second update. With CUDA enabled, both logical ranks in this example use the same default device.
 
-See the [collective training example](../../../ruda-optim/examples/collective_training.rs) for the complete call sequence. To also save scheduler state and pending accumulated gradients, use `TrainingRecord` from [Training and saving state](../training.md).
+See the [collective training example](../../../crates/ruda-optim/examples/collective_training.rs) for the complete call sequence. To also save scheduler state and pending accumulated gradients, use `TrainingRecord` from [Training and saving state](../training.md).
 
 ## 7. Explicit-rank tensor collectives
 
@@ -80,4 +80,4 @@ All ranks must call in matching order with equal shard lengths and element types
 
 Each shard's matmul is synchronized before the next shard is consumed, so lazy backends compute during host communication. This is host-staged overlap, not GPU peer-memory transfer, a fused device kernel, or an acceleration guarantee.
 
-Source: [streaming ring](../../../ruCCL/src/rank/device_collective/all_gather_stream.rs), [tensor matmul adapter](../../../ruCCL/src/tensor_device/all_gather_matmul.rs).
+Source: [streaming ring](../../../crates/ruCCL/src/rank/device_collective/all_gather_stream.rs), [tensor matmul adapter](../../../crates/ruCCL/src/tensor_device/all_gather_matmul.rs).

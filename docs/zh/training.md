@@ -10,11 +10,11 @@
 
 ```toml
 [dependencies]
-ruda-autodiff = { path = "../RUDA/ruda-autodiff", default-features = false, features = ["std"] }
-ruda-model = { path = "../RUDA/ruda-model", default-features = false, features = ["std"] }
-ruda-nn = { path = "../RUDA/ruda-nn", default-features = false, features = ["std"] }
-ruda-optim = { path = "../RUDA/ruda-optim", default-features = false, features = ["std"] }
-ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
+ruda-autodiff = { path = "../RUDA/crates/ruda-autodiff", default-features = false, features = ["std"] }
+ruda-model = { path = "../RUDA/crates/ruda-model", default-features = false, features = ["std"] }
+ruda-nn = { path = "../RUDA/crates/ruda-nn", default-features = false, features = ["std"] }
+ruda-optim = { path = "../RUDA/crates/ruda-optim", default-features = false, features = ["std"] }
+ruda-tensor-device = { path = "../RUDA/crates/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
 ```
 
 ## 前向、反向与参数更新
@@ -194,7 +194,7 @@ fn restore_training(
 
 `ruda_optim` 还提供 `SgdConfig`、`AdamWConfig`、`AdaGradConfig`、`RmsPropConfig`、`AdanConfig`、`MuonConfig` 和 `LBFGSConfig`。更换优化器时同时更换配置和状态类型。集合通信训练的接入见 [ruCCL](libraries/ruccl.md)。
 
-接口参考：[优化器](../../ruda-optim/src/optim/mod.rs)、[训练记录](../../ruda-optim/src/training.rs)。
+接口参考：[优化器](../../crates/ruda-optim/src/optim/mod.rs)、[训练记录](../../crates/ruda-optim/src/training.rs)。
 
 ### Muon 与 Muon + AdamW 参数分组
 
@@ -202,7 +202,7 @@ fn restore_training(
 
 用 `GradientsParams::from_grads(loss.backward(), &model)` 取得梯度，再调用 `try_step_with_lrs(muon_lr, adamw_lr, model, gradients)`，接收返回的新模型。两个学习率独立；使用 `Optimizer::step(lr, ...)` 时，Muon 使用 `lr`，AdamW 使用 `lr * adamw_lr_ratio`，默认比例为 `0.015`。`MuonMomentumMode::Ema`、`with_stable_normalization(true)` 和 `MuonMatrixLayout::InputOutput` 均需显式选择；稳定范数选项要求 FP32 参数、梯度和动量。
 
-保存模型与优化器状态，恢复时保留原 `ParamId`、分组和配置；`try_load_record` 拒绝不兼容状态。调用方负责更新前反缩放、检查非有限梯度，以及在各副本间统一跳步决定。接口见 [Muon 配置](../../ruda-optim/src/optim/muon/mod.rs)和[分组优化器](../../ruda-optim/src/optim/muon/grouped.rs)。[完整 Host 训练示例](../../ruda-optim/examples/muon_training.rs)可直接运行：
+保存模型与优化器状态，恢复时保留原 `ParamId`、分组和配置；`try_load_record` 拒绝不兼容状态。调用方负责更新前反缩放、检查非有限梯度，以及在各副本间统一跳步决定。接口见 [Muon 配置](../../crates/ruda-optim/src/optim/muon/mod.rs)和[分组优化器](../../crates/ruda-optim/src/optim/muon/grouped.rs)。[完整 Host 训练示例](../../crates/ruda-optim/examples/muon_training.rs)可直接运行：
 
 ```bash
 cargo run --release --locked -p ruda-optim --example muon-training -- 20
@@ -214,8 +214,8 @@ cargo run --release --locked -p ruda-optim --example muon-training -- 20
 
 | `ruda-optim` feature | 接口与用法 |
 | --- | --- |
-| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../ruda-optim/src/fused_adamw/device.rs)：传入参数、梯度、可选动量状态、`AdamWOptions` 和 `StepControl`；参数／动量为 FP32，梯度支持 F32/F16/BF16，要求连续布局、相同设备与执行队列，返回独立的参数和状态输出。 |
-| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../ruda-optim/src/fused_adamw/guard_device.rs)：传入 `AdamWEntry` 参数组及 `GradientGuardOptions`，在 FP32 反缩放后检查 NaN/Inf，对所选单设备／单队列参数组计算一个 L2 范数，并使用共同系数裁剪后更新。 |
+| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../crates/ruda-optim/src/fused_adamw/device.rs)：传入参数、梯度、可选动量状态、`AdamWOptions` 和 `StepControl`；参数／动量为 FP32，梯度支持 F32/F16/BF16，要求连续布局、相同设备与执行队列，返回独立的参数和状态输出。 |
+| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../crates/ruda-optim/src/fused_adamw/guard_device.rs)：传入 `AdamWEntry` 参数组及 `GradientGuardOptions`，在 FP32 反缩放后检查 NaN/Inf，对所选单设备／单队列参数组计算一个 L2 范数，并使用共同系数裁剪后更新。 |
 
 `StepControl::gradient_scale` 接收有限正 loss scale；整个累积窗口使用同一 scale，`skip_update` 显式控制跳步。`max_norm=None` 不裁剪但仍检测非有限值；`NonFinitePolicy::Skip` 跳过整组的参数、权重衰减和步数更新，`Error` 在提交更新前返回错误。该范数不是跨 rank 的分布式全局范数。
 
@@ -223,7 +223,7 @@ cargo run --release --locked -p ruda-optim --example muon-training -- 20
 
 ## 在 `ruda:0` 上进行原生 PyTorch 训练
 
-这条路径与上面的 Rust `Autodiff<Cuda<...>>` 示例分开。准备同一源码的匹配 Rust／C++ 组件，可自行构建或使用兼容预编译包：基础 ABI 10、training API 4、router API 1、paged-backward API 2、graph API 3。安装见[原生 PyTorch 指南](../../ruda-torch/README.md)，参数契约见 [API 参考](native-pytorch-api.md)。
+这条路径与上面的 Rust `Autodiff<Cuda<...>>` 示例分开。准备同一源码的匹配 Rust／C++ 组件，可自行构建或使用兼容预编译包：基础 ABI 10、training API 4、router API 1、paged-backward API 2、graph API 3。安装见[原生 PyTorch 指南](../../crates/ruda-torch/README.md)，参数契约见 [API 参考](native-pytorch-api.md)。
 
 `ruda_torch.RMSNorm`／`rms_norm`、`LayerNorm`／`layer_norm` 及 `silu_mul` 支持原生一阶训练。归一化仅沿最后一轴，统计量使用 FP32，输出保留激活 dtype，仿射参数可为输入 dtype 或 FP32。受支持的连续末轴输入可通过标准 `torch.nn.LayerNorm` 进入原生训练路径。这些融合接口不支持高阶梯度或训练图捕获。
 

@@ -65,7 +65,7 @@ jobs:
           key: Linux-rust-1.97.1-colab-${{ matrix.label }}-${{ hashFiles('Cargo.lock') }}-${{ inputs.source_revision }}
           restore-keys: |
             Linux-rust-1.97.1-colab-${{ matrix.label }}-${{ hashFiles('Cargo.lock') }}-
-            Linux-rust-1.97.1-v36-native-${{ hashFiles('Cargo.lock') }}-
+            Linux-rust-1.97.1-native-cuda-${{ hashFiles('Cargo.lock') }}-
       - name: Build one independent native artifact
         run: python3 .github/scripts/colab_bundle.py --label '${{ matrix.label }}' --output 'bundle/${{ matrix.label }}'
       - name: Save compiled artifact checkpoint only

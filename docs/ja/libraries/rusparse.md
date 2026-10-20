@@ -94,4 +94,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 これらの計算メソッドは `Result` を返します。フレームワークのスパース操作で使用される値テンソルは量子化されていない必要があります。
 
-API 参照: [デバイス CSR](../../../ruSPARSE/src/tensor/mod.rs)、[フレームワーク CSR](../../../ruda-tensor/src/api/sparse.rs)。
+API 参照: [デバイス CSR](../../../crates/ruSPARSE/src/tensor/mod.rs)、[フレームワーク CSR](../../../crates/ruda-tensor/src/api/sparse.rs)。

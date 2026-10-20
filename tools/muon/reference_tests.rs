@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Runs with rustc alone; does NOT compile or execute RUDA tensors.
-#[path = "../../ruda-optim/src/optim/muon/test_reference.rs"]
+#[path = "../../crates/ruda-optim/src/optim/muon/test_reference.rs"]
 mod reference;
 use reference::{Settings, orthogonalize, step};
 

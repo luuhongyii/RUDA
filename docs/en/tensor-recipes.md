@@ -113,12 +113,12 @@ The example differentiates the mean of four squares, so its gradient is `2*x/4`.
 
 Quantized storage and quantization-aware training are different operations. The current autodiff quantization implementation accepts untracked inputs; `quantize` rejects tracked input tensors or tracked scale tensors, and `quantize_dynamic` rejects tracked input tensors. Adding `Autodiff` does not supply the missing quantization gradient rule.
 
-`dequantize` creates an autodiff tensor from the inner backend result; it does not reconnect a gradient path through an earlier quantization operation. Keep this distinction when using quantized inference weights alongside floating-point training. See [quantized autodiff operations](../../ruda-autodiff/src/ops/qtensor.rs).
+`dequantize` creates an autodiff tensor from the inner backend result; it does not reconnect a gradient path through an earlier quantization operation. Keep this distinction when using quantized inference weights alongside floating-point training. See [quantized autodiff operations](../../crates/ruda-autodiff/src/ops/qtensor.rs).
 
 ## API entry points
 
-- [Tensor creation, shape, slicing, and transfers](../../ruda-tensor/src/api/base.rs).
-- [Arithmetic, reductions, and matrix multiplication](../../ruda-tensor/src/api/numeric.rs).
-- [Autodiff tensor methods](../../ruda-tensor/src/api/autodiff.rs).
-- [Creation options and dtype policy](../../ruda-tensor/src/api/options.rs).
-- [Host backend and runtime dtype dispatch](../../ruda-tensor-host/src/backend.rs).
+- [Tensor creation, shape, slicing, and transfers](../../crates/ruda-tensor/src/api/base.rs).
+- [Arithmetic, reductions, and matrix multiplication](../../crates/ruda-tensor/src/api/numeric.rs).
+- [Autodiff tensor methods](../../crates/ruda-tensor/src/api/autodiff.rs).
+- [Creation options and dtype policy](../../crates/ruda-tensor/src/api/options.rs).
+- [Host backend and runtime dtype dispatch](../../crates/ruda-tensor-host/src/backend.rs).

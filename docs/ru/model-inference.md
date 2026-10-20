@@ -67,9 +67,9 @@ cargo run --release --locked -p ruda-llm --features nvidia-ptx --example qwen35_
 
 ```toml
 [dependencies]
-rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
-ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rullm = { package = "ruda-llm", path = "../RUDA/crates/ruLLM", features = ["nvidia"] }
+ruda-tensor-device = { path = "../RUDA/crates/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"
 
 ```
@@ -228,7 +228,7 @@ fn generate_from_images(
 
 Планировщик управляет запросами и метаданными распределения страниц. Исполнитель вызывающего объекта владеет устройством хранения и исполнения модели KV. Используйте `token_matrix()`, `context_lengths()` и `flattened_block_table()` для создания пакетных входных данных. Завершите или отмените невыполненный пакет, прежде чем снова звонить по `schedule()`.
 
-API Ссылка: [Экспорт ruLLM](../../ruLLM/src/lib.rs), [Параметры генерации](../../ruLLM/src/generation.rs), [Планировщик](../../ruLLM/src/continuous_batch.rs).
+API Ссылка: [Экспорт ruLLM](../../crates/ruLLM/src/lib.rs), [Параметры генерации](../../crates/ruLLM/src/generation.rs), [Планировщик](../../crates/ruLLM/src/continuous_batch.rs).
 
 ## Qwen3.5: объединённое постраничное внимание
 

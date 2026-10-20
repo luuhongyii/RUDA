@@ -37,7 +37,7 @@
 
 不支持的 IR 返回 `CompilationError::UnsupportedInstruction`；配置或结构验证错误返回 `CompilationError::Validation`，诊断包含 `Direct PTX:` 前缀。此路径不自动回退 NVRTC。
 
-源码定义：[ptx 模块](../../ruda-compiler/src/ptx/mod.rs)、[编译器测试](../../ruda-compiler/src/ptx/tests.rs)、[运行时后端选择](../../ruda-driver-cuda/src/compiler_backend.rs)。
+源码定义：[ptx 模块](../../crates/ruda-compiler/src/ptx/mod.rs)、[编译器测试](../../crates/ruda-compiler/src/ptx/tests.rs)、[运行时后端选择](../../crates/ruda-driver-cuda/src/compiler_backend.rs)。
 
 ## 5. Packed FP4 传输与 NVFP4 缩放 MMA
 
@@ -45,4 +45,4 @@
 
 `CoopMma::ExecuteScaled` 当前仅接受 SM 120、PTX 8.7 或更新版本、`16×8×64` tile、packed E2M1x2 A／B、F32 C／D、E4M3 scale，以及 `scales_factor = 4`。它生成 `mxf4nvf4.block_scale.scale_vec::4X` 指令，并将输出 target 改为 `sm_120a`。其他架构、tile、scale 格式或倍数会被拒绝，同时要求足够的 fragment 寄存器容量。
 
-源码：[packed 操作处理](../../ruda-compiler/src/ptx/packed.rs)、[缩放 MMA lowering](../../ruda-compiler/src/ptx/matrix/scaled.rs)、[packed 传输／布局示例](../../ruda-driver-cuda/examples/ptx_packed.rs)。该示例读取已导出的 PTX，检查字节传输和 fragment 坐标，不执行 NVFP4 MMA 算术。
+源码：[packed 操作处理](../../crates/ruda-compiler/src/ptx/packed.rs)、[缩放 MMA lowering](../../crates/ruda-compiler/src/ptx/matrix/scaled.rs)、[packed 传输／布局示例](../../crates/ruda-driver-cuda/examples/ptx_packed.rs)。该示例读取已导出的 PTX，检查字节传输和 fragment 坐标，不执行 NVFP4 MMA 算术。

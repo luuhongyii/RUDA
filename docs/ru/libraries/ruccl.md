@@ -41,9 +41,9 @@ ruCCL включает в себя тензорные серверные кол�
 
 Функция `cuda` включает тензорный бэкенд CUDA. Запустите `cargo run --locked -p ruCCL --features cuda --example all_reduce` для выполнения Ring AllReduce с четырьмя логическими рангами на GPU 0. Он проверяет сумму/среднее по 257 элементам FP32, сохранение входных данных и выход из сеанса.
 
-Адаптеры устройств находятся в папке [tensor_device](../../../ruCCL/src/tensor_device). Интерфейс оптимизатора см. в разделе [явное снижение градиента ранга](../../../ruda-optim/src/optim/grads/collective.rs). Передачи включают путь, промежуточный на хосте, а не P2P с нулевой копией.
+Адаптеры устройств находятся в папке [tensor_device](../../../crates/ruCCL/src/tensor_device). Интерфейс оптимизатора см. в разделе [явное снижение градиента ранга](../../../crates/ruda-optim/src/optim/grads/collective.rs). Передачи включают путь, промежуточный на хосте, а не P2P с нулевой копией.
 
-Источник: [коллектив API](../../../ruCCL/src/api.rs), [конфигурация](../../../ruCCL/src/config.rs), [ранг](../../../ruCCL/src/rank/mod.rs) и [в процессе реализации](../../../ruCCL/src/in_process/mod.rs).
+Источник: [коллектив API](../../../crates/ruCCL/src/api.rs), [конфигурация](../../../crates/ruCCL/src/config.rs), [ранг](../../../crates/ruCCL/src/rank/mod.rs) и [в процессе реализации](../../../crates/ruCCL/src/in_process/mod.rs).
 
 ## 6. Коллективное обучение
 
@@ -58,7 +58,7 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 
 `run` требуется каталог, который еще не существует. Он сохраняет модель и оптимизатор каждого ранга после первого обновления, а затем выполняет второе обновление. `resume` восстанавливает этот каталог и выполняет второе обновление. При включенном CUDA оба логических ранга в этом примере используют одно и то же устройство по умолчанию.
 
-См. [пример коллективного обучения](../../../ruda-optim/examples/collective_training.rs) для получения полной последовательности вызовов. Чтобы также сохранить состояние планировщика и ожидающие накопленные градиенты, используйте `TrainingRecord` из [Состояние обучения и сохранения](../training.md).
+См. [пример коллективного обучения](../../../crates/ruda-optim/examples/collective_training.rs) для получения полной последовательности вызовов. Чтобы также сохранить состояние планировщика и ожидающие накопленные градиенты, используйте `TrainingRecord` из [Состояние обучения и сохранения](../training.md).
 
 ## 8. Потоковый all-gather и локальное матричное умножение
 
@@ -70,4 +70,4 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 
 Matmul каждого shard синхронизируется перед следующим, чтобы отложенные бэкенды считали во время host-коммуникации. Это host-staged перекрытие, не GPU P2P, не объединённый kernel и не гарантия ускорения.
 
-[Потоковое кольцо](../../../ruCCL/src/rank/device_collective/all_gather_stream.rs), [адаптер матричного умножения](../../../ruCCL/src/tensor_device/all_gather_matmul.rs).
+[Потоковое кольцо](../../../crates/ruCCL/src/rank/device_collective/all_gather_stream.rs), [адаптер матричного умножения](../../../crates/ruCCL/src/tensor_device/all_gather_matmul.rs).

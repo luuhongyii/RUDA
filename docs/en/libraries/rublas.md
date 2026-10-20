@@ -14,7 +14,7 @@ ruBLAS provides linear algebra operations and device tensor interfaces.
 | `tensor-int4` | `rublas::tensor_int4` |
 | `tensor-grouped` | `rublas::tensor_grouped` |
 
-The Cargo package is `rublas`. Select the required features and disable unnecessary defaults for general-purpose paths. See [Cargo.toml](../../../ruBLAS/Cargo.toml).
+The Cargo package is `rublas`. Select the required features and disable unnecessary defaults for general-purpose paths. See [Cargo.toml](../../../crates/ruBLAS/Cargo.toml).
 
 ## 2. Matrix multiplication, vectors, and INT4
 
@@ -33,7 +33,7 @@ Complex GEMM and triangular substitution use scalar GPU kernels, not Tensor Core
 
 Python exposes `ruda_torch.gemm`, `fused_gemm`, `grouped_gemm` and `triangular_solve` with first-order autograd. Its grouped entry accepts arbitrary-order int32/int64 expert IDs, unlike the low-level segmented U32/offset interface below. See [PyTorch scientific contracts](../native-pytorch-api.md#scientific-operations).
 
-Sources: [real GEMM](../../../ruBLAS/src/tensor_matmul/gemm.rs), [complex GEMM](../../../ruBLAS/src/tensor_matmul/complex.rs), [triangular solve](../../../ruBLAS/src/tensor_matmul/triangular.rs), [fused epilogue](../../../ruBLAS/src/tensor_matmul/fused.rs).
+Sources: [real GEMM](../../../crates/ruBLAS/src/tensor_matmul/gemm.rs), [complex GEMM](../../../crates/ruBLAS/src/tensor_matmul/complex.rs), [triangular solve](../../../crates/ruBLAS/src/tensor_matmul/triangular.rs), [fused epilogue](../../../crates/ruBLAS/src/tensor_matmul/fused.rs).
 
 ### Tensor matrix multiplication
 
@@ -61,11 +61,11 @@ fn residue_matmul<R: Runtime>(
 
 Inputs `[M, K]` and `[K, N]` produce `[M, N]`. Invalid setup or missing device capabilities return `MatmulSetupError` rather than switching to Naive.
 
-See the [matrix multiplication entry point](../../../ruBLAS/src/tensor_matmul/base.rs).
+See the [matrix multiplication entry point](../../../crates/ruBLAS/src/tensor_matmul/base.rs).
 
 ### Vector cross product
 
-`rublas::tensor_vector::cross(lhs, rhs, dim)` requires the selected dimension to have length 3 and returns a device tensor. Computing along a non-final dimension involves permutation and contiguous conversion. See [cross.rs](../../../ruBLAS/src/tensor_vector/cross.rs).
+`rublas::tensor_vector::cross(lhs, rhs, dim)` requires the selected dimension to have length 3 and returns a device tensor. Computing along a non-final dimension involves permutation and contiguous conversion. See [cross.rs](../../../crates/ruBLAS/src/tensor_vector/cross.rs).
 
 ### AWQ INT4
 
@@ -80,9 +80,9 @@ For input dimension K, output dimension N, and group size G:
 | scales | F16 | [K/G, N] |
 | bias (optional) | F16 | [N] |
 
-K, N, and G must be nonzero; K must be divisible by G and N by 8. The input's final dimension is K, replaced by N in the output. All operands must share a device. Packed bit order must match the [AWQ kernel](../../../ruBLAS/src/tensor_int4/kernel.rs); an arbitrary INT4 file cannot be used directly as qweight.
+K, N, and G must be nonzero; K must be divisible by G and N by 8. The input's final dimension is K, replaced by N in the output. All operands must share a device. Packed bit order must match the [AWQ kernel](../../../crates/ruBLAS/src/tensor_int4/kernel.rs); an arbitrary INT4 file cannot be used directly as qweight.
 
-See the [INT4 interface](../../../ruBLAS/src/tensor_int4/mod.rs) for the object and its checks.
+See the [INT4 interface](../../../crates/ruBLAS/src/tensor_int4/mod.rs) for the object and its checks.
 
 ## 3. Grouped matrix multiplication
 
@@ -106,7 +106,7 @@ Row m selects the weight matrix indexed by row_experts[m] and computes dot produ
 - Relevant element counts must fit U32 indexing.
 - Invalid arguments return `GroupedMatmulError`. Handle asynchronous execution errors during readback or synchronization.
 
-Source: [grouped interface](../../../ruBLAS/src/tensor_grouped/mod.rs) and [kernel](../../../ruBLAS/src/tensor_grouped/kernel.rs).
+Source: [grouped interface](../../../crates/ruBLAS/src/tensor_grouped/mod.rs) and [kernel](../../../crates/ruBLAS/src/tensor_grouped/kernel.rs).
 
 ## 5. Integration with other libraries
 

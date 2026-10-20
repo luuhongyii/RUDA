@@ -34,7 +34,7 @@ fn serve(address: &str, id: UniqueId, world_size: usize) -> Result<(), NetworkEr
 }
 ```
 
-Run the coordinator concurrently with all workers; `run()` accepts their channels and serves until disconnect. Do not block the only worker thread inside serve before launching peers. It accepts explicit collective timeout, optional heartbeat timeout, rail and transport configuration; [network definitions](../../ruCCL/src/rank/network.rs) specify valid values. The rendezvous address, ID and rank/device assignment are application inputs, not automatically consumed `torchrun`/NCCL environment conventions.
+Run the coordinator concurrently with all workers; `run()` accepts their channels and serves until disconnect. Do not block the only worker thread inside serve before launching peers. It accepts explicit collective timeout, optional heartbeat timeout, rail and transport configuration; [network definitions](../../crates/ruCCL/src/rank/network.rs) specify valid values. The rendezvous address, ID and rank/device assignment are application inputs, not automatically consumed `torchrun`/NCCL environment conventions.
 
 For a CUDA tensor rank, this initialization function connects its session and broadcasts model parameters before optimizer creation:
 
@@ -66,7 +66,7 @@ fn initialize_rank(
 }
 ```
 
-The layer dimensions illustrate initialization only; replace the model construction with your actual replica. Workspace dependencies are `ruCCL` (Rust import `ruccl`), `ruda-autodiff`, `ruda-nn`, `ruda-optim` with `collective`, and `ruda-tensor-device` with `cuda-default`. Connection error conversion uses `TensorDeviceError`; rank metadata/device configuration must be provided by the application. Source: [connection methods](../../ruCCL/src/rank/communicator/connect.rs).
+The layer dimensions illustrate initialization only; replace the model construction with your actual replica. Workspace dependencies are `ruCCL` (Rust import `ruccl`), `ruda-autodiff`, `ruda-nn`, `ruda-optim` with `collective`, and `ruda-tensor-device` with `cuda-default`. Connection error conversion uses `TensorDeviceError`; rank metadata/device configuration must be provided by the application. Source: [connection methods](../../crates/ruCCL/src/rank/communicator/connect.rs).
 
 The default TCP tensor adapter downloads/stages/uploads tensor payloads. TCP peer exchange is not automatically GPU P2P/NVLink/RDMA. An alternative device-native `DataParallelCommunicator` must provide ordered metadata plus matching floating/integer broadcast and reduction contracts; changing the transport does not change token weighting, tied aliases or local parameter identities.
 
@@ -87,7 +87,7 @@ Backpropagate **local loss sums**, accumulate locally and track their effective 
 - `MissingGradientPolicy::Error`: require local gradients where the rank has nonzero weight.
 - `Zero`: explicitly contribute zero for missing local gradients. Globally unused parameters remain absent.
 
-Unknown/frozen parameters in the gradient container, changed local IDs/structure, inconsistent policy, or invalid global weighting are contract errors. Scheduler, clipping, optimizer update and accumulator reset are not implicit. See [DataParallel source](../../ruda-optim/src/data_parallel.rs) and [training state](training.md).
+Unknown/frozen parameters in the gradient container, changed local IDs/structure, inconsistent policy, or invalid global weighting are contract errors. Scheduler, clipping, optimizer update and accumulator reset are not implicit. See [DataParallel source](../../crates/ruda-optim/src/data_parallel.rs) and [training state](training.md).
 
 ## Save and resume every rank
 
@@ -104,7 +104,7 @@ cargo run --locked -p ruda-optim --features collective,cuda \
   --example collective_training -- resume ../ruda-collective-state
 ```
 
-`run` requires a new directory. It saves rank-local model/optimizer after the first step and performs the second; `resume` restores that saved boundary and performs the second. Both ranks in this unmodified example use the same default device. The [in-process tensor example](../../ruCCL/examples/tensor_collectives.rs) likewise creates three default-device contexts; neither command is a multi-GPU performance baseline.
+`run` requires a new directory. It saves rank-local model/optimizer after the first step and performs the second; `resume` restores that saved boundary and performs the second. Both ranks in this unmodified example use the same default device. The [in-process tensor example](../../crates/ruCCL/examples/tensor_collectives.rs) likewise creates three default-device contexts; neither command is a multi-GPU performance baseline.
 
 ## ZeRO-1 optimizer-state partitioning
 
@@ -112,7 +112,7 @@ cargo run --locked -p ruda-optim --features collective,cuda \
 
 `step(lr, model, gradients, local_weight, policy)` returns `Zero1Step { model, global_weight }`. Backpropagate local loss sums; reduction preserves global token weighting and missing-gradient rules. `step_fp32` keeps reduced gradients in FP32 for a compatible optimizer. Learning rates must match. Save every rank's `Zero1Record` from `to_record()` with that rank's model, scheduler and data/RNG state; `load_record` requires matching rank, world size, owners and local model IDs. Recorder precision must preserve optimizer/master state. Optimizer options are recreated explicitly, not inferred from records.
 
-This partitions **optimizer state**, not parameter or gradient storage; state memory is determined by the actual owner assignment, not guaranteed to be evenly balanced. Ownership changes/elastic world-size resharding are not automatic. It does not implement ZeRO-2/3 or FSDP. Source: [state partitioning](../../ruda-optim/src/data_parallel/zero.rs).
+This partitions **optimizer state**, not parameter or gradient storage; state memory is determined by the actual owner assignment, not guaranteed to be evenly balanced. Ownership changes/elastic world-size resharding are not automatic. It does not implement ZeRO-2/3 or FSDP. Source: [state partitioning](../../crates/ruda-optim/src/data_parallel/zero.rs).
 
 ## Tensor-parallel projections
 
@@ -120,7 +120,7 @@ Enable `ruda-nn/tensor-parallel`. `modules::tensor_parallel::{ColumnParallelLine
 
 `column.forward(input, communicator, gather_output)` sums input gradients from all column shards, optionally gathering output features. `row.forward(input, communicator, input_is_parallel)` scatters a full input only when requested, sums partial outputs, then adds bias **once**. An ungathered column output connects to a row's parallel input. Use identical logical losses within this TP group, not independent data-parallel losses.
 
-The [model-parallel regions](../../ruda-autodiff/src/tensor_parallel.rs) deliberately differ from generic differentiable collectives: copy forward → sum backward; sum forward → identity backward; scatter forward → gather backward; gather forward → local slice backward. This avoids multiplying a replicated loss gradient by world size. Equal nonempty shards and matching forward/backward ordering are required. [Projection implementation](../../ruda-nn/src/modules/tensor_parallel.rs). These layers do not automatically convert a whole attention/MoE model or schedule pipeline stages.
+The [model-parallel regions](../../crates/ruda-autodiff/src/tensor_parallel.rs) deliberately differ from generic differentiable collectives: copy forward → sum backward; sum forward → identity backward; scatter forward → gather backward; gather forward → local slice backward. This avoids multiplying a replicated loss gradient by world size. Equal nonempty shards and matching forward/backward ordering are required. [Projection implementation](../../crates/ruda-nn/src/modules/tensor_parallel.rs). These layers do not automatically convert a whole attention/MoE model or schedule pipeline stages.
 
 ## Python replicated training with NCCL
 
@@ -146,7 +146,7 @@ In a manual training loop, backpropagate local loss sums and call `group.synchro
 
 For causal fine-tuning, initialize the final `CausalLMFinetuner` model, construct its optimizer, then pass `replica_group=group` to `SFTTrainer`. The trainer uses global token normalization, synchronizes accumulated gradients before update, reports global loss/tokens and checks step/base/optimizer/scaler agreement. An empty window on one rank is allowed if another rank has supervised tokens. Save each rank to its own checkpoint directory; restart requires matching rank/world size and the same completed boundary. This remains replicated training, not parameter sharding or direct `torch.nn.parallel.DistributedDataParallel` replacement.
 
-`ReplicaGroup(device_type='cpu')` requires an explicitly initialized Gloo group and is only the CPU reference; it is never selected automatically when native/NCCL support is missing. Source: [replica communication](../../ruda-torch/python/ruda_torch/distributed_training.py).
+`ReplicaGroup(device_type='cpu')` requires an explicitly initialized Gloo group and is only the CPU reference; it is never selected automatically when native/NCCL support is missing. Source: [replica communication](../../crates/ruda-torch/python/ruda_torch/distributed_training.py).
 
 ## Failure handling
 

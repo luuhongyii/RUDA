@@ -402,7 +402,7 @@ def main():
     cases=fixtures(np.random.default_rng(2077))
     if args.generate_fixtures:
         (ROOT/'tools/science/fixtures.json').write_text(json.dumps(cases,indent=2)+'\n')
-        (ROOT/'ruSOLVER/src/fixtures.rs').write_text(rust_fixtures(cases))
+        (ROOT/'crates/ruSOLVER/src/fixtures.rs').write_text(rust_fixtures(cases))
     report={'schema':'ruda.science.python_oracle.v1','status':'passed','seed':20260910,
         'scope':'Python mathematical models vs NumPy/SciPy; NOT Rust compilation or GPU execution',
         'versions':{'python':sys.version,'numpy':np.__version__,'scipy':scipy.__version__},

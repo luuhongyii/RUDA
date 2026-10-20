@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'ruSOLVER/**'
-      - 'ruINTEGRATE/**'
-      - 'ruSPARSE/**'
+      - 'crates/ruSOLVER/**'
+      - 'crates/ruINTEGRATE/**'
+      - 'crates/ruSPARSE/**'
       - 'tools/science/**'
       - 'tools/science_extended/**'
       - 'tools/run_science_extended_regressions.py'
@@ -14,9 +14,9 @@ on:
       - '.github/workflows/science-host.yml'
   push:
     paths:
-      - 'ruSOLVER/**'
-      - 'ruINTEGRATE/**'
-      - 'ruSPARSE/**'
+      - 'crates/ruSOLVER/**'
+      - 'crates/ruINTEGRATE/**'
+      - 'crates/ruSPARSE/**'
       - 'tools/science/**'
       - 'tools/science_extended/**'
       - 'tools/run_science_extended_regressions.py'

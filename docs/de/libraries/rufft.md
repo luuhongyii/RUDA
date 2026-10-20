@@ -12,10 +12,10 @@ Das Cargo-Paket ist `ruda-fft`; Sein Rust-Importname ist `rufft`. Die Funktion `
 
 ```toml
 [dependencies]
-rufft = { package = "ruda-fft", path = "../RUDA/ruFFT", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rufft = { package = "ruda-fft", path = "../RUDA/crates/ruFFT", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Vorwärts- und Rücktransformationen
@@ -115,4 +115,4 @@ Um zu vermeiden, dass beim Verwalten von Puffern Eingaben mit Nullen aufgefüllt
 
 N muss eine Zweierpotenz von mindestens 2 sein und reale/imaginäre Formen müssen übereinstimmen. `signal_len` darf die Länge der Eingabeachse oder N nicht überschreiten. `spec_bins` muss mindestens 1 sein und darf die Länge der Eingabespektrumsachse oder `N / 2 + 1` nicht überschreiten. Ausgabepuffer erfordern weiterhin eine vollständige Zuweisung; Diese Schnittstellen vermeiden die Materialisierung des mit Nullen aufgefüllten Eingabeendes.
 
-API Referenz: [Tensor-Schnittstelle](../../../ruFFT/src/tensor.rs), [Vorwärtsstart](../../../ruFFT/src/fft/rfft.rs), [Inverser Start](../../../ruFFT/src/fft/irfft.rs).
+API Referenz: [Tensor-Schnittstelle](../../../crates/ruFFT/src/tensor.rs), [Vorwärtsstart](../../../crates/ruFFT/src/fft/rfft.rs), [Inverser Start](../../../crates/ruFFT/src/fft/irfft.rs).

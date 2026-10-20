@@ -122,12 +122,12 @@ fn main() {
 
 ## 按后端选择算子
 
-LibTorch 适配器的量化张量方法未实现，当前绑定也不提供 `deform_conv2d`、可变形卷积反向与整数 `argtopk`。该适配器不同于原生 `ruda_torch` Python 设备扩展，见[量化方法](../../ruda-tensor-tch/src/ops/qtensor.rs)、[模块算子](../../ruda-tensor-tch/src/ops/module.rs)和[整数算子](../../ruda-tensor-tch/src/ops/int_tensor.rs)。
+LibTorch 适配器的量化张量方法未实现，当前绑定也不提供 `deform_conv2d`、可变形卷积反向与整数 `argtopk`。该适配器不同于原生 `ruda_torch` Python 设备扩展，见[量化方法](../../crates/ruda-tensor-tch/src/ops/qtensor.rs)、[模块算子](../../crates/ruda-tensor-tch/src/ops/module.rs)和[整数算子](../../crates/ruda-tensor-tch/src/ops/int_tensor.rs)。
 
 昇腾执行见 [CANN 执行指南](ascend-guide.md)，集合通信见[分布式指南](distributed-guide.md)；套上后端包装器不代表就具备集合操作支持。
 
 ## API 入口
 
-- [CUDA 别名](../../ruda-tensor-device/src/cuda.rs)、[ROCm 别名](../../ruda-tensor-rocm/src/lib.rs)和 [WGPU 初始化](../../ruda-tensor-wgpu/src/lib.rs)。
-- [Router 别名](../../ruda-tensor-router/src/lib.rs)、[设备枚举与字节桥接](../../ruda-tensor-router/src/types.rs)。
-- [远程客户端](../../ruda-tensor-remote/src/lib.rs)、[服务端启动](../../ruda-tensor-remote/src/server/base.rs)和 [WebSocket 监听器](../../ruda-communication/src/websocket/server.rs)。
+- [CUDA 别名](../../crates/ruda-tensor-device/src/cuda.rs)、[ROCm 别名](../../crates/ruda-tensor-rocm/src/lib.rs)和 [WGPU 初始化](../../crates/ruda-tensor-wgpu/src/lib.rs)。
+- [Router 别名](../../crates/ruda-tensor-router/src/lib.rs)、[设备枚举与字节桥接](../../crates/ruda-tensor-router/src/types.rs)。
+- [远程客户端](../../crates/ruda-tensor-remote/src/lib.rs)、[服务端启动](../../crates/ruda-tensor-remote/src/server/base.rs)和 [WebSocket 监听器](../../crates/ruda-communication/src/websocket/server.rs)。

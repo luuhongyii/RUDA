@@ -17,7 +17,7 @@ ruDNN provides neural network operations. The Cargo package is `ruDNN` and the R
 | `tensor-normalization` | General-purpose device normalization for model layers |
 | `tensor-gated-delta` | Gated-delta computation for hybrid architectures such as Qwen3.5 |
 
-Attention and convolution each have corresponding autotune features. See [Cargo.toml](../../../ruDNN/Cargo.toml) and [module exports](../../../ruDNN/src/lib.rs).
+Attention and convolution each have corresponding autotune features. See [Cargo.toml](../../../crates/ruDNN/Cargo.toml) and [module exports](../../../crates/ruDNN/src/lib.rs).
 
 ## 2. Attention and convolution
 
@@ -27,7 +27,7 @@ Attention and convolution each have corresponding autotune features. See [Cargo.
 
 Strategies include FlashBlackboxAccelerated, FlashUnit, Fallback, and Autotune when its feature is enabled. The default is Fallback without autotuning and Autotune with it. Fallback uses multiple kernels on the same device, not a CPU backend.
 
-Match layout, mask, and precision to the selected strategy. See the [attention interface](../../../ruDNN/src/attention/tensor/base.rs).
+Match layout, mask, and precision to the selected strategy. See the [attention interface](../../../crates/ruDNN/src/attention/tensor/base.rs).
 
 ### Convolution
 
@@ -35,7 +35,7 @@ Match layout, mask, and precision to the selected strategy. See the [attention i
 
 Strategies include Direct, ImplicitGemm, and optional Autotune. The entry point uses Direct for three-dimensional F32 convolution. Grouped convolution also uses Direct when ImplicitGemm is selected. The strategy parameter is therefore not always a strict request to retain one algorithm.
 
-The same module provides conv_data_backward and conv_weight_backward. Check shape, options, and execution requirements for each direction. See the [convolution interface](../../../ruDNN/src/convolution/tensor/base.rs).
+The same module provides conv_data_backward and conv_weight_backward. Check shape, options, and execution requirements for each direction. See the [convolution interface](../../../crates/ruDNN/src/convolution/tensor/base.rs).
 
 ## 3. MoE workflow
 
@@ -69,7 +69,7 @@ Input tokens have shape [T, H]; gate and up have shape [E, I, H]; down has shape
 
 Dispatch does not drop tokens to enforce capacity. Atomic assignment order within an expert is not fixed; a saved mapping restores token order. The forward entry point takes precomputed logits rather than performing the model's gate projection or loading weight files.
 
-Source: [routing](../../../ruDNN/src/moe/routing.rs), [dispatch and combine](../../../ruDNN/src/moe/dispatch.rs), [experts](../../../ruDNN/src/moe/experts.rs), and [tests](../../../ruDNN/src/moe/tests.rs).
+Source: [routing](../../../crates/ruDNN/src/moe/routing.rs), [dispatch and combine](../../../crates/ruDNN/src/moe/dispatch.rs), [experts](../../../crates/ruDNN/src/moe/experts.rs), and [tests](../../../crates/ruDNN/src/moe/tests.rs).
 
 ## 6. Call MoE
 
@@ -196,7 +196,7 @@ Enable `tensor-paged-attention` and use `rudnn::paged_attention`. `HostPlan::new
 
 `DevicePlan::attention(q, k, v, scale, causal)` reads physical cache pages directly for packed, variable-length prefill/decode. Q has shape `[queries, Hq, D]`, K `[pages, page_size, Hkv, D]`, V `[pages, page_size, Hkv, Dv]`, and the result `[queries, Hq, Dv]`; `Hq` must be divisible by `Hkv`. Inputs must be contiguous, unquantized F32/F16/BF16 with matching dtype, device and queue. Supply finite Q/K/V and a finite positive scale. `D` and `Dv` are in `1..=1024`; the device must support a 32- or 64-lane plane and the required launch grid. These floating-cache methods support forward and first-order backward, without arbitrary external masks.
 
-`DevicePlan::attention_quantized(q, k, v, position, scale, causal, workspace)` is the separate inference-only packed path, enabled by the same feature. K/V are `ruda_kernel::quantization::packed::PackedTensor` values with the same logical page geometry; optional positional query/cache operands select MLA. It decodes packed values directly into registers and accepts an optional split workspace; no quantized-cache backward is provided. See the [implementation](../../../ruDNN/src/paged_attention/quantized.rs) and [Python cache API](../native-pytorch-api.md#quantized-kv-attention).
+`DevicePlan::attention_quantized(q, k, v, position, scale, causal, workspace)` is the separate inference-only packed path, enabled by the same feature. K/V are `ruda_kernel::quantization::packed::PackedTensor` values with the same logical page geometry; optional positional query/cache operands select MLA. It decodes packed values directly into registers and accepts an optional split workspace; no quantized-cache backward is provided. See the [implementation](../../../crates/ruDNN/src/paged_attention/quantized.rs) and [Python cache API](../native-pytorch-api.md#quantized-kv-attention).
 
 `DevicePlan::mla(q, qp, latent, kp, scale, causal)` takes absorbed queries `[queries, H, R]`, positional queries `[queries, H, P]`, a shared latent cache `[pages, page_size, 1, R]` and positional cache `[pages, page_size, 1, P]`. It returns compressed context `[queries, H, R]`; `P` is in `1..=256`. Apply positional encoding before the call and value/output projections afterward. Use the model's original QK scale, not a scale derived from the compressed rank.
 

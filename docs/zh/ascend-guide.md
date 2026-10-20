@@ -69,9 +69,9 @@ python3 tools/ascend/build_common_ir.py --toolkit "$ASCEND_HOME_PATH" --op mul -
 
 ```toml
 [dependencies]
-ruda-compiler = { path = "../RUDA/ruda-compiler", default-features = false, features = ["ascend"] }
-ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["compiler-std"] }
-ruda-driver-cann = { path = "../RUDA/ruda-driver-cann", features = ["common-ir"] }
+ruda-compiler = { path = "../RUDA/crates/ruda-compiler", default-features = false, features = ["ascend"] }
+ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["compiler-std"] }
+ruda-driver-cann = { path = "../RUDA/crates/ruda-driver-cann", features = ["common-ir"] }
 ```
 
 使用下面的 `src/main.rs`：
@@ -158,7 +158,7 @@ python3 tools/ascend/build_common_ir.py --toolkit "$ASCEND_HOME_PATH" --op rms_n
 
 ## API 入口
 
-- [编译器与选项](../../ruda-compiler/src/ascend/mod.rs)、[Map 定义](../../ruda-compiler/src/ascend/programs.rs)、[行定义](../../ruda-compiler/src/ascend/row_programs.rs)。
-- [构建器](../../tools/ascend/build_common_ir.py)和[编译器 CLI](../../ruda-compiler/examples/ascend_ir.rs)。
-- [CannProgram](../../ruda-driver-cann/src/tensor/common_ir/mod.rs)、[session 生命周期](../../ruda-driver-cann/src/tensor/owner.rs)、[借用 session](../../ruda-driver-cann/src/tensor/mod.rs)。
-- [原生矩阵接口](../../ruda-driver-cann/src/tensor/deepgemm/mod.rs)与 [ruBLAS 集成](../../ruBLAS/src/cann.rs)。
+- [编译器与选项](../../crates/ruda-compiler/src/ascend/mod.rs)、[Map 定义](../../crates/ruda-compiler/src/ascend/programs.rs)、[行定义](../../crates/ruda-compiler/src/ascend/row_programs.rs)。
+- [构建器](../../tools/ascend/build_common_ir.py)和[编译器 CLI](../../crates/ruda-compiler/examples/ascend_ir.rs)。
+- [CannProgram](../../crates/ruda-driver-cann/src/tensor/common_ir/mod.rs)、[session 生命周期](../../crates/ruda-driver-cann/src/tensor/owner.rs)、[借用 session](../../crates/ruda-driver-cann/src/tensor/mod.rs)。
+- [原生矩阵接口](../../crates/ruda-driver-cann/src/tensor/deepgemm/mod.rs)与 [ruBLAS 集成](../../crates/ruBLAS/src/cann.rs)。

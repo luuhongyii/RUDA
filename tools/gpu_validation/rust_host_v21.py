@@ -34,7 +34,7 @@ def main() -> int:
         report['errors'].append('missing rustc; no production Rust compilation/execution'); save(); return 2
     binary = out/('graph_topology_tests.exe' if os.name=='nt' else 'graph_topology_tests')
     commands=[('version',[compiler,'--version']),
-        ('compile',[compiler,'--edition=2024','--test',str(ROOT/'ruda-driver-cuda/src/execution/graph_topology.rs'),'-o',str(binary)]),
+        ('compile',[compiler,'--edition=2024','--test',str(ROOT/'crates/ruda-driver-cuda/src/execution/graph_topology.rs'),'-o',str(binary)]),
         ('test',[str(binary),'--test-threads=1'])]
     try:
         for label, command in commands:

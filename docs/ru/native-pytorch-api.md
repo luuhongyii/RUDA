@@ -10,7 +10,7 @@
 
 Пути задаются через `RUDA_TORCH_CUBLAS_LIBRARY`, `RUDA_TORCH_CUBLASLT_LIBRARY`, `RUDA_TORCH_CUSOLVER_LIBRARY`, `RUDA_TORCH_CUFFT_LIBRARY`; `RUDA_TORCH_DLL_DIR` добавляет каталоги поиска, `RUDA_TORCH_CUDA_LIBRARY` указывает драйвер. Метаданные wheel привязаны к minor-версии Python и точной версии PyTorch при сборке. При смене окружения Rust и C++ пересобираются вместе.
 
-Комплексный linalg, LDL, общие собственные значения, матричная экспонента и ограничения FP16/complex32 FFT описаны в [подробном API](../en/native-pytorch-api.md#scientific-operations). [Выбор](../../ruda-torch/python/ruda_torch/math_backend.py), [загрузка библиотек](../../ruda-torch/python/ruda_torch/_vendor_runtime.py), [метаданные сборки](../../ruda-torch/python/setup.py).
+Комплексный linalg, LDL, общие собственные значения, матричная экспонента и ограничения FP16/complex32 FFT описаны в [подробном API](../en/native-pytorch-api.md#scientific-operations). [Выбор](../../crates/ruda-torch/python/ruda_torch/math_backend.py), [загрузка библиотек](../../crates/ruda-torch/python/ruda_torch/_vendor_runtime.py), [метаданные сборки](../../crates/ruda-torch/python/setup.py).
 
 ## Packed-квантизация и квантованные KV-кеши
 
@@ -24,7 +24,7 @@ Packed API 1 предоставляет INT2/3/4/5/6/8, FP4 E2M1 и FP8 E4M3/E5M
 
 `Generator(seed=None)` использует Philox4x32-10. `manual_seed`/`manual_seed_all` инициализируют генератор по умолчанию для единственного устройства; seed — знаковое или беззнаковое 64-битное целое. `get_rng_state`/`set_rng_state` и методы Generator `get_state`/`set_state` работают с RUDA-состоянием: CPU uint8 тензор из 24 байт, не состояние CUDA RNG. Варианты `_all` используют список из одного состояния.
 
-`uniform_`, `normal_`, `bernoulli_` заполняют RUDA FP32/FP16/BF16 через native random API 1. Параметры конечны, границы упорядочены, стандартное отклонение неотрицательно, вероятность в `[0,1]`. `generator` — RUDA Generator; по умолчанию используется `default_generator`. Зарезервированный counter не используется повторно после ошибки dispatch. `get_amp_supported_dtype` возвращает FP16/BF16, `is_initialized` — состояние инициализации. `register_random_ops` вызывается при импорте, повторная регистрация не нужна. [Исходный код](../../ruda-torch/python/ruda_torch/random.py).
+`uniform_`, `normal_`, `bernoulli_` заполняют RUDA FP32/FP16/BF16 через native random API 1. Параметры конечны, границы упорядочены, стандартное отклонение неотрицательно, вероятность в `[0,1]`. `generator` — RUDA Generator; по умолчанию используется `default_generator`. Зарезервированный counter не используется повторно после ошибки dispatch. `get_amp_supported_dtype` возвращает FP16/BF16, `is_initialized` — состояние инициализации. `register_random_ops` вызывается при импорте, повторная регистрация не нужна. [Исходный код](../../crates/ruda-torch/python/ruda_torch/random.py).
 
 Импорт ruda_torch регистрирует PrivateUse1, другой backend в том же процессе несовместим. ruda:0 и torch.cuda — разные allocations. device_count1/current_device0. is_available означает инициализацию, не всю hardware capability. execution_stats — cumulative counters, не timer.
 

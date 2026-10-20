@@ -8,7 +8,7 @@
 
 `ParallelMesh(data_parallel=..., tensor_parallel=..., pipeline_parallel=...)` 必须覆盖整个已初始化的进程组。shape 为 `(DP, PP, TP)`，坐标为 `(data_rank, pipeline_rank, tensor_rank)`，全局 rank 为 `(data_rank * PP + pipeline_rank) * TP + tensor_rank`。所有 rank 使用相同配置，并按相同顺序创建通信组。`mesh.data`、`mesh.pipeline`、`mesh.tensor` 和 `mesh.stage` 是不同通信范围；`close()` 释放其拥有的组。mesh 不负责启动进程或推断模型的 stage 划分。
 
-源码：[ParallelMesh 与 TensorParallelGroup](../../ruda-torch/python/ruda_torch/parallel_mesh.py)、[ReplicaGroup](../../ruda-torch/python/ruda_torch/distributed_training.py)。
+源码：[ParallelMesh 与 TensorParallelGroup](../../crates/ruda-torch/python/ruda_torch/parallel_mesh.py)、[ReplicaGroup](../../crates/ruda-torch/python/ruda_torch/distributed_training.py)。
 
 ## 张量并行模型转换
 
@@ -25,7 +25,7 @@
 
 `tensor_parallel_state_dict` 通过集合通信在每个 rank 重建完整状态；`load_tensor_parallel_state_dict` 将普通完整字典加载到已准备的分片。完整重建可能占用完整模型的主机内存。大型本地 safetensors 可使用 `load_tensor_parallel_safetensors` 直接填充已分片的 meta 模型；dtype 映射与准确 NF4 目标由调用者提供。
 
-源码：[投影、转换与状态](../../ruda-torch/python/ruda_torch/parallel_training.py)、[流式 checkpoint 加载](../../ruda-torch/python/ruda_torch/parallel_checkpoint_io.py)。
+源码：[投影、转换与状态](../../crates/ruda-torch/python/ruda_torch/parallel_training.py)、[流式 checkpoint 加载](../../crates/ruda-torch/python/ruda_torch/parallel_checkpoint_io.py)。
 
 ## NF4／LoRA 分片与互操作
 
@@ -37,7 +37,7 @@
 - `load_tensor_parallel_bnb_nf4_safetensors` 将预量化 base 流式加载到本地 packed TP 投影。
 - `load_peft_adapter` 按调用者指定的路径加载 PEFT A/B 矩阵；`save_peft_adapter` 将完整矩阵导出到新目录，不推断模型家族的目标路径。
 
-源码：[并行适配器](../../ruda-torch/python/ruda_torch/parallel_adapters.py)、[NF4 文件格式](../../ruda-torch/python/ruda_torch/quantization_interop.py)、[PEFT 文件](../../ruda-torch/python/ruda_torch/adapter_interop.py)。
+源码：[并行适配器](../../crates/ruda-torch/python/ruda_torch/parallel_adapters.py)、[NF4 文件格式](../../crates/ruda-torch/python/ruda_torch/quantization_interop.py)、[PEFT 文件](../../crates/ruda-torch/python/ruda_torch/adapter_interop.py)。
 
 ## FSDP、ZeRO 与准确 Muon 更新
 
@@ -56,7 +56,7 @@
 
 不能对共享同一 loss 的 TP rank 再独立平均，也不能将片段视为完整参数实施全矩阵 Muon。准确构造器、group 和优化器选项见[签名参考](python-api-signatures.md)。
 
-源码：[FSDP／ZeRO](../../ruda-torch/python/ruda_torch/sharded_training.py)、[混合协调](../../ruda-torch/python/ruda_torch/hybrid_parallel.py)、[嵌套 FSDP／TP](../../ruda-torch/python/ruda_torch/sharded_mesh.py)、[分片 Muon](../../ruda-torch/python/ruda_torch/sharded_optim.py)、[TP／mesh Muon](../../ruda-torch/python/ruda_torch/tensor_parallel_optim.py)。
+源码：[FSDP／ZeRO](../../crates/ruda-torch/python/ruda_torch/sharded_training.py)、[混合协调](../../crates/ruda-torch/python/ruda_torch/hybrid_parallel.py)、[嵌套 FSDP／TP](../../crates/ruda-torch/python/ruda_torch/sharded_mesh.py)、[分片 Muon](../../crates/ruda-torch/python/ruda_torch/sharded_optim.py)、[TP／mesh Muon](../../crates/ruda-torch/python/ruda_torch/tensor_parallel_optim.py)。
 
 ## 流水线边界与优化器步
 
@@ -66,7 +66,7 @@
 
 `PipelineTiedParameters` 按显式符号绑定拥有者 stage 上的同一逻辑权重，并校验优化器所有权。使用 trainer 的全 stage 恢复方法；直接重试部分更新的 stage 不是恢复。
 
-源码：[单 tensor 流水线](../../ruda-torch/python/ruda_torch/pipeline_training.py)、[树边界](../../ruda-torch/python/ruda_torch/structured_pipeline.py)、[trainer](../../ruda-torch/python/ruda_torch/pipeline_trainer.py)、[stage 共享权重](../../ruda-torch/python/ruda_torch/pipeline_ties.py)。
+源码：[单 tensor 流水线](../../crates/ruda-torch/python/ruda_torch/pipeline_training.py)、[树边界](../../crates/ruda-torch/python/ruda_torch/structured_pipeline.py)、[trainer](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py)、[stage 共享权重](../../crates/ruda-torch/python/ruda_torch/pipeline_ties.py)。
 
 ## 已提交数据游标与 packed 监督
 
@@ -74,7 +74,7 @@
 
 `TokenBudgetBatchSampler` 按调用者提供的实际 token 成本组批，保留 sampler 顺序。`collate_varlen_causal_lm` 打包显式 labels，不产生跨文档 next-token 目标，也不隐式截断。`PackedCausalLMFinetuner` 使用 flat-token backbone/head 契约；`CausalLMTrainer` 提供完整参数训练，而非 SFTTrainer 的适配器专用快照。
 
-源码：[sampler 与 token 预算](../../ruda-torch/python/ruda_torch/training_data.py)、[因果训练器](../../ruda-torch/python/ruda_torch/causal_finetuning.py)。
+源码：[sampler 与 token 预算](../../crates/ruda-torch/python/ruda_torch/training_data.py)、[因果训练器](../../crates/ruda-torch/python/ruda_torch/causal_finetuning.py)。
 
 ## 完整模型与全 rank checkpoint
 
@@ -86,13 +86,13 @@
 
 PipelineTrainer 的 `save_distributed`／`resume_distributed` 覆盖全部 stage；合并状态恢复接受显式应用 resharding 和可选 stage 变换。checkpoint 文件保存在仓库外。
 
-源码：[完整快照](../../ruda-torch/python/ruda_torch/training_checkpoint.py)、[全 rank generation](../../ruda-torch/python/ruda_torch/distributed_checkpoint.py)、[全 stage 恢复](../../ruda-torch/python/ruda_torch/pipeline_trainer.py)。
+源码：[完整快照](../../crates/ruda-torch/python/ruda_torch/training_checkpoint.py)、[全 rank generation](../../crates/ruda-torch/python/ruda_torch/distributed_checkpoint.py)、[全 stage 恢复](../../crates/ruda-torch/python/ruda_torch/pipeline_trainer.py)。
 
 ## 完整更新自动调优
 
 `TrainingAutotuner` 测量实际训练窗口，搜索 microbatch 与 LM-head chunk 布局，不永久消耗一次优化器更新。试运行保存并恢复参数、优化器/scaler/scheduler、可变状态、RNG、计数器和梯度。快照自身占用内存；必须使用实际目标尺寸，而非缩小的替代输入。`TrainingPlan.apply` 检查 batch 尺寸并保持监督 token 数量。
 
-`PipelineAutotuner` 在不改变 stage mesh 的情况下比较原生 1F1B 与 fill/drain 调度。它与[算子层全栈自动调优](stack-autotuning.md)不同。签名选项、候选预算与策略见 [training_autotune.py](../../ruda-torch/python/ruda_torch/training_autotune.py)。
+`PipelineAutotuner` 在不改变 stage mesh 的情况下比较原生 1F1B 与 fill/drain 调度。它与[算子层全栈自动调优](stack-autotuning.md)不同。签名选项、候选预算与策略见 [training_autotune.py](../../crates/ruda-torch/python/ruda_torch/training_autotune.py)。
 
 ## 注意力选择
 
@@ -104,4 +104,4 @@ PipelineTrainer 的 `save_distributed`／`resume_distributed` 覆盖全部 stage
 | `vocab_parallel_cross_entropy` | 本地连续词表区间，TP rank 的逻辑 targets／顺序相同，可含词表 padding；返回一个逻辑 loss，不是 DP rank 总和。 |
 | `register_transformers_attention` | 显式注册独立 `ruda_` 名称及 Transformers AttentionInterface 的标准 mask 适配器，不修改模型或覆盖内置实现。 |
 
-block score 存储由 tile 限定，但 Transformers 提供的 dense mask 仍可能占用二次方内存。此注册路径不提供输出注意力权重、head mask 或 soft-capped logits。源码：[dense 注意力](../../ruda-torch/python/ruda_torch/attention.py)、[block 注意力](../../ruda-torch/python/ruda_torch/block_attention.py)、[varlen 注意力](../../ruda-torch/python/ruda_torch/varlen_attention.py)、[词表 loss](../../ruda-torch/python/ruda_torch/parallel_loss.py)、[Transformers 注册](../../ruda-torch/python/ruda_torch/transformers_attention.py)。
+block score 存储由 tile 限定，但 Transformers 提供的 dense mask 仍可能占用二次方内存。此注册路径不提供输出注意力权重、head mask 或 soft-capped logits。源码：[dense 注意力](../../crates/ruda-torch/python/ruda_torch/attention.py)、[block 注意力](../../crates/ruda-torch/python/ruda_torch/block_attention.py)、[varlen 注意力](../../crates/ruda-torch/python/ruda_torch/varlen_attention.py)、[词表 loss](../../crates/ruda-torch/python/ruda_torch/parallel_loss.py)、[Transformers 注册](../../crates/ruda-torch/python/ruda_torch/transformers_attention.py)。

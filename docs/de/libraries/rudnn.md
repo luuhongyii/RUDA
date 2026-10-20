@@ -19,7 +19,7 @@ ruDNN bietet neuronale Netzwerkoperationen. Das Cargo-Paket ist `ruDNN` und die 
 |`tensor-normalization`|Universelle Gerätenormalisierung für Modellebenen|
 |`tensor-gated-delta`|Gated-Delta-Berechnung für Hybridarchitekturen wie Qwen3.5|
 
-Aufmerksamkeit und Faltung verfügen jeweils über entsprechende Autotune-Funktionen. Siehe [Cargo.toml](../../../ruDNN/Cargo.toml) und [Modulexporte](../../../ruDNN/src/lib.rs).
+Aufmerksamkeit und Faltung verfügen jeweils über entsprechende Autotune-Funktionen. Siehe [Cargo.toml](../../../crates/ruDNN/Cargo.toml) und [Modulexporte](../../../crates/ruDNN/src/lib.rs).
 
 ## 2. Attention und Faltung
 
@@ -29,7 +29,7 @@ Aufmerksamkeit und Faltung verfügen jeweils über entsprechende Autotune-Funkti
 
 Die Strategien umfassen FlashBlackboxAccelerated, FlashUnit, Fallback und bei aktiviertem Feature Autotune. Ohne Autotuning ist Fallback der Standard, mit Autotuning Autotune. Fallback verwendet mehrere Kernels auf demselben Gerät, kein CPU-Backend.
 
-Passen Sie Layout, Maske und Präzision an die ausgewählte Strategie an. Siehe die [Attention-Schnittstelle](../../../ruDNN/src/attention/tensor/base.rs).
+Passen Sie Layout, Maske und Präzision an die ausgewählte Strategie an. Siehe die [Attention-Schnittstelle](../../../crates/ruDNN/src/attention/tensor/base.rs).
 
 ### Faltung
 
@@ -37,7 +37,7 @@ Passen Sie Layout, Maske und Präzision an die ausgewählte Strategie an. Siehe 
 
 Zu den Strategien gehören Direct, ImplicitGemm und optional Autotune. Der Einstiegspunkt verwendet Direct für die dreidimensionale F32-Faltung. Die gruppierte Faltung verwendet auch Direct, wenn ImplicitGemm ausgewählt ist. Der Strategieparameter ist daher nicht immer eine strikte Anforderung, einen Algorithmus beizubehalten.
 
-Das gleiche Modul stellt conv_data_backward und conv_weight_backward bereit. Überprüfen Sie Form, Optionen und Ausführungsanforderungen für jede Richtung. Siehe die [Faltungsschnittstelle](../../../ruDNN/src/convolution/tensor/base.rs).
+Das gleiche Modul stellt conv_data_backward und conv_weight_backward bereit. Überprüfen Sie Form, Optionen und Ausführungsanforderungen für jede Richtung. Siehe die [Faltungsschnittstelle](../../../crates/ruDNN/src/convolution/tensor/base.rs).
 
 ## 3. MoE-Workflow
 
@@ -71,7 +71,7 @@ Eingabetokens haben die Form [T, H]; gate und up haben [E, I, H], down hat [E, H
 
 Die Verteilung verwirft keine Tokens zur Durchsetzung einer Kapazitätsgrenze. Die atomare Zuweisungsreihenfolge innerhalb eines Experten ist nicht festgelegt; eine gespeicherte Zuordnung stellt die Token-Reihenfolge wieder her. Der Vorwärtseinstiegspunkt nimmt vorberechnete Logits entgegen, statt die Gate-Projektion des Modells auszuführen oder Gewichtsdateien zu laden.
 
-Quelle: [Routing](../../../ruDNN/src/moe/routing.rs), [Dispatch and Combine](../../../ruDNN/src/moe/dispatch.rs), [Experten](../../../ruDNN/src/moe/experts.rs) und [Tests](../../../ruDNN/src/moe/tests.rs).
+Quelle: [Routing](../../../crates/ruDNN/src/moe/routing.rs), [Dispatch and Combine](../../../crates/ruDNN/src/moe/dispatch.rs), [Experten](../../../crates/ruDNN/src/moe/experts.rs) und [Tests](../../../crates/ruDNN/src/moe/tests.rs).
 
 ## 6. MoE aufrufen
 

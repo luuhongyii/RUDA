@@ -92,4 +92,4 @@ For sparse/dense matrix multiplication, use `csrmm(&matrix, operation_b, alpha, 
 
 These computation methods return `Result`. Value tensors used in framework sparse operations must be unquantized.
 
-API reference: [Device CSR](../../../ruSPARSE/src/tensor/mod.rs), [Framework CSR](../../../ruda-tensor/src/api/sparse.rs).
+API reference: [Device CSR](../../../crates/ruSPARSE/src/tensor/mod.rs), [Framework CSR](../../../crates/ruda-tensor/src/api/sparse.rs).

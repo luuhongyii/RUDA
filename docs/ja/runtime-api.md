@@ -6,16 +6,16 @@
 
 汎用ランタイムは `ruda::runtime` にあり、`ruda/runtime` 機能によって有効になります。各バックエンドには、対応するドライバー クレートも必要です。
 
-CUDA は shape と strides がともに空のランク 0 コピー記述子を、空テンソルではなく 1 スカラーとして扱います。長さ 0 の軸がある場合は空の転送です。[CUDA コピー実装](../../ruda-driver-cuda/src/execution/command.rs)。
+CUDA は shape と strides がともに空のランク 0 コピー記述子を、空テンソルではなく 1 スカラーとして扱います。長さ 0 の軸がある場合は空の転送です。[CUDA コピー実装](../../crates/ruda-driver-cuda/src/execution/command.rs)。
 
 ## 1. コアの種類
 
 |タイプ|責任|定義|
 | --- | --- | --- |
-|`Runtime`|アソシエイト コンパイラー、サーバー、およびデバイス。デバイスクライアントを提供します|[バックエンド.rs](../../ruda-runtime/src/runtime/backend.rs)|
-|`ComputeClient<R>`|割り当て、カーネルの送信、リードバック、同期、および機能のクエリ|[client.rs](../../ruda-runtime/src/runtime/client.rs)|
-|`ComputeServer`|バックエンド実行コントラクト|[サーバーモジュール](../../ruda-runtime/src/runtime/server/mod.rs)|
-|`RudaTensor<R>`|デバイス ストレージとテンソル メタデータ|[テンソル定義](../../ruda-kernel/src/tensor/base.rs)|
+|`Runtime`|アソシエイト コンパイラー、サーバー、およびデバイス。デバイスクライアントを提供します|[バックエンド.rs](../../crates/ruda-runtime/src/runtime/backend.rs)|
+|`ComputeClient<R>`|割り当て、カーネルの送信、リードバック、同期、および機能のクエリ|[client.rs](../../crates/ruda-runtime/src/runtime/client.rs)|
+|`ComputeServer`|バックエンド実行コントラクト|[サーバーモジュール](../../crates/ruda-runtime/src/runtime/server/mod.rs)|
+|`RudaTensor<R>`|デバイス ストレージとテンソル メタデータ|[テンソル定義](../../crates/ruda-kernel/src/tensor/base.rs)|
 
 `R::client(&device)` はランタイムのクライアントを取得します。 `R::Device` はデバイスのタイプを決定します。ランタイム タイプを共有しても、異なる物理デバイス上のストレージが交換可能になるわけではありません。
 

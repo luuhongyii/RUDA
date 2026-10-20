@@ -51,7 +51,7 @@ def main():
     try:
         import torch
         report['torch']=torch.__version__;report['python']=sys.version
-        prefix='ruda-torch/python/tests/'
+        prefix='crates/ruda-torch/python/tests/'
         if args.phase=='core':
             tests('architecture-numerics',[prefix+'test_'+n+'.py' for n in
                 ['architecture_primitives','compressed_attention','muon_optimizer','hybrid_architecture_training','training_host']])
@@ -64,7 +64,7 @@ def main():
             library=args.cpp_library
             if library is None:
                 build=out/'cpp'
-                if run('cpp-build',[sys.executable,'ruda-torch/tools/check_cpp_bridge.py','--output',str(build),'--static-graph'],timeout=300):
+                if run('cpp-build',[sys.executable,'crates/ruda-torch/tools/check_cpp_bridge.py','--output',str(build),'--static-graph'],timeout=300):
                     raise RuntimeError('C++ build/protocol checks failed')
                 details=json.loads((build/'result.json').read_text());report['cpp_build']=details
                 report['cpp_compiled']=bool(details['cpp_compiled'])
@@ -81,7 +81,7 @@ def main():
                 ('cpp-architecture-dispatch','test_architecture_dispatch_cpp.py')]:
                 tests(label,[prefix+file],cpp_env)
         elif args.phase=='examples':
-            example='ruda-torch/python/examples/train_hybrid_attention.py'
+            example='crates/ruda-torch/python/examples/train_hybrid_attention.py'
             for label,flags in [('example-eager',['--warmup-steps','2','--steps','3']),
                                 ('example-compiled',['--compile','--warmup-steps','1','--steps','2'])]:
                 target=out/(label+'.json')
@@ -92,8 +92,8 @@ def main():
                 report[label]=details
         elif args.phase=='gpu':
             target=out/'device-acceptance.json'
-            native_env=dict(env,PYTHONPATH=str(root/'ruda-torch/python')+os.pathsep+env.get('PYTHONPATH',''))
-            rc=run('device-acceptance',[sys.executable,'ruda-torch/python/examples/train_hybrid_attention.py',
+            native_env=dict(env,PYTHONPATH=str(root/'crates/ruda-torch/python')+os.pathsep+env.get('PYTHONPATH',''))
+            rc=run('device-acceptance',[sys.executable,'crates/ruda-torch/python/examples/train_hybrid_attention.py',
                 '--warmup-steps','1','--steps','2','--compile','--output',str(target)],native_env)
             details=json.loads(target.read_text()) if target.exists() else {'error':'no device report'}
             report['device']=details;report['gpu_executed']=bool(details.get('gpu_executed'))

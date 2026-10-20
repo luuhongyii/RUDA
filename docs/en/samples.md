@@ -4,7 +4,7 @@
 
 ## 1. NVIDIA runtime example
 
-Entry point: [ptx-runtime](../../ruda-driver-cuda/examples/ptx_runtime.rs).
+Entry point: [ptx-runtime](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs).
 
 The basic case performs FP32 addition twice at each length: 1, 63, 64, 65, and 257. It checks every result and 16 tail sentinel values. It demonstrates device selection, upload, argument binding, tail bounds, readback, and repeated execution.
 
@@ -20,13 +20,13 @@ cargo run --locked -p ruda-driver-cuda --features direct-ptx --example ptx-runti
 
 | Argument | Behavior | Example source |
 | --- | --- | --- |
-| `--tensor` | Tensor metadata and layout checks | [tensor.rs](../../ruda-driver-cuda/examples/ptx_runtime/tensor.rs) |
-| `--shared` | Shared memory checks | [shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs) |
-| `--half` | FP16/BF16 checks | [half_precision.rs](../../ruda-driver-cuda/examples/ptx_runtime/half_precision.rs) |
-| `--bitwise` | Bitwise operation checks | [bitwise.rs](../../ruda-driver-cuda/examples/ptx_runtime/bitwise.rs) |
-| `--shared-over-limit` | Shared memory limit diagnostics | [shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs) |
-| `--expect-cold` | Asserts compilation occurred without a disk cache hit | [Main entry point](../../ruda-driver-cuda/examples/ptx_runtime.rs) |
-| `--expect-warm` | Asserts a disk cache hit without recompilation | [Main entry point](../../ruda-driver-cuda/examples/ptx_runtime.rs) |
+| `--tensor` | Tensor metadata and layout checks | [tensor.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/tensor.rs) |
+| `--shared` | Shared memory checks | [shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs) |
+| `--half` | FP16/BF16 checks | [half_precision.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/half_precision.rs) |
+| `--bitwise` | Bitwise operation checks | [bitwise.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/bitwise.rs) |
+| `--shared-over-limit` | Shared memory limit diagnostics | [shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs) |
+| `--expect-cold` | Asserts compilation occurred without a disk cache hit | [Main entry point](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs) |
+| `--expect-warm` | Asserts a disk cache hit without recompilation | [Main entry point](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs) |
 
 `--shared-over-limit` takes a separate early-return branch. Do not combine it with cold/warm cache checks.
 

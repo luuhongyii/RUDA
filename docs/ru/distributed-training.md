@@ -15,7 +15,7 @@ CudaDevice { index } выбирает CUDA ordinal, видимый процес�
 - Согласуйте TCP/heartbeat timeout, rails и transport. Автоматический launcher по соглашениям torchrun/NCCL не предоставляется.
 - TCP Tensor adapter по умолчанию host-staged. TCP peer не означает автоматически GPU P2P/NVLink/RDMA.
 
-Cargo: ruCCL, ruda-autodiff, ruda-nn, ruda-optim с collective, ruda-tensor-device с cuda-default. [Полная функция инициализации](../en/distributed-training.md#rendezvous-and-rank-connection), [API подключения](../../ruCCL/src/rank/communicator/connect.rs). Другой native transport реализует DataParallelCommunicator с упорядоченными metadata и контрактами broadcast/reduce.
+Cargo: ruCCL, ruda-autodiff, ruda-nn, ruda-optim с collective, ruda-tensor-device с cuda-default. [Полная функция инициализации](../en/distributed-training.md#rendezvous-and-rank-connection), [API подключения](../../crates/ruCCL/src/rank/communicator/connect.rs). Другой native transport реализует DataParallelCommunicator с упорядоченными metadata и контрактами broadcast/reduce.
 
 ## Последовательность обучения
 

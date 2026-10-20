@@ -52,8 +52,8 @@ def main():
         result=run(name,command,output,args.timeout,min_tests);checks.append(result);print(f"{name}: {result['status']}",flush=True);return result
     if 'reference' in suites:
         execute('stack-python-reference',[sys.executable,'tools/stack_autotune/reference_checks.py'])
-        execute('v1-python-reference',[sys.executable,'ruLLM/tools/verify_reference.py'])
-        execute('v2-python-reference',[sys.executable,'ruLLM/tools/verify_runtime_reference.py'])
+        execute('v1-python-reference',[sys.executable,'crates/ruLLM/tools/verify_reference.py'])
+        execute('v2-python-reference',[sys.executable,'crates/ruLLM/tools/verify_runtime_reference.py'])
     if 'core' in suites:
         with tempfile.TemporaryDirectory(prefix='ruda-autotune-') as directory:
             binary=str(Path(directory)/('tests.exe' if os.name=='nt' else 'tests'))

@@ -84,12 +84,12 @@ def main() -> int:
     logs.mkdir(parents=True, exist_ok=True)
     path = logs/'results.json'
     if path.exists(): parser.error('results.json already exists; choose a fresh log directory')
-    source_files = sorted((ROOT/'ruda-optim/src/fused_adamw').glob('*.rs'))
-    source_files += [ROOT/'ruda-optim/Cargo.toml', ROOT/'Cargo.lock', Path(__file__).resolve()]
+    source_files = sorted((ROOT/'crates/ruda-optim/src/fused_adamw').glob('*.rs'))
+    source_files += [ROOT/'crates/ruda-optim/Cargo.toml', ROOT/'Cargo.lock', Path(__file__).resolve()]
     source_files += sorted((ROOT/'tools/gradient_guard').glob('*.*'))
-    source_files += [ROOT/'ruda-optim/tests/gradient_guard_cuda.rs', ROOT/'ruda-optim/examples/gradient_guard_bench.rs', ROOT/'ruda-optim/examples/gradient_guard/staged.rs',
-                     ROOT/'ruda-optim/tests/fused_adamw/common.rs', ROOT/'ruda-optim/tests/fused_adamw_cuda.rs',
-                     ROOT/'ruda-optim/examples/fused_adamw/staged.rs']
+    source_files += [ROOT/'crates/ruda-optim/tests/gradient_guard_cuda.rs', ROOT/'crates/ruda-optim/examples/gradient_guard_bench.rs', ROOT/'crates/ruda-optim/examples/gradient_guard/staged.rs',
+                     ROOT/'crates/ruda-optim/tests/fused_adamw/common.rs', ROOT/'crates/ruda-optim/tests/fused_adamw_cuda.rs',
+                     ROOT/'crates/ruda-optim/examples/fused_adamw/staged.rs']
     report = {'schema':'ruda.gradient_guard.validation.v1','suite':args.suite,'started_utc':now.isoformat(),'status':'running',
               'plans':public,'results':[], 'performance_measured':False,
               'source_sha256':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files},

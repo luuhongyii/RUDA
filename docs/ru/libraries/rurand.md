@@ -12,10 +12,10 @@ ruRAND генерирует тензоры устройств с равноме�
 
 ```toml
 [dependencies]
-rurand = { package = "ruRAND", path = "../RUDA/ruRAND", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rurand = { package = "ruRAND", path = "../RUDA/crates/ruRAND", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. Генерация случайных тензоров
@@ -118,4 +118,4 @@ fn fill_uniform<R: Runtime>(
 
 Функции тензорного уровня вызывают панику, если при запуске возвращается ошибка; базовая точка входа выше возвращает `Result<(), LaunchError>`. Успешная отправка не означает, что выполнение GPU завершено. Считайте тензор обратно или дождитесь синхронизации клиента. `into_data_sync` паникует при сбое чтения; используйте асинхронный `into_data(tensor).await` для распространения ошибок обратного чтения.
 
-API Ссылка: [Тензорные интерфейсы](../../../ruRAND/src/tensor/mod.rs), [Исходное состояние](../../../ruRAND/src/state.rs), [Распределения](../../../ruRAND/src/distributions/mod.rs).
+API Ссылка: [Тензорные интерфейсы](../../../crates/ruRAND/src/tensor/mod.rs), [Исходное состояние](../../../crates/ruRAND/src/state.rs), [Распределения](../../../crates/ruRAND/src/distributions/mod.rs).

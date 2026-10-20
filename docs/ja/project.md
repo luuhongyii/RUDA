@@ -87,7 +87,7 @@ x = torch.arange(4, dtype=torch.float32).to("ruda:0")
 print((x + x).cpu())
 ```
 
-[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) は Python パッケージ、C++ 拡張、Rust ネイティブライブラリを含む Linux／Windows x86_64 wheel を配布します。両方とも CPython 3.13 が必要で、Linux は PyTorch `2.10.0+cu126`（Ubuntu 24.04 でビルド）、Windows は `2.13.0+cu130` を使用します。Python パッケージのバージョンは `ruda-torch==0.1.1` です。[Release インストール手順](../../ruda-torch/README.md#release-wheels)を参照してください。`ruda-torch-native` はソースからビルドするコンポーネントで、crates.io パッケージではありません。
+[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) は Python パッケージ、C++ 拡張、Rust ネイティブライブラリを含む Linux／Windows x86_64 wheel を配布します。両方とも CPython 3.13 が必要で、Linux は PyTorch `2.10.0+cu126`（Ubuntu 24.04 でビルド）、Windows は `2.13.0+cu130` を使用します。Python パッケージのバージョンは `ruda-torch==0.1.1` です。[Release インストール手順](../../crates/ruda-torch/README.md#release-wheels)を参照してください。`ruda-torch-native` はソースからビルドするコンポーネントで、crates.io パッケージではありません。
 
 ## スタックの構成
 

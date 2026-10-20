@@ -6,7 +6,7 @@
 
 ## 1. Build and install
 
-To skip local Rust/C++ compilation, use the [v0.1.96 release wheels](../../ruda-torch/README.md#release-wheels): CPython 3.13, Linux x86_64 with PyTorch `2.10.0+cu126` (Ubuntu 24.04 build), or Windows x86_64 with `2.13.0+cu130`. Install the matching wheel/PyTorch pair, then set the compiler environment below. Otherwise, build from source:
+To skip local Rust/C++ compilation, use the [v0.1.96 release wheels](../../crates/ruda-torch/README.md#release-wheels): CPython 3.13, Linux x86_64 with PyTorch `2.10.0+cu126` (Ubuntu 24.04 build), or Windows x86_64 with `2.13.0+cu130`. Install the matching wheel/PyTorch pair, then set the compiler environment below. Otherwise, build from source:
 
 Prepare the [NVIDIA build environment](getting-started.md), Python with PyTorch and setuptools, and a C++20 compiler. On Windows, run in an x64 MSVC developer shell. From the repository root:
 
@@ -33,7 +33,7 @@ export RUDA_PTX_VERSION=8.0
 
 Choose a [PTX version](ptx.md) supported by your GPU and driver. `RUDA_CUDA_COMPILER=nvrtc` selects the CUDA C++/NVRTC path instead.
 
-The loader searches for a packaged native library, then the repository's debug library. Set `RUDA_TORCH_LIBRARY` before import when using a separately built release library or a different path; wheels already include their library. The Rust library and C++ extension must both use ABI 10. For Linux/Windows wheels and the separate Linux/Colab bundles, follow the [package installation guide](../../ruda-torch/README.md#build-and-install); use its specified Python, PyTorch, and platform versions.
+The loader searches for a packaged native library, then the repository's debug library. Set `RUDA_TORCH_LIBRARY` before import when using a separately built release library or a different path; wheels already include their library. The Rust library and C++ extension must both use ABI 10. For Linux/Windows wheels and the separate Linux/Colab bundles, follow the [package installation guide](../../crates/ruda-torch/README.md#build-and-install); use its specified Python, PyTorch, and platform versions.
 
 ## 2. Transfer data and read a result
 

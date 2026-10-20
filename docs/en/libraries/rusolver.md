@@ -53,7 +53,7 @@ Standalone LU/Cholesky factor results retain partial factors on failure and repo
 
 The [PyTorch linalg backend](../native-pytorch-api.md#scientific-operations) registers standard solve/factorization, QR/eigen/SVD, inverse/determinant and least-squares APIs, with PyTorch's own autograd formulas. PyTorch pivots are converted to one-based int32. Its least-squares driver is only `None`/`gels`; SVD accepts `None` with native Jacobi, not named NVIDIA drivers. Full Q/full SVD bases are explicit, not thin substitutes.
 
-Sources: [factorization](../../../ruSOLVER/src/tensor/factorization.rs), [factor reuse and least squares](../../../ruSOLVER/src/tensor/linear.rs), [Jacobi](../../../ruSOLVER/src/tensor/jacobi.rs), [Python registration](../../../ruda-torch/python/ruda_torch/linalg.py).
+Sources: [factorization](../../../crates/ruSOLVER/src/tensor/factorization.rs), [factor reuse and least squares](../../../crates/ruSOLVER/src/tensor/linear.rs), [Jacobi](../../../crates/ruSOLVER/src/tensor/jacobi.rs), [Python registration](../../../crates/ruda-torch/python/ruda_torch/linalg.py).
 
 ## Small batched Cholesky device contract
 

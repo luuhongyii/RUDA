@@ -94,4 +94,4 @@ Für die Multiplikation einer dünn besetzten/dichten Matrix verwenden Sie `csrm
 
 Diese Berechnungsmethoden geben `Result` zurück. Werttensoren, die in Framework-Sparse-Operationen verwendet werden, müssen unquantisiert sein.
 
-API-Referenz: [Gerät CSR](../../../ruSPARSE/src/tensor/mod.rs), [Framework CSR](../../../ruda-tensor/src/api/sparse.rs).
+API-Referenz: [Gerät CSR](../../../crates/ruSPARSE/src/tensor/mod.rs), [Framework CSR](../../../crates/ruda-tensor/src/api/sparse.rs).

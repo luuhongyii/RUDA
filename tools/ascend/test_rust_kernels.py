@@ -12,7 +12,7 @@ def main():
     def save():(out/'summary.json').write_text(json.dumps(report,indent=2)+'\n')
     cc=shutil.which('rustc')
     if cc is None:report['status']='missing_rustc';save();print('missing rustc; no Rust test executed',file=sys.stderr);return 1
-    crate=ROOT/'ruda-ascend-kernels';exe=out/'rust-device-program-tests'
+    crate=ROOT/'crates/ruda-ascend-kernels';exe=out/'rust-device-program-tests'
     commands=[('compile',[cc,'--edition=2024','--test','-C','opt-level=2',str(crate/'src/lib.rs'),'-o',str(exe)]),
               ('test',[str(exe),'--nocapture'])]
     for label,cmd in commands:

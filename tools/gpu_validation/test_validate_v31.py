@@ -35,7 +35,7 @@ def test_select_compiled_binary():
 def test_actual_source_test_names_match_inventory():
  import re
  for package,target,feature,prefix,names,marker,bf16 in v.SCOPES:
-  path=v.ROOT/('ruBLAS/src/tensor_grouped/tests_backward.rs' if package=='rublas' else 'ruDNN/src/moe/tests_v31.rs')
+  path=v.ROOT/('crates/ruBLAS/src/tensor_grouped/tests_backward.rs' if package=='rublas' else 'crates/ruDNN/src/moe/tests_v31.rs')
   actual=set(re.findall(r'fn (v31_\w+)\(',path.read_text()))
   assert actual==names and bf16 in path.read_text()
 

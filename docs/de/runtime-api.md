@@ -6,16 +6,16 @@
 
 Die allgemeine Laufzeit befindet sich in `ruda::runtime` und wird durch die Funktion `ruda/runtime` aktiviert. Jedes Backend benötigt außerdem seine entsprechende Treiberkiste.
 
-CUDA behandelt einen Kopierdeskriptor mit leerer Form und leeren Strides als einen Skalar, nicht als leeren Tensor. Eine Achse der Länge null beschreibt dagegen eine leere Übertragung. Siehe [CUDA-Kopierimplementierung](../../ruda-driver-cuda/src/execution/command.rs).
+CUDA behandelt einen Kopierdeskriptor mit leerer Form und leeren Strides als einen Skalar, nicht als leeren Tensor. Eine Achse der Länge null beschreibt dagegen eine leere Übertragung. Siehe [CUDA-Kopierimplementierung](../../crates/ruda-driver-cuda/src/execution/command.rs).
 
 ## 1. Kerntypen
 
 |Typ|Verantwortung|Definition|
 | --- | --- | --- |
-|`Runtime`|verbindet Compiler, Server und Gerät; stellt Geräte-Clients bereit|[backend.rs](../../ruda-runtime/src/runtime/backend.rs)|
-|`ComputeClient<R>`|Zuweisung, Kernel-Übermittlung, Rücklesung, Synchronisierung und Funktionsabfragen|[client.rs](../../ruda-runtime/src/runtime/client.rs)|
-|`ComputeServer`|Backend-Ausführungsvertrag|[Servermodul](../../ruda-runtime/src/runtime/server/mod.rs)|
-|`RudaTensor<R>`|Gerätespeicher und Tensor-Metadaten|[Tensordefinition](../../ruda-kernel/src/tensor/base.rs)|
+|`Runtime`|verbindet Compiler, Server und Gerät; stellt Geräte-Clients bereit|[backend.rs](../../crates/ruda-runtime/src/runtime/backend.rs)|
+|`ComputeClient<R>`|Zuweisung, Kernel-Übermittlung, Rücklesung, Synchronisierung und Funktionsabfragen|[client.rs](../../crates/ruda-runtime/src/runtime/client.rs)|
+|`ComputeServer`|Backend-Ausführungsvertrag|[Servermodul](../../crates/ruda-runtime/src/runtime/server/mod.rs)|
+|`RudaTensor<R>`|Gerätespeicher und Tensor-Metadaten|[Tensordefinition](../../crates/ruda-kernel/src/tensor/base.rs)|
 
 `R::client(&device)` ruft den Client der Laufzeit ab. `R::Device` bestimmt den Gerätetyp; Durch die gemeinsame Nutzung eines Laufzeittyps wird der Speicher auf verschiedenen physischen Geräten nicht austauschbar.
 

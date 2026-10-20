@@ -87,7 +87,7 @@ x = torch.arange(4, dtype=torch.float32).to("ruda:0")
 print((x + x).cpu())
 ```
 
-[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) enthält Linux- und Windows-x86_64-Wheels mit Python-Paket, C++-Erweiterung und nativer Rust-Bibliothek. Beide benötigen CPython 3.13: Linux nutzt PyTorch `2.10.0+cu126` (Build auf Ubuntu 24.04), Windows `2.13.0+cu130`. Die Python-Paketversion ist `ruda-torch==0.1.1`; siehe [Release-Installation](../../ruda-torch/README.md#release-wheels). `ruda-torch-native` wird aus dem Quellcode erstellt und ist kein crates.io-Paket.
+[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) enthält Linux- und Windows-x86_64-Wheels mit Python-Paket, C++-Erweiterung und nativer Rust-Bibliothek. Beide benötigen CPython 3.13: Linux nutzt PyTorch `2.10.0+cu126` (Build auf Ubuntu 24.04), Windows `2.13.0+cu130`. Die Python-Paketversion ist `ruda-torch==0.1.1`; siehe [Release-Installation](../../crates/ruda-torch/README.md#release-wheels). `ruda-torch-native` wird aus dem Quellcode erstellt und ist kein crates.io-Paket.
 
 ## Aufbau des Stacks
 

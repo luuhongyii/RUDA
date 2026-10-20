@@ -13,16 +13,16 @@ on:
   pull_request:
     # Host guards read sources from every crate listed here; keep in sync with tools/gpu_validation.
     paths:
-      - 'ruda-driver-cuda/**'
-      - 'ruda-driver-hip/**'
-      - 'ruda-kernel/**'
-      - 'ruda-kernel-macros/**'
-      - 'ruda-compiler/**'
-      - 'ruda-communication/**'
-      - 'ruda-torch/**'
-      - 'ruBLAS/**'
-      - 'ruDNN/**'
-      - 'ruLLM/**'
+      - 'crates/ruda-driver-cuda/**'
+      - 'crates/ruda-driver-hip/**'
+      - 'crates/ruda-kernel/**'
+      - 'crates/ruda-kernel-macros/**'
+      - 'crates/ruda-compiler/**'
+      - 'crates/ruda-communication/**'
+      - 'crates/ruda-torch/**'
+      - 'crates/ruBLAS/**'
+      - 'crates/ruDNN/**'
+      - 'crates/ruLLM/**'
       - 'tools/gpu_validation/**'
       - '.github/workflows/native-graph-v21.yml'
 permissions:
@@ -41,7 +41,7 @@ jobs:
         run: |
           python3 -m venv .v21-venv
           .v21-venv/bin/python -m pip install pytest==9.0.2
-          .v21-venv/bin/python -m pytest -q ruda-driver-cuda/tests/host tools/gpu_validation
+          .v21-venv/bin/python -m pytest -q crates/ruda-driver-cuda/tests/host tools/gpu_validation
       - name: Full native crate and new real-device targets must compile
         run: |
           cargo test --locked -p ruda-driver-cuda --no-default-features --features std,direct-ptx --lib execution::graph_topology::tests

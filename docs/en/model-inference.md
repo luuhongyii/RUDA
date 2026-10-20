@@ -65,9 +65,9 @@ For an application directory alongside the `RUDA` source directory, use these de
 
 ```toml
 [dependencies]
-rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
-ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rullm = { package = "ruda-llm", path = "../RUDA/crates/ruLLM", features = ["nvidia"] }
+ruda-tensor-device = { path = "../RUDA/crates/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"
 
 ```
@@ -239,7 +239,7 @@ To integrate your own batch executor, use `ContinuousBatchScheduler`:
 
 The scheduler manages requests and page-allocation metadata. The caller's executor owns device KV storage and model execution. Use `token_matrix()`, `context_lengths()`, and `flattened_block_table()` to construct batch inputs. Complete or cancel an outstanding batch before calling `schedule()` again.
 
-API reference: [ruLLM exports](../../ruLLM/src/lib.rs), [Generation options](../../ruLLM/src/generation.rs), [Scheduler](../../ruLLM/src/continuous_batch.rs).
+API reference: [ruLLM exports](../../crates/ruLLM/src/lib.rs), [Generation options](../../crates/ruLLM/src/generation.rs), [Scheduler](../../crates/ruLLM/src/continuous_batch.rs).
 
 ## Paged Llama/Qwen2 execution
 
@@ -272,7 +272,7 @@ The dense packed path also uses tiled attention for long prefills and windowed a
 
 ## OpenAI-compatible HTTP server
 
-The [NVIDIA example](../../ruLLM/examples/qwen2_openai_server.rs) uses `serve_openai` and the paged runner. It needs the same local floating-point Qwen2/Qwen2.5 files as generation, uses BF16, and does not require `--features serving`:
+The [NVIDIA example](../../crates/ruLLM/examples/qwen2_openai_server.rs) uses `serve_openai` and the paged runner. It needs the same local floating-point Qwen2/Qwen2.5 files as generation, uses BF16, and does not require `--features serving`:
 
 ```powershell
 $env:RUDA_CUDA_COMPILER = 'nvrtc'

@@ -1,6 +1,6 @@
 # 原生 PyTorch API 参考
 
-[文档目录](README.md) · [包指南](../../ruda-torch/README.md) · [English](../en/native-pytorch-api.md)
+[文档目录](README.md) · [包指南](../../crates/ruda-torch/README.md) · [English](../en/native-pytorch-api.md)
 
 [全部公开签名](python-api-signatures.md) · [并行训练、数据与恢复](parallel-and-data.md)
 
@@ -18,7 +18,7 @@
 
 可用 `RUDA_TORCH_CUBLAS_LIBRARY`、`RUDA_TORCH_CUBLASLT_LIBRARY`、`RUDA_TORCH_CUSOLVER_LIBRARY`、`RUDA_TORCH_CUFFT_LIBRARY` 指定库路径；`RUDA_TORCH_DLL_DIR` 增加搜索目录。CUDA 驱动加载还接受 `RUDA_TORCH_CUDA_LIBRARY`。
 
-源码构建的 wheel 元数据绑定编译时的 Python 次版本和准确 PyTorch 版本。改变构建环境时须一起重建 Rust 库和 C++ 扩展；可选分发注册不代表任意 PyTorch 版本均兼容。源码：[后端选择](../../ruda-torch/python/ruda_torch/math_backend.py)、[动态库加载](../../ruda-torch/python/ruda_torch/_vendor_runtime.py)、[构建元数据](../../ruda-torch/python/setup.py)。
+源码构建的 wheel 元数据绑定编译时的 Python 次版本和准确 PyTorch 版本。改变构建环境时须一起重建 Rust 库和 C++ 扩展；可选分发注册不代表任意 PyTorch 版本均兼容。源码：[后端选择](../../crates/ruda-torch/python/ruda_torch/math_backend.py)、[动态库加载](../../crates/ruda-torch/python/ruda_torch/_vendor_runtime.py)、[构建元数据](../../crates/ruda-torch/python/setup.py)。
 
 ## 随机数生成器与可恢复状态
 
@@ -42,13 +42,13 @@ r.uniform_(x, generator=generator)
 torch.testing.assert_close(x.cpu(), first, rtol=0, atol=0)
 ```
 
-源码：[生成器与注册](../../ruda-torch/python/ruda_torch/random.py)、[设备／RNG 包装](../../ruda-torch/python/ruda_torch/__init__.py)。
+源码：[生成器与注册](../../crates/ruda-torch/python/ruda_torch/random.py)、[设备／RNG 包装](../../crates/ruda-torch/python/ruda_torch/__init__.py)。
 
 ## 设备与组件契约
 
 先导入 `ruda_torch`，再创建 `ruda:0` 张量。同一进程不能已经注册其他 PrivateUse1 后端。`is_available()` 表示集成已初始化，不是 GPU 指令支持的完整清单；`device_count()` 为 1，`current_device()` 为 0。`synchronize(device=None)` 仅接受原生设备并等待完成。`execution_stats()` 返回累计内核、传输及部分库调用计数，不是计时器或 autotune 结果。
 
-Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、training 4、router 1、sequence 1、NF4 decode 1、NF4 matmul 1、scientific 1、BLAS 1、linalg 1、FFT 1、packed quantization 1、quantized paged attention 1。Paged backward 接受原生 API 1 或 2 及兼容桥接，ordered backward 要求 2；仅匹配基础 ABI 不表示具备全部扩展。使用匹配的[源码构建、Release wheel 或预编译包](../../ruda-torch/README.md#build-and-install)。
+Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、training 4、router 1、sequence 1、NF4 decode 1、NF4 matmul 1、scientific 1、BLAS 1、linalg 1、FFT 1、packed quantization 1、quantized paged attention 1。Paged backward 接受原生 API 1 或 2 及兼容桥接，ordered backward 要求 2；仅匹配基础 ABI 不表示具备全部扩展。使用匹配的[源码构建、Release wheel 或预编译包](../../crates/ruda-torch/README.md#build-and-install)。
 
 原生 eager 后端不安装通用 CPU 回退。算子不支持、能力缺失及设备错误直接传播。CUDA 与 RUDA 张量使用不同分配，不能因为在同一 GPU 上就混用。
 
@@ -89,9 +89,9 @@ Rust／C++ 要求基础 ABI 10。可选功能各自协商版本：graph 3、trai
 
 QR 支持 `reduced`、`complete`、`r`；complete QR 与 `svd(full_matrices=True)` 返回完整正交基。`geqrf` 和 QR 的 `r` 模式保留 PyTorch 不支持 backward 的行为。原生 RUDA SVD 使用单边 Jacobi，仅接受 `driver=None`；显式 NVIDIA SVD 接受 `None`、`gesvdj`、`gesvd`，不接受 `gesvda`。最小二乘要求满秩，仅接受 `driver=None`／`gels`，使用基于 QR 的求解，不替换成正规方程或秩揭示驱动。
 
-一般特征问题对 FP32／complex64 输入返回 complex64，对 FP64／complex128 输入返回 complex128。LDL 返回 int32 主元；`ldl_solve` 要求主元 shape 等于 `LD.shape[:-1]`，支持对称或 Hermitian 模式。矩阵指数还接受 FP16／BF16／complex32。显式 NVIDIA solver 路径未实现 LDL、一般 eig 或矩阵指数，会返回不支持的 command 错误。具体 dtype 和路径契约见 [linalg 分发](../../ruda-torch/python/ruda_torch/linalg.py)及 [NVIDIA solver 分发](../../ruda-torch/python/ruda_torch/_vendor_solver.py)。
+一般特征问题对 FP32／complex64 输入返回 complex64，对 FP64／complex128 输入返回 complex128。LDL 返回 int32 主元；`ldl_solve` 要求主元 shape 等于 `LD.shape[:-1]`，支持对称或 Hermitian 模式。矩阵指数还接受 FP16／BF16／complex32。显式 NVIDIA solver 路径未实现 LDL、一般 eig 或矩阵指数，会返回不支持的 command 错误。具体 dtype 和路径契约见 [linalg 分发](../../crates/ruda-torch/python/ruda_torch/linalg.py)及 [NVIDIA solver 分发](../../crates/ruda-torch/python/ruda_torch/_vendor_solver.py)。
 
-`torch.sparse.spsolve(A, B, left=True)` 的原生 CSR 路径要求 A 为非 batch 的 FP32／FP64 方阵，B 为同 dtype 的一维 strided 右端项；CSR 索引为宽度一致的 int32／int64。拒绝 `left=False`，显式 NVIDIA 路径不可用。见[稀疏求解](../../ruda-torch/python/ruda_torch/_sparse_solve.py)。
+`torch.sparse.spsolve(A, B, left=True)` 的原生 CSR 路径要求 A 为非 batch 的 FP32／FP64 方阵，B 为同 dtype 的一维 strided 右端项；CSR 索引为宽度一致的 int32／int64。拒绝 `left=False`，显式 NVIDIA 路径不可用。见[稀疏求解](../../crates/ruda-torch/python/ruda_torch/_sparse_solve.py)。
 
 ### FFT 与显式 plan
 
@@ -104,7 +104,7 @@ QR 支持 `reduced`、`complete`、`r`；complete QR 与 `svd(full_matrices=True
 | nD | `fftn`、`ifftn`、`rfftn`、`irfftn`、`hfftn`、`ihfftn` |
 | 布局／频率 | `fftshift`、`ifftshift`、`fftfreq`、`rfftfreq` |
 
-变换支持 FP16／FP32／FP64 与 complex32／complex64／complex128；FP16／complex32 要求每个变换轴的长度均为二次幂。BF16 明确拒绝，不悄悄提升类型。整数输入转换为所选 FP16／FP32／FP64 默认 dtype，频率辅助函数接受这三种实数 dtype。`n`／`s` 对相应变换维度截取或补零，最后一个变换轴是 Hermitian 压缩轴；`irfft`／`hfft` 系列展开压缩输入时，应明确指定原始奇数长度。`norm=None`／`backward` 归一化逆变换，`forward` 归一化正变换，`ortho` 使用平方根归一化。原生 FP32／FP64 的非二次幂长度通过 Bluestein 卷积计算真实请求长度，不改变请求长度，也不执行 CPU DFT。显式 NVIDIA 选择使用 cuFFT，见 [FFT 分发与 dtype 检查](../../ruda-torch/python/ruda_torch/fft.py)。
+变换支持 FP16／FP32／FP64 与 complex32／complex64／complex128；FP16／complex32 要求每个变换轴的长度均为二次幂。BF16 明确拒绝，不悄悄提升类型。整数输入转换为所选 FP16／FP32／FP64 默认 dtype，频率辅助函数接受这三种实数 dtype。`n`／`s` 对相应变换维度截取或补零，最后一个变换轴是 Hermitian 压缩轴；`irfft`／`hfft` 系列展开压缩输入时，应明确指定原始奇数长度。`norm=None`／`backward` 归一化逆变换，`forward` 归一化正变换，`ortho` 使用平方根归一化。原生 FP32／FP64 的非二次幂长度通过 Bluestein 卷积计算真实请求长度，不改变请求长度，也不执行 CPU DFT。显式 NVIDIA 选择使用 cuFFT，见 [FFT 分发与 dtype 检查](../../crates/ruda-torch/python/ruda_torch/fft.py)。
 
 变换 `out=` 会调整 shape 并复制结果，但在参与输入／输出需要梯度时拒绝 autograd；非 `out` 变换有原生 adjoint backward，并支持高阶线性梯度。Plan 是显式、绑定执行队列的所有者，不建立无界全局缓存：
 
@@ -126,7 +126,7 @@ restored = torch.fft.irfft(spectrum, n=7, norm='ortho')
 
 `FFTPlan(input, *, kind='fft', s=None, dim=None, norm=None)` 的 kind 可为 `fft`、`ifft`、`rfft`、`irfft`、`hfft`、`ihfft`。输入 shape／dtype／设备及变换轴／长度固定，信号值可变化。`execute(input, *, out=None)` 复用 plan，`retained_bytes` 报告持有存储，`clear_workspace()` 释放 lazy scratch，`close()` 释放 plan；上下文退出时自动调用 `close()`。
 
-源码：[BLAS](../../ruda-torch/python/ruda_torch/blas.py)、[linalg 注册](../../ruda-torch/python/ruda_torch/linalg.py)、[FFT](../../ruda-torch/python/ruda_torch/fft.py)、[科学计算存储／算子](../../ruda-torch/src/scientific.rs)。原生 Rust 契约见 [ruBLAS](libraries/rublas.md)、[ruSOLVER](libraries/rusolver.md)、[ruFFT](libraries/rufft.md)。
+源码：[BLAS](../../crates/ruda-torch/python/ruda_torch/blas.py)、[linalg 注册](../../crates/ruda-torch/python/ruda_torch/linalg.py)、[FFT](../../crates/ruda-torch/python/ruda_torch/fft.py)、[科学计算存储／算子](../../crates/ruda-torch/src/scientific.rs)。原生 Rust 契约见 [ruBLAS](libraries/rublas.md)、[ruSOLVER](libraries/rusolver.md)、[ruFFT](libraries/rufft.md)。
 
 ## 归一化与门控激活
 
@@ -140,7 +140,7 @@ restored = torch.fft.irfft(spectrum, n=7, norm='ortho')
 | `LayerNorm(width, eps=1e-5, elementwise_affine=True, bias=True, device=None, dtype=None)` | 正 width，仿射默认 FP32；`elementwise_affine=False` 关闭两个参数，`bias=False` 仅关闭 bias。 |
 | `silu_mul(gate, up)` | shape／dtype／device 相同，不广播；计算 `SiLU(gate) * up`，保留低精度存储舍入边界。 |
 
-反向前不能修改保存的输入／权重。这些融合反向接口拒绝 `create_graph=True`。可选 FP32 仿射参数与显式 StaticGraph RMSNorm 的同类型权重契约不同。源码：[training.py](../../ruda-torch/python/ruda_torch/training.py)。
+反向前不能修改保存的输入／权重。这些融合反向接口拒绝 `create_graph=True`。可选 FP32 仿射参数与显式 StaticGraph RMSNorm 的同类型权重契约不同。源码：[training.py](../../crates/ruda-torch/python/ruda_torch/training.py)。
 
 ## 优化器与损失缩放
 
@@ -154,7 +154,7 @@ restored = torch.fft.irfft(spectrum, n=7, norm='ortho')
 
 `GradScaler(init_scale=65536., growth_factor=2., backoff_factor=0.5, growth_interval=2000, min_scale=2**-24, max_scale=2**24)` 为 RUDA scaler，不是 `torch.amp.GradScaler`。尺度边界为正，growth factor 大于一，backoff 在 `(0,1)`，interval 为正整数。同一优化器周期依次执行 `scale(loss).backward()`、`step(optimizer)`、`update()`；loss 须为 RUDA 上的单元素 FP32。`step` 接受 RUDA AdamW、Muon、MuonAdamW，不接受 closure 或额外参数。没有 `unscale_()` 或多优化器周期；`get_scale()` 读取当前值，scaler 状态仅在完整周期之间存档。
 
-Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python Muon 指南](architecture-training.md)和[优化器定义](../../ruda-torch/python/ruda_torch/optim.py)。不能将局部分片更新当成完整矩阵 Muon。
+Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python Muon 指南](architecture-training.md)和[优化器定义](../../crates/ruda-torch/python/ruda_torch/optim.py)。不能将局部分片更新当成完整矩阵 Muon。
 
 ## 流与事件
 
@@ -172,7 +172,7 @@ Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python M
 | `record_stream(tensor, s)` | 为已提交工作保留分配，不建立生产／消费依赖。 |
 | `Event.close()` | 显式释放原生事件，再用时须重新 record。 |
 
-异步模式在首次原生提交前设置 `RUDA_TORCH_ASYNC=1`，进程内缓存该选项。取标量／回读及显式同步仍会等待。见[流示例](../../ruda-torch/README.md#streams-events-and-asynchronous-dispatch)。
+异步模式在首次原生提交前设置 `RUDA_TORCH_ASYNC=1`，进程内缓存该选项。取标量／回读及显式同步仍会等待。见[流示例](../../crates/ruda-torch/README.md#streams-events-and-asynchronous-dispatch)。
 
 ## 分页注意力与固定路由权重
 
@@ -184,17 +184,17 @@ Python Muon 分组、Newton–Schulz 选项及存档规则见[架构与 Python M
 | `mla(absorbed_query, position_query, latent_cache, position_cache, scale=..., causal=True)` | 查询 `[queries,heads,rank]`／`[queries,heads,position_dim]`，缓存 `[pages,page_size,1,rank]`／`[pages,page_size,1,position_dim]`，位置宽度不超过 256；返回尚未做 value／output 投影的 `[queries,heads,rank]` context。 |
 | `workspace_bytes(query_heads, value_dim)` | 仅前向 split scratch，不含反向内存或总峰值显存。 |
 
-`splits=1` 为不拆分，2–32 使用部分注意力与 FP32 归并，每个工作区上限 64 MiB。KV 内容／更新及位置编码由调用者负责，MLA 使用原模型 QK scale。浮点缓存支持一阶梯度，不支持任意外部 mask 或高阶导数；压缩缓存走独立的[量化 KV 推理路径](#量化-kv-注意力)。默认 atomic backward；`backward_strategy='ordered'` 显式选择无原子的历史归约，不是 autotune。所有权／压缩选项见[包注意力指南](../../ruda-torch/README.md#paged-gqa-and-mla)。
+`splits=1` 为不拆分，2–32 使用部分注意力与 FP32 归并，每个工作区上限 64 MiB。KV 内容／更新及位置编码由调用者负责，MLA 使用原模型 QK scale。浮点缓存支持一阶梯度，不支持任意外部 mask 或高阶导数；压缩缓存走独立的[量化 KV 推理路径](#量化-kv-注意力)。默认 atomic backward；`backward_strategy='ordered'` 显式选择无原子的历史归约，不是 autotune。所有权／压缩选项见[包注意力指南](../../crates/ruda-torch/README.md#paged-gqa-and-mla)。
 
-`selected_router_weights(logits, indices, scoring='softmax', renormalize=False, scale=1.)` 输入连续原生 `[tokens,experts]` FP32／FP16／BF16 logits 和 `[tokens,top_k]` int32／int64 indices，`1 <= top_k <= min(experts,64)`。返回 FP32 已选择槽位权重及一阶 logits 梯度，不负责专家选择。Softmax 先覆盖全部专家再 gather，sigmoid 逐点计算；可选重归一化覆盖已 gather 槽位，最后乘 scale。重复索引累加梯度；无效索引使相应前向／反向整行输出 NaN，仍保持越界安全，不通过主机同步检查索引。见[路由实现](../../ruda-torch/python/ruda_torch/_router.py)。
+`selected_router_weights(logits, indices, scoring='softmax', renormalize=False, scale=1.)` 输入连续原生 `[tokens,experts]` FP32／FP16／BF16 logits 和 `[tokens,top_k]` int32／int64 indices，`1 <= top_k <= min(experts,64)`。返回 FP32 已选择槽位权重及一阶 logits 梯度，不负责专家选择。Softmax 先覆盖全部专家再 gather，sigmoid 逐点计算；可选重归一化覆盖已 gather 槽位，最后乘 scale。重复索引累加梯度；无效索引使相应前向／反向整行输出 NaN，仍保持越界安全，不通过主机同步检查索引。见[路由实现](../../crates/ruda-torch/python/ruda_torch/_router.py)。
 
 ## 序列训练与可学习伪量化
 
 `solve_triangular(a, b, upper=False, left=True, unitriangular=False)` 接收同设备、同浮点类型矩阵。A 为 `[...,N,N]`；左求解 B 为 `[...,N,K]`，右求解为 `[...,K,N]`，批次维度可广播。flag 须为 Python bool；RUDA 使用 sequence API 1，CPU／CUDA 为显式参考设备，支持一阶自动微分。
 
-`gated_delta_rule(query, key, value, beta, log_decay, initial_state=None, query_scale=None, normalize_qk=False, norm_eps=1e-6, chunk_size=64, checkpoint_chunks=True, native_forward=True)` 要求同一浮点设备：Q／K `[B,H,T,Dk]`，V `[B,H,T,Dv]`，beta／decay `[B,H,T]`，可选初始状态 `[B,H,Dk,Dv]`，Q／K／V 存储类型相同。`chunk_size` 为正；返回 `(output, final_state)`，输出 `[B,H,T,Dv]`。状态／中间值为 FP32，显式 CPU FP64 输入使用 FP64。默认 RUDA 前向复用 ruDNN chunk 路径，反向重算同设备分块操作，不是独立融合 DeltaNet backward；输出与最终状态均传播梯度。准确 scale／归一化及空序列行为见[序列实现](../../ruda-torch/python/ruda_torch/sequence_training.py)。
+`gated_delta_rule(query, key, value, beta, log_decay, initial_state=None, query_scale=None, normalize_qk=False, norm_eps=1e-6, chunk_size=64, checkpoint_chunks=True, native_forward=True)` 要求同一浮点设备：Q／K `[B,H,T,Dk]`，V `[B,H,T,Dv]`，beta／decay `[B,H,T]`，可选初始状态 `[B,H,Dk,Dv]`，Q／K／V 存储类型相同。`chunk_size` 为正；返回 `(output, final_state)`，输出 `[B,H,T,Dv]`。状态／中间值为 FP32，显式 CPU FP64 输入使用 FP64。默认 RUDA 前向复用 ruDNN chunk 路径，反向重算同设备分块操作，不是独立融合 DeltaNet backward；输出与最终状态均传播梯度。准确 scale／归一化及空序列行为见[序列实现](../../crates/ruda-torch/python/ruda_torch/sequence_training.py)。
 
-`learned_fake_quantize(x, scales, bits=4, block_shape=None, symmetric=True)` 要求非空 FP32／FP16／BF16 输入及同设备 FP32 scales。bits 为 2、4、8；没有 block shape 时只有一个 scale，否则每轴一个正块大小，scale 数量为 `product(ceil(shape/block_shape))`，包括边缘块。scale 下限为 `1e-8`，低于下限的尺度梯度为零；返回具有一阶 straight-through 导数的**浮点**张量，不是打包推理权重。`LearnedFakeQuantize(initial_scales, ...)` 保存可训练、可存档的 FP32 尺度参数，移动模块时仍须保持 FP32。见[伪量化实现](../../ruda-torch/python/ruda_torch/quantization.py)和不同格式的 [NF4 微调](finetuning.md)。
+`learned_fake_quantize(x, scales, bits=4, block_shape=None, symmetric=True)` 要求非空 FP32／FP16／BF16 输入及同设备 FP32 scales。bits 为 2、4、8；没有 block shape 时只有一个 scale，否则每轴一个正块大小，scale 数量为 `product(ceil(shape/block_shape))`，包括边缘块。scale 下限为 `1e-8`，低于下限的尺度梯度为零；返回具有一阶 straight-through 导数的**浮点**张量，不是打包推理权重。`LearnedFakeQuantize(initial_scales, ...)` 保存可训练、可存档的 FP32 尺度参数，移动模块时仍须保持 FP32。见[伪量化实现](../../crates/ruda-torch/python/ruda_torch/quantization.py)和不同格式的 [NF4 微调](finetuning.md)。
 
 ## Packed 量化与权重导入
 
@@ -243,7 +243,7 @@ Safetensors 加载器需要另外执行 `python -m pip install safetensors`，wh
 
 Quantized paged API 1 将压缩历史直接解码到寄存器，避免展开完整历史缓存，保留分块 prefill／decode 及计划的 split／merge 调度。此路径**仅用于推理**；反向传播使用浮点缓存。Query 仍为 FP32／FP16／BF16，并遵守原有计划的几何、scale 和设备约束。
 
-源码：[packed 张量](../../ruda-torch/python/ruda_torch/packed_quantization.py)、[校准／QAT](../../ruda-torch/python/ruda_torch/quantization_calibration.py)、[GPTQ](../../ruda-torch/python/ruda_torch/gptq.py)、[GGUF](../../ruda-torch/python/ruda_torch/gguf.py)、[量化缓存](../../ruda-torch/python/ruda_torch/quantized_cache.py)。
+源码：[packed 张量](../../crates/ruda-torch/python/ruda_torch/packed_quantization.py)、[校准／QAT](../../crates/ruda-torch/python/ruda_torch/quantization_calibration.py)、[GPTQ](../../crates/ruda-torch/python/ruda_torch/gptq.py)、[GGUF](../../crates/ruda-torch/python/ruda_torch/gguf.py)、[量化缓存](../../crates/ruda-torch/python/ruda_torch/quantized_cache.py)。
 
 ## 编译、图与模型
 
@@ -254,8 +254,8 @@ Quantized paged API 1 将压缩历史直接解码到寄存器，避免展开完�
 - [通用模型编译](model-compiler.md)：`compile`、`make_backend`、`CompiledModel`、`CompiledFunction`，准确原生重载、shape／stream 缓存及错误策略。
 - [固定地址静态图](static-pytorch-graphs.md)：`StaticGraph`、`GraphOp`、重放／输出生命周期和显式一阶训练。
 - [微调 API](finetuning.md)：公开的打包、LoRA／NF4 加载、因果监督、适配器及训练 checkpoint 入口。
-- [混合模型源码](../../ruda-torch/python/ruda_torch/hybrid_model.py)：`MHCTransformerBlock`、`HybridAttentionLanguageModel`、`next_token_loss`，属于模型组合，不是预训练权重加载器。
-- [mHC 源码](../../ruda-torch/python/ruda_torch/mhc.py)：`MHC`、`MHCResidual`、`MHCSequential`、`MHCCoefficients`、`sinkhorn`。
-- [压缩注意力源码](../../ruda-torch/python/ruda_torch/sparse_attention.py)：`LightningIndexer`／`DSAIndexer`、`indexer_kl_loss`、`LearnedKVCompressor`、`CompressedSparseAttention`／`CSA`、`HeavilyCompressedAttention`／`HCA`、`RotaryEmbedding`、`AttentionOutput`、`IndexerOutput`、`CompressedAttentionCache`、`CompressionState`。
+- [混合模型源码](../../crates/ruda-torch/python/ruda_torch/hybrid_model.py)：`MHCTransformerBlock`、`HybridAttentionLanguageModel`、`next_token_loss`，属于模型组合，不是预训练权重加载器。
+- [mHC 源码](../../crates/ruda-torch/python/ruda_torch/mhc.py)：`MHC`、`MHCResidual`、`MHCSequential`、`MHCCoefficients`、`sinkhorn`。
+- [压缩注意力源码](../../crates/ruda-torch/python/ruda_torch/sparse_attention.py)：`LightningIndexer`／`DSAIndexer`、`indexer_kl_loss`、`LearnedKVCompressor`、`CompressedSparseAttention`／`CSA`、`HeavilyCompressedAttention`／`HCA`、`RotaryEmbedding`、`AttentionOutput`、`IndexerOutput`、`CompressedAttentionCache`、`CompressionState`。
 
 架构组件组合的是同设备张量操作，名称不代表兼容全部预训练 DeepSeek 架构。API 元数据错误通常抛出 `ValueError`／`TypeError`，原生执行错误直接传播，异步错误可能在同步／回读时出现。

@@ -31,7 +31,7 @@ export RUDA_PTX_VERSION=8.0
 
 Выберите [версию PTX](ptx.md), поддерживаемую GPU и драйвером. `RUDA_CUDA_COMPILER=nvrtc` выбирает CUDA C++/NVRTC. Загрузчик сначала ищет библиотеку внутри пакета, затем debug-библиотеку репозитория. Для release-сборки или другого пути задайте `RUDA_TORCH_LIBRARY` перед импортом. Rust-библиотека и C++-расширение должны использовать ABI 10.
 
-[Wheels v0.1.96](../../ruda-torch/README.md#release-wheels) не требуют локальной сборки Rust/C++: CPython 3.13, Linux x86_64 с PyTorch `2.10.0+cu126` (сборка на Ubuntu 24.04) либо Windows x86_64 с `2.13.0+cu130`. Нативная библиотека включена; отдельный путь `RUDA_TORCH_LIBRARY` не нужен. Для отдельных Linux/Colab bundles сохраняются их [инструкции установки](../../ruda-torch/README.md#linuxcolab-precompiled-bundle).
+[Wheels v0.1.96](../../crates/ruda-torch/README.md#release-wheels) не требуют локальной сборки Rust/C++: CPython 3.13, Linux x86_64 с PyTorch `2.10.0+cu126` (сборка на Ubuntu 24.04) либо Windows x86_64 с `2.13.0+cu130`. Нативная библиотека включена; отдельный путь `RUDA_TORCH_LIBRARY` не нужен. Для отдельных Linux/Colab bundles сохраняются их [инструкции установки](../../crates/ruda-torch/README.md#linuxcolab-precompiled-bundle).
 
 ## 2. Передача данных и чтение результата
 

@@ -41,9 +41,9 @@ ruCCL には、テンソル バックエンド集合体、ランク コア、お
 
 `cuda` 機能は、CUDA テンソル バックエンドを有効にします。 `cargo run --locked -p ruCCL --features cuda --example all_reduce` を実行して、GPU 0 で 4 つの論理ランクを持つリング AllReduce を実行します。これは、257 の FP32 要素の合計/平均、入力の保存、およびセッションの終了をチェックします。
 
-デバイス アダプターは [tensor_device](../../../ruCCL/src/tensor_device) にあります。オプティマイザー インターフェイスについては、[明示的なランク勾配削減](../../../ruda-optim/src/optim/grads/collective.rs) を参照してください。転送には、ゼロコピー P2P ではなく、ホストステージングされたパスが含まれます。
+デバイス アダプターは [tensor_device](../../../crates/ruCCL/src/tensor_device) にあります。オプティマイザー インターフェイスについては、[明示的なランク勾配削減](../../../crates/ruda-optim/src/optim/grads/collective.rs) を参照してください。転送には、ゼロコピー P2P ではなく、ホストステージングされたパスが含まれます。
 
-ソース: [集合 API](../../../ruCCL/src/api.rs)、[構成](../../../ruCCL/src/config.rs)、[ランク](../../../ruCCL/src/rank/mod.rs)、および [インプロセス実装](../../../ruCCL/src/in_process/mod.rs)。
+ソース: [集合 API](../../../crates/ruCCL/src/api.rs)、[構成](../../../crates/ruCCL/src/config.rs)、[ランク](../../../crates/ruCCL/src/rank/mod.rs)、および [インプロセス実装](../../../crates/ruCCL/src/in_process/mod.rs)。
 
 ## 6. 集合研修
 
@@ -58,7 +58,7 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 
 `run` にはまだ存在しないディレクトリが必要です。最初の更新後に各ランクのモデルとオプティマイザーを保存し、2 番目の更新を実行します。 `resume` はそのディレクトリを復元し、2 番目の更新を実行します。 CUDA が有効になっている場合、この例の両方の論理ランクは同じデフォルト デバイスを使用します。
 
-完全な呼び出しシーケンスについては、[集合トレーニングの例](../../../ruda-optim/examples/collective_training.rs) を参照してください。スケジューラーの状態と保留中の累積勾配も保存するには、[トレーニングと状態の保存](../training.md) の `TrainingRecord` を使用します。
+完全な呼び出しシーケンスについては、[集合トレーニングの例](../../../crates/ruda-optim/examples/collective_training.rs) を参照してください。スケジューラーの状態と保留中の累積勾配も保存するには、[トレーニングと状態の保存](../training.md) の `TrainingRecord` を使用します。
 
 ## 8. ストリーミング all-gather と rank ローカル行列積
 
@@ -70,4 +70,4 @@ cargo run --locked -p ruda-optim --features collective,cuda --example collective
 
 shard ごとに matmul を同期するため、遅延バックエンドでもホスト通信中に計算します。host-staged な重複実行であり、GPU P2P、デバイス融合、速度向上を保証しません。
 
-[リング実装](../../../ruCCL/src/rank/device_collective/all_gather_stream.rs)・[行列積アダプター](../../../ruCCL/src/tensor_device/all_gather_matmul.rs)。
+[リング実装](../../../crates/ruCCL/src/rank/device_collective/all_gather_stream.rs)・[行列積アダプター](../../../crates/ruCCL/src/tensor_device/all_gather_matmul.rs)。

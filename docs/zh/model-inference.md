@@ -65,9 +65,9 @@ cargo run --release --locked -p ruda-llm --features nvidia-ptx --example qwen35_
 
 ```toml
 [dependencies]
-rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
-ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rullm = { package = "ruda-llm", path = "../RUDA/crates/ruLLM", features = ["nvidia"] }
+ruda-tensor-device = { path = "../RUDA/crates/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"
 
 ```
@@ -239,7 +239,7 @@ fn generate_from_images(
 
 调度器管理请求和页分配元数据；设备 KV 存储与模型执行由调用方的执行器负责。`token_matrix()`、`context_lengths()`、`flattened_block_table()` 可用于构造批量输入。存在未完成批次时，先完成或撤销该批次，再调用 `schedule()`。
 
-接口参考：[ruLLM 导出](../../ruLLM/src/lib.rs)、[生成配置](../../ruLLM/src/generation.rs)、[调度器](../../ruLLM/src/continuous_batch.rs)。
+接口参考：[ruLLM 导出](../../crates/ruLLM/src/lib.rs)、[生成配置](../../crates/ruLLM/src/generation.rs)、[调度器](../../crates/ruLLM/src/continuous_batch.rs)。
 
 ## Llama／Qwen2 分页执行
 
@@ -272,7 +272,7 @@ KV 池按配置容量分配，不是仅为当前 token 分配。`runner.engine()
 
 ## OpenAI 风格 HTTP 服务
 
-[NVIDIA 示例](../../ruLLM/examples/qwen2_openai_server.rs) 使用 `serve_openai` 和分页 runner。准备与生成相同的本地浮点 Qwen2／Qwen2.5 文件，示例使用 BF16，不要求 `--features serving`：
+[NVIDIA 示例](../../crates/ruLLM/examples/qwen2_openai_server.rs) 使用 `serve_openai` 和分页 runner。准备与生成相同的本地浮点 Qwen2／Qwen2.5 文件，示例使用 BF16，不要求 `--features serving`：
 
 ```powershell
 $env:RUDA_CUDA_COMPILER = 'nvrtc'

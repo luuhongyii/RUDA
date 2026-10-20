@@ -10,7 +10,7 @@
 
 | 节点 | 元数据／scalar 契约 |
 | --- | --- |
-| copy、一元逐点操作 | 单输入，无 right，scalar 为规范零；完整一元列表见 [`UNARY_CODES`](../../ruda-torch/python/ruda_torch/_graph_spec.py)。 |
+| copy、一元逐点操作 | 单输入，无 right，scalar 为规范零；完整一元列表见 [`UNARY_CODES`](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py)。 |
 | add／mul／div、激活 backward、silu_mul | 同 shape／dtype 的两个张量，不广播；add 的 scalar 为 alpha，其他 scalar 为零。 |
 | add_scalar／mul_scalar／div_scalar | 单输入与有限 FP32 scalar，无 right；减法通过负的 add scalar／alpha 显式表示。 |
 | mm／bmm | 同类型二维／三维输入，内维与批次匹配，不广播，scalar 为零。 |
@@ -18,7 +18,7 @@
 | softmax／log_softmax 及其 backward | scalar 为规范的非负轴，backward 的梯度与输出张量规格匹配。 |
 | sum_keepdim／mean_keepdim | scalar 为非空、范围内的归约轴位掩码，不是结果 shape；归约轴保留为一。 |
 
-通用构造器为 `GraphOp(kind, output, left, right=None, scalar=0.)`；便捷方法包括 copy、add(alpha=...)、mul、silu、silu_mul、rms_norm(eps=...)。`outputs` 为不同的已生产节点名序列，默认最后一个节点；不允许覆盖名称或读取未来节点。scalar 构图时固定，改变尺寸或 scalar 须重建。准确编码与检查见 [`_graph_spec.py`](../../ruda-torch/python/ruda_torch/_graph_spec.py)。
+通用构造器为 `GraphOp(kind, output, left, right=None, scalar=0.)`；便捷方法包括 copy、add(alpha=...)、mul、silu、silu_mul、rms_norm(eps=...)。`outputs` 为不同的已生产节点名序列，默认最后一个节点；不允许覆盖名称或读取未来节点。scalar 构图时固定，改变尺寸或 scalar 须重建。准确编码与检查见 [`_graph_spec.py`](../../crates/ruda-torch/python/ruda_torch/_graph_spec.py)。
 
 `optimize`、`reuse_workspace` 为两个独立选项，默认均为 False；其他图选项也须为显式 bool：
 
@@ -76,7 +76,7 @@ C++ 每次重放不再构造 Descriptor 的 shape/stride 向量，也不再把�
 
 ## 构建与验证
 
-当前基础张量 ABI 为 10，**附加图接口为 3**；Rust／C++ 组件须匹配，可从同一源码构建或使用 [Linux／Colab 预编译包](../../ruda-torch/README.md#linuxcolab-precompiled-bundle)。接口不匹配会报错。
+当前基础张量 ABI 为 10，**附加图接口为 3**；Rust／C++ 组件须匹配，可从同一源码构建或使用 [Linux／Colab 预编译包](../../crates/ruda-torch/README.md#linuxcolab-precompiled-bundle)。接口不匹配会报错。
 
 ```bash
 cargo build --locked --release -p ruda-torch-native
@@ -85,7 +85,7 @@ python -m pip install --no-build-isolation --no-deps -e ./ruda-torch/python
 
 export RUDA_CUDA_COMPILER=ptx
 # RUDA_PTX_VERSION 必须使用实际驱动支持且已验证的值。
-python ruda-torch/tools/validate_static_graph.py --build --benchmark \
+python crates/ruda-torch/tools/validate_static_graph.py --build --benchmark \
   --output ./v24-static-graph-validation
 ```
 

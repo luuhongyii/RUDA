@@ -16,7 +16,7 @@ Plan 持有缓冲区／表，绑定构建时的队列、dtype 与输入 shape。
 
 F32 单轴真实长度入口为 `rufft::tensor::{rfft_exact, irfft_exact}`；逆变换还原奇数长度时应明确提供 N。`RealFftPlan` 复用 chirp 表与 scratch；单轴接口仍仅支持 F32，不能据多轴 plan 的 FP64 支持推断其 dtype 已扩展。
 
-源码：[多轴 plan](../../../ruFFT/src/multidim.rs)、[FP64 plan](../../../ruFFT/src/double.rs)、[频谱布局 kernel](../../../ruFFT/src/spectral_layout.rs)、[Python FFT](../../../ruda-torch/python/ruda_torch/fft.py)。
+源码：[多轴 plan](../../../crates/ruFFT/src/multidim.rs)、[FP64 plan](../../../crates/ruFFT/src/double.rs)、[频谱布局 kernel](../../../crates/ruFFT/src/spectral_layout.rs)、[Python FFT](../../../crates/ruda-torch/python/ruda_torch/fft.py)。
 
 ## 1. 配置依赖
 
@@ -24,10 +24,10 @@ Cargo package 名为 `ruda-fft`，Rust 导入名为 `rufft`。`tensor` feature �
 
 ```toml
 [dependencies]
-rufft = { package = "ruda-fft", path = "../RUDA/ruFFT", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rufft = { package = "ruda-fft", path = "../RUDA/crates/ruFFT", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. 正变换与逆变换
@@ -127,4 +127,4 @@ fn batched_rfft<R: Runtime>(
 
 N 必须是至少为 2 的 2 的幂，实部和虚部 shape 相同。`signal_len` 不能超过输入轴长度或 N；`spec_bins` 至少为 1，且不能超过输入频谱轴长度或 `N / 2 + 1`。输出缓冲区仍须完整分配；这两个入口省去的是输入尾部补零的物化复制。
 
-接口参考：[张量入口](../../../ruFFT/src/tensor.rs)、[正变换启动](../../../ruFFT/src/fft/rfft.rs)、[逆变换启动](../../../ruFFT/src/fft/irfft.rs)。
+接口参考：[张量入口](../../../crates/ruFFT/src/tensor.rs)、[正变换启动](../../../crates/ruFFT/src/fft/rfft.rs)、[逆变换启动](../../../crates/ruFFT/src/fft/irfft.rs)。

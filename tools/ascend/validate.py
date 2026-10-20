@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 def digest_tree(root:Path):
     h=hashlib.sha256()
-    for base in [root/'ruda-driver-cann',root/'ruda-ascend-kernels',root/'tools/ascend']:
+    for base in [root/'crates/ruda-driver-cann',root/'crates/ruda-ascend-kernels',root/'tools/ascend']:
         for p in sorted(base.rglob('*')):
             if p.is_file() and '__pycache__' not in p.parts and '.pytest_cache' not in p.parts:
                 h.update(str(p.relative_to(root)).encode());h.update(p.read_bytes())

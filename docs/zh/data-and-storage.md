@@ -122,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `with_regex` 等过滤器选择参数路径。Safetensors 和 PyTorch Store 用 `with_key_remapping` 映射参数名；Rudapack 使用 `with_remap_pattern` 或 `remap(KeyRemapper)`。`allow_partial(true)` 显式允许部分加载，默认值是 false。检查 `ApplyResult.applied`、`skipped`、`missing`、`unused` 和 `errors`，区分已载入、未匹配及不兼容的条目。形状不匹配和 dtype 不匹配是不同错误。
 
-`HalfPrecisionAdapter` 对浮点快照进行存储精度转换：保存时使用 `with_to_adapter`，读取时使用 `with_from_adapter`。`without_module("LayerNorm")` 可使归一化参数保留全精度，见[完整半精度示例](../../ruda-store/examples/half_precision.rs)。
+`HalfPrecisionAdapter` 对浮点快照进行存储精度转换：保存时使用 `with_to_adapter`，读取时使用 `with_from_adapter`。`without_module("LayerNorm")` 可使归一化参数保留全精度，见[完整半精度示例](../../crates/ruda-store/examples/half_precision.rs)。
 
 ## 权重与训练状态的区别
 
@@ -130,6 +130,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## API 入口
 
-- [数据集实现](../../ruda-dataset/src/dataset/mod.rs)与[变换适配器](../../ruda-dataset/src/transform/mod.rs)。
-- [Batcher 契约](../../ruda-model/src/data/dataloader/batcher.rs)与[加载器构造器](../../ruda-model/src/data/dataloader/builder.rs)。
-- [存储 API 导出](../../ruda-store/src/lib.rs)、[Rudapack Store](../../ruda-store/src/rudapack/store.rs)和 [PyTorch Store](../../ruda-store/src/pytorch/store.rs)。
+- [数据集实现](../../crates/ruda-dataset/src/dataset/mod.rs)与[变换适配器](../../crates/ruda-dataset/src/transform/mod.rs)。
+- [Batcher 契约](../../crates/ruda-model/src/data/dataloader/batcher.rs)与[加载器构造器](../../crates/ruda-model/src/data/dataloader/builder.rs)。
+- [存储 API 导出](../../crates/ruda-store/src/lib.rs)、[Rudapack Store](../../crates/ruda-store/src/rudapack/store.rs)和 [PyTorch Store](../../crates/ruda-store/src/pytorch/store.rs)。

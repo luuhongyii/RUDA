@@ -13,9 +13,9 @@ import shutil
 
 ROOT=Path(__file__).resolve().parents[2]
 SCOPES={
-    'adapters':['ruda-torch/src','ruda-torch/python/ruda_torch','ruLLM/src'],
-    'native_drivers':['ruda-driver-cuda/src','ruda-driver-hip/src'],
-    'loaders':['ruLLM/src'],
+    'adapters':['crates/ruda-torch/src','crates/ruda-torch/python/ruda_torch','crates/ruLLM/src'],
+    'native_drivers':['crates/ruda-driver-cuda/src','crates/ruda-driver-hip/src'],
+    'loaders':['crates/ruLLM/src'],
 }
 def scan(root, scope, pattern):
     result=[]; count=0;regex=re.compile(pattern)
@@ -38,12 +38,12 @@ def audit(root):
     report['graph_references_in_adapters']=scan(root,SCOPES['adapters'],r'\bCudaGraph\b|\bcuGraphLaunch\b|\bgraph_build\b|\bgraph_replay\b')
     report['named_deepseek_kimi_references']=scan(root,SCOPES['loaders'],r'(?i)deepseek|kimi')
     report['runtime_capture_managed_ipc_references']=scan(root,SCOPES['native_drivers'],r'\b(?:cuStreamBeginCapture\w*|cuStreamEndCapture\w*|cuMemAllocManaged|cuMemPrefetchAsync\w*|cuIpc(?:Get|Open|Close)\w*|hipGraph\w*)\b')
-    report['single_device_evidence']=excerpt(root,'ruda-torch/python/ruda_torch/csrc/backend.cpp',r'only ruda:0|deviceCount\(\).*return 1')
-    report['inference_only_evidence']=excerpt(root,'ruda-torch/python/ruda_torch/csrc/backend.cpp',r'paged attention is inference-only|MLA is inference-only')
-    report['ptx_debug_evidence']=excerpt(root,'ruda-compiler/src/ptx/emit.rs',r'debug_symbols|unsupported\("debug symbols"\)')
-    report['named_loaders']=excerpt(root,'ruLLM/src/huggingface.rs',r'pub fn load_huggingface_|pub use.*load_huggingface')
-    report['host_staged_evidence']=excerpt(root,'ruda-communication/src/data_service.rs',r'B::float_into_data')
-    report['nccl_evidence']=excerpt(root,'ruda-driver-cuda/src/execution/server.rs',r'cudarc::nccl::result::')
+    report['single_device_evidence']=excerpt(root,'crates/ruda-torch/python/ruda_torch/csrc/backend.cpp',r'only ruda:0|deviceCount\(\).*return 1')
+    report['inference_only_evidence']=excerpt(root,'crates/ruda-torch/python/ruda_torch/csrc/backend.cpp',r'paged attention is inference-only|MLA is inference-only')
+    report['ptx_debug_evidence']=excerpt(root,'crates/ruda-compiler/src/ptx/emit.rs',r'debug_symbols|unsupported\("debug symbols"\)')
+    report['named_loaders']=excerpt(root,'crates/ruLLM/src/huggingface.rs',r'pub fn load_huggingface_|pub use.*load_huggingface')
+    report['host_staged_evidence']=excerpt(root,'crates/ruda-communication/src/data_service.rs',r'B::float_into_data')
+    report['nccl_evidence']=excerpt(root,'crates/ruda-driver-cuda/src/execution/server.rs',r'cudarc::nccl::result::')
     report['tools']={tool:shutil.which(tool) for tool in ['rustc','cargo','nvidia-smi','compute-sanitizer']}
     try:
         ctypes.CDLL('nvcuda.dll' if os.name=='nt' else 'libcuda.so.1')

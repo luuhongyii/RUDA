@@ -215,7 +215,7 @@ def main():
     if args.out and args.out.exists():parser.error('refusing to overwrite evidence')
     report=run_all()
     root=Path(__file__).resolve().parents[2]
-    report['source_sha256']={str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest()for p in [root/'ruSOLVER/src/tensor/warp_kernel.rs',Path(__file__)]}
+    report['source_sha256']={str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest()for p in [root/'crates/ruSOLVER/src/tensor/warp_kernel.rs',Path(__file__)]}
     text=json.dumps(report,indent=2,allow_nan=False)+'\n'
     if args.out:args.out.parent.mkdir(parents=True,exist_ok=True);args.out.write_text(text)
     print(text)

@@ -3,13 +3,13 @@ name: ruLLM runtime contracts
 on:
   pull_request:
     paths:
-      - 'ruLLM/**'
+      - 'crates/ruLLM/**'
       - 'Cargo.lock'
       - '.github/workflows/rullm-runtime.yml'
   push:
     branches: [main]
     paths:
-      - 'ruLLM/**'
+      - 'crates/ruLLM/**'
       - 'Cargo.lock'
       - '.github/workflows/rullm-runtime.yml'
   workflow_dispatch:
@@ -30,7 +30,7 @@ jobs:
           rustup toolchain install 1.90.0 --profile minimal
           rustup override set 1.90.0
       - name: Independent references and real std-only Rust tests
-        run: python3 ruLLM/tools/run_runtime_validation.py --suite reference --suite core --timeout 180
+        run: python3 crates/ruLLM/tools/run_runtime_validation.py --suite reference --suite core --timeout 180
       - name: Report
         if: always()
-        run: cat ruLLM/validation/runtime-v2/validation.json
+        run: cat crates/ruLLM/validation/runtime-v2/validation.json

@@ -10,10 +10,10 @@ Cargo package 为 `ruTENSOR`，Rust 导入名为 `rutensor`。默认启用 `std`
 
 ```toml
 [dependencies]
-rutensor = { package = "ruTENSOR", path = "../RUDA/ruTENSOR" }
-ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rutensor = { package = "ruTENSOR", path = "../RUDA/crates/ruTENSOR" }
+ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. 张量收缩、归约和置换
@@ -158,6 +158,6 @@ fn execute<R: Runtime>(
 
 当两个输入存储类型相同且为 F16／BF16／F32、计算类型为 F32、标签表示一个共享 K 轴，且 M／N 为输出的最后两个轴时，矩阵收缩可分发到 ruBLAS。输入不能含对角标签，一元变换须为 Identity／Conjugate；batch 轴可广播。其他收缩保留通用内核；矩阵乘 setup 不适用时使用通用内核，但 launch 错误直接返回，不予隐藏。alpha／beta epilogue、可选 C 和输出描述符保持不变。
 
-源码：[路径规划](../../../ruTENSOR/src/path.rs)、[矩阵分发](../../../ruTENSOR/src/matmul.rs)、[einsum plan 方法](../../../ruTENSOR/src/einsum.rs)。
+源码：[路径规划](../../../crates/ruTENSOR/src/path.rs)、[矩阵分发](../../../crates/ruTENSOR/src/matmul.rs)、[einsum plan 方法](../../../crates/ruTENSOR/src/einsum.rs)。
 
 ruTENSOR 提供 Ruda Rust 接口，不提供 NVIDIA cuTENSOR 的 C ABI。设备必须支持所选存储和计算类型。

@@ -67,9 +67,9 @@ Für ein Anwendungsverzeichnis neben dem Quellverzeichnis `RUDA` verwenden Sie d
 
 ```toml
 [dependencies]
-rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
-ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rullm = { package = "ruda-llm", path = "../RUDA/crates/ruLLM", features = ["nvidia"] }
+ruda-tensor-device = { path = "../RUDA/crates/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"
 
 ```
@@ -228,7 +228,7 @@ Um Ihren eigenen Batch-Executor zu integrieren, verwenden Sie `ContinuousBatchSc
 
 Der Scheduler verwaltet Anfragen und Seitenzuordnungsmetadaten. Der Ausführende des Aufrufers besitzt den Speicher und die Modellausführung des Geräts KV. Verwenden Sie `token_matrix()`, `context_lengths()` und `flattened_block_table()`, um Batch-Eingaben zu erstellen. Schließen Sie einen ausstehenden Stapel ab oder stornieren Sie ihn, bevor Sie `schedule()` erneut aufrufen.
 
-API-Referenz: [ruLLM-Exporte](../../ruLLM/src/lib.rs), [Generierungsoptionen](../../ruLLM/src/generation.rs), [Planer](../../ruLLM/src/continuous_batch.rs).
+API-Referenz: [ruLLM-Exporte](../../crates/ruLLM/src/lib.rs), [Generierungsoptionen](../../crates/ruLLM/src/generation.rs), [Planer](../../crates/ruLLM/src/continuous_batch.rs).
 
 ## Qwen3.5: fusionierte seitenbasierte Attention
 

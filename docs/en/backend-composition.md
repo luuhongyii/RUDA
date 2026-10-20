@@ -122,12 +122,12 @@ Run `cargo run --bin server`, then run `cargo run --bin client` in a second term
 
 ## Backend-specific operator selection
 
-The LibTorch adapter's quantized tensor methods are not implemented. Its `deform_conv2d`, deformable-convolution backward, and integer `argtopk` are also unavailable through the current bindings. This adapter is distinct from the native `ruda_torch` Python device extension. See [quantized methods](../../ruda-tensor-tch/src/ops/qtensor.rs), [module operators](../../ruda-tensor-tch/src/ops/module.rs), and [integer operators](../../ruda-tensor-tch/src/ops/int_tensor.rs).
+The LibTorch adapter's quantized tensor methods are not implemented. Its `deform_conv2d`, deformable-convolution backward, and integer `argtopk` are also unavailable through the current bindings. This adapter is distinct from the native `ruda_torch` Python device extension. See [quantized methods](../../crates/ruda-tensor-tch/src/ops/qtensor.rs), [module operators](../../crates/ruda-tensor-tch/src/ops/module.rs), and [integer operators](../../crates/ruda-tensor-tch/src/ops/int_tensor.rs).
 
 For Ascend, follow [the CANN execution guide](ascend-guide.md). For collective execution, follow [the distributed guide](distributed-guide.md); a backend wrapper does not establish collective-operation support.
 
 ## API entry points
 
-- [CUDA aliases](../../ruda-tensor-device/src/cuda.rs), [ROCm aliases](../../ruda-tensor-rocm/src/lib.rs), and [WGPU setup](../../ruda-tensor-wgpu/src/lib.rs).
-- [Router aliases](../../ruda-tensor-router/src/lib.rs), [device enums and byte bridge](../../ruda-tensor-router/src/types.rs).
-- [Remote client](../../ruda-tensor-remote/src/lib.rs), [server startup](../../ruda-tensor-remote/src/server/base.rs), and [WebSocket listener](../../ruda-communication/src/websocket/server.rs).
+- [CUDA aliases](../../crates/ruda-tensor-device/src/cuda.rs), [ROCm aliases](../../crates/ruda-tensor-rocm/src/lib.rs), and [WGPU setup](../../crates/ruda-tensor-wgpu/src/lib.rs).
+- [Router aliases](../../crates/ruda-tensor-router/src/lib.rs), [device enums and byte bridge](../../crates/ruda-tensor-router/src/types.rs).
+- [Remote client](../../crates/ruda-tensor-remote/src/lib.rs), [server startup](../../crates/ruda-tensor-remote/src/server/base.rs), and [WebSocket listener](../../crates/ruda-communication/src/websocket/server.rs).

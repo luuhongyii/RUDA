@@ -4,7 +4,7 @@
 
 ## 1. NVIDIA 运行时示例
 
-入口：[ptx-runtime](../../ruda-driver-cuda/examples/ptx_runtime.rs)。
+入口：[ptx-runtime](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)。
 
 基础用例对长度 1、63、64、65、257 各执行两次 FP32 加法，逐元素检查结果并检查输出尾部 16 个哨兵值。它演示设备选择、数据上传、参数绑定、尾部边界、回读及重复执行。
 
@@ -20,13 +20,13 @@ cargo run --locked -p ruda-driver-cuda --features direct-ptx --example ptx-runti
 
 | 参数 | 内容 | 示例源码 |
 | --- | --- | --- |
-| `--tensor` | 张量元数据与布局相关检查 | [tensor.rs](../../ruda-driver-cuda/examples/ptx_runtime/tensor.rs) |
-| `--shared` | 共享内存相关检查 | [shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs) |
-| `--half` | FP16／BF16 相关检查 | [half_precision.rs](../../ruda-driver-cuda/examples/ptx_runtime/half_precision.rs) |
-| `--bitwise` | 位运算定向检查 | [bitwise.rs](../../ruda-driver-cuda/examples/ptx_runtime/bitwise.rs) |
-| `--shared-over-limit` | 共享内存超限诊断 | [shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs) |
-| `--expect-cold` | 断言发生编译且没有磁盘缓存命中 | [主入口](../../ruda-driver-cuda/examples/ptx_runtime.rs) |
-| `--expect-warm` | 断言不重新编译且实际命中磁盘缓存 | [主入口](../../ruda-driver-cuda/examples/ptx_runtime.rs) |
+| `--tensor` | 张量元数据与布局相关检查 | [tensor.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/tensor.rs) |
+| `--shared` | 共享内存相关检查 | [shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs) |
+| `--half` | FP16／BF16 相关检查 | [half_precision.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/half_precision.rs) |
+| `--bitwise` | 位运算定向检查 | [bitwise.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/bitwise.rs) |
+| `--shared-over-limit` | 共享内存超限诊断 | [shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs) |
+| `--expect-cold` | 断言发生编译且没有磁盘缓存命中 | [主入口](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs) |
+| `--expect-warm` | 断言不重新编译且实际命中磁盘缓存 | [主入口](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs) |
 
 `--shared-over-limit` 是提前返回的独立分支，不应与冷／热缓存检查合并使用。
 

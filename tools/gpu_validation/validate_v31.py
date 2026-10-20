@@ -105,7 +105,7 @@ def main(argv=None):
         if a.bf16 and report['hardware']['compute_capability'][0]<8:raise RuntimeError('BF16 explicitly requested on unsupported device; no successful skip')
         if tools and not shutil.which('compute-sanitizer'):raise RuntimeError('compute-sanitizer unavailable')
         report['source_sha256']={}
-        for folder in ['ruBLAS/src/tensor_grouped','ruDNN/src/moe']:
+        for folder in ['crates/ruBLAS/src/tensor_grouped','crates/ruDNN/src/moe']:
             for path in sorted((ROOT/folder).rglob('*.rs')):report['source_sha256'][str(path.relative_to(ROOT))]=digest(path)
         report['cargo_lock_sha256']=digest(ROOT/'Cargo.lock')
         for tool in ('rustc','cargo'):

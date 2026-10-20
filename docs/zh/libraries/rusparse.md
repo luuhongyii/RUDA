@@ -92,4 +92,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 这些计算方法返回 `Result`；框架稀疏运算的值张量必须非量化。
 
-接口参考：[设备 CSR](../../../ruSPARSE/src/tensor/mod.rs)、[框架 CSR](../../../ruda-tensor/src/api/sparse.rs)。
+接口参考：[设备 CSR](../../../crates/ruSPARSE/src/tensor/mod.rs)、[框架 CSR](../../../crates/ruda-tensor/src/api/sparse.rs)。

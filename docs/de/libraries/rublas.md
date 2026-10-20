@@ -16,7 +16,7 @@ ruBLAS bietet lineare Algebraoperationen und Gerätetensorschnittstellen.
 |`tensor-int4`|`rublas::tensor_int4`|
 |`tensor-grouped`|`rublas::tensor_grouped`|
 
-Das Cargo-Paket ist `rublas`. Wählen Sie die erforderlichen Funktionen aus und deaktivieren Sie unnötige Standardeinstellungen für allgemeine Pfade. Siehe [Cargo.toml](../../../ruBLAS/Cargo.toml).
+Das Cargo-Paket ist `rublas`. Wählen Sie die erforderlichen Funktionen aus und deaktivieren Sie unnötige Standardeinstellungen für allgemeine Pfade. Siehe [Cargo.toml](../../../crates/ruBLAS/Cargo.toml).
 
 ## 2. Matrixmultiplikation, Vektoren und INT4
 
@@ -46,11 +46,11 @@ fn residue_matmul<R: Runtime>(
 
 Die Eingaben `[M, K]` und `[K, N]` erzeugen `[M, N]`. Ungültiges Setup oder fehlende Gerätefunktionen geben `MatmulSetupError` zurück, anstatt zu Naive zu wechseln.
 
-Siehe [Einstiegspunkt für die Matrixmultiplikation](../../../ruBLAS/src/tensor_matmul/base.rs).
+Siehe [Einstiegspunkt für die Matrixmultiplikation](../../../crates/ruBLAS/src/tensor_matmul/base.rs).
 
 ### Vektorkreuzprodukt
 
-`rublas::tensor_vector::cross(lhs, rhs, dim)` setzt die Länge 3 der gewählten Dimension voraus und gibt einen Gerätetensor zurück. Eine Berechnung entlang einer anderen als der letzten Dimension erfordert Permutation und Umwandlung in zusammenhängenden Speicher. Siehe [cross.rs](../../../ruBLAS/src/tensor_vector/cross.rs).
+`rublas::tensor_vector::cross(lhs, rhs, dim)` setzt die Länge 3 der gewählten Dimension voraus und gibt einen Gerätetensor zurück. Eine Berechnung entlang einer anderen als der letzten Dimension erfordert Permutation und Umwandlung in zusammenhängenden Speicher. Siehe [cross.rs](../../../crates/ruBLAS/src/tensor_vector/cross.rs).
 
 ### AWQ INT4
 
@@ -65,9 +65,9 @@ Für Eingabedimension K, Ausgabedimension N und Gruppengröße G:
 |scales|F16|[K/G, N]|
 |bias (optional)|F16|[N]|
 
-K, N und G müssen ungleich Null sein; K muss durch G und N durch 8 teilbar sein. Die endgültige Dimension der Eingabe ist K, die in der Ausgabe durch N ersetzt wird. Alle Operanden müssen sich ein Gerät teilen. Die gepackte Bitreihenfolge muss mit dem [AWQ-Kernel](../../../ruBLAS/src/tensor_int4/kernel.rs) übereinstimmen. Eine beliebige INT4-Datei kann nicht direkt als qweight verwendet werden.
+K, N und G müssen ungleich Null sein; K muss durch G und N durch 8 teilbar sein. Die endgültige Dimension der Eingabe ist K, die in der Ausgabe durch N ersetzt wird. Alle Operanden müssen sich ein Gerät teilen. Die gepackte Bitreihenfolge muss mit dem [AWQ-Kernel](../../../crates/ruBLAS/src/tensor_int4/kernel.rs) übereinstimmen. Eine beliebige INT4-Datei kann nicht direkt als qweight verwendet werden.
 
-Informationen zum Objekt und seinen Prüfungen finden Sie in der [INT4-Schnittstelle](../../../ruBLAS/src/tensor_int4/mod.rs).
+Informationen zum Objekt und seinen Prüfungen finden Sie in der [INT4-Schnittstelle](../../../crates/ruBLAS/src/tensor_int4/mod.rs).
 
 ## 3. Gruppierte Matrixmultiplikation
 
@@ -91,7 +91,7 @@ Zeile m wählt die durch row_experts[m] indizierte Gewichtsmatrix aus und berech
 - Die Anzahl der relevanten Elemente muss zur U32-Indizierung passen.
 - Ungültige Argumente geben `GroupedMatmulError` zurück. Behandeln Sie asynchrone Ausführungsfehler während des Rücklesens oder der Synchronisierung.
 
-Quelle: [gruppierte Schnittstelle](../../../ruBLAS/src/tensor_grouped/mod.rs) und [Kernel](../../../ruBLAS/src/tensor_grouped/kernel.rs).
+Quelle: [gruppierte Schnittstelle](../../../crates/ruBLAS/src/tensor_grouped/mod.rs) und [Kernel](../../../crates/ruBLAS/src/tensor_grouped/kernel.rs).
 
 ## 5. Integration mit anderen Bibliotheken
 

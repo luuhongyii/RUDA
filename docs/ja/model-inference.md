@@ -67,9 +67,9 @@ cargo run --release --locked -p ruda-llm --features nvidia-ptx --example qwen35_
 
 ```toml
 [dependencies]
-rullm = { package = "ruda-llm", path = "../RUDA/ruLLM", features = ["nvidia"] }
-ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rullm = { package = "ruda-llm", path = "../RUDA/crates/ruLLM", features = ["nvidia"] }
+ruda-tensor-device = { path = "../RUDA/crates/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 half = "=2.7.1"
 
 ```
@@ -228,7 +228,7 @@ fn generate_from_images(
 
 スケジューラはリクエストとページ割り当てメタデータを管理します。呼び出し元のエグゼキュータは、デバイス KV ストレージとモデルの実行を所有しています。 `token_matrix()`、`context_lengths()`、および `flattened_block_table()` を使用してバッチ入力を構築します。 `schedule()` を再度呼び出す前に、未処理のバッチを完了するかキャンセルしてください。
 
-API 参照: [ruLLM エクスポート](../../ruLLM/src/lib.rs)、[生成オプション](../../ruLLM/src/generation.rs)、[スケジューラー](../../ruLLM/src/continuous_batch.rs)。
+API 参照: [ruLLM エクスポート](../../crates/ruLLM/src/lib.rs)、[生成オプション](../../crates/ruLLM/src/generation.rs)、[スケジューラー](../../crates/ruLLM/src/continuous_batch.rs)。
 
 ## Qwen3.5 の融合ページ化アテンション
 

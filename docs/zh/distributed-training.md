@@ -34,7 +34,7 @@ fn serve(address: &str, id: UniqueId, world_size: usize) -> Result<(), NetworkEr
 }
 ```
 
-协调端与全部 worker 并发启动。run 接受 rank 通道并服务到断开，不能在唯一 worker 线程先阻塞 serve 再启动 peer。支持明确的 collective timeout、可选 heartbeat timeout、rail 和 transport；有效值见[网络定义](../../ruCCL/src/rank/network.rs)。地址、ID、rank／device 配置由应用传入，不自动读取 torchrun／NCCL 启动约定。
+协调端与全部 worker 并发启动。run 接受 rank 通道并服务到断开，不能在唯一 worker 线程先阻塞 serve 再启动 peer。支持明确的 collective timeout、可选 heartbeat timeout、rail 和 transport；有效值见[网络定义](../../crates/ruCCL/src/rank/network.rs)。地址、ID、rank／device 配置由应用传入，不自动读取 torchrun／NCCL 启动约定。
 
 CUDA rank 可这样连接并在创建优化器之前广播参数：
 
@@ -66,7 +66,7 @@ fn initialize_rank(
 }
 ```
 
-层尺寸仅示范初始化，实际使用时换为真实副本模型。依赖为 ruCCL（Rust 导入 ruccl）、ruda-autodiff、ruda-nn、启用 collective 的 ruda-optim，以及启用 cuda-default 的 ruda-tensor-device。连接错误经 TensorDeviceError 转换，rank 元数据与设备配置由应用提供；见[连接方法](../../ruCCL/src/rank/communicator/connect.rs)。
+层尺寸仅示范初始化，实际使用时换为真实副本模型。依赖为 ruCCL（Rust 导入 ruccl）、ruda-autodiff、ruda-nn、启用 collective 的 ruda-optim，以及启用 cuda-default 的 ruda-tensor-device。连接错误经 TensorDeviceError 转换，rank 元数据与设备配置由应用提供；见[连接方法](../../crates/ruCCL/src/rank/communicator/connect.rs)。
 
 默认 TCP 张量适配器下载／主机暂存／上传载荷，TCP peer 交换不自动等于 GPU P2P／NVLink／RDMA。自定义设备原生 DataParallelCommunicator 须提供有序元数据、匹配的浮点／整数广播及归约；换 transport 不改变 token 加权、共享别名或本地参数身份。
 
@@ -87,7 +87,7 @@ fn initialize_rank(
 - Error：local weight 非零时要求梯度存在。
 - Zero：明确为缺失局部梯度贡献零，全球未使用参数仍不进入更新。
 
-未知／冻结参数梯度、改变的本地 ID／结构、不同策略或无效全局权重均为契约错误。不会隐式执行 scheduler、裁剪、优化器或累积器清空；见 [DataParallel 源码](../../ruda-optim/src/data_parallel.rs)和[训练状态](training.md)。
+未知／冻结参数梯度、改变的本地 ID／结构、不同策略或无效全局权重均为契约错误。不会隐式执行 scheduler、裁剪、优化器或累积器清空；见 [DataParallel 源码](../../crates/ruda-optim/src/data_parallel.rs)和[训练状态](training.md)。
 
 ## 保存与恢复每个 rank
 
@@ -104,7 +104,7 @@ cargo run --locked -p ruda-optim --features collective,cuda \
   --example collective_training -- resume ../ruda-collective-state
 ```
 
-run 要求新目录，第一步后保存各 rank 模型／优化器再执行第二步；resume 恢复第一步边界再执行第二步。未改动示例的两个 rank 使用同一默认设备；[进程内张量示例](../../ruCCL/examples/tensor_collectives.rs)也创建三个默认设备上下文，都不是多 GPU 性能基线。
+run 要求新目录，第一步后保存各 rank 模型／优化器再执行第二步；resume 恢复第一步边界再执行第二步。未改动示例的两个 rank 使用同一默认设备；[进程内张量示例](../../crates/ruCCL/examples/tensor_collectives.rs)也创建三个默认设备上下文，都不是多 GPU 性能基线。
 
 ## ZeRO-1 优化器状态分片
 
@@ -112,7 +112,7 @@ run 要求新目录，第一步后保存各 rank 模型／优化器再执行第�
 
 `step(lr,model,gradients,local_weight,policy)` 返回 `Zero1Step { model,global_weight }`。输入为本地损失和的梯度，沿用全局 token 加权及缺失梯度语义；兼容优化器使用 `step_fp32` 保留 FP32 归约梯度，各 rank 学习率一致。每个 rank 的 `to_record()` 生成 `Zero1Record`，与其模型、scheduler、数据／RNG 状态一起保存；`load_record` 检查 rank、world size、owners 和本地模型 ID。记录精度须保留优化器／主参数值，优化器选项由调用者重新创建，不从存档推测。
 
-这里只分片**优化器状态**，参数与梯度仍为副本。状态内存取决于实际 owners，不保证平均分配；不自动改变 world size 或重分片，不等于 ZeRO-2/3 或 FSDP。源码：[状态分片](../../ruda-optim/src/data_parallel/zero.rs)。
+这里只分片**优化器状态**，参数与梯度仍为副本。状态内存取决于实际 owners，不保证平均分配；不自动改变 world size 或重分片，不等于 ZeRO-2/3 或 FSDP。源码：[状态分片](../../crates/ruda-optim/src/data_parallel/zero.rs)。
 
 ## 张量并行投影
 
@@ -120,7 +120,7 @@ run 要求新目录，第一步后保存各 rank 模型／优化器再执行第�
 
 `column.forward(input,communicator,gather_output)` 汇总列分片的输入梯度，可选聚合输出特征。`row.forward(input,communicator,input_is_parallel)` 只在明确请求时切分完整输入，汇总部分输出后**仅加一次 bias**。未聚合的列输出可直接接行并行输入。TP group 使用相同逻辑损失，不能混用数据并行的独立 rank 损失。
 
-[模型并行区域](../../ruda-autodiff/src/tensor_parallel.rs)区别于普通可微分 collective：复制前向→求和反向、求和前向→恒等反向、切分前向→聚合反向、聚合前向→本地切片反向，避免副本损失的梯度额外乘 world size。分片须非空、等宽，前后向调用顺序一致。源码：[投影层](../../ruda-nn/src/modules/tensor_parallel.rs)。不自动转换整个 attention／MoE 模型，也不调度流水线阶段。
+[模型并行区域](../../crates/ruda-autodiff/src/tensor_parallel.rs)区别于普通可微分 collective：复制前向→求和反向、求和前向→恒等反向、切分前向→聚合反向、聚合前向→本地切片反向，避免副本损失的梯度额外乘 world size。分片须非空、等宽，前后向调用顺序一致。源码：[投影层](../../crates/ruda-nn/src/modules/tensor_parallel.rs)。不自动转换整个 attention／MoE 模型，也不调度流水线阶段。
 
 ## Python 多进程副本训练与 NCCL
 
@@ -146,7 +146,7 @@ group = r.ReplicaGroup()
 
 因果微调先初始化最终 `CausalLMFinetuner`，创建优化器，再给 `SFTTrainer` 传 `replica_group=group`。训练器按全局 token 归一化，累积后、更新前同步梯度，报告全局 loss／token，并检查 step／base／优化器／scaler 一致性。某个 rank 可以没有微批次，只要其他 rank 有监督 token。每个 rank 使用独立存档目录，重启须匹配 rank／world size 与共同完成的边界。这仍是副本训练，不是参数分片，也不是直接替换 `torch.nn.parallel.DistributedDataParallel`。
 
-`ReplicaGroup(device_type='cpu')` 要求明确初始化的 Gloo group，仅为 CPU 参考；原生／NCCL 缺失时不会自动选它。源码：[副本通信](../../ruda-torch/python/ruda_torch/distributed_training.py)。
+`ReplicaGroup(device_type='cpu')` 要求明确初始化的 Gloo group，仅为 CPU 参考；原生／NCCL 缺失时不会自动选它。源码：[副本通信](../../crates/ruda-torch/python/ruda_torch/distributed_training.py)。
 
 ## 故障处理
 

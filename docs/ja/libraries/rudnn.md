@@ -19,7 +19,7 @@ ruDNN はニューラル ネットワーク操作を提供します。 Cargo パ
 |`tensor-normalization`|モデル層の汎用デバイス正規化|
 |`tensor-gated-delta`|Qwen3.5 などのハイブリッド アーキテクチャ向けのゲートデルタ計算|
 
-アテンションとコンボリューションには、それぞれ対応する自動調整機能があります。 [Cargo.toml](../../../ruDNN/Cargo.toml) および [モジュール エクスポート](../../../ruDNN/src/lib.rs) を参照してください。
+アテンションとコンボリューションには、それぞれ対応する自動調整機能があります。 [Cargo.toml](../../../crates/ruDNN/Cargo.toml) および [モジュール エクスポート](../../../crates/ruDNN/src/lib.rs) を参照してください。
 
 ## 2. Attention と畳み込み
 
@@ -29,7 +29,7 @@ ruDNN はニューラル ネットワーク操作を提供します。 Cargo パ
 
 戦略には FlashBlackboxAccelerated、FlashUnit、Fallback、および対応 feature が有効な場合の Autotune があります。自動チューニングが無効なら既定は Fallback、有効なら Autotune です。Fallback は同じデバイス上で複数のカーネルを使い、CPU バックエンドは使いません。
 
-レイアウト、マスク、精度を選択した戦略に合わせます。 [アテンションインターフェイス](../../../ruDNN/src/attention/tensor/base.rs)を参照してください。
+レイアウト、マスク、精度を選択した戦略に合わせます。 [アテンションインターフェイス](../../../crates/ruDNN/src/attention/tensor/base.rs)を参照してください。
 
 ### 畳み込み
 
@@ -37,7 +37,7 @@ ruDNN はニューラル ネットワーク操作を提供します。 Cargo パ
 
 戦略には、直接、ImplicitGemm、およびオプションの Autotune が含まれます。エントリ ポイントは、3 次元 F32 畳み込みに Direct を使用します。 ImplicitGemm が選択されている場合、グループ化コンボリューションでもダイレクトが使用されます。したがって、戦略パラメーターは、常に 1 つのアルゴリズムを保持するという厳密な要求ではありません。
 
-同じモジュールで conv_data_backward と conv_weight_backward が提供されます。各方向の形状、オプション、施工条件をご確認ください。 [コンボリューションインターフェイス](../../../ruDNN/src/convolution/tensor/base.rs)を参照してください。
+同じモジュールで conv_data_backward と conv_weight_backward が提供されます。各方向の形状、オプション、施工条件をご確認ください。 [コンボリューションインターフェイス](../../../crates/ruDNN/src/convolution/tensor/base.rs)を参照してください。
 
 ## 3. MoE ワークフロー
 
@@ -71,7 +71,7 @@ Softmax は、top-k を選択する前に、FP32 のすべてのエキスパー�
 
 振り分け処理は容量制限を守るためにトークンを破棄しません。エキスパート内のアトミックな割り当て順序は固定されず、保存した対応表でトークン順序を復元します。順伝播のエントリポイントは計算済み logits を受け取り、モデルのゲート射影や重みファイルの読み込みは行いません。
 
-ソース: [ルーティング](../../../ruDNN/src/moe/routing.rs)、[ディスパッチと結合](../../../ruDNN/src/moe/dispatch.rs)、[専門家](../../../ruDNN/src/moe/experts.rs)、および [テスト](../../../ruDNN/src/moe/tests.rs)。
+ソース: [ルーティング](../../../crates/ruDNN/src/moe/routing.rs)、[ディスパッチと結合](../../../crates/ruDNN/src/moe/dispatch.rs)、[専門家](../../../crates/ruDNN/src/moe/experts.rs)、および [テスト](../../../crates/ruDNN/src/moe/tests.rs)。
 
 ## 6. MoE の呼び出し
 

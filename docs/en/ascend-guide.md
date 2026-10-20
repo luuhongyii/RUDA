@@ -69,9 +69,9 @@ Place an application directory alongside the `RUDA` checkout. Its dependencies a
 
 ```toml
 [dependencies]
-ruda-compiler = { path = "../RUDA/ruda-compiler", default-features = false, features = ["ascend"] }
-ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["compiler-std"] }
-ruda-driver-cann = { path = "../RUDA/ruda-driver-cann", features = ["common-ir"] }
+ruda-compiler = { path = "../RUDA/crates/ruda-compiler", default-features = false, features = ["ascend"] }
+ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["compiler-std"] }
+ruda-driver-cann = { path = "../RUDA/crates/ruda-driver-cann", features = ["common-ir"] }
 ```
 
 Use this `src/main.rs`:
@@ -158,7 +158,7 @@ The common-IR implementation accepts its supported FP32 map and row patterns, no
 
 ## API entry points
 
-- [Compiler/options](../../ruda-compiler/src/ascend/mod.rs), [map definitions](../../ruda-compiler/src/ascend/programs.rs), [row definitions](../../ruda-compiler/src/ascend/row_programs.rs).
-- [Artifact builder](../../tools/ascend/build_common_ir.py) and [compiler CLI](../../ruda-compiler/examples/ascend_ir.rs).
-- [CannProgram](../../ruda-driver-cann/src/tensor/common_ir/mod.rs), [session lifecycle](../../ruda-driver-cann/src/tensor/owner.rs), [borrowed sessions](../../ruda-driver-cann/src/tensor/mod.rs).
-- [Native matrix interface](../../ruda-driver-cann/src/tensor/deepgemm/mod.rs) and [ruBLAS integration](../../ruBLAS/src/cann.rs).
+- [Compiler/options](../../crates/ruda-compiler/src/ascend/mod.rs), [map definitions](../../crates/ruda-compiler/src/ascend/programs.rs), [row definitions](../../crates/ruda-compiler/src/ascend/row_programs.rs).
+- [Artifact builder](../../tools/ascend/build_common_ir.py) and [compiler CLI](../../crates/ruda-compiler/examples/ascend_ir.rs).
+- [CannProgram](../../crates/ruda-driver-cann/src/tensor/common_ir/mod.rs), [session lifecycle](../../crates/ruda-driver-cann/src/tensor/owner.rs), [borrowed sessions](../../crates/ruda-driver-cann/src/tensor/mod.rs).
+- [Native matrix interface](../../crates/ruda-driver-cann/src/tensor/deepgemm/mod.rs) and [ruBLAS integration](../../crates/ruBLAS/src/cann.rs).

@@ -28,7 +28,7 @@ jobs:
         include:
           - name: Native and autodiff
             key: unsafe-native
-            cache: v36-native
+            cache: native-cuda
             commands: |
               cargo build --locked -p ruda-torch-native -p ruda-autodiff --features ruda-autodiff/distributed
               cargo build --locked -p ruda-autodiff --no-default-features

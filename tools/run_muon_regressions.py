@@ -56,10 +56,10 @@ def main():
     logs.mkdir(parents=True,exist_ok=True)
     result_file=logs/'results.json'
     if result_file.exists():p.error('choose a new log directory; existing results are never overwritten')
-    paths=list((ROOT/'ruda-optim/src/optim/muon').rglob('*.rs'))
+    paths=list((ROOT/'crates/ruda-optim/src/optim/muon').rglob('*.rs'))
     paths += list((ROOT/'tools/muon').glob('*.*'))
-    paths += [ROOT/'ruda-optim/Cargo.toml', ROOT/'Cargo.lock', ROOT/'ruda-optim/src/optim/adamw.rs',
-              ROOT/'ruda-optim/src/optim/momentum.rs',ROOT/'ruda-optim/examples/muon_training.rs',Path(__file__).resolve()]
+    paths += [ROOT/'crates/ruda-optim/Cargo.toml', ROOT/'Cargo.lock', ROOT/'crates/ruda-optim/src/optim/adamw.rs',
+              ROOT/'crates/ruda-optim/src/optim/momentum.rs',ROOT/'crates/ruda-optim/examples/muon_training.rs',Path(__file__).resolve()]
     report={'schema':'ruda.muon.validation.v1','suite':args.suite,'started_utc':now.isoformat(),
             'status':'running','plans':public,'results':[], 'performance_measured':False,
             'source_sha256':{str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in paths if x.is_file()}}

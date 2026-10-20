@@ -31,7 +31,7 @@ def test_bad_samples_refused(mode):
 
 def test_expected_native_test_names_exist():
     import re
-    code=(ROOT/'ruDNN/src/paged_attention/tests_history_row_cache.rs').read_text()
+    code=(ROOT/'crates/ruDNN/src/paged_attention/tests_history_row_cache.rs').read_text()
     actual=set(re.findall(r'#\[test\]\s*fn (v35_[a-z0-9_]+)',code))
     assert actual==v.NAMES and len(actual)==19
 

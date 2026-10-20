@@ -2,7 +2,7 @@
 
 [Содержание](README.md) · [Runtime](runtime-api.md) · [Политики и примеры](../en/stack-autotuning.md)
 
-[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) содержит `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` и `SHA256SUMS`; те же данные находятся в [`autotune/a100-sxm4-40gb/20261013/`](../../autotune/a100-sxm4-40gb/20261013). Распакуйте `stack-autotune-v1` в каталог кеша, переданный `enable_stack_autotune`; `table.csv` служит для просмотра. Сохраняются точные ключи устройства, драйвера, сборки, workload и контекста, а также TTL. Записи benchmark не становятся автоматически совместимыми с PyTorch wheels; импорт Python их не загружает. [Использование и ограничения](../en/stack-autotuning.md#distributed-a100-tables).
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) содержит `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` и `SHA256SUMS`; те же данные находятся в [`data/autotune/a100-sxm4-40gb/20261013/`](../../data/autotune/a100-sxm4-40gb/20261013). Распакуйте `stack-autotune-v1` в каталог кеша, переданный `enable_stack_autotune`; `table.csv` служит для просмотра. Сохраняются точные ключи устройства, драйвера, сборки, workload и контекста, а также TTL. Записи benchmark не становятся автоматически совместимыми с PyTorch wheels; импорт Python их не загружает. [Использование и ограничения](../en/stack-autotuning.md#distributed-a100-tables).
 
 Controller проверяет семантически одинаковые варианты, измеряет завершённую работу и кеширует для workload/device. Подключены matmul, attention, forward convolution, fused matmul, packed greedy generation. FFT/sparse/solver/communication, multi-GPU placement и глобальный поиск всей модели автоматически не включены.
 

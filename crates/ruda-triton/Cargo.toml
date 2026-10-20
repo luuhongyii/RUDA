@@ -1,0 +1,26 @@
+[package]
+name = "ruda-triton"
+version = "0.1.0"
+edition.workspace = true
+description = "Triton backend for Ruda: SIMT kernel description to Ruda IR and direct PTX."
+license-file = "../../LICENSE"
+repository = "https://github.com/shuqi2077/RUDA"
+publish = false
+
+[[bin]]
+name = "ruda-triton-ptx"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dependencies.ruda-core]
+path = "../ruda-core"
+default-features = false
+features = ["std", "ir", "compiler", "argument-layout"]
+
+[dependencies.ruda-compiler]
+path = "../ruda-compiler"
+default-features = false
+features = ["ptx"]

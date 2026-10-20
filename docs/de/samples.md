@@ -6,7 +6,7 @@
 
 ## 1. NVIDIA Laufzeitbeispiel
 
-Einstiegspunkt: [ptx-runtime](../../ruda-driver-cuda/examples/ptx_runtime.rs).
+Einstiegspunkt: [ptx-runtime](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs).
 
 Im Basisfall wird die FP32-Addition zweimal bei jeder Länge durchgeführt: 1, 63, 64, 65 und 257. Dabei werden jedes Ergebnis und 16 Tail-Sentinel-Werte überprüft. Es demonstriert Geräteauswahl, Upload, Argumentbindung, Tail-Bounds, Readback und wiederholte Ausführung.
 
@@ -22,13 +22,13 @@ cargo run --locked -p ruda-driver-cuda --features direct-ptx --example ptx-runti
 
 |Argument|Verhalten|Beispielquelle|
 | --- | --- | --- |
-|`--tensor`|Tensor-Metadaten- und Layoutprüfungen|[tensor.rs](../../ruda-driver-cuda/examples/ptx_runtime/tensor.rs)|
-|`--shared`|Prüfungen des gemeinsam genutzten Speichers|[shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
-|`--half`|FP16/BF16 prüft|[half_precision.rs](../../ruda-driver-cuda/examples/ptx_runtime/half_precision.rs)|
-|`--bitwise`|Bitweise Operationsprüfungen|[bitwise.rs](../../ruda-driver-cuda/examples/ptx_runtime/bitwise.rs)|
-|`--shared-over-limit`|Diagnose der Grenze des gemeinsam genutzten Speichers|[shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
-|`--expect-cold`|Die Kompilierung der Asserts erfolgte ohne einen Festplatten-Cache-Treffer|[Haupteinstiegspunkt](../../ruda-driver-cuda/examples/ptx_runtime.rs)|
-|`--expect-warm`|Stellt einen Festplatten-Cache-Treffer ohne Neukompilierung fest|[Haupteinstiegspunkt](../../ruda-driver-cuda/examples/ptx_runtime.rs)|
+|`--tensor`|Tensor-Metadaten- und Layoutprüfungen|[tensor.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/tensor.rs)|
+|`--shared`|Prüfungen des gemeinsam genutzten Speichers|[shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
+|`--half`|FP16/BF16 prüft|[half_precision.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/half_precision.rs)|
+|`--bitwise`|Bitweise Operationsprüfungen|[bitwise.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/bitwise.rs)|
+|`--shared-over-limit`|Diagnose der Grenze des gemeinsam genutzten Speichers|[shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
+|`--expect-cold`|Die Kompilierung der Asserts erfolgte ohne einen Festplatten-Cache-Treffer|[Haupteinstiegspunkt](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)|
+|`--expect-warm`|Stellt einen Festplatten-Cache-Treffer ohne Neukompilierung fest|[Haupteinstiegspunkt](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)|
 
 `--shared-over-limit` verwendet einen separaten Zweig mit vorzeitiger Rückkehr. Kombinieren Sie es nicht mit Kalt-/Warm-Cache-Prüfungen.
 

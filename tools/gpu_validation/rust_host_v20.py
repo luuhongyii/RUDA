@@ -29,7 +29,7 @@ def main() -> int:
     if not compiler:
         report['errors'].append('missing rustc; production Rust was not compiled or run')
         save(); print(report['errors'][0], file=sys.stderr); return 2
-    source = ROOT/'ruda-driver-cuda/src/execution/graph_topology.rs'
+    source = ROOT/'crates/ruda-driver-cuda/src/execution/graph_topology.rs'
     binary = out/('graph_topology_tests.exe' if os.name=='nt' else 'graph_topology_tests')
     try:
         for label, command in [('compile', [compiler,'--edition=2024','--test',str(source),'-o',str(binary)]),

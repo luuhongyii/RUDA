@@ -6,7 +6,7 @@
 
 ## 1. NVIDIA ランタイムの例
 
-エントリ ポイント: [ptx-runtime](../../ruda-driver-cuda/examples/ptx_runtime.rs)。
+エントリ ポイント: [ptx-runtime](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)。
 
 基本的なケースでは、FP32 加算を各長さ (1、63、64、65、257) で 2 回実行します。すべての結果と 16 個の末尾センチネル値をチェックします。デバイスの選択、アップロード、引数バインド、テール バウンド、リードバック、および繰り返し実行を示します。
 
@@ -22,13 +22,13 @@ cargo run --locked -p ruda-driver-cuda --features direct-ptx --example ptx-runti
 
 |引数|の動作|ソース例|
 | --- | --- | --- |
-|`--tensor`|Tensor メタデータとレイアウトのチェック|[tensor.rs](../../ruda-driver-cuda/examples/ptx_runtime/tensor.rs)|
-|`--shared`|共有メモリのチェック|[shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
-|`--half`|FP16/BF16 チェック|[half_precision.rs](../../ruda-driver-cuda/examples/ptx_runtime/half_precision.rs)|
-|`--bitwise`|ビット単位の動作チェック|[bitwise.rs](../../ruda-driver-cuda/examples/ptx_runtime/bitwise.rs)|
-|`--shared-over-limit`|共有メモリ制限診断|[shared.rs](../../ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
-|`--expect-cold`|ディスク キャッシュ ヒットなしでコンパイルが行われたことをアサートします|[メイン エントリ ポイント](../../ruda-driver-cuda/examples/ptx_runtime.rs)|
-|`--expect-warm`|再コンパイルせずにディスク キャッシュ ヒットをアサートします|[メイン エントリ ポイント](../../ruda-driver-cuda/examples/ptx_runtime.rs)|
+|`--tensor`|Tensor メタデータとレイアウトのチェック|[tensor.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/tensor.rs)|
+|`--shared`|共有メモリのチェック|[shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
+|`--half`|FP16/BF16 チェック|[half_precision.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/half_precision.rs)|
+|`--bitwise`|ビット単位の動作チェック|[bitwise.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/bitwise.rs)|
+|`--shared-over-limit`|共有メモリ制限診断|[shared.rs](../../crates/ruda-driver-cuda/examples/ptx_runtime/shared.rs)|
+|`--expect-cold`|ディスク キャッシュ ヒットなしでコンパイルが行われたことをアサートします|[メイン エントリ ポイント](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)|
+|`--expect-warm`|再コンパイルせずにディスク キャッシュ ヒットをアサートします|[メイン エントリ ポイント](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)|
 
 `--shared-over-limit` は別の早期リターン分岐を実行します。コールド/ウォーム キャッシュ チェックと組み合わせないでください。
 

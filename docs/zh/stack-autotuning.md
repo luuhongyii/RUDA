@@ -14,12 +14,12 @@
 
 | 层级 | 接入位置 | 比较对象 |
 |---|---|---|
-| 公共运行时 | `ruda-runtime/src/runtime/tune/stack/`、原 `LocalTuner` | 校验、预算、配对计时、缓存、并发控制、失效和报告 |
-| 矩阵乘 | `ruBLAS/src/tensor_matmul/tune/base.rs` | 所有符合原选择条件的候选组；包含精度策略和真实布局 |
-| 注意力 | `ruDNN/src/attention/tensor/tune.rs` | 整个注意力算子；区分掩码、偏置和算子选项 |
-| 前向卷积 | `ruDNN/src/convolution/tensor/forward/tune.rs` | 整个前向卷积；以显式参考实现为基线 |
-| 融合图 | `ruda-fusion/src/device/optim/matmul/tune.rs` | 已融合矩阵乘候选的全部对外输出，而不只是中间乘法 |
-| 完整生成 | `ruLLM/src/autotune.rs` | packed 模型的 Portable 与 Automatic 两种完整贪心生成方案 |
+| 公共运行时 | `crates/ruda-runtime/src/runtime/tune/stack/`、原 `LocalTuner` | 校验、预算、配对计时、缓存、并发控制、失效和报告 |
+| 矩阵乘 | `crates/ruBLAS/src/tensor_matmul/tune/base.rs` | 所有符合原选择条件的候选组；包含精度策略和真实布局 |
+| 注意力 | `crates/ruDNN/src/attention/tensor/tune.rs` | 整个注意力算子；区分掩码、偏置和算子选项 |
+| 前向卷积 | `crates/ruDNN/src/convolution/tensor/forward/tune.rs` | 整个前向卷积；以显式参考实现为基线 |
+| 融合图 | `crates/ruda-fusion/src/device/optim/matmul/tune.rs` | 已融合矩阵乘候选的全部对外输出，而不只是中间乘法 |
+| 完整生成 | `crates/ruLLM/src/autotune.rs` | packed 模型的 Portable 与 Automatic 两种完整贪心生成方案 |
 
 已有 `TunePlan` 的候选资格规则继续保留；新路径展开所有合格优先级组，不再因为第一组能运行就停止搜索。候选数和总调优时间仍受预算约束，因此不保证试完每种实现。
 
@@ -105,7 +105,7 @@ export RUDA_AUTOTUNE_CONTEXT_TAG='实际负载、并发、拓扑与功耗配置�
 
 ### 发布的 A100 调优表
 
-[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) 附带 `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` 和 `SHA256SUMS`。相同记录位于 [`autotune/a100-sxm4-40gb/20261013/`](../../autotune/a100-sxm4-40gb/20261013)。归档包含供查看的 `table.csv` 和原生 `stack-autotune-v1/*.rtune`；运行时读取后者，不读取 CSV。
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) 附带 `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` 和 `SHA256SUMS`。相同记录位于 [`data/autotune/a100-sxm4-40gb/20261013/`](../../data/autotune/a100-sxm4-40gb/20261013)。归档包含供查看的 `table.csv` 和原生 `stack-autotune-v1/*.rtune`；运行时读取后者，不读取 CSV。
 
 核对归档的 SHA-256 条目后，解压到传给 `enable_stack_autotune` 的缓存根目录，例如 `.ruda-stack-cache/stack-autotune-v1/*.rtune`。按前文安装控制器；不希望重新搜索时使用 `CacheOnly`，需要调优缺失项时使用 `Explore`。
 
@@ -175,7 +175,7 @@ cargo run --release --locked -p ruda-llm \
 
 `Decision` 提供 `index`、`reference_index`、`name`、`source`、`verified`、可选的候选／参考 `ratio` 和 `cache_key`；索引仅对应本次候选切片，不用于其他构建。`TuneReport` 提供操作／环境／workload／context、winner、耗时、预算状态与 `CandidateReport` 行（`name`、`samples`、`ratio`、`relative_mad`、`verified`、`note`）。缓存命中增加计数，不生成新搜索报告。
 
-磁盘 Record／`DiskCache` 是内部实现，不是公开序列化 API。读取检查格式、完整键、大小、摘要及数值有效性，控制器检查 TTL 和当前进程校验。保存先新建临时文件、fsync、rename，再按容量清理；清理报错时新记录可能已写入。源码：[策略类型](../../ruda-runtime/src/runtime/tune/stack/policy.rs)、[控制器](../../ruda-runtime/src/runtime/tune/stack/engine.rs)、[运行时适配](../../ruda-runtime/src/runtime/tune/stack/runtime_adapter.rs)、[内部缓存](../../ruda-runtime/src/runtime/tune/stack/cache.rs)。
+磁盘 Record／`DiskCache` 是内部实现，不是公开序列化 API。读取检查格式、完整键、大小、摘要及数值有效性，控制器检查 TTL 和当前进程校验。保存先新建临时文件、fsync、rename，再按容量清理；清理报错时新记录可能已写入。源码：[策略类型](../../crates/ruda-runtime/src/runtime/tune/stack/policy.rs)、[控制器](../../crates/ruda-runtime/src/runtime/tune/stack/engine.rs)、[运行时适配](../../crates/ruda-runtime/src/runtime/tune/stack/runtime_adapter.rs)、[内部缓存](../../crates/ruda-runtime/src/runtime/tune/stack/cache.rs)。
 
 ## 11. 兼容性与范围
 

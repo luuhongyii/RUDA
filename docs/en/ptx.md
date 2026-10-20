@@ -37,7 +37,7 @@ Preserve the argument layout, entry point, and shared memory requirements when c
 
 Unsupported IR returns `CompilationError::UnsupportedInstruction`. Invalid configuration or structure returns `CompilationError::Validation`. Diagnostics include the `Direct PTX:` prefix. The backend does not automatically fall back to NVRTC.
 
-Definitions: [PTX module](../../ruda-compiler/src/ptx/mod.rs), [compiler tests](../../ruda-compiler/src/ptx/tests.rs), and [runtime backend selection](../../ruda-driver-cuda/src/compiler_backend.rs).
+Definitions: [PTX module](../../crates/ruda-compiler/src/ptx/mod.rs), [compiler tests](../../crates/ruda-compiler/src/ptx/tests.rs), and [runtime backend selection](../../crates/ruda-driver-cuda/src/compiler_backend.rs).
 
 ## 5. Packed FP4 transport and NVFP4 scaled MMA
 
@@ -45,4 +45,4 @@ Definitions: [PTX module](../../ruda-compiler/src/ptx/mod.rs), [compiler tests](
 
 `CoopMma::ExecuteScaled` currently accepts only SM 120 with PTX 8.7 or newer, a `16×8×64` tile, packed E2M1x2 A/B, F32 C/D, E4M3 scales, and `scales_factor = 4`. It emits the `mxf4nvf4.block_scale.scale_vec::4X` instruction and changes the generated target to `sm_120a`. Other architectures, tile shapes, scale formats or factors are rejected; sufficient fragment register capacity is also required.
 
-See [packed operation handling](../../ruda-compiler/src/ptx/packed.rs), [scaled MMA lowering](../../ruda-compiler/src/ptx/matrix/scaled.rs), and the [packed transport/layout example](../../ruda-driver-cuda/examples/ptx_packed.rs). That example consumes exported PTX files and checks byte transport and fragment coordinates; it does not execute NVFP4 MMA arithmetic.
+See [packed operation handling](../../crates/ruda-compiler/src/ptx/packed.rs), [scaled MMA lowering](../../crates/ruda-compiler/src/ptx/matrix/scaled.rs), and the [packed transport/layout example](../../crates/ruda-driver-cuda/examples/ptx_packed.rs). That example consumes exported PTX files and checks byte transport and fragment coordinates; it does not execute NVFP4 MMA arithmetic.

@@ -10,10 +10,10 @@ Cargo package 名为 `ruRAND`，Rust 导入名为 `rurand`。`tensor` feature �
 
 ```toml
 [dependencies]
-rurand = { package = "ruRAND", path = "../RUDA/ruRAND", default-features = false, features = ["std", "tensor"] }
-ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
-ruda-kernel = { path = "../RUDA/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
-ruda-driver-cuda = { path = "../RUDA/ruda-driver-cuda", default-features = false, features = ["std"] }
+rurand = { package = "ruRAND", path = "../RUDA/crates/ruRAND", default-features = false, features = ["std", "tensor"] }
+ruda-core = { path = "../RUDA/crates/ruda-core", default-features = false, features = ["std", "tensor-host-data"] }
+ruda-kernel = { path = "../RUDA/crates/ruda-kernel", default-features = false, features = ["frontend-std", "device-tensor"] }
+ruda-driver-cuda = { path = "../RUDA/crates/ruda-driver-cuda", default-features = false, features = ["std"] }
 ```
 
 ## 2. 生成随机张量
@@ -116,4 +116,4 @@ fn fill_uniform<R: Runtime>(
 
 张量级入口在启动返回错误时 panic；上面的底层入口返回 `Result<(), LaunchError>`。提交成功不代表 GPU 已执行完毕，读取结果时使用张量回读接口或等待客户端同步。`into_data_sync` 在回读失败时 panic；需要传播回读错误时使用异步 `into_data(tensor).await`。
 
-接口参考：[张量入口](../../../ruRAND/src/tensor/mod.rs)、[种子状态](../../../ruRAND/src/state.rs)、[分布实现](../../../ruRAND/src/distributions/mod.rs)。
+接口参考：[张量入口](../../../crates/ruRAND/src/tensor/mod.rs)、[种子状态](../../../crates/ruRAND/src/state.rs)、[分布实现](../../../crates/ruRAND/src/distributions/mod.rs)。

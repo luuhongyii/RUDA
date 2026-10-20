@@ -21,11 +21,11 @@
 | `Tensor<T>` | 带维度与步长信息的 Kernel 张量访问 |
 | `Runtime` | 关联编译器、计算服务和设备类型 |
 
-这些名称来自当前 API；CUDA 概念对照见[兼容性指南](compatibility.md)。公共导出见 [DSL prelude](../../ruda-kernel/src/dsl/prelude.rs)。
+这些名称来自当前 API；CUDA 概念对照见[兼容性指南](compatibility.md)。公共导出见 [DSL prelude](../../crates/ruda-kernel/src/dsl/prelude.rs)。
 
 ## 3. 第一个 Kernel
 
-下面摘自 [ptx-runtime 示例](../../ruda-driver-cuda/examples/ptx_runtime.rs)，完整主机代码和执行检查保留在示例中：
+下面摘自 [ptx-runtime 示例](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs)，完整主机代码和执行检查保留在示例中：
 
 ```rust
 use ruda_kernel::dsl::prelude::*;

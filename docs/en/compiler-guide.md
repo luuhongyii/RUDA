@@ -25,7 +25,7 @@ Both execute through the NVIDIA driver. The CUDA C++ compilation path is not an 
 | `ruda-compiler/ptx` | Direct PTX compiler |
 | `ruda-driver-cuda/direct-ptx` | Enables direct PTX selection in the CUDA backend |
 
-Features determine which code is built; environment variables select a path at runtime. These are separate controls. See the [CUDA manifest](../../ruda-driver-cuda/Cargo.toml) and [compiler manifest](../../ruda-compiler/Cargo.toml).
+Features determine which code is built; environment variables select a path at runtime. These are separate controls. See the [CUDA manifest](../../crates/ruda-driver-cuda/Cargo.toml) and [compiler manifest](../../crates/ruda-compiler/Cargo.toml).
 
 ## 3. Environment variables
 
@@ -36,7 +36,7 @@ Features determine which code is built; environment variables select a path at r
 | `CUDA_PATH` | CUDA Toolkit installation root |
 | `RUDA_PTX_TEST_CACHE` | Cache directory override read only by the ptx-runtime example |
 
-Unknown compiler values produce an error. Selecting `ptx` without enabling `direct-ptx` also produces an error rather than switching to NVRTC. See [compiler_backend.rs](../../ruda-driver-cuda/src/compiler_backend.rs).
+Unknown compiler values produce an error. Selecting `ptx` without enabling `direct-ptx` also produces an error rather than switching to NVRTC. See [compiler_backend.rs](../../crates/ruda-driver-cuda/src/compiler_backend.rs).
 
 ## 4. Targets and caches
 
@@ -58,4 +58,4 @@ Set `TRITON_DEFAULT_BACKEND=ruda` before importing Triton. `RUDA_TRITON_DEVICE=c
 
 This frontend accepts Triton, not Gluon, and unsupported TTIR operations raise lowering errors. It is separate from the Rust kernel DSL; selecting it does not imply compatibility with every Triton kernel. GX1 mode requires a separate GX1 library not included in this software workspace.
 
-Source: [Python installation metadata](../../ruda-triton/python/pyproject.toml), [compiler stages](../../ruda-triton/python/ruda_triton/compiler.py), [device/stream adapter](../../ruda-triton/python/ruda_triton/driver.py).
+Source: [Python installation metadata](../../crates/ruda-triton/python/pyproject.toml), [compiler stages](../../crates/ruda-triton/python/ruda_triton/compiler.py), [device/stream adapter](../../crates/ruda-triton/python/ruda_triton/driver.py).

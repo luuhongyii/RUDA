@@ -11,7 +11,7 @@ def main():
  def save():target.write_text(json.dumps(report,indent=2)+'\n')
  rust=shutil.which('rustc')
  if not rust:report['errors'].append('missing rustc; no production code executed');save();return 2
- source=ROOT/'ruBLAS/src/tensor_grouped/backward_plan.rs'
+ source=ROOT/'crates/ruBLAS/src/tensor_grouped/backward_plan.rs'
  harness=out/'planner_harness.rs';harness.write_text('#[path = '+json.dumps(str(source))+']\nmod planner;\n')
  binary=out/('planner_tests.exe' if os.name=='nt' else 'planner_tests')
  try:

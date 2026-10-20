@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'ruda-torch/python/**'
-      - 'ruda-torch/tools/check_cpp_bridge.py'
+      - 'crates/ruda-torch/python/**'
+      - 'crates/ruda-torch/tools/check_cpp_bridge.py'
       - '.github/workflows/model-compiler-host.yml'
   push:
     paths:
-      - 'ruda-torch/python/**'
-      - 'ruda-torch/tools/check_cpp_bridge.py'
+      - 'crates/ruda-torch/python/**'
+      - 'crates/ruda-torch/tools/check_cpp_bridge.py'
       - '.github/workflows/model-compiler-host.yml'
 
 jobs:
@@ -27,27 +27,27 @@ jobs:
           python -m pip install pytest safetensors numpy transformers==4.57.1 accelerate==1.13.0
       - name: CPU model and native-region simulator tests
         run: |
-          python -m compileall -q ruda-torch/python/ruda_torch
+          python -m compileall -q crates/ruda-torch/python/ruda_torch
           python -m pytest -q \
-            ruda-torch/python/tests/test_model_compile.py \
-            ruda-torch/python/tests/test_finetuning.py \
-            ruda-torch/python/tests/test_causal_finetuning.py \
-            ruda-torch/python/tests/test_replica_training.py \
-            ruda-torch/python/tests/test_sequence_training.py \
-            ruda-torch/python/tests/test_native_training_contracts.py \
-            ruda-torch/python/tests/test_compile_native.py \
-            ruda-torch/python/tests/test_static_graph_spec.py \
-            ruda-torch/python/tests/test_static_graph_optimizer.py \
-            ruda-torch/python/tests/test_static_graph_training.py \
+            crates/ruda-torch/python/tests/test_model_compile.py \
+            crates/ruda-torch/python/tests/test_finetuning.py \
+            crates/ruda-torch/python/tests/test_causal_finetuning.py \
+            crates/ruda-torch/python/tests/test_replica_training.py \
+            crates/ruda-torch/python/tests/test_sequence_training.py \
+            crates/ruda-torch/python/tests/test_native_training_contracts.py \
+            crates/ruda-torch/python/tests/test_compile_native.py \
+            crates/ruda-torch/python/tests/test_static_graph_spec.py \
+            crates/ruda-torch/python/tests/test_static_graph_optimizer.py \
+            crates/ruda-torch/python/tests/test_static_graph_training.py \
             --junitxml=model-compiler-python.xml
       - name: Compile actual C++ bridge and test host protocols
         run: |
-          python ruda-torch/tools/check_cpp_bridge.py \
+          python crates/ruda-torch/tools/check_cpp_bridge.py \
             --compiler clang++ --static-graph --output model-compiler-cpp
           library="$(find model-compiler-cpp -maxdepth 1 -name '_C*.so' -print -quit)"
           test -n "$library" && test -f "$library"
           RUDA_CPP_TEST_LIBRARY="$(realpath "$library")" python -m pytest -q \
-            ruda-torch/python/tests/test_model_compile_cpp.py \
+            crates/ruda-torch/python/tests/test_model_compile_cpp.py \
             --junitxml=model-compiler-cpp/model-tracing.xml
       - name: Reject empty/skipped test suites
         run: |

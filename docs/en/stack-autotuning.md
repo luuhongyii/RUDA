@@ -8,12 +8,12 @@ The shared controller validates semantically equivalent implementations, measure
 
 | Layer | Adapter / search scope |
 | --- | --- |
-| Runtime | [`ruda-runtime/src/runtime/tune/stack`](../../ruda-runtime/src/runtime/tune/stack): policy, timing, cache and reports |
-| Matrix multiplication | [`ruBLAS` tuner](../../ruBLAS/src/tensor_matmul/tune/base.rs): eligible candidate groups and actual layout/precision |
-| Attention | [`ruDNN` attention tuner](../../ruDNN/src/attention/tensor/tune.rs): operator and mask/bias options |
-| Forward convolution | [`ruDNN` convolution tuner](../../ruDNN/src/convolution/tensor/forward/tune.rs): complete forward operator |
-| Fusion | [Fused matmul tuner](../../ruda-fusion/src/device/optim/matmul/tune.rs): all externally visible fused outputs |
-| Generation | [`ruLLM` application adapter](../../ruLLM/src/autotune.rs): Portable versus Automatic packed greedy-generation plans |
+| Runtime | [`crates/ruda-runtime/src/runtime/tune/stack`](../../crates/ruda-runtime/src/runtime/tune/stack): policy, timing, cache and reports |
+| Matrix multiplication | [`ruBLAS` tuner](../../crates/ruBLAS/src/tensor_matmul/tune/base.rs): eligible candidate groups and actual layout/precision |
+| Attention | [`ruDNN` attention tuner](../../crates/ruDNN/src/attention/tensor/tune.rs): operator and mask/bias options |
+| Forward convolution | [`ruDNN` convolution tuner](../../crates/ruDNN/src/convolution/tensor/forward/tune.rs): complete forward operator |
+| Fusion | [Fused matmul tuner](../../crates/ruda-fusion/src/device/optim/matmul/tune.rs): all externally visible fused outputs |
+| Generation | [`ruLLM` application adapter](../../crates/ruLLM/src/autotune.rs): Portable versus Automatic packed greedy-generation plans |
 
 Original candidate eligibility is retained, but all eligible priority groups can participate within the budget. FFT, sparse, solver, communication and unrelated fusion paths retain their existing behavior. Batch sizes, stream counts, model splitting and multi-GPU placement are not searched.
 
@@ -58,7 +58,7 @@ Not installing the controller retains the original LocalTuner route. `Disabled` 
 | `max_parallel_tunes` | 1, additionally serialized per device in a process |
 | `regression_pairs`, `regression_ratio` | 7 supplied comparison pairs; invalidate above ratio 1.15 |
 
-See [policy definitions and validation ranges](../../ruda-runtime/src/runtime/tune/stack/policy.rs) before overriding defaults. The 1.05 threshold is a policy, not a measured speedup claim.
+See [policy definitions and validation ranges](../../crates/ruda-runtime/src/runtime/tune/stack/policy.rs) before overriding defaults. The 1.05 threshold is a policy, not a measured speedup claim.
 
 Each sample remeasures reference and candidate, alternates their order and compares candidate/reference ratios. Selection uses the median ratio with a noise criterion, not a single fastest run or a statistical significance claim.
 
@@ -86,7 +86,7 @@ Disk records use `stack-autotune-v1` under the selected directory. Full keys are
 
 ## Distributed A100 tables
 
-[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) includes `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` and `SHA256SUMS`. The same records are in [`autotune/a100-sxm4-40gb/20261013/`](../../autotune/a100-sxm4-40gb/20261013). The archive contains `table.csv` for inspection and native `stack-autotune-v1/*.rtune` records; the runtime reads the records, not the CSV.
+[v0.1.95](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.95) includes `ruda-v0.1.95-a100-sxm4-40gb-autotune.tar.gz` and `SHA256SUMS`. The same records are in [`data/autotune/a100-sxm4-40gb/20261013/`](../../data/autotune/a100-sxm4-40gb/20261013). The archive contains `table.csv` for inspection and native `stack-autotune-v1/*.rtune` records; the runtime reads the records, not the CSV.
 
 After checking the archive's SHA-256 entry, extract it under the cache root passed to `enable_stack_autotune`, for example `.ruda-stack-cache/stack-autotune-v1/*.rtune`. Install the controller as above; choose `CacheOnly` to avoid new timing searches or `Explore` to tune misses.
 
@@ -113,7 +113,7 @@ These public APIs are exported by `ruda::runtime::tune::stack`; their definition
 
 `Decision` exposes `index`, `reference_index`, `name`, `source`, `verified`, optional selected/reference `ratio` and `cache_key`. Indices belong to this call's candidate slice, not another build. `TuneReport` contains operation/environment/workload/context, winner, elapsed time, budget status and `CandidateReport` rows (`name`, `samples`, `ratio`, `relative_mad`, `verified`, `note`). Cache hits increment counters rather than adding new search reports.
 
-Persistent records/`DiskCache` are internal, not supported public serialization APIs. Reads enforce format, full key, size, checksum and numeric validity; the controller checks TTL and current-process validation. `save` uses a new temporary file, fsync and rename before capacity pruning; a pruning error can occur after the new record was installed. See [policy types](../../ruda-runtime/src/runtime/tune/stack/policy.rs), [controller](../../ruda-runtime/src/runtime/tune/stack/engine.rs), [runtime adapter](../../ruda-runtime/src/runtime/tune/stack/runtime_adapter.rs) and [internal cache](../../ruda-runtime/src/runtime/tune/stack/cache.rs).
+Persistent records/`DiskCache` are internal, not supported public serialization APIs. Reads enforce format, full key, size, checksum and numeric validity; the controller checks TTL and current-process validation. `save` uses a new temporary file, fsync and rename before capacity pruning; a pruning error can occur after the new record was installed. See [policy types](../../crates/ruda-runtime/src/runtime/tune/stack/policy.rs), [controller](../../crates/ruda-runtime/src/runtime/tune/stack/engine.rs), [runtime adapter](../../crates/ruda-runtime/src/runtime/tune/stack/runtime_adapter.rs) and [internal cache](../../crates/ruda-runtime/src/runtime/tune/stack/cache.rs).
 
 ## Concurrency, failures and regressions
 

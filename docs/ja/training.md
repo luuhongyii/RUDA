@@ -12,11 +12,11 @@
 
 ```toml
 [dependencies]
-ruda-autodiff = { path = "../RUDA/ruda-autodiff", default-features = false, features = ["std"] }
-ruda-model = { path = "../RUDA/ruda-model", default-features = false, features = ["std"] }
-ruda-nn = { path = "../RUDA/ruda-nn", default-features = false, features = ["std"] }
-ruda-optim = { path = "../RUDA/ruda-optim", default-features = false, features = ["std"] }
-ruda-tensor-device = { path = "../RUDA/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
+ruda-autodiff = { path = "../RUDA/crates/ruda-autodiff", default-features = false, features = ["std"] }
+ruda-model = { path = "../RUDA/crates/ruda-model", default-features = false, features = ["std"] }
+ruda-nn = { path = "../RUDA/crates/ruda-nn", default-features = false, features = ["std"] }
+ruda-optim = { path = "../RUDA/crates/ruda-optim", default-features = false, features = ["std"] }
+ruda-tensor-device = { path = "../RUDA/crates/ruda-tensor-device", default-features = false, features = ["std", "cuda"] }
 ```
 
 ## 前方、後方、パラメータの更新
@@ -144,7 +144,7 @@ fn restore_training(
 
 `ruda_optim` は、`SgdConfig`、`AdamWConfig`、`AdaGradConfig`、`RmsPropConfig`、`AdanConfig`、`MuonConfig`、および `LBFGSConfig` も提供します。オプティマイザーを切り替えるときは、構成と状態タイプの両方を変更します。集合的なトレーニングの統合については、[ruCCL](libraries/ruccl.md) を参照してください。
 
-API 参照: [オプティマイザー](../../ruda-optim/src/optim/mod.rs)、[トレーニング レコード](../../ruda-optim/src/training.rs)。
+API 参照: [オプティマイザー](../../crates/ruda-optim/src/optim/mod.rs)、[トレーニング レコード](../../crates/ruda-optim/src/training.rs)。
 
 ### Muon と Muon + AdamW のパラメータグループ
 
@@ -152,7 +152,7 @@ API 参照: [オプティマイザー](../../ruda-optim/src/optim/mod.rs)、[ト
 
 `GradientsParams::from_grads(loss.backward(), &model)` で勾配を取得し、`try_step_with_lrs(muon_lr, adamw_lr, model, gradients)` の戻り値を新しいモデルとして保持します。学習率は独立です。`Optimizer::step(lr, ...)` では Muon が `lr`、AdamW が `lr * adamw_lr_ratio` を使い、比率の既定値は `0.015` です。`MuonMomentumMode::Ema`、`with_stable_normalization(true)`、`MuonMatrixLayout::InputOutput` は明示的に選択し、安定したノルム計算には FP32 のパラメータ・勾配・モメンタムが必要です。
 
-モデルとオプティマイザー状態を一緒に保存し、復元時に元の `ParamId`、グループ、設定を維持します。`try_load_record` は非互換状態を拒否します。更新前の逆スケーリング、非有限勾配の検査、レプリカ間のスキップ判断の一致は呼び出し側が担当します。[Muon 設定](../../ruda-optim/src/optim/muon/mod.rs)と[グループ化 API](../../ruda-optim/src/optim/muon/grouped.rs)、[完全な Host 学習例](../../ruda-optim/examples/muon_training.rs)を参照してください。
+モデルとオプティマイザー状態を一緒に保存し、復元時に元の `ParamId`、グループ、設定を維持します。`try_load_record` は非互換状態を拒否します。更新前の逆スケーリング、非有限勾配の検査、レプリカ間のスキップ判断の一致は呼び出し側が担当します。[Muon 設定](../../crates/ruda-optim/src/optim/muon/mod.rs)と[グループ化 API](../../crates/ruda-optim/src/optim/muon/grouped.rs)、[完全な Host 学習例](../../crates/ruda-optim/examples/muon_training.rs)を参照してください。
 
 ```bash
 cargo run --release --locked -p ruda-optim --example muon-training -- 20
@@ -164,8 +164,8 @@ cargo run --release --locked -p ruda-optim --example muon-training -- 20
 
 | `ruda-optim` feature | API と使用方法 |
 | --- | --- |
-| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../ruda-optim/src/fused_adamw/device.rs) にパラメータ、勾配、任意のモメンタム状態、`AdamWOptions`、`StepControl` を渡します。パラメータ／モメンタムは FP32、勾配は F32/F16/BF16。連続配置と同一デバイス／キューが必要で、独立したパラメータ／状態バッファを返します。 |
-| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../ruda-optim/src/fused_adamw/guard_device.rs) に `AdamWEntry` グループと `GradientGuardOptions` を渡します。FP32 逆スケーリング後に NaN/Inf を検査し、単一デバイス／キューの選択グループ全体の L2 ノルムから共通係数でクリッピングして更新します。 |
+| `fused-adamw-device` | [`fused_adamw::adamw_step`](../../crates/ruda-optim/src/fused_adamw/device.rs) にパラメータ、勾配、任意のモメンタム状態、`AdamWOptions`、`StepControl` を渡します。パラメータ／モメンタムは FP32、勾配は F32/F16/BF16。連続配置と同一デバイス／キューが必要で、独立したパラメータ／状態バッファを返します。 |
+| `gradient-guard-device` | [`fused_adamw::guarded_adamw_step`](../../crates/ruda-optim/src/fused_adamw/guard_device.rs) に `AdamWEntry` グループと `GradientGuardOptions` を渡します。FP32 逆スケーリング後に NaN/Inf を検査し、単一デバイス／キューの選択グループ全体の L2 ノルムから共通係数でクリッピングして更新します。 |
 
 `StepControl::gradient_scale` は有限の正の loss scale で、蓄積窓全体で同じ値を使います。`skip_update` は明示的な更新スキップです。`max_norm=None` はクリッピングだけを無効化します。`NonFinitePolicy::Skip` はグループ全体のパラメータ・減衰・ステップ更新をスキップし、`Error` は更新送信前にエラーを返します。このノルムは rank 間の分散グローバルノルムではありません。
 
@@ -173,7 +173,7 @@ cargo run --release --locked -p ruda-optim --example muon-training -- 20
 
 ## `ruda:0` 上のネイティブ PyTorch 学習
 
-上記の Rust `Autodiff<Cuda<...>>` とは別の経路です。同じソースの Rust ライブラリと C++ 拡張、または互換性のあるコンパイル済み bundle を使います。基本 ABI 10、training API 4、router API 1、paged-backward API 2、graph API 3 を使用します。[ネイティブ PyTorch ガイド](../../ruda-torch/README.md)と [API 契約](native-pytorch-api.md)を参照してください。
+上記の Rust `Autodiff<Cuda<...>>` とは別の経路です。同じソースの Rust ライブラリと C++ 拡張、または互換性のあるコンパイル済み bundle を使います。基本 ABI 10、training API 4、router API 1、paged-backward API 2、graph API 3 を使用します。[ネイティブ PyTorch ガイド](../../crates/ruda-torch/README.md)と [API 契約](native-pytorch-api.md)を参照してください。
 
 `ruda_torch.RMSNorm`/`rms_norm`、`LayerNorm`/`layer_norm`、`silu_mul` は一階学習に対応します。正規化は最終軸のみで、統計量は FP32、出力は活性値と同じ dtype、アフィンパラメーターは入力 dtype または FP32 です。標準の `torch.nn.LayerNorm` も対応する連続最終軸入力でネイティブ学習経路を選びます。高階勾配と学習グラフ capture は対象外です。
 

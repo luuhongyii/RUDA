@@ -23,11 +23,11 @@
 |`Tensor<T>`|形状およびストライドのメタデータを使用したカーネル テンソル アクセス|
 |`Runtime`|コンパイラ、計算サーバー、およびデバイス タイプを関連付けます|
 
-対応する CUDA の概念については、[互換性ガイド](compatibility.md) を参照してください。パブリック エクスポートは [DSL プレリュード](../../ruda-kernel/src/dsl/prelude.rs) にあります。
+対応する CUDA の概念については、[互換性ガイド](compatibility.md) を参照してください。パブリック エクスポートは [DSL プレリュード](../../crates/ruda-kernel/src/dsl/prelude.rs) にあります。
 
 ## 3. Your first kernel
 
-このカーネルは、完全なホスト プログラムと実行チェックを含む [ptx-runtime example](../../ruda-driver-cuda/examples/ptx_runtime.rs) から来ています。
+このカーネルは、完全なホスト プログラムと実行チェックを含む [ptx-runtime example](../../crates/ruda-driver-cuda/examples/ptx_runtime.rs) から来ています。
 
 ```rust
 use ruda_kernel::dsl::prelude::*;

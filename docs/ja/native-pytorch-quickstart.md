@@ -31,7 +31,7 @@ export RUDA_PTX_VERSION=8.0
 
 GPU とドライバが対応する [PTX バージョン](ptx.md)を選択します。`RUDA_CUDA_COMPILER=nvrtc` は CUDA C++/NVRTC 経路を選択します。ローダーはパッケージ内のライブラリ、次にリポジトリの debug ライブラリを探します。release ビルドなど別の場所では、インポート前に `RUDA_TORCH_LIBRARY` を設定してください。Rust と C++ の両コンポーネントに ABI 10 が必要です。
 
-[v0.1.96 wheel](../../ruda-torch/README.md#release-wheels) を使えば Rust/C++ のローカルビルドは不要です。CPython 3.13、Linux x86_64 は PyTorch `2.10.0+cu126`（Ubuntu 24.04 でビルド）、Windows x86_64 は `2.13.0+cu130` が必要です。ネイティブライブラリを同梱するため、独自の `RUDA_TORCH_LIBRARY` 指定は不要です。別配布の Linux/Colab バンドルは従来の[インストール手順](../../ruda-torch/README.md#linuxcolab-precompiled-bundle)に従います。
+[v0.1.96 wheel](../../crates/ruda-torch/README.md#release-wheels) を使えば Rust/C++ のローカルビルドは不要です。CPython 3.13、Linux x86_64 は PyTorch `2.10.0+cu126`（Ubuntu 24.04 でビルド）、Windows x86_64 は `2.13.0+cu130` が必要です。ネイティブライブラリを同梱するため、独自の `RUDA_TORCH_LIBRARY` 指定は不要です。別配布の Linux/Colab バンドルは従来の[インストール手順](../../crates/ruda-torch/README.md#linuxcolab-precompiled-bundle)に従います。
 
 ## 2. データ転送と結果の読み出し
 

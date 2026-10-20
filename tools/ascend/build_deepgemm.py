@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse,hashlib,json,os,shutil,struct,subprocess,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
-CRATE=ROOT/'ruda-ascend-kernels'
+CRATE=ROOT/'crates/ruda-ascend-kernels'
 SCHEMA='ruda.ascend.rust.bf16.v2'
 
 def run(cmd:list[str],log:Path,timeout:int=600):

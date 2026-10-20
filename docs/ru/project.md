@@ -87,7 +87,7 @@ x = torch.arange(4, dtype=torch.float32).to("ruda:0")
 print((x + x).cpu())
 ```
 
-[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) содержит Linux/Windows x86_64 wheels с пакетом Python, расширением C++ и нативной библиотекой Rust. Для обоих нужен CPython 3.13: Linux использует PyTorch `2.10.0+cu126` (сборка на Ubuntu 24.04), Windows — `2.13.0+cu130`. Версия Python-пакета — `ruda-torch==0.1.1`; см. [установку релиза](../../ruda-torch/README.md#release-wheels). `ruda-torch-native` собирается из исходного кода и не является пакетом crates.io.
+[v0.1.96](https://github.com/shuqi2077/RUDA/releases/tag/v0.1.96) содержит Linux/Windows x86_64 wheels с пакетом Python, расширением C++ и нативной библиотекой Rust. Для обоих нужен CPython 3.13: Linux использует PyTorch `2.10.0+cu126` (сборка на Ubuntu 24.04), Windows — `2.13.0+cu130`. Версия Python-пакета — `ruda-torch==0.1.1`; см. [установку релиза](../../crates/ruda-torch/README.md#release-wheels). `ruda-torch-native` собирается из исходного кода и не является пакетом crates.io.
 
 ## Организация стека
 
