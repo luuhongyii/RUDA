@@ -15,7 +15,7 @@ on:
       - 'ruFFT/src/**'
       - 'ruFFT/tests/host/**'
       - 'tools/gpu_validation/**'
-      - 'ruda-driver-cuda/src/execution/context/**'
+      - 'ruda-driver/cuda/src/execution/context/**'
       - '.github/workflows/fft-runtime-v16.yml'
 permissions:
   contents: read

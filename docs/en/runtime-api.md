@@ -4,7 +4,7 @@
 
 The general-purpose runtime is in `ruda::runtime`, enabled by the `ruda/runtime` feature. Each backend also requires its corresponding driver crate.
 
-CUDA treats a rank-zero copy descriptor with empty shape and strides as one scalar element, not as an empty tensor. A dimension of size zero instead describes an empty transfer. See the [CUDA copy implementation](../../ruda-driver-cuda/src/execution/command.rs).
+CUDA treats a rank-zero copy descriptor with empty shape and strides as one scalar element, not as an empty tensor. A dimension of size zero instead describes an empty transfer. See the [CUDA copy implementation](../../ruda-driver/cuda/src/execution/command.rs).
 
 ## 1. Core types
 

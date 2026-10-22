@@ -150,7 +150,7 @@ features = ["device-tensor"]
 optional = true
 
 [dependencies.ruda-driver-cuda]
-path = "../../ruda-driver-cuda"
+path = "../../ruda-driver/cuda"
 version = "0.1.100"
 default-features = false
 optional = true

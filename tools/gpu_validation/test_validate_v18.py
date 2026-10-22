@@ -22,7 +22,7 @@ def test_failure_zero_and_ignored_are_not_success(old,new):
     with pytest.raises(ValueError):v.require_update_success(valid().replace(old,new))
 
 def test_testlist_matches_real_rust_source():
-    source=Path(__file__).resolve().parents[2]/'ruda-driver-cuda/tests/graph_update.rs'
+    source=Path(__file__).resolve().parents[2]/'ruda-driver/cuda/tests/graph_update.rs'
     import re
     names=set(re.findall(r'fn (graph_update_\w+)\(',source.read_text()))-{'graph_update_benchmark'}
     assert names==v.REQUIRED

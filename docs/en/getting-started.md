@@ -32,7 +32,7 @@ cargo metadata --no-deps --format-version 1 --offline --locked
 
 These commands do not compile Ruda. `--offline` requires the dependencies needed for resolution to be cached locally.
 
-Set `CUDA_PATH` to select the CUDA Toolkit root. On Windows, point it to an installed version directory, not the parent containing multiple versions. See the [CUDA installation path interface](../../ruda-driver-cuda/src/lib.rs).
+Set `CUDA_PATH` to select the CUDA Toolkit root. On Windows, point it to an installed version directory, not the parent containing multiple versions. See the [CUDA installation path interface](../../ruda-driver/cuda/src/lib.rs).
 
 ## 3. Build the example
 

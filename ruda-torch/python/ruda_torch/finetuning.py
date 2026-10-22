@@ -19,6 +19,25 @@ from torch import nn
 from torch.nn import functional as F
 from torch.autograd.function import once_differentiable
 
+if __package__:
+    from ._parameter_lora import (LoRAParameter, parameter_lora_targets, parameter_lora_entries,
+                                  adapter_shapes, parameter_adapter_metadata, register_parameter_lora)
+else:
+    # The standalone CPU reference entry does not import the native package.
+    import importlib.util
+    import sys
+    _parameter_spec = importlib.util.spec_from_file_location(
+        __name__ + '_parameter_lora', Path(__file__).with_name('_parameter_lora.py'))
+    _parameter_module = importlib.util.module_from_spec(_parameter_spec)
+    sys.modules[_parameter_spec.name] = _parameter_module
+    _parameter_spec.loader.exec_module(_parameter_module)
+    LoRAParameter = _parameter_module.LoRAParameter
+    parameter_lora_targets = _parameter_module.parameter_lora_targets
+    parameter_lora_entries = _parameter_module.parameter_lora_entries
+    adapter_shapes = _parameter_module.adapter_shapes
+    parameter_adapter_metadata = _parameter_module.parameter_adapter_metadata
+    register_parameter_lora = _parameter_module.register_parameter_lora
+
 
 NF4_CODEBOOK = (-1.0, -0.6961928009986877, -0.5250730514526367,
                 -0.39491748809814453, -0.28444138169288635,
@@ -291,11 +310,14 @@ def _replace(model, replacements):
         setattr(parent, child, value)
 
 
-def inject_lora(model, *, target_modules, rank=16, alpha=16., adapter_dtype=torch.float32,dropout=0.,use_rslora=False):
+def inject_lora(model, *, target_modules=None, rank=16, alpha=16., adapter_dtype=torch.float32,
+                dropout=0.,use_rslora=False,target_parameters=None):
     """In-place injection; freeze base model, preserving shared module aliases.
 
     Names are exact qualified module paths. No model family or head-selection
-    heuristic is used. Construct the optimizer AFTER injection.
+    heuristic is used. target_parameters selects floating 2-D or stacked 3-D
+    weights (one A/B pair per expert); those targets require dropout=0.
+    Construct the optimizer AFTER injection.
     """
     if __package__:
         from .parallel_adapters import (_ParallelLoRA,_ParallelNF4,lora_from_parallel_base)
@@ -308,14 +330,25 @@ def inject_lora(model, *, target_modules, rank=16, alpha=16., adapter_dtype=torc
         _ParallelLoRA=()
         parallel_types=()
         packed_types,embedding_types=(),()
-    if any(isinstance(m, (LoRALinear,_ParallelLoRA)) for m in model.modules()):
+    if any(isinstance(m, (LoRALinear,LoRAParameter,_ParallelLoRA)) for m in model.modules()):
         raise ValueError('model already contains LoRA adapters')
-    selected = _selected(model, target_modules, (nn.Linear, NF4Linear)+packed_types+parallel_types)
+    if target_modules is None and target_parameters is None:
+        raise ValueError('select target_modules and/or target_parameters')
+    selected = [] if target_modules is None else _selected(model, target_modules, (nn.Linear, NF4Linear)+packed_types+parallel_types)
     selected = [(name,base) for name,base in selected if not isinstance(base,embedding_types)]
     parallel_paths=[name for name,module in model.named_modules(remove_duplicate=False) if isinstance(module,parallel_types)]
     selected=[(name,module) for name,module in selected if not any(name.startswith(parent+'.') for parent in parallel_paths)]
-    if not selected or (target_modules!='all-linear' and not set(target_modules).issubset({name for name,_ in selected})):
+    if target_modules is not None and (not selected or (target_modules!='all-linear' and not set(target_modules).issubset({name for name,_ in selected}))):
         raise ValueError('select complete parallel projections, not their local implementation modules')
+    parameter_targets = parameter_lora_targets(model,target_parameters,[name for name,_ in selected])
+    if parameter_targets and dropout:
+        raise ValueError('weight-space parameter LoRA does not implement input dropout; use dropout=0')
+    parameter_adapters = {}
+    for owner,field,weight in parameter_targets:
+        if id(weight) not in parameter_adapters:
+            parameter_adapters[id(weight)] = LoRAParameter(weight,rank=rank,alpha=alpha,
+                adapter_dtype=adapter_dtype,use_rslora=use_rslora,
+                is_transposed=weight.ndim==3 and getattr(owner,'is_transposed',False)).train(owner.training)
     wrappers = {}
     for _, base in selected:
         if id(base) not in wrappers:
@@ -326,6 +359,8 @@ def inject_lora(model, *, target_modules, rank=16, alpha=16., adapter_dtype=torc
         p.requires_grad_(False)
         p.grad = None
     _replace(model, [(name, wrappers[id(base)]) for name, base in selected])
+    for owner,field,weight in parameter_targets:
+        register_parameter_lora(owner,field,parameter_adapters[id(weight)])
     return model
 
 
@@ -335,7 +370,7 @@ def quantize_nf4(model, *, target_modules, block_size=64, tile_rows=128):
     Tied weights are rejected rather than silently breaking embedding/head ties.
     This does not implement a sharded Hugging Face checkpoint loader.
     """
-    if any(isinstance(m, LoRALinear) for m in model.modules()):
+    if any(isinstance(m, (LoRALinear,LoRAParameter)) for m in model.modules()):
         raise ValueError('quantize the frozen base before injecting adapters')
     _positive_int(block_size, 'block_size')
     _positive_int(tile_rows, 'tile_rows')
@@ -369,7 +404,9 @@ def adapter_state_dict(model):
     """Portable CPU adapter tensors plus a strict, versioned layout contract."""
     if __package__:
         from .sharded_adapter_interop import has_sharded_units,sharded_adapter_state_dict
-        if has_sharded_units(model):return sharded_adapter_state_dict(model)
+        if has_sharded_units(model) or any(isinstance(layer,LoRAParameter) and
+                (layer.expert_group is not None or layer.tensor_group is not None) for layer in model.modules()):
+            return sharded_adapter_state_dict(model)
     layers = {}
     if __package__:
         from .parallel_adapters import _ParallelLoRA,adapter_base_kind,full_adapter_matrix
@@ -377,7 +414,10 @@ def adapter_state_dict(model):
         _ParallelLoRA=()
         adapter_base_kind=lambda layer:'nf4' if isinstance(layer.base,NF4Linear) else 'dense'
     for name, layer in model.named_modules():
-        if isinstance(layer, (LoRALinear,_ParallelLoRA)):
+        if isinstance(layer, LoRAParameter):
+            layers[name] = dict(parameter_adapter_metadata(layer),
+                lora_A=layer.lora_A.detach().cpu().clone(), lora_B=layer.lora_B.detach().cpu().clone())
+        elif isinstance(layer, (LoRALinear,_ParallelLoRA)):
             layers[name] = {'rank': layer.rank, 'alpha': layer.alpha,
                             'in_features': layer.in_features, 'out_features': layer.out_features,
                             'base': adapter_base_kind(layer),
@@ -385,9 +425,9 @@ def adapter_state_dict(model):
                             'lora_B': full_adapter_matrix(layer,'lora_B') if isinstance(layer,_ParallelLoRA) else layer.lora_B.detach().cpu().clone()}
     if not layers:
         raise ValueError('model has no LoRA adapters')
-    version = 1
-    if any(layer.dropout or layer.use_rslora for layer in model.modules() if isinstance(layer,(LoRALinear,_ParallelLoRA))):
-        version = 2
+    version = 3 if any(isinstance(layer,LoRAParameter) for layer in model.modules()) else 1
+    if version==3 or any(layer.dropout or layer.use_rslora for layer in model.modules() if isinstance(layer,(LoRALinear,_ParallelLoRA))):
+        version = max(2,version)
         for name,layer in model.named_modules():
             if isinstance(layer,(LoRALinear,_ParallelLoRA)):
                 layers[name].update(dropout=layer.dropout,use_rslora=layer.use_rslora)
@@ -398,24 +438,31 @@ def adapter_state_dict(model):
 def load_adapter_state_dict(model, state):
     if __package__:
         from .sharded_adapter_interop import has_sharded_units,load_sharded_adapter_state_dict
-        if has_sharded_units(model):return load_sharded_adapter_state_dict(model,state)
+        if has_sharded_units(model) or any(isinstance(layer,LoRAParameter) and
+                (layer.expert_group is not None or layer.tensor_group is not None) for layer in model.modules()):
+            return load_sharded_adapter_state_dict(model,state)
     if __package__:
         from .parallel_adapters import _ParallelLoRA,adapter_base_kind,local_adapter_matrix
     else:
         _ParallelLoRA=()
         adapter_base_kind=lambda layer:'nf4' if isinstance(layer.base,NF4Linear) else 'dense'
-    if not isinstance(state, dict) or set(state) != {'format', 'version', 'layers'} or state['format'] != 'ruda-lora' or state['version'] not in (1,2):
+    if not isinstance(state, dict) or set(state) != {'format', 'version', 'layers'} or state['format'] != 'ruda-lora' or state['version'] not in (1,2,3):
         raise ValueError('unsupported adapter checkpoint')
-    layers = {name: layer for name, layer in model.named_modules() if isinstance(layer, (LoRALinear,_ParallelLoRA))}
+    layers = {name: layer for name, layer in model.named_modules() if isinstance(layer, (LoRALinear,LoRAParameter,_ParallelLoRA))}
     if not layers or not isinstance(state['layers'], dict) or set(layers) != set(state['layers']):
         raise ValueError('adapter target names mismatch')
     copies = []
     shared = {}
     for name, layer in layers.items():
         entry = state['layers'][name]
-        metadata = {'rank': layer.rank, 'alpha': layer.alpha, 'in_features': layer.in_features,
-                    'out_features': layer.out_features, 'base': adapter_base_kind(layer)}
-        if state['version']==2:
+        if isinstance(layer,LoRAParameter):
+            if state['version'] != 3:
+                raise ValueError('parameter adapters require checkpoint version 3')
+            metadata = parameter_adapter_metadata(layer)
+        else:
+            metadata = {'rank': layer.rank, 'alpha': layer.alpha, 'in_features': layer.in_features,
+                        'out_features': layer.out_features, 'base': adapter_base_kind(layer)}
+        if state['version']>=2:
             metadata.update(dropout=layer.dropout,use_rslora=layer.use_rslora)
         elif layer.dropout or layer.use_rslora:
             raise ValueError('legacy adapter checkpoint does not contain dropout/RSLoRA semantics')
@@ -423,7 +470,7 @@ def load_adapter_state_dict(model, state):
             raise ValueError(f'adapter configuration mismatch: {name}')
         for key in ('lora_A', 'lora_B'):
             src, dst = entry[key], getattr(layer, key)
-            shape=(layer.rank,layer.in_features) if key=='lora_A' else (layer.out_features,layer.rank)
+            shape=adapter_shapes(layer)[key]
             if not isinstance(src, torch.Tensor) or src.shape != shape or src.dtype not in _FLOATS:
                 raise ValueError(f'adapter tensor mismatch: {name}.{key}')
             value=local_adapter_matrix(layer,key,src) if isinstance(layer,_ParallelLoRA) else src
@@ -450,8 +497,12 @@ def merge_lora(model):
     else:
         _ParallelLoRA=()
     layers = [(name, layer) for name, layer in model.named_modules(remove_duplicate=False) if isinstance(layer, (LoRALinear,_ParallelLoRA))]
-    if not layers:
+    parameter_layers = list(parameter_lora_entries(model))
+    if not layers and not parameter_layers:
         raise ValueError('model has no adapters')
+    for path,owner,field,adapter,weight in parameter_layers:
+        if owner.training or adapter.training:
+            raise ValueError('merge requires eval-mode parameter LoRA owners')
     owners = {}
     for module in model.modules():
         for parameter in module.parameters(recurse=False):
@@ -475,18 +526,31 @@ def merge_lora(model):
             result.bias = nn.Parameter(base.bias.detach().clone(), requires_grad=False)
         merged[id(layer)] = result.eval()
     _replace(model, [(name, merged[id(layer)]) for name, layer in layers])
+    from torch.nn.utils import parametrize
+    updated = set()
+    for path,owner,field,adapter,weight in parameter_layers:
+        if id(weight) not in updated:
+            update=adapter.lora_B.float() @ adapter.lora_A.float()
+            if adapter.is_transposed:update=update.transpose(-2,-1)
+            weight.copy_((weight.float() + update * adapter.scaling).to(weight.dtype))
+            weight.requires_grad_(False)
+            updated.add(id(weight))
+        parametrize.remove_parametrizations(owner,field,leave_parametrized=False)
     return model
 
 
 def load_nf4_safetensors(model, directory, *, target_modules, device,
                          dtype=torch.bfloat16, block_size=64, tile_rows=128,
-                         parameter_dtypes=None, buffer_dtypes=None):
+                         parameter_dtypes=None, buffer_dtypes=None, stacked_expert_modules=None):
     """Load exact model tensor names from HF-style safetensors, one tensor at a time.
 
     Construct the model on meta first. Selected Linear weights are quantized on
     CPU and uploaded packed; remaining tensors are uploaded individually. No
     architecture, tokenizer, remote code or key-renaming rules are inferred.
     Nonpersistent meta buffers must be materialized by the model's constructor.
+    target_modules=None streams floating tensors without quantizing projections.
+    Explicit stacked_expert_modules can consume separate gate/up/down expert
+    checkpoints into [experts,out,in] fields, staging at most tile_rows on CPU.
     Failure leaves already-loaded tensors in place; use a fresh meta model to retry.
     """
     from safetensors import safe_open
@@ -500,7 +564,7 @@ def load_nf4_safetensors(model, directory, *, target_modules, device,
     device = torch.device(device)
     if device.type not in ('cpu', 'cuda', 'ruda'):
         raise ValueError('unsupported execution device')
-    selected = _selected(model, target_modules, nn.Linear)
+    selected = [] if target_modules is None else _selected(model, target_modules, nn.Linear)
     targets = {name for name, _ in selected}
     parameters = list(model.named_parameters(remove_duplicate=False))
     buffers = list(model.named_buffers(remove_duplicate=False))
@@ -545,6 +609,31 @@ def load_nf4_safetensors(model, directory, *, target_modules, device,
         if not path.is_relative_to(directory) or not path.is_file():
             raise ValueError('checkpoint shard must be a file inside the checkpoint directory')
         files[name] = path
+    stacked = {}
+    for path in stacked_expert_modules or ():
+        module = model.get_submodule(path) if path else model
+        gate, down = getattr(module,'gate_up_proj',None),getattr(module,'down_proj',None)
+        if (not isinstance(gate,nn.Parameter) or not isinstance(down,nn.Parameter)
+                or gate.ndim!=3 or down.ndim!=3 or gate.shape[0]!=down.shape[0]
+                or gate.shape[1]!=2*down.shape[2] or gate.shape[2]!=down.shape[1]):
+            raise ValueError(f'unsupported stacked expert schema: {path}')
+        prefix=path+'.' if path else ''
+        for field,target in (('gate_up_proj',gate),('down_proj',down)):
+            name=prefix+field
+            if name in files:continue
+            pieces=[]
+            for expert in range(gate.shape[0]):
+                fields=('gate_proj','up_proj') if field=='gate_up_proj' else ('down_proj',)
+                for half,source_field in enumerate(fields):
+                    key=f'{prefix}{expert}.{source_field}.weight'
+                    shape=(down.shape[2],gate.shape[2]) if field=='gate_up_proj' else tuple(down.shape[1:])
+                    if key not in files:raise ValueError(f'missing expert checkpoint tensor: {key}')
+                    with safe_open(str(files[key]),framework='pt',device='cpu') as source:
+                        sliced=source.get_slice(key)
+                        if tuple(sliced.get_shape())!=shape or sliced.get_dtype() not in ('F16','BF16','F32'):
+                            raise ValueError(f'expert checkpoint shape/dtype mismatch: {key}')
+                    pieces.append((key,expert,half*down.shape[2] if field=='gate_up_proj' else 0,shape))
+            stacked[name]=pieces
     aliases = {}
     for name, tensor in parameters + buffers:
         aliases.setdefault(id(tensor), []).append(name)
@@ -553,6 +642,8 @@ def load_nf4_safetensors(model, directory, *, target_modules, device,
         return name if name in files else (candidates[0] if candidates else None)
     persistent = set(model.state_dict())
     for name, tensor in parameters + buffers:
+        if name in stacked:
+            continue
         key = key_for(name, tensor)
         if key is None:
             if name in persistent or tensor.device.type == 'meta':
@@ -590,7 +681,17 @@ def load_nf4_safetensors(model, directory, *, target_modules, device,
         if id(original) not in loaded:
             storage_dtype = (parameter_dtypes.get(name, dtype) if isinstance(original, nn.Parameter)
                              else buffer_dtypes.get(name, original.dtype))
-            value = read(name, original).to(device=device, dtype=storage_dtype if original.is_floating_point() else original.dtype)
+            if name in stacked:
+                value=torch.empty(original.shape,dtype=storage_dtype,device=device)
+                with torch.no_grad():
+                    for key,expert,offset,shape in stacked[name]:
+                        with safe_open(str(files[key]),framework='pt',device='cpu') as source:
+                            sliced=source.get_slice(key)
+                            for begin in range(0,shape[0],tile_rows):
+                                end=min(begin+tile_rows,shape[0])
+                                value[expert,offset+begin:offset+end].copy_(sliced[begin:end,:].to(device=device,dtype=storage_dtype))
+            else:
+                value = read(name, original).to(device=device, dtype=storage_dtype if original.is_floating_point() else original.dtype)
             loaded[id(original)] = nn.Parameter(value, requires_grad=False) if isinstance(original, nn.Parameter) else value
         setattr(parent, leaf, loaded[id(original)])
     return model

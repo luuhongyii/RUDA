@@ -256,7 +256,8 @@ def context_parallel_router_loss(gate_logits, group, *, num_experts, top_k,
         probability_sum = probability_sum + (probabilities.float() * valid[:, None]).sum(0)
         rows = rows + valid.sum()
     moments = _sum_objective(torch.cat((counts, probability_sum, rows.reshape(1))), register_group(group_key, group))
-    frequency, probability = moments[:num_experts] / moments[-1], moments[num_experts:-1] / moments[-1]
+    denominator = moments[-1].clamp_min(1)
+    frequency, probability = moments[:num_experts] / denominator, moments[num_experts:-1] / denominator
     return num_experts * (frequency * probability).sum()
 
 

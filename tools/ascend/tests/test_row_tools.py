@@ -98,7 +98,7 @@ def test_public_ir_is_reused_not_another_algorithm_wrapper():
 
 
 def test_runtime_allocates_each_output_from_its_binding():
-    text=(TOOLS.parents[1]/'ruda-driver-cann/src/tensor/common_ir/mod.rs').read_text()
+    text=(TOOLS.parents[1]/'ruda-driver/cann/src/tensor/common_ir/mod.rs').read_text()
     assert '[(b.bytes / 4) as i64]' in text
     assert 'validate_ranges(&ranges)?' in text
     assert 't.layout.byte_len() as u64!=b.bytes' in text

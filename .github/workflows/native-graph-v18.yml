@@ -12,7 +12,7 @@ on:
         description: PTX version supported by the actual device and driver
   pull_request:
     paths:
-      - 'ruda-driver-cuda/**'
+      - 'ruda-driver/cuda/**'
       - 'ruda-kernel/src/dsl/compute/launcher.rs'
       - 'ruda-runtime/src/runtime/memory_management/memory_pool/handle.rs'
       - 'tools/gpu_validation/**'
@@ -29,7 +29,7 @@ jobs:
         run: |
           python3 -m venv .v18-venv
           .v18-venv/bin/python -m pip install pytest==9.0.2
-          .v18-venv/bin/python -m pytest -q ruda-driver-cuda/tests/host tools/gpu_validation
+          .v18-venv/bin/python -m pytest -q ruda-driver/cuda/tests/host tools/gpu_validation
       - name: Compile native crate and run Rust-only layout tests
         run: |
           rustc --version

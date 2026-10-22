@@ -27,7 +27,7 @@
 
 ## 3. Your first kernel
 
-このカーネルは、完全なホスト プログラムと実行チェックを含む [ptx-runtime example](../../ruda-driver-cuda/examples/ptx_runtime.rs) から来ています。
+このカーネルは、完全なホスト プログラムと実行チェックを含む [ptx-runtime example](../../ruda-driver/cuda/examples/ptx_runtime.rs) から来ています。
 
 ```rust
 use ruda_kernel::dsl::prelude::*;

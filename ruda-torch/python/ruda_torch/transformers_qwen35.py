@@ -117,7 +117,8 @@ def enable_transformers_qwen35(model):
         raise ValueError('expected an HF Qwen3.5 dense or MoE text configuration')
     replacements = []
     for name, module in model.named_modules():
-        kind = type(module).__name__
+        kind = next((cls.__name__ for cls in type(module).__mro__ if cls.__name__ in
+            ('Qwen3_5GatedDeltaNet', 'Qwen3_5MoeGatedDeltaNet', 'Qwen3_5MoeExperts')), None)
         if kind in ('Qwen3_5GatedDeltaNet', 'Qwen3_5MoeGatedDeltaNet'):
             required = ('in_proj_qkv', 'in_proj_z', 'in_proj_b', 'in_proj_a', 'out_proj', 'conv1d',
                         'dt_bias', 'A_log', 'norm', 'layer_idx', 'num_v_heads', 'num_k_heads',

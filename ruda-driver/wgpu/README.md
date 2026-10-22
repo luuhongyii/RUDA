@@ -30,6 +30,6 @@ Default features: `ruda/runtime-default`, `ruda-core/std`, `ruda-kernel/frontend
 
 ## Links
 
-- [Package source](https://github.com/shuqi2077/RUDA/tree/main/ruda-driver-wgpu/src)
-- [Cargo manifest](https://github.com/shuqi2077/RUDA/blob/main/ruda-driver-wgpu/Cargo.toml)
+- [Package source](https://github.com/shuqi2077/RUDA/tree/main/ruda-driver/wgpu/src)
+- [Cargo manifest](https://github.com/shuqi2077/RUDA/blob/main/ruda-driver/wgpu/Cargo.toml)
 - [Ruda guide](https://github.com/shuqi2077/RUDA/blob/main/docs/en/driver-api.md)

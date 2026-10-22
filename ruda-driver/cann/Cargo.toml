@@ -17,14 +17,14 @@ libloading = "=0.8.9"
 sha2 = "=0.10.9"
 
 [dependencies.ruda-compiler]
-path = "../ruda-compiler"
+path = "../../ruda-compiler"
 version = "0.1.19"
 default-features = false
 features = ["ascend"]
 optional = true
 
 [dependencies.ruda-core]
-path = "../ruda-core"
+path = "../../ruda-core"
 version = "0.1.10"
 default-features = false
 features = ["compiler-std"]

@@ -12,7 +12,7 @@ on:
       - 'ruda-kernel-macros/**'
       - 'ruda-ir-macros/**'
       - 'ruda-compiler/**'
-      - 'ruda-driver-cuda/**'
+      - 'ruda-driver/cuda/**'
       - 'ruPRIM/**'
       - 'ruDNN/**'
       - 'ruBLAS/**'

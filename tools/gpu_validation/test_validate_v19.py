@@ -22,7 +22,7 @@ def test_failure_zero_and_ignored_are_not_success(old,new):
     with pytest.raises(ValueError):v.require_batch_success(valid().replace(old,new))
 
 def test_testlist_matches_real_rust_source():
-    source=Path(__file__).resolve().parents[2]/'ruda-driver-cuda/tests/graph_batch.rs'
+    source=Path(__file__).resolve().parents[2]/'ruda-driver/cuda/tests/graph_batch.rs'
     import re
     names=set(re.findall(r'fn (graph_batch_\w+)\(',source.read_text()))-{'graph_batch_benchmark'}
     assert names==v.REQUIRED

@@ -25,7 +25,7 @@ For corresponding CUDA concepts, see the [compatibility guide](compatibility.md)
 
 ## 3. Your first kernel
 
-This kernel comes from the [ptx-runtime example](../../ruda-driver-cuda/examples/ptx_runtime.rs), which includes the complete host program and execution checks:
+This kernel comes from the [ptx-runtime example](../../ruda-driver/cuda/examples/ptx_runtime.rs), which includes the complete host program and execution checks:
 
 ```rust
 use ruda_kernel::dsl::prelude::*;

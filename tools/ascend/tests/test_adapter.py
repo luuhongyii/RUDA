@@ -9,7 +9,7 @@ spec=importlib.util.spec_from_file_location('ascend_build',ROOT/'tools/ascend/bu
 b=importlib.util.module_from_spec(spec);sys.modules[spec.name]=b;spec.loader.exec_module(b)
 
 def test_production_no_longer_contains_original_cpp_device_headers():
-    assert not (ROOT/'ruda-driver-cann/vendor/deepgemm-ascend').exists()
+    assert not (ROOT/'ruda-driver/cann/vendor/deepgemm-ascend').exists()
     assert not list((ROOT/'ruda-ascend-kernels').rglob('*.hpp'))
     for p in (ROOT/'ruda-ascend-kernels/src').glob('*.rs'):
         if p.name=='tests.rs':continue
@@ -28,7 +28,7 @@ def test_kernel_is_structured_rust_not_cpp_template():
     assert 'asc_mmad(' not in core  # Target spellings belong to lowering, not algorithms.
 
 def test_runtime_refuses_the_old_cpp_schema():
-    src=(ROOT/'ruda-driver-cann/src/tensor/deepgemm/artifact.rs').read_text()
+    src=(ROOT/'ruda-driver/cann/src/tensor/deepgemm/artifact.rs').read_text()
     assert 'ruda.ascend.rust.bf16.v2' in src
     assert 'ruda.deepgemm.bf16.v1' not in src
     assert 'source_language' in src and 'rust-device-ir' in src

@@ -182,9 +182,16 @@ class CausalLMFinetuner(nn.Module):
     """An explicit backbone/head split; no model-specific module-path inference."""
     def __init__(self, backbone, head, *, token_chunk_size=32,
                  activation_checkpointing=True, checkpoint_modules=None,
-                 preserve_rng_state=True, label_smoothing=0.):
+                 preserve_rng_state=True, label_smoothing=0.,
+                 auxiliary_loss=None, backbone_kwargs=None):
         super().__init__()
         self.backbone, self.head = backbone, head
+        if auxiliary_loss is not None and not callable(auxiliary_loss):
+            raise TypeError('auxiliary_loss must be callable or None')
+        self.auxiliary_loss = auxiliary_loss
+        self.backbone_kwargs = dict(backbone_kwargs or {})
+        if {'input_ids', 'attention_mask', 'use_cache', 'return_dict'}.intersection(self.backbone_kwargs):
+            raise ValueError('backbone_kwargs cannot override token inputs or training cache controls')
         self.token_chunk_size = positive_int(token_chunk_size, 'token_chunk_size')
         self.label_smoothing = float(label_smoothing)
         if not 0 <= self.label_smoothing <= 1:
@@ -205,8 +212,9 @@ class CausalLMFinetuner(nn.Module):
             else:
                 self._checkpoint_backbone = True
 
-    def hidden(self, input_ids, attention_mask, **metadata):
-        kwargs = {'input_ids': input_ids, 'attention_mask': attention_mask, **metadata}
+    def _backbone_output(self, input_ids, attention_mask, **metadata):
+        kwargs = {**self.backbone_kwargs, 'input_ids': input_ids,
+                  'attention_mask': attention_mask, **metadata}
         if hasattr(self.backbone, 'config'):
             kwargs.update(use_cache=False, return_dict=True)
         if self._checkpoint_backbone and self.training and torch.is_grad_enabled():
@@ -216,17 +224,50 @@ class CausalLMFinetuner(nn.Module):
                                 preserve_rng_state=self.preserve_rng_state)
         else:
             result = self.backbone(**kwargs)
+        return result
+
+    @staticmethod
+    def _hidden_state(result):
         if isinstance(result, torch.Tensor):
             return result
         if not hasattr(result, 'last_hidden_state'):
             raise TypeError('backbone must return hidden states, not vocabulary logits')
         return result.last_hidden_state
 
-    def forward(self, input_ids, attention_mask, labels, *, reduction='mean', label_smoothing=None):
-        hidden = self.hidden(input_ids, attention_mask)
-        return chunked_lm_cross_entropy(hidden, self.head, labels,
-                                       token_chunk_size=self.token_chunk_size, reduction=reduction,
-                                       label_smoothing=self.label_smoothing if label_smoothing is None else label_smoothing)
+    def hidden(self, input_ids, attention_mask, **metadata):
+        return self._hidden_state(self._backbone_output(input_ids, attention_mask, **metadata))
+
+    def _objective(self, result, labels, attention_mask, *, reduction, label_smoothing,
+                   include_auxiliary_loss=True, shift=True):
+        hidden = self._hidden_state(result)
+        targets = labels
+        if hidden.ndim == 2 and labels.ndim == 1:
+            hidden, targets = hidden.unsqueeze(0), labels.unsqueeze(0)
+        loss = chunked_lm_cross_entropy(hidden, self.head, targets,
+            token_chunk_size=self.token_chunk_size, reduction=reduction, shift=shift,
+            label_smoothing=self.label_smoothing if label_smoothing is None else label_smoothing)
+        if include_auxiliary_loss and self.auxiliary_loss is not None:
+            auxiliary = self.auxiliary_loss(result, attention_mask)
+            if (not isinstance(auxiliary, torch.Tensor) or auxiliary.ndim != 0
+                    or not auxiliary.is_floating_point() or auxiliary.device != loss.device):
+                raise ValueError('auxiliary_loss must return a same-device scalar mean objective')
+            targets = labels[..., 1:] if shift else labels
+            count = (targets != -100).sum().to(loss.dtype)
+            token_sum = getattr(self.auxiliary_loss, 'token_sum', None)
+            if reduction == 'sum' and token_sum is not None:
+                loss = loss + token_sum(auxiliary.to(loss.dtype), count)
+            else:
+                scale = count if reduction == 'sum' else (count > 0).to(loss.dtype)
+                loss = loss + auxiliary.to(loss.dtype) * scale
+        return loss
+
+    def forward(self, input_ids, attention_mask, labels, *, reduction='mean', label_smoothing=None,
+                include_auxiliary_loss=True):
+        result = (self._backbone_output(input_ids, attention_mask)
+                  if include_auxiliary_loss and self.auxiliary_loss is not None
+                  else self.hidden(input_ids, attention_mask))
+        return self._objective(result, labels, attention_mask, reduction=reduction,
+            label_smoothing=label_smoothing, include_auxiliary_loss=include_auxiliary_loss)
 
 
 class PackedCausalLMFinetuner(CausalLMFinetuner):
@@ -239,23 +280,20 @@ class PackedCausalLMFinetuner(CausalLMFinetuner):
     """
     packed_input=True
 
-    def forward(self,input_ids,attention_mask,labels,position_ids,cu_seqlens,max_seqlen,*,reduction='mean',label_smoothing=None):
+    def forward(self,input_ids,attention_mask,labels,position_ids,cu_seqlens,max_seqlen,*,reduction='mean',label_smoothing=None,
+                include_auxiliary_loss=True):
         from .varlen_attention import _boundaries
         if input_ids.ndim!=1 or labels.shape!=input_ids.shape or position_ids.shape!=input_ids.shape or attention_mask.shape!=input_ids.shape:
             raise ValueError('packed causal tensors must share the real flat token axis')
         boundaries=_boundaries(cu_seqlens,input_ids.numel())
         if type(max_seqlen) is not int or max_seqlen!=max(b-a for a,b in zip(boundaries,boundaries[1:])):
             raise ValueError('max_seqlen must equal the actual document maximum')
-        kwargs={'input_ids':input_ids,'attention_mask':attention_mask,'position_ids':position_ids,
-                'cu_seqlens':cu_seqlens,'max_seqlen':max_seqlen}
-        if self._checkpoint_backbone and self.training and torch.is_grad_enabled():
-            def invoke(ids,mask,positions):return self.backbone(**dict(kwargs,input_ids=ids,attention_mask=mask,position_ids=positions))
-            result=checkpoint(invoke,input_ids,attention_mask,position_ids,use_reentrant=False,preserve_rng_state=self.preserve_rng_state)
-        else:result=self.backbone(**kwargs)
-        hidden=result if isinstance(result,torch.Tensor) else result.last_hidden_state
+        result=self._backbone_output(input_ids,attention_mask,position_ids=position_ids,
+                                     cu_seqlens=cu_seqlens,max_seqlen=max_seqlen)
+        hidden=self._hidden_state(result)
         if tuple(hidden.shape[:-1])!=tuple(input_ids.shape):raise ValueError('packed backbone must preserve flat tokens, not return vocabulary logits')
-        return chunked_lm_cross_entropy(hidden,self.head,labels,token_chunk_size=self.token_chunk_size,
-                                       reduction=reduction,label_smoothing=self.label_smoothing if label_smoothing is None else label_smoothing)
+        return self._objective(result,labels,attention_mask,reduction=reduction,label_smoothing=label_smoothing,
+                               include_auxiliary_loss=include_auxiliary_loss)
 
 
 class ContextParallelFinetuner(CausalLMFinetuner):
@@ -275,18 +313,19 @@ class ContextParallelFinetuner(CausalLMFinetuner):
         self.context_group, self.context_key = group, group_key
 
     def forward(self, input_ids, attention_mask, position_ids, ruda_context_documents,
-                context_targets, *, reduction='mean', label_smoothing=None):
+                context_targets, *, reduction='mean', label_smoothing=None, include_auxiliary_loss=True):
         from .transformers_context_parallel import _reduce_loss
         from ._expert_exchange import register_group
         if any(value.shape != input_ids.shape for value in
                (attention_mask, position_ids, ruda_context_documents, context_targets)):
             raise ValueError('context token fields must share the local [batch,tokens] layout')
-        hidden = self.hidden(input_ids, attention_mask, position_ids=position_ids,
-            ruda_context_positions=position_ids, ruda_context_documents=ruda_context_documents,
-            ruda_context_valid=attention_mask)
-        loss = chunked_lm_cross_entropy(hidden, self.head, context_targets,
-            token_chunk_size=self.token_chunk_size, shift=False, reduction='sum',
-            label_smoothing=self.label_smoothing if label_smoothing is None else label_smoothing)
+        hidden_fn = (self._backbone_output if include_auxiliary_loss and self.auxiliary_loss is not None
+                     else self.hidden)
+        result = hidden_fn(input_ids, attention_mask, position_ids=position_ids,
+                          ruda_context_positions=position_ids, ruda_context_documents=ruda_context_documents,
+                          ruda_context_valid=attention_mask)
+        loss = self._objective(result, context_targets, attention_mask, shift=False, reduction='sum',
+            label_smoothing=label_smoothing, include_auxiliary_loss=include_auxiliary_loss)
         if reduction == 'sum':
             return loss
         if reduction != 'mean':
@@ -295,10 +334,66 @@ class ContextParallelFinetuner(CausalLMFinetuner):
         return _reduce_loss(loss.reshape(()), count, register_group(self.context_key, self.context_group))[0]
 
 
+def _hf_meta_model(directory, *, auto_class=None, config_kwargs=None, model_kwargs=None):
+    from transformers import AutoConfig, AutoModelForCausalLM
+    from accelerate import init_empty_weights
+    directory = Path(directory).resolve()
+    ck = {} if config_kwargs is None else dict(config_kwargs)
+    mk = {} if model_kwargs is None else dict(model_kwargs)
+    if {'local_files_only', 'trust_remote_code'}.intersection(ck) or 'trust_remote_code' in mk:
+        raise ValueError('loader uses local files and does not authorize remote code')
+    source_config = json.loads((directory / 'config.json').read_text(encoding='utf-8'))
+    if source_config.get('model_type') == 'kimi_linear':
+        from .transformers_kimi import register_transformers_kimi
+        register_transformers_kimi(exist_ok=True)
+    config = AutoConfig.from_pretrained(directory, local_files_only=True, trust_remote_code=False, **ck)
+    factory = AutoModelForCausalLM if auto_class is None else auto_class
+    with init_empty_weights(include_buffers=False):
+        model = factory.from_config(config, trust_remote_code=False, **mk)
+    model.tie_weights()
+    return model
+
+
+def _hf_parameter_dtypes(model, parameter_dtypes):
+    overrides = {}
+    keep = getattr(model, '_keep_in_fp32_modules', None) or []
+    if keep:
+        pattern = re.compile(r'(^|\.)(?:' + '|'.join(keep) + r')(\.|$)')
+        overrides = {name: torch.float32 for name, parameter in model.named_parameters(remove_duplicate=False)
+                     if parameter.is_floating_point() and pattern.search(name)}
+    if parameter_dtypes is not None:
+        overrides.update(parameter_dtypes)
+    return overrides
+
+
+def _hf_stacked_expert_paths(model):
+    kinds = ('Qwen3MoeExperts', 'Qwen3_5MoeExperts', 'DeepseekV3Experts')
+    return [name for name, module in model.named_modules(remove_duplicate=False)
+            if any(cls.__name__ in kinds for cls in type(module).__mro__)]
+
+
+def load_hf_model(directory, *, device, dtype=torch.bfloat16, auto_class=None,
+                  parameter_dtypes=None, config_kwargs=None, model_kwargs=None):
+    """Stream a local floating HF checkpoint for full-parameter training.
+
+    Preserves declared weight ties, nonpersistent buffers and FP32 exceptions;
+    Kimi Linear uses RUDA's registered implementation. No checkpoint is downloaded.
+    """
+    model = _hf_meta_model(directory, auto_class=auto_class, config_kwargs=config_kwargs,
+                           model_kwargs=model_kwargs)
+    trainable = {name: parameter.requires_grad for name, parameter in model.named_parameters()}
+    load_nf4_safetensors(model, directory, target_modules=None, device=device, dtype=dtype,
+                         parameter_dtypes=_hf_parameter_dtypes(model, parameter_dtypes),
+                         stacked_expert_modules=_hf_stacked_expert_paths(model))
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad_(trainable[name])
+    return model
+
+
 def load_hf_nf4_model(directory, *, target_modules, device, dtype=torch.bfloat16,
                       auto_class=None, rank=16, alpha=16., block_size=64,
                       tile_rows=128, adapter_dtype=torch.float32, parameter_dtypes=None,
-                      config_kwargs=None, model_kwargs=None):
+                      config_kwargs=None, model_kwargs=None, target_parameters=None):
     """Instantiate a local HF architecture on meta and stream its real weights.
 
     `auto_class` selects the caller's AutoModel class (causal LM by default).
@@ -307,33 +402,16 @@ def load_hf_nf4_model(directory, *, target_modules, device, dtype=torch.bfloat16
     accelerate's parameter-only meta context leaves nonpersistent buffers
     materialized, while checkpoint loading preserves their original dtypes.
     """
-    from transformers import AutoConfig, AutoModelForCausalLM
-    from accelerate import init_empty_weights
-    directory = Path(directory).resolve()
-    ck = {} if config_kwargs is None else dict(config_kwargs)
-    mk = {} if model_kwargs is None else dict(model_kwargs)
-    if {'local_files_only', 'trust_remote_code'}.intersection(ck) or 'trust_remote_code' in mk:
-        raise ValueError('loader uses local files and does not authorize remote code')
-    config = AutoConfig.from_pretrained(directory, local_files_only=True, trust_remote_code=False, **ck)
-    factory = AutoModelForCausalLM if auto_class is None else auto_class
-    with init_empty_weights(include_buffers=False):
-        model = factory.from_config(config, trust_remote_code=False, **mk)
-    # Parameter registration inside the meta context can break alias identity.
-    # Reapply the architecture's declared ties before exact-name streaming.
-    model.tie_weights()
-    overrides = {}
-    keep = getattr(model, '_keep_in_fp32_modules', None) or []
-    if keep:
-        pattern = re.compile(r'(^|\.)(?:' + '|'.join(keep) + r')(\.|$)')
-        overrides = {name: torch.float32 for name, parameter in model.named_parameters()
-                     if parameter.is_floating_point() and pattern.search(name)}
-    if parameter_dtypes is not None:
-        overrides.update(parameter_dtypes)
+    if target_modules is None:
+        raise ValueError('NF4 requires linear module targets; use load_hf_model for floating parameter-only LoRA')
+    model = _hf_meta_model(directory, auto_class=auto_class, config_kwargs=config_kwargs,
+                           model_kwargs=model_kwargs)
     load_nf4_safetensors(model, directory, target_modules=target_modules, device=device,
                         dtype=dtype, block_size=block_size, tile_rows=tile_rows,
-                        parameter_dtypes=overrides)
+                        parameter_dtypes=_hf_parameter_dtypes(model, parameter_dtypes),
+                        stacked_expert_modules=_hf_stacked_expert_paths(model))
     inject_lora(model, target_modules=target_modules, rank=rank, alpha=alpha,
-                adapter_dtype=adapter_dtype)
+                adapter_dtype=adapter_dtype, target_parameters=target_parameters)
     return model
 
 
@@ -585,7 +663,11 @@ class SFTTrainer:
                 for batch in microbatches:
                     batch = {name: value.to(device) if isinstance(value, torch.Tensor) and name != 'cu_seqlens' else value
                              for name, value in batch.items()}
-                    loss = self.executable(**batch, reduction='sum', label_smoothing=0.)
+                    options = {'reduction': 'sum', 'label_smoothing': 0.}
+                    template = getattr(self.model, '_template', self.model)
+                    if getattr(template, 'auxiliary_loss', None) is not None:
+                        options['include_auxiliary_loss'] = False
+                    loss = self.executable(**batch, **options)
                     total = loss.detach() if total is None else total + loss.detach()
                 if total is None:
                     total = torch.zeros((), dtype=torch.float32, device=device)
@@ -610,6 +692,12 @@ class SFTTrainer:
         options = {'label_smoothing': template.label_smoothing}
         if self.context_input:
             options['targets'] = 'pre_shifted_context_shards'
+        auxiliary = getattr(template, 'auxiliary_loss', None)
+        if auxiliary is not None:
+            contract = getattr(auxiliary, 'loss_options', None)
+            options['auxiliary_loss'] = (contract() if contract is not None else
+                getattr(auxiliary,'__module__',type(auxiliary).__module__) + '.' +
+                getattr(auxiliary,'__qualname__',type(auxiliary).__qualname__))
         return options
 
     def _capture_training_state(self):

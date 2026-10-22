@@ -29,6 +29,6 @@ Default features: `std`, `ruda/runtime-default`, `ruda-core/std`, `ruda-kernel/f
 
 ## Links
 
-- [Package source](https://github.com/shuqi2077/RUDA/tree/main/ruda-driver-hip/src)
-- [Cargo manifest](https://github.com/shuqi2077/RUDA/blob/main/ruda-driver-hip/Cargo.toml)
+- [Package source](https://github.com/shuqi2077/RUDA/tree/main/ruda-driver/hip/src)
+- [Cargo manifest](https://github.com/shuqi2077/RUDA/blob/main/ruda-driver/hip/Cargo.toml)
 - [Ruda guide](https://github.com/shuqi2077/RUDA/blob/main/docs/en/driver-api.md)

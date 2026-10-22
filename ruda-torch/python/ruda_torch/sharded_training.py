@@ -190,7 +190,8 @@ class FullyShardedModule(nn.Module):
         metas = {id(p): nn.Parameter(torch.empty(p.shape, dtype=p.dtype, device='meta'),
                                      requires_grad=p.requires_grad) for p in unique}
         for parameter in unique:
-            for attribute in ('_ruda_tp_sharded', '_ruda_tp_replicas', '_ruda_ep_sharded', '_ruda_sp_replicated', '_ruda_ep_global_shape'):
+            for attribute in ('_ruda_tp_sharded', '_ruda_tp_replicas', '_ruda_ep_sharded', '_ruda_sp_replicated',
+                              '_ruda_ep_global_shape', '_ruda_parameter_layout'):
                 if hasattr(parameter, attribute):
                     setattr(metas[id(parameter)], attribute, getattr(parameter, attribute))
         for name, parameter in named:

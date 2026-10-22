@@ -12,7 +12,7 @@ on:
         description: Match the actual GPU and driver; this is not auto-detection
   pull_request:
     paths:
-      - 'ruda-driver-cuda/**'
+      - 'ruda-driver/cuda/**'
       - 'tools/gpu_validation/**'
       - '.github/workflows/native-graph-v19.yml'
 permissions:
@@ -31,7 +31,7 @@ jobs:
         run: |
           python3 -m venv .v19-venv
           .v19-venv/bin/python -m pip install pytest==9.0.2
-          .v19-venv/bin/python -m pytest -q ruda-driver-cuda/tests/host tools/gpu_validation
+          .v19-venv/bin/python -m pytest -q ruda-driver/cuda/tests/host tools/gpu_validation
       - name: Full native crate and new real-device targets must compile
         run: |
           cargo test --locked -p ruda-driver-cuda --no-default-features --features std,direct-ptx --lib execution::graph_batch::tests

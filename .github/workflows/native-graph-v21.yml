@@ -13,8 +13,8 @@ on:
   pull_request:
     # Host guards read sources from every crate listed here; keep in sync with tools/gpu_validation.
     paths:
-      - 'ruda-driver-cuda/**'
-      - 'ruda-driver-hip/**'
+      - 'ruda-driver/cuda/**'
+      - 'ruda-driver/hip/**'
       - 'ruda-kernel/**'
       - 'ruda-kernel-macros/**'
       - 'ruda-compiler/**'
@@ -41,7 +41,7 @@ jobs:
         run: |
           python3 -m venv .v21-venv
           .v21-venv/bin/python -m pip install pytest==9.0.2
-          .v21-venv/bin/python -m pytest -q ruda-driver-cuda/tests/host tools/gpu_validation
+          .v21-venv/bin/python -m pytest -q ruda-driver/cuda/tests/host tools/gpu_validation
       - name: Full native crate and new real-device targets must compile
         run: |
           cargo test --locked -p ruda-driver-cuda --no-default-features --features std,direct-ptx --lib execution::graph_topology::tests

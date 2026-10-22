@@ -16,12 +16,12 @@
 | `ruda-runtime` | `0.1.30` | `ruda_runtime` | [rustdoc](https://docs.rs/ruda-runtime/0.1.30/ruda_runtime/) | [Конфигурация Cargo](../../ruda-runtime/Cargo.toml) |
 | `ruda-kernel-macros` | `0.1.11` | `ruda_kernel_macros` | [rustdoc](https://docs.rs/ruda-kernel-macros/0.1.11/ruda_kernel_macros/) | [Конфигурация Cargo](../../ruda-kernel-macros/Cargo.toml) |
 | `ruda-ir-macros` | `0.1.2` | `ruda_ir_macros` | [rustdoc](https://docs.rs/ruda-ir-macros/0.1.2/ruda_ir_macros/) | [Конфигурация Cargo](../../ruda-ir-macros/Cargo.toml) |
-| `ruda-driver-cuda` | `0.1.98` | `ruda_driver_cuda` | [rustdoc](https://docs.rs/ruda-driver-cuda/0.1.98/ruda_driver_cuda/) | [Конфигурация Cargo](../../ruda-driver-cuda/Cargo.toml) |
-| `ruda-driver-hip` | `0.1.98` | `ruda_driver_hip` | [rustdoc](https://docs.rs/ruda-driver-hip/0.1.98/ruda_driver_hip/) | [Конфигурация Cargo](../../ruda-driver-hip/Cargo.toml) |
+| `ruda-driver-cuda` | `0.1.98` | `ruda_driver_cuda` | [rustdoc](https://docs.rs/ruda-driver-cuda/0.1.98/ruda_driver_cuda/) | [Конфигурация Cargo](../../ruda-driver/cuda/Cargo.toml) |
+| `ruda-driver-hip` | `0.1.98` | `ruda_driver_hip` | [rustdoc](https://docs.rs/ruda-driver-hip/0.1.98/ruda_driver_hip/) | [Конфигурация Cargo](../../ruda-driver/hip/Cargo.toml) |
 | `ruda-hip-sys` | `7.14.6085000` | `ruda_hip_sys` | [rustdoc](https://docs.rs/ruda-hip-sys/7.14.6085000/ruda_hip_sys/) | [Конфигурация Cargo](../../ruda-hip-sys/Cargo.toml) |
-| `ruda-driver-wgpu` | `0.1.98` | `ruda_driver_wgpu` | [rustdoc](https://docs.rs/ruda-driver-wgpu/0.1.98/ruda_driver_wgpu/) | [Конфигурация Cargo](../../ruda-driver-wgpu/Cargo.toml) |
-| `ruda-driver-cpu` | `0.1.98` | `ruda_driver_cpu` | [rustdoc](https://docs.rs/ruda-driver-cpu/0.1.98/ruda_driver_cpu/) | [Конфигурация Cargo](../../ruda-driver-cpu/Cargo.toml) |
-| `ruda-driver-cann` | `0.1.98` | `ruda_driver_cann` | [rustdoc](https://docs.rs/ruda-driver-cann/0.1.98/ruda_driver_cann/) | [Конфигурация Cargo](../../ruda-driver-cann/Cargo.toml) |
+| `ruda-driver-wgpu` | `0.1.98` | `ruda_driver_wgpu` | [rustdoc](https://docs.rs/ruda-driver-wgpu/0.1.98/ruda_driver_wgpu/) | [Конфигурация Cargo](../../ruda-driver/wgpu/Cargo.toml) |
+| `ruda-driver-cpu` | `0.1.98` | `ruda_driver_cpu` | [rustdoc](https://docs.rs/ruda-driver-cpu/0.1.98/ruda_driver_cpu/) | [Конфигурация Cargo](../../ruda-driver/cpu/Cargo.toml) |
+| `ruda-driver-cann` | `0.1.98` | `ruda_driver_cann` | [rustdoc](https://docs.rs/ruda-driver-cann/0.1.98/ruda_driver_cann/) | [Конфигурация Cargo](../../ruda-driver/cann/Cargo.toml) |
 | `ruda-ascend-kernels` | `0.1.0` | `ruda_ascend_kernels` | [rustdoc](https://docs.rs/ruda-ascend-kernels/0.1.0/ruda_ascend_kernels/) | [Конфигурация Cargo](../../ruda-ascend-kernels/Cargo.toml) |
 | `rublas` | `0.1.98` | `rublas` | [rustdoc](https://docs.rs/rublas/0.1.98/rublas/) | [Конфигурация Cargo](../../ruBLAS/Cargo.toml) |
 | `ruDNN` | `0.1.98` | `rudnn` | [rustdoc](https://docs.rs/ruDNN/0.1.98/rudnn/) | [Конфигурация Cargo](../../ruDNN/Cargo.toml) |

@@ -43,12 +43,12 @@ Cargo 包名、仓库目录名和 Rust 导入名可能不同。例如 ruFFT 位�
 
 | Cargo 包名 | Rust 导入名／源码 | 职责 |
 | --- | --- | --- |
-| [`ruda-driver-cuda`](../../ruda-driver-cuda/Cargo.toml) | [`ruda_driver_cuda`](../../ruda-driver-cuda/src/lib.rs) | CUDA 设备、分配、编译与启动 |
-| [`ruda-driver-hip`](../../ruda-driver-hip/Cargo.toml) | [`ruda_driver_hip`](../../ruda-driver-hip/src/lib.rs) | AMD HIP 运行时适配 |
+| [`ruda-driver-cuda`](../../ruda-driver/cuda/Cargo.toml) | [`ruda_driver_cuda`](../../ruda-driver/cuda/src/lib.rs) | CUDA 设备、分配、编译与启动 |
+| [`ruda-driver-hip`](../../ruda-driver/hip/Cargo.toml) | [`ruda_driver_hip`](../../ruda-driver/hip/src/lib.rs) | AMD HIP 运行时适配 |
 | [`ruda-hip-sys`](../../ruda-hip-sys/Cargo.toml) | [`ruda_hip_sys`](../../ruda-hip-sys/src/lib.rs) | 底层 HIP 运行时绑定 |
-| [`ruda-driver-wgpu`](../../ruda-driver-wgpu/Cargo.toml) | [`ruda_driver_wgpu`](../../ruda-driver-wgpu/src/lib.rs) | WGPU 初始化、存储和计算执行 |
-| [`ruda-driver-cpu`](../../ruda-driver-cpu/Cargo.toml) | [`ruda_driver_cpu`](../../ruda-driver-cpu/src/lib.rs) | CPU Kernel 运行时驱动；区别于 Host 张量后端 |
-| [`ruda-driver-cann`](../../ruda-driver-cann/Cargo.toml) | [`ruda_driver_cann`](../../ruda-driver-cann/src/lib.rs) | 动态加载的 CANN AscendCL 接口 |
+| [`ruda-driver-wgpu`](../../ruda-driver/wgpu/Cargo.toml) | [`ruda_driver_wgpu`](../../ruda-driver/wgpu/src/lib.rs) | WGPU 初始化、存储和计算执行 |
+| [`ruda-driver-cpu`](../../ruda-driver/cpu/Cargo.toml) | [`ruda_driver_cpu`](../../ruda-driver/cpu/src/lib.rs) | CPU Kernel 运行时驱动；区别于 Host 张量后端 |
+| [`ruda-driver-cann`](../../ruda-driver/cann/Cargo.toml) | [`ruda_driver_cann`](../../ruda-driver/cann/src/lib.rs) | 动态加载的 CANN AscendCL 接口 |
 | [`ruda-ascend-kernels`](../../ruda-ascend-kernels/Cargo.toml) | [`ruda_ascend_kernels`](../../ruda-ascend-kernels/src/lib.rs) | Rust 昇腾设备程序与指令降级 |
 
 ## 领域计算库

@@ -43,12 +43,12 @@ The tables cover the resolved workspace, including the path-dependent CANN drive
 
 | Cargo package | Rust import / source | Responsibility |
 | --- | --- | --- |
-| [`ruda-driver-cuda`](../../ruda-driver-cuda/Cargo.toml) | [`ruda_driver_cuda`](../../ruda-driver-cuda/src/lib.rs) | CUDA devices, allocation, compilation, and launch |
-| [`ruda-driver-hip`](../../ruda-driver-hip/Cargo.toml) | [`ruda_driver_hip`](../../ruda-driver-hip/src/lib.rs) | AMD HIP runtime adapter |
+| [`ruda-driver-cuda`](../../ruda-driver/cuda/Cargo.toml) | [`ruda_driver_cuda`](../../ruda-driver/cuda/src/lib.rs) | CUDA devices, allocation, compilation, and launch |
+| [`ruda-driver-hip`](../../ruda-driver/hip/Cargo.toml) | [`ruda_driver_hip`](../../ruda-driver/hip/src/lib.rs) | AMD HIP runtime adapter |
 | [`ruda-hip-sys`](../../ruda-hip-sys/Cargo.toml) | [`ruda_hip_sys`](../../ruda-hip-sys/src/lib.rs) | Low-level HIP runtime bindings |
-| [`ruda-driver-wgpu`](../../ruda-driver-wgpu/Cargo.toml) | [`ruda_driver_wgpu`](../../ruda-driver-wgpu/src/lib.rs) | WGPU setup, storage, and compute execution |
-| [`ruda-driver-cpu`](../../ruda-driver-cpu/Cargo.toml) | [`ruda_driver_cpu`](../../ruda-driver-cpu/src/lib.rs) | CPU kernel runtime driver, separate from Host tensor backend |
-| [`ruda-driver-cann`](../../ruda-driver-cann/Cargo.toml) | [`ruda_driver_cann`](../../ruda-driver-cann/src/lib.rs) | Dynamically loaded CANN AscendCL interfaces |
+| [`ruda-driver-wgpu`](../../ruda-driver/wgpu/Cargo.toml) | [`ruda_driver_wgpu`](../../ruda-driver/wgpu/src/lib.rs) | WGPU setup, storage, and compute execution |
+| [`ruda-driver-cpu`](../../ruda-driver/cpu/Cargo.toml) | [`ruda_driver_cpu`](../../ruda-driver/cpu/src/lib.rs) | CPU kernel runtime driver, separate from Host tensor backend |
+| [`ruda-driver-cann`](../../ruda-driver/cann/Cargo.toml) | [`ruda_driver_cann`](../../ruda-driver/cann/src/lib.rs) | Dynamically loaded CANN AscendCL interfaces |
 | [`ruda-ascend-kernels`](../../ruda-ascend-kernels/Cargo.toml) | [`ruda_ascend_kernels`](../../ruda-ascend-kernels/src/lib.rs) | Rust Ascend device programs and instruction lowering |
 
 ## Compute libraries

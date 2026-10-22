@@ -6,7 +6,7 @@
 
 汎用ランタイムは `ruda::runtime` にあり、`ruda/runtime` 機能によって有効になります。各バックエンドには、対応するドライバー クレートも必要です。
 
-CUDA は shape と strides がともに空のランク 0 コピー記述子を、空テンソルではなく 1 スカラーとして扱います。長さ 0 の軸がある場合は空の転送です。[CUDA コピー実装](../../ruda-driver-cuda/src/execution/command.rs)。
+CUDA は shape と strides がともに空のランク 0 コピー記述子を、空テンソルではなく 1 スカラーとして扱います。長さ 0 の軸がある場合は空の転送です。[CUDA コピー実装](../../ruda-driver/cuda/src/execution/command.rs)。
 
 ## 1. コアの種類
 

@@ -81,7 +81,7 @@ def test_source_wiring_is_shared_ir_not_v38_matrix_stage():
     programs=(root/'ruda-compiler/src/ascend/programs.rs').read_text()
     assert 'KernelDefinition' in programs and 'Arithmetic::' in programs
     assert 'AscendC::' not in programs and 'deep_gemm' not in programs
-    runtime=(root/'ruda-driver-cann/src/tensor/common_ir/mod.rs').read_text()
+    runtime=(root/'ruda-driver/cann/src/tensor/common_ir/mod.rs').read_text()
     assert 'validate_ranges(&ranges)?' in runtime
     assert 'session.quiescent.set(false)' in runtime
     assert 'aclrtSynchronizeStream' in runtime

@@ -12,7 +12,7 @@ on:
         description: PTX version supported by the actual device and driver
   pull_request:
     paths:
-      - 'ruda-driver-cuda/**'
+      - 'ruda-driver/cuda/**'
       - 'ruda-kernel/src/dsl/compute/**'
       - 'ruda-kernel-macros/src/ir/generate/launch.rs'
       - 'tools/gpu_validation/**'
@@ -28,7 +28,7 @@ jobs:
       - run: |
           python3 -m venv .v17-venv
           .v17-venv/bin/python -m pip install pytest==9.0.2
-          .v17-venv/bin/python -m pytest -q ruda-driver-cuda/tests/host tools/gpu_validation
+          .v17-venv/bin/python -m pytest -q ruda-driver/cuda/tests/host tools/gpu_validation
   real-native-graph-acceptance:
     if: github.event_name == 'workflow_dispatch' && inputs.run_gpu
     runs-on: [self-hosted, linux, x64, ruda-gpu]

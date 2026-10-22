@@ -1,8 +1,8 @@
 """Source wiring checks only: these do not compile or execute production Rust."""
 from pathlib import Path
 import re
-ROOT=Path(__file__).resolve().parents[3]
-def source(path):return (ROOT/'ruda-driver-cuda'/path).read_text()
+ROOT=Path(__file__).resolve().parents[4]
+def source(path):return (ROOT/'ruda-driver/cuda'/path).read_text()
 
 def test_public_api_keeps_legacy_chain_explicit():
     text=source('src/graph.rs')

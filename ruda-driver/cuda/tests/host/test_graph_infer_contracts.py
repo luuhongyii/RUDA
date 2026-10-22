@@ -1,6 +1,6 @@
 """Source wiring guards only, not a Rust compiler or GPU test."""
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[3] / 'ruda-driver-cuda'
+ROOT = Path(__file__).resolve().parents[4] / 'ruda-driver/cuda'
 def text(p): return (ROOT/p).read_text()
 
 def test_new_inference_is_an_explicit_public_api():

@@ -71,7 +71,7 @@ Place an application directory alongside the `RUDA` checkout. Its dependencies a
 [dependencies]
 ruda-compiler = { path = "../RUDA/ruda-compiler", default-features = false, features = ["ascend"] }
 ruda-core = { path = "../RUDA/ruda-core", default-features = false, features = ["compiler-std"] }
-ruda-driver-cann = { path = "../RUDA/ruda-driver-cann", features = ["common-ir"] }
+ruda-driver-cann = { path = "../RUDA/ruda-driver/cann", features = ["common-ir"] }
 ```
 
 Use this `src/main.rs`:
@@ -160,5 +160,5 @@ The common-IR implementation accepts its supported FP32 map and row patterns, no
 
 - [Compiler/options](../../ruda-compiler/src/ascend/mod.rs), [map definitions](../../ruda-compiler/src/ascend/programs.rs), [row definitions](../../ruda-compiler/src/ascend/row_programs.rs).
 - [Artifact builder](../../tools/ascend/build_common_ir.py) and [compiler CLI](../../ruda-compiler/examples/ascend_ir.rs).
-- [CannProgram](../../ruda-driver-cann/src/tensor/common_ir/mod.rs), [session lifecycle](../../ruda-driver-cann/src/tensor/owner.rs), [borrowed sessions](../../ruda-driver-cann/src/tensor/mod.rs).
-- [Native matrix interface](../../ruda-driver-cann/src/tensor/deepgemm/mod.rs) and [ruBLAS integration](../../ruBLAS/src/cann.rs).
+- [CannProgram](../../ruda-driver/cann/src/tensor/common_ir/mod.rs), [session lifecycle](../../ruda-driver/cann/src/tensor/owner.rs), [borrowed sessions](../../ruda-driver/cann/src/tensor/mod.rs).
+- [Native matrix interface](../../ruda-driver/cann/src/tensor/deepgemm/mod.rs) and [ruBLAS integration](../../ruBLAS/src/cann.rs).

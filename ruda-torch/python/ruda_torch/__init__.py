@@ -483,11 +483,13 @@ if hasattr(_native, "ruda_torch_nf4_api_version") and hasattr(_C, "initialize_nf
         raise RuntimeError("RUDA NF4 API mismatch; rebuild Rust and C++ libraries")
     _C.initialize_nf4(ctypes.cast(_native.ruda_torch_nf4_decode, ctypes.c_void_p).value)
     _nf4_available = True
-from .finetuning import (LoRALinear, NF4Linear, inject_lora, quantize_nf4,
+from .finetuning import (LoRALinear, LoRAParameter, NF4Linear, inject_lora, quantize_nf4,
                          adapter_state_dict, load_adapter_state_dict, merge_lora,
                          load_nf4_safetensors, finetune_state_dict, load_finetune_state_dict)
 from .causal_finetuning import (chunked_lm_cross_entropy, SFTCollator, CausalLMFinetuner,
-                               SFTTrainer, load_hf_nf4_model, activation_checkpoint_modules)
+                               SFTTrainer, load_hf_model, load_hf_nf4_model, activation_checkpoint_modules)
+from .transformers_training import (prepare_causal_lm, enable_transformers_moe,
+    HfRouterAuxiliaryLoss, hf_router_load_balancing_loss)
 from .distributed_training import ReplicaGroup
 if torch.distributed.is_available():
     from .process_group import ProcessGroupRuCCL, register_ruccl_backend

@@ -11,26 +11,21 @@
 
 [package]
 edition = "2024"
-name = "ruda-driver-hip"
+name = "ruda-driver-cpu"
 version.workspace = true
-authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+authors = ["marcantoinem <marc-antoine.m@outlook.com>"]
 build = false
 autolib = false
 autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "AMD ROCm HIP driver backend for Ruda"
+description = "CPU driver backend for Ruda"
 readme = "README.md"
-keywords = [
-    "gpu",
-    "amd",
-    "rocm",
-    "hip",
-]
+keywords = ["cpu"]
 categories = ["science"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/shuqi2077/RUDA/tree/main/ruda-driver-hip"
+repository = "https://github.com/shuqi2077/RUDA/tree/main/ruda-driver/cpu"
 
 [features]
 default = [
@@ -39,29 +34,31 @@ default = [
     "ruda-core/std",
     "ruda-kernel/frontend-default",
 ]
-rocwmma = []
+mlir-dump = ["ruda-compiler/mlir-dump"]
 std = [
     "ruda/runtime-std",
     "ruda-core/std",
     "ruda-kernel/frontend-std",
 ]
 tracing = [
-    "dep:tracing",
     "ruda/runtime-tracing",
     "ruda-core/tracing",
     "ruda-kernel/frontend-tracing",
+    "ruda-compiler/optimizer-tracing",
 ]
 
 [lib]
-name = "ruda_driver_hip"
+name = "ruda_driver_cpu"
 path = "src/lib.rs"
 
 [dependencies.bytemuck]
 version = "1.16.1"
 
-[dependencies.ruda-hip-sys]
-path = "../ruda-hip-sys"
-version = "=7.14.6085000"
+[dependencies.ruda-compiler]
+path = "../../ruda-compiler"
+version = "0.1.19"
+features = [ "mlir",]
+default-features = false
 
 [dependencies.derive-new]
 version = "0.7.0"
@@ -91,11 +88,15 @@ features = [
 ]
 default-features = false
 
-[dependencies.tracing]
-version = "^0.1.43"
-features = ["attributes"]
-optional = true
-default-features = false
+[dependencies.sysinfo]
+version = "0.38.0"
+
+[dependencies.melior]
+version = "=0.25.0"
+features = ["helpers"]
+
+[dev-dependencies.paste]
+version = "1"
 
 [dev-dependencies.pretty_assertions]
 version = "1.4"
@@ -116,31 +117,32 @@ broken_intra_doc_links = "warn"
 invalid_html_tags = "warn"
 
 [dependencies.ruda-core]
-path = "../ruda-core"
+path = "../../ruda-core"
 version = "0.1.10"
 default-features = false
-features = [ "compilation-cache", "std", "hash",]
+features = [ "std",]
 
 [dependencies.ruda]
 package = "ruda-runtime"
-path = "../ruda-runtime"
+path = "../../ruda-runtime"
 version = "0.1.30"
 default-features = false
-features = [ "runtime", "runtime-channel-mutex", "monitoring-amdgpu-busy-percent", "monitoring-gpu-engine-counters",]
+features = [ "runtime", "runtime-channel-mutex", "runtime-std", "runtime-storage-bytes",]
 
 [dependencies.ruda-kernel]
-path = "../ruda-kernel"
+path = "../../ruda-kernel"
 version = "0.1.47"
 default-features = false
-features = [ "frontend", "lowering-cpp",]
+features = [ "frontend", "frontend-std", "library", "lowering-mlir",]
 
 [dev-dependencies.ruda-kernel]
-path = "../ruda-kernel"
+path = "../../ruda-kernel"
 default-features = false
 features = [ "frontend", "frontend-default", "frontend-tests", "library", "library-tests",]
 
-[dependencies.ruda-compiler]
-path = "../ruda-compiler"
-version = "0.1.19"
-default-features = false
-features = [ "cpp",]
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))'.dependencies.libc]
+version = "0.2"
+
+[target.'cfg(windows)'.dependencies.winapi]
+version = "0.3.9"
+features = ["sysinfoapi", "winnt", "processthreadsapi", "processtopologyapi", "winbase"]

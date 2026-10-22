@@ -25,7 +25,7 @@
 
 ## 3. 第一个 Kernel
 
-下面摘自 [ptx-runtime 示例](../../ruda-driver-cuda/examples/ptx_runtime.rs)，完整主机代码和执行检查保留在示例中：
+下面摘自 [ptx-runtime 示例](../../ruda-driver/cuda/examples/ptx_runtime.rs)，完整主机代码和执行检查保留在示例中：
 
 ```rust
 use ruda_kernel::dsl::prelude::*;

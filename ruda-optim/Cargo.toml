@@ -183,7 +183,7 @@ features = [ "doc",]
 rustdoc-args = [ "--cfg", "docsrs",]
 
 [dependencies.ruda-driver-cuda]
-path = "../ruda-driver-cuda"
+path = "../ruda-driver/cuda"
 version = "0.1.100"
 optional = true
 # The CUDA example intentionally needs runtime defaults and dynamic CUDA loading.

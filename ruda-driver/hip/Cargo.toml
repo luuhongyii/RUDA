@@ -11,49 +11,39 @@
 
 [package]
 edition = "2024"
-name = "ruda-driver-wgpu"
+name = "ruda-driver-hip"
 version.workspace = true
 authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
-build = "build.rs"
+build = false
 autolib = false
 autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "WGPU driver backend for Ruda"
+description = "AMD ROCm HIP driver backend for Ruda"
 readme = "README.md"
 keywords = [
     "gpu",
-    "wgpu",
-    "webgpu",
-    "gpgpu",
+    "amd",
+    "rocm",
+    "hip",
 ]
 categories = ["science"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/shuqi2077/RUDA/tree/main/ruda-driver-wgpu"
+repository = "https://github.com/shuqi2077/RUDA/tree/main/ruda-driver/hip"
 
 [features]
 default = [
+    "std",
     "ruda/runtime-default",
     "ruda-core/std",
     "ruda-kernel/frontend-default",
 ]
-exclusive-memory-only = ["ruda/runtime-exclusive-memory-only"]
-msl = ["ruda-compiler/cpp-default", "ruda-compiler/cpp-metal", "ruda-kernel/lowering-metal", "ruda/runtime-default", "ruda-kernel/frontend-default"]
-profile-tracy = ["tracy-client"]
-spirv = [
-    "ruda-compiler/spirv",
-    "ruda-kernel/lowering-spirv",
-    "ash",
-    "ruda-core/compilation-cache",
-    "ruda-core/hash",
-]
-spirv-dump = ["std"]
+rocwmma = []
 std = [
     "ruda/runtime-std",
     "ruda-core/std",
     "ruda-kernel/frontend-std",
-    "sanitize-filename",
 ]
 tracing = [
     "dep:tracing",
@@ -61,31 +51,20 @@ tracing = [
     "ruda-core/tracing",
     "ruda-kernel/frontend-tracing",
 ]
-vulkan-validate = []
 
 [lib]
-name = "ruda_driver_wgpu"
+name = "ruda_driver_hip"
 path = "src/lib.rs"
-
-[dependencies.ash]
-version = "0.38"
-optional = true
-
-[dependencies.async-channel]
-version = "2.3"
 
 [dependencies.bytemuck]
 version = "1.16.1"
 
-[dependencies.cfg-if]
-version = "1.0.0"
+[dependencies.ruda-hip-sys]
+path = "../../ruda-hip-sys"
+version = "=7.14.6085000"
 
 [dependencies.derive-new]
 version = "0.7.0"
-default-features = false
-
-[dependencies.derive_more]
-version = "2"
 default-features = false
 
 [dependencies.half]
@@ -97,38 +76,26 @@ features = [
 ]
 default-features = false
 
-[dependencies.hashbrown]
-version = "0.16"
-
 [dependencies.log]
 version = "^0.4.22"
 default-features = false
 
-[dependencies.sanitize-filename]
-version = "0.6"
-optional = true
+[dependencies.paste]
+version = "1"
+
+[dependencies.serde]
+version = "1.0.204"
+features = [
+    "derive",
+    "alloc",
+]
+default-features = false
 
 [dependencies.tracing]
 version = "^0.1.43"
 features = ["attributes"]
 optional = true
 default-features = false
-
-[dependencies.tracy-client]
-version = "0.18.0"
-optional = true
-
-[dev-dependencies.half]
-version = "2.5"
-features = [
-    "alloc",
-    "num-traits",
-    "serde",
-]
-default-features = false
-
-[dev-dependencies.paste]
-version = "1"
 
 [dev-dependencies.pretty_assertions]
 version = "1.4"
@@ -137,31 +104,6 @@ version = "1.4"
 version = "^0.2"
 features = ["trace"]
 default-features = false
-
-[build-dependencies.cfg_aliases]
-version = "0.2.1"
-
-[target.'cfg(not(target_os = "macos"))'.dependencies.wgpu]
-version = "29"
-features = ["fragile-send-sync-non-atomic-wasm"]
-
-[target.'cfg(target_family = "wasm")'.dependencies.wasm-bindgen-futures]
-version = "0.4.45"
-
-[target.'cfg(target_vendor = "apple")'.dependencies.objc2]
-version = "0.6"
-
-[target.'cfg(target_vendor = "apple")'.dependencies.objc2-metal]
-version = "0.3"
-default-features = false
-features = ["std", "MTLDevice"]
-
-[target.'cfg(target_os = "macos")'.dependencies.wgpu]
-version = "29"
-features = [
-    "vulkan-portability",
-    "fragile-send-sync-non-atomic-wasm",
-]
 
 [lints.clippy]
 doc_markdown = "warn"
@@ -174,31 +116,31 @@ broken_intra_doc_links = "warn"
 invalid_html_tags = "warn"
 
 [dependencies.ruda-core]
-path = "../ruda-core"
+path = "../../ruda-core"
 version = "0.1.10"
 default-features = false
-features = [ "ir",]
+features = [ "compilation-cache", "std", "hash",]
 
 [dependencies.ruda]
 package = "ruda-runtime"
-path = "../ruda-runtime"
+path = "../../ruda-runtime"
 version = "0.1.30"
 default-features = false
-features = [ "runtime", "runtime-channel-mutex", "runtime-monitoring",]
+features = [ "runtime", "runtime-channel-mutex", "monitoring-amdgpu-busy-percent", "monitoring-gpu-engine-counters",]
 
 [dependencies.ruda-kernel]
-path = "../ruda-kernel"
+path = "../../ruda-kernel"
 version = "0.1.47"
 default-features = false
-features = [ "frontend", "lowering-wgsl",]
+features = [ "frontend", "lowering-cpp",]
 
 [dev-dependencies.ruda-kernel]
-path = "../ruda-kernel"
+path = "../../ruda-kernel"
 default-features = false
 features = [ "frontend", "frontend-default", "frontend-tests", "library", "library-tests",]
 
 [dependencies.ruda-compiler]
-path = "../ruda-compiler"
+path = "../../ruda-compiler"
 version = "0.1.19"
 default-features = false
-features = [ "wgsl",]
+features = [ "cpp",]

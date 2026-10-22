@@ -33,7 +33,7 @@ cargo metadata --no-deps --format-version 1 --offline --locked
 
 Diese Befehle kompilieren Ruda nicht. `--offline` erfordert, dass die für die Auflösung erforderlichen Abhängigkeiten lokal zwischengespeichert werden.
 
-Legen Sie `CUDA_PATH` fest, um das CUDA Toolkit-Stammverzeichnis auszuwählen. Verweisen Sie unter Windows auf ein installiertes Versionsverzeichnis und nicht auf das übergeordnete Verzeichnis, das mehrere Versionen enthält. Siehe die [CUDA-Installationspfadschnittstelle](../../ruda-driver-cuda/src/lib.rs).
+Legen Sie `CUDA_PATH` fest, um das CUDA Toolkit-Stammverzeichnis auszuwählen. Verweisen Sie unter Windows auf ein installiertes Versionsverzeichnis und nicht auf das übergeordnete Verzeichnis, das mehrere Versionen enthält. Siehe die [CUDA-Installationspfadschnittstelle](../../ruda-driver/cuda/src/lib.rs).
 
 ## 3. Erstellen Sie das Beispiel
 

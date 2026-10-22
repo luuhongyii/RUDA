@@ -34,7 +34,7 @@ ruda-fusion = { path = "../../ruda-fusion", default-features = false, features =
 ruda-tensor-host = { path = "../host", default-features = false }
 ruda-tensor-capture = { path = "../capture", default-features = false, optional = true }
 ruda-tensor-device = { path = "../device", default-features = false, optional = true }
-ruda-driver-cpu = { path = "../../ruda-driver-cpu", optional = true }
+ruda-driver-cpu = { path = "../../ruda-driver/cpu", optional = true }
 ruda-tensor-wgpu = { path = "../wgpu", default-features = false, optional = true }
 ruda-tensor-rocm = { path = "../rocm", default-features = false, optional = true }
 ruda-tensor-tch = { path = "../tch", default-features = false, optional = true }

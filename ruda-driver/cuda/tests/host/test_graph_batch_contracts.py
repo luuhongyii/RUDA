@@ -2,9 +2,9 @@
 from pathlib import Path
 import re
 import pytest
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 def text(name):
-    return (ROOT / 'ruda-driver-cuda' / name).read_text()
+    return (ROOT / 'ruda-driver/cuda' / name).read_text()
 
 def body(source, start, end):
     return source.split(start, 1)[1].split(end, 1)[0]
@@ -91,4 +91,4 @@ def test_legacy_whole_queue_queries_remain_available():
 def test_no_new_abi_or_default_async_change():
     # This feature is a Rust graph API, not an invented PyTorch graph adapter.
     assert 'RUDA_TORCH_ASYNC' in (ROOT/'ruda-torch/src/lib.rs').read_text()
-    assert not list((ROOT/'ruda-driver-cuda/src').rglob('*.cu'))
+    assert not list((ROOT/'ruda-driver/cuda/src').rglob('*.cu'))

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Fine-tune a local HF checkpoint using explicit, model-independent paths.
 
-JSONL rows contain input_ids/labels or messages. The frozen checkpoint is
-identified by --base-id; --backbone, --head and --targets are exact module
-paths supplied by the caller. No pretrained weights are downloaded.
+JSONL rows contain input_ids/labels or messages. The source checkpoint is
+identified by --base-id. Optional --backbone/--head override the model's
+decoder/head API; adapter module/parameter targets are exact caller paths.
+Full, LoRA and NF4-LoRA training use the same loop. No weights are downloaded.
 Default execution is RUDA; --cpu-reference is an explicit reference run.
 Start with a bounded short --steps trial on the intended input shapes before
 any long run. Checkpoints/progress live only in the caller's output directory.
@@ -74,6 +75,14 @@ def run(args):
     dtype = {'fp32': torch.float32, 'fp16': torch.float16, 'bf16': torch.bfloat16}[args.dtype]
     torch.manual_seed(args.seed)
     device = 'cpu' if args.cpu_reference else 'ruda:0'
+    training_mode = getattr(args, 'training_mode', 'qlora')
+    parameter_targets = getattr(args, 'target_parameters', None)
+    if training_mode == 'full' and (args.targets or parameter_targets):
+        raise ValueError('full training does not select adapter targets')
+    if training_mode != 'full' and not args.targets and not parameter_targets:
+        raise ValueError('adapter training requires --targets and/or --target-parameters')
+    if training_mode == 'qlora' and not args.targets:
+        raise ValueError('NF4-LoRA requires --targets for quantized linear modules; parameter-only adapters use --training-mode lora')
     factory = getattr(transformers, args.auto_class)
     config = vars(args).copy()
     for name in ('resume', 'output', 'steps'):
@@ -96,20 +105,35 @@ def run(args):
     # identity; metadata is not claimed to be a content hash of frozen weights.
     config['base_files'] = {str(path.relative_to(args.model)): [path.stat().st_size, path.stat().st_mtime_ns]
                              for path in sorted(args.model.rglob('*')) if path.is_file()}
-    pretrained = cft.load_hf_nf4_model(args.model, target_modules=args.targets, device=device,
-                                       dtype=dtype, auto_class=factory, rank=args.rank, alpha=args.alpha,
-                                       model_kwargs={'attn_implementation': args.attention})
-    model = cft.CausalLMFinetuner(pretrained.get_submodule(args.backbone), pretrained.get_submodule(args.head),
-                                token_chunk_size=args.token_chunk_size,
-                                checkpoint_modules=args.checkpoint_modules,
-                                preserve_rng_state=not args.no_preserve_rng_state)
+    load_options = dict(device=device, dtype=dtype, auto_class=factory,
+                        model_kwargs={'attn_implementation': args.attention})
+    if training_mode == 'qlora':
+        pretrained = cft.load_hf_nf4_model(args.model, target_modules=args.targets,
+            target_parameters=parameter_targets, rank=args.rank, alpha=args.alpha, **load_options)
+    else:
+        pretrained = cft.load_hf_model(args.model, **load_options)
+        if training_mode == 'lora':
+            cft.inject_lora(pretrained, target_modules=args.targets, target_parameters=parameter_targets,
+                            rank=args.rank, alpha=args.alpha)
+    router_aux = getattr(args, 'router_aux_loss', None)
+    if router_aux is not None:
+        text_config = getattr(pretrained.config, 'text_config', pretrained.config)
+        if router_aux and not getattr(text_config, 'router_aux_loss_coef', 0.):
+            raise ValueError('--router-aux-loss requires a configured router_aux_loss_coef')
+        text_config.output_router_logits = router_aux
+    training = importlib.import_module(cft.__package__ + '.transformers_training')
+    model = training.prepare_causal_lm(pretrained, backbone=args.backbone, head=args.head,
+        ruda_kernels=not args.cpu_reference, token_chunk_size=args.token_chunk_size,
+        checkpoint_modules=args.checkpoint_modules,
+        preserve_rng_state=not args.no_preserve_rng_state)
     optimizer = optimizer_class([p for p in model.parameters() if p.requires_grad], lr=args.lr)
     compiler = importlib.import_module(cft.__package__ + '.compiler')
     executable = (compiler.compile(model, device_type='cpu' if args.cpu_reference else 'ruda',
                                    native='off' if args.cpu_reference else 'auto', fullgraph=True)
                   if args.compile else model)
     try:
-        trainer = cft.SFTTrainer(executable, optimizer, base_id=args.base_id, run_config=config)
+        trainer_class = cft.CausalLMTrainer if training_mode == 'full' else cft.SFTTrainer
+        trainer = trainer_class(executable, optimizer, base_id=args.base_id, run_config=config)
         if args.resume:
             trainer.resume(args.resume)
         config_path = output / 'run-config.json'
@@ -147,9 +171,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('model', 'data', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
-    for name in ('base-id', 'backbone', 'head'):
-        parser.add_argument('--' + name, required=True)
-    parser.add_argument('--targets', nargs='+', required=True)
+    parser.add_argument('--base-id', required=True)
+    parser.add_argument('--backbone')
+    parser.add_argument('--head')
+    parser.add_argument('--training-mode', choices=('full', 'lora', 'qlora'), default='qlora')
+    parser.add_argument('--targets', nargs='+')
+    parser.add_argument('--target-parameters', nargs='+')
+    parser.add_argument('--router-aux-loss', action=argparse.BooleanOptionalAction, default=None,
+                        help='override config output_router_logits, retaining its router loss coefficient')
     parser.add_argument('--checkpoint-modules', nargs='+')
     parser.add_argument('--auto-class', default='AutoModelForCausalLM')
     parser.add_argument('--attention', default='eager')

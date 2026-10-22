@@ -27,7 +27,7 @@ Die entsprechenden CUDA-Konzepte finden Sie im [Kompatibilitätsleitfaden](compa
 
 ## 3. Ihr erster Kernel
 
-Dieser Kernel stammt aus dem [ptx-runtime-Beispiel](../../ruda-driver-cuda/examples/ptx_runtime.rs), das das vollständige Hostprogramm und die Ausführungsprüfungen enthält:
+Dieser Kernel stammt aus dem [ptx-runtime-Beispiel](../../ruda-driver/cuda/examples/ptx_runtime.rs), das das vollständige Hostprogramm und die Ausführungsprüfungen enthält:
 
 ```rust
 use ruda_kernel::dsl::prelude::*;

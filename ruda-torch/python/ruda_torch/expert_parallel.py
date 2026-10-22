@@ -86,32 +86,90 @@ class ExpertParallelMLP(nn.Module):
         self._local_ids.append(-1)
 
     def _mark_parameters(self):
-        for parameter, shape in ((self.gate_up_proj, (self.num_experts, 2 * self.intermediate_size, self.hidden_size)),
-                                 (self.down_proj, (self.num_experts, self.hidden_size, self.intermediate_size))):
+        from ._parameter_lora import parameter_weight
+        for field, shape, axis in (('gate_up_proj', (self.num_experts, 2 * self.intermediate_size, self.hidden_size), 1),
+                                   ('down_proj', (self.num_experts, self.hidden_size, self.intermediate_size), 2)):
+            parameter, adapter = parameter_weight(self, field)
             parameter._ruda_ep_sharded = True
             parameter._ruda_ep_global_shape = shape
             parameter._ruda_tp_sharded = self.tensor_group is not None
+            parameter._ruda_parameter_layout = dict(shape=shape, expert_group=self.group,
+                tensor_group=self.tensor_group, tensor_axis=axis if self.tensor_group is not None else None,
+                transform='expert-gate-up' if field == 'gate_up_proj' else None)
+            if adapter is not None:
+                adapter.configure_layout(parameter)
+                adapter.mark_parameters()
 
-    def shard_tensor_parallel(self, group):
+    def shard_tensor_parallel(self, group, *, parameter_cache=None):
         if self.tensor_group is not None:
             raise ValueError('expert intermediates are already tensor-parallel')
         if self.intermediate_size % group.world_size or group.device_type != self.group.device_type:
             raise ValueError('expert intermediate width must divide the tensor group on the same device type')
         width = self.intermediate_size // group.world_size
         begin, end = width * group.rank, width * (group.rank + 1)
+        from ._parameter_lora import parameter_weight, partition_parameter_adapter, register_parameter_lora
+        from torch.nn.utils import parametrize
+        gate_weight, gate_adapter = parameter_weight(self, 'gate_up_proj')
+        down_weight, down_adapter = parameter_weight(self, 'down_proj')
         with torch.no_grad():
-            gate = torch.cat((self.gate_up_proj[:, begin:end],
-                              self.gate_up_proj[:, self.intermediate_size+begin:self.intermediate_size+end]), dim=1)
-            down = self.down_proj[:, :, begin:end].contiguous().clone()
-        self.gate_up_proj = nn.Parameter(gate, requires_grad=self.gate_up_proj.requires_grad)
-        self.down_proj = nn.Parameter(down, requires_grad=self.down_proj.requires_grad)
+            gate = torch.cat((gate_weight[:, begin:end],
+                              gate_weight[:, self.intermediate_size+begin:self.intermediate_size+end]), dim=1)
+            down = down_weight[:, :, begin:end].contiguous().clone()
+        for field, adapter in (('gate_up_proj', gate_adapter), ('down_proj', down_adapter)):
+            if adapter is not None:
+                parametrize.remove_parametrizations(self, field, leave_parametrized=False)
+        cache={} if parameter_cache is None else parameter_cache
+        for field,value,weight in (('gate_up_proj',gate,gate_weight),('down_proj',down,down_weight)):
+            if id(weight) in cache:
+                parameter,_,source_field=cache[id(weight)]
+                if source_field!=field:raise ValueError('tied expert weights use different tensor partitions')
+            else:
+                parameter=nn.Parameter(value,requires_grad=weight.requires_grad)
+            setattr(self,field,parameter)
         self.tensor_group, self.local_intermediate_size = group, width
         self._mark_parameters()
+        for field,weight,adapter in (('gate_up_proj',gate_weight,gate_adapter),('down_proj',down_weight,down_adapter)):
+            if adapter is not None:
+                local_adapter=(cache[id(weight)][1] if id(weight) in cache else
+                               partition_parameter_adapter(adapter,getattr(self,field)))
+                if local_adapter is None:raise ValueError('tied expert weights have inconsistent adapters')
+                register_parameter_lora(self,field,local_adapter)
+            else:
+                local_adapter=None
+                if id(weight) in cache and cache[id(weight)][1] is not None:
+                    raise ValueError('tied expert weights have inconsistent adapters')
+            cache[id(weight)]=(parameter_weight(self,field)[0],local_adapter,field)
         return self
 
     def _apply(self, fn, recurse=True):
         result = super()._apply(fn, recurse=recurse)
         self._mark_parameters()
+        return result
+
+    @classmethod
+    def from_module(cls, module, group, *, group_key, names=('gate_up_proj', 'down_proj'),
+                    combine='float32', activation='storage', parameter_cache=None):
+        from ._parameter_lora import parameter_weight, partition_parameter_adapter, register_parameter_lora
+        sources = [parameter_weight(module, name) for name in names]
+        result = cls.from_stacked(sources[0][0], sources[1][0], group, group_key=group_key,
+                                  combine=combine, activation=activation)
+        order = getattr(module, '_ruda_parameter_order', tuple(module._parameters))
+        translated = dict(zip(names, ('gate_up_proj', 'down_proj')))
+        result._ruda_parameter_order = tuple(translated[name] for name in order if name in translated)
+        cache={} if parameter_cache is None else parameter_cache
+        for field, (weight, adapter) in zip(('gate_up_proj', 'down_proj'), sources):
+            if id(weight) in cache:
+                local_weight,local_adapter,source_field=cache[id(weight)]
+                if source_field!=field:raise ValueError('tied expert weights use different ownership layouts')
+                setattr(result,field,local_weight)
+                if (adapter is None)!=(local_adapter is None):
+                    raise ValueError('tied expert weights have inconsistent adapters')
+            else:
+                local_weight=getattr(result,field)
+                local_adapter=None if adapter is None else partition_parameter_adapter(adapter,local_weight)
+                cache[id(weight)]=(local_weight,local_adapter,field)
+            if adapter is not None:
+                register_parameter_lora(result,field,local_adapter)
         return result
 
     @classmethod
@@ -303,8 +361,10 @@ def tensor_parallelize_experts(model, group):
         raise ValueError('partition expert ownership before tensor-parallelizing expert intermediates')
     if any(bank.tensor_group is not None or bank.intermediate_size % group.world_size for bank in banks):
         raise ValueError('all expert banks must have unpartitioned, divisible intermediate widths')
+    cache={}
     for bank in banks:
-        bank.shard_tensor_parallel(group)
+        if isinstance(bank,_SeparateExpertParallelMLP):bank.shard_tensor_parallel(group)
+        else:bank.shard_tensor_parallel(group,parameter_cache=cache)
     return model
 
 
@@ -346,12 +406,13 @@ def _parallelize_hf_stacked(model, group, group_key, class_names):
     from .finetuning import _replace
     replacements = []
     packed = {}
+    parameter_cache = {}
     for path, module in model.named_modules(remove_duplicate=False):
-        if type(module).__name__ in class_names:
+        if any(base.__name__ in class_names for base in type(module).__mro__):
             replacement = packed.get(id(module))
             if replacement is None:
-                replacement = ExpertParallelMLP.from_stacked(module.gate_up_proj, module.down_proj, group,
-                    group_key=group_key, combine='expert_order', activation='storage')
+                replacement = ExpertParallelMLP.from_module(module, group,
+                    group_key=group_key, combine='expert_order', activation='storage',parameter_cache=parameter_cache)
                 replacement.act_fn = module.act_fn
                 replacement.source_kind = 'hf'
                 replacement.source_prefix = path
@@ -384,12 +445,13 @@ def expert_parallelize_moe(model, group, *, group_key='ruda-expert'):
     from .finetuning import _replace
     replacements = []
     packed = {}
+    parameter_cache = {}
     for path, module in model.named_modules(remove_duplicate=False):
         if isinstance(module, SwiGLUExperts):
             replacement = packed.get(id(module))
             if replacement is None:
-                parallel = ExpertParallelMLP.from_stacked(module.gate_up, module.down, group,
-                    group_key=group_key, combine='float32', activation='float32')
+                parallel = ExpertParallelMLP.from_module(module, group, names=('gate_up', 'down'),
+                    group_key=group_key, combine='float32', activation='float32',parameter_cache=parameter_cache)
                 parallel.source_prefix, parallel.source_names = path, ('gate_up', 'down')
                 replacement = packed[id(module)] = _RoutedExperts(parallel)
             replacements.append((path, replacement))

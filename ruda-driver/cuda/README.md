@@ -29,8 +29,8 @@ Default features: `std`, `ruda/runtime-default`, `ruda-core/std`, `ruda-kernel/f
 
 ## Links
 
-- [Package source](https://github.com/shuqi2077/RUDA/tree/main/ruda-driver-cuda/src)
-- [Cargo manifest](https://github.com/shuqi2077/RUDA/blob/main/ruda-driver-cuda/Cargo.toml)
+- [Package source](https://github.com/shuqi2077/RUDA/tree/main/ruda-driver/cuda/src)
+- [Cargo manifest](https://github.com/shuqi2077/RUDA/blob/main/ruda-driver/cuda/Cargo.toml)
 - [Ruda guide](https://github.com/shuqi2077/RUDA/blob/main/docs/en/driver-api.md)
 
 ## Stream and event interop

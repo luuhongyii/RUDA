@@ -51,6 +51,7 @@ def model_shard_layout(model):
     from .parallel_adapters import _ParallelNF4,_ParallelLoRA,nf4_layout
     from .packed_parallel import _ParallelPacked,packed_layout
     from .expert_parallel import ExpertParallelMLP, _SeparateExpertParallelMLP
+    from ._parameter_lora import LoRAParameter, parameter_weight, adapter_shapes, parameter_adapter_axis
     layout = {}
     for path, module in model.named_modules(remove_duplicate=False):
         prefix = path+'.' if path else ''
@@ -82,14 +83,26 @@ def model_shard_layout(model):
                     layout[key]['expert_tensor_axis'] = 0 if column < 2 else 1
         elif isinstance(module, ExpertParallelMLP):
             for name in ('gate_up_proj', 'down_proj'):
+                _, adapter = parameter_weight(module, name)
+                key = prefix+('parametrizations.'+name+'.original' if adapter is not None else name)
                 shape = ([module.num_experts, 2 * module.intermediate_size, module.hidden_size]
                          if name == 'gate_up_proj' else [module.num_experts, module.hidden_size, module.intermediate_size])
-                layout[prefix+name] = {'name': prefix+name, 'aliases': [], 'shape': shape,
-                                      'axis': 0, 'partition': 'expert'}
+                layout[key] = {'name': key, 'aliases': [], 'shape': shape, 'axis': 0, 'partition': 'expert'}
                 if getattr(module, 'tensor_group', None) is not None:
-                    layout[prefix+name]['expert_tensor_axis'] = 1 if name == 'gate_up_proj' else 2
+                    layout[key]['expert_tensor_axis'] = 1 if name == 'gate_up_proj' else 2
                     if name == 'gate_up_proj':
-                        layout[prefix+name]['transform'] = 'expert-gate-up'
+                        layout[key]['transform'] = 'expert-gate-up'
+        elif isinstance(module,LoRAParameter):
+            for name,shape in adapter_shapes(module).items():
+                axis=parameter_adapter_axis(module,name)
+                spec={'name':prefix+name,'aliases':[],'shape':list(shape),'axis':axis}
+                if module.expert_group is not None:
+                    spec.update(axis=0,partition='expert')
+                    if axis is not None:spec['expert_tensor_axis']=axis
+                elif axis is None:spec['replicated']=True
+                if axis is not None and module.tensor_transform=='expert-gate-up' and name=='lora_B':
+                    spec['transform']='expert-gate-up'
+                layout[prefix+name]=spec
         elif isinstance(module,_ParallelLoRA):
             for name,shape,axis in (('lora_A',[module.rank,module.in_features],1 if module.axis==1 else None),
                                     ('lora_B',[module.out_features,module.rank],0 if module.axis==0 else None)):

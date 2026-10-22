@@ -14,7 +14,7 @@ import shutil
 ROOT=Path(__file__).resolve().parents[2]
 SCOPES={
     'adapters':['ruda-torch/src','ruda-torch/python/ruda_torch','ruLLM/src'],
-    'native_drivers':['ruda-driver-cuda/src','ruda-driver-hip/src'],
+    'native_drivers':['ruda-driver/cuda/src','ruda-driver/hip/src'],
     'loaders':['ruLLM/src'],
 }
 def scan(root, scope, pattern):
@@ -43,7 +43,7 @@ def audit(root):
     report['ptx_debug_evidence']=excerpt(root,'ruda-compiler/src/ptx/emit.rs',r'debug_symbols|unsupported\("debug symbols"\)')
     report['named_loaders']=excerpt(root,'ruLLM/src/huggingface.rs',r'pub fn load_huggingface_|pub use.*load_huggingface')
     report['host_staged_evidence']=excerpt(root,'ruda-communication/src/data_service.rs',r'B::float_into_data')
-    report['nccl_evidence']=excerpt(root,'ruda-driver-cuda/src/execution/server.rs',r'cudarc::nccl::result::')
+    report['nccl_evidence']=excerpt(root,'ruda-driver/cuda/src/execution/server.rs',r'cudarc::nccl::result::')
     report['tools']={tool:shutil.which(tool) for tool in ['rustc','cargo','nvidia-smi','compute-sanitizer']}
     try:
         ctypes.CDLL('nvcuda.dll' if os.name=='nt' else 'libcuda.so.1')
