@@ -143,6 +143,145 @@ fn check(c:&ComputeClient<CudaRuntime>,value:&View,message:&str) {
     assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()),0,"{message}");
 }
 
+#[ruda(launch)]
+fn cross_entropy_tiles<S: Float + RudaElement>(x: &Tensor<S>, partial: &mut Tensor<f32>) {
+    let warp = (ABSOLUTE_POS / 32) as usize;
+    let lane = (ABSOLUTE_POS % 32) as usize;
+    let tiles = partial.shape(1);
+    let row = warp / tiles;
+    let tile = warp % tiles;
+    if row < x.shape(0) {
+        let width = x.shape(1);
+        let end = (tile + 1) * 1024;
+        let mut col = tile * 1024 + lane;
+        let mut maximum = f32::new(f32::NEG_INFINITY);
+        while col < end && col < width {
+            maximum = f32::max(maximum, f32::cast_from(x[row * width + col]));
+            col += 32;
+        }
+        maximum = plane_max(maximum);
+        let mut sum = 0.0f32;
+        col = tile * 1024 + lane;
+        while col < end && col < width {
+            if maximum != f32::new(f32::NEG_INFINITY) {
+                sum += (f32::cast_from(x[row * width + col]) - maximum).exp();
+            }
+            col += 32;
+        }
+        sum = plane_sum(sum);
+        if lane == 0 {
+            partial[warp * 2] = maximum;
+            partial[warp * 2 + 1] = sum;
+        }
+    }
+}
+
+#[ruda(launch)]
+fn cross_entropy_finish<S: Float + RudaElement>(
+    x: &Tensor<S>, targets: &Tensor<i64>, partial: &Tensor<f32>,
+    losses: &mut Tensor<f32>, stats: &mut Tensor<f32>, invalid: &mut Tensor<Atomic<u32>>,
+    ignore: i64,
+) {
+    let row = (ABSOLUTE_POS / 32) as usize;
+    let lane = (ABSOLUTE_POS % 32) as usize;
+    if row < targets.len() {
+        let tiles = partial.shape(1);
+        let mut tile = lane;
+        let mut maximum = f32::new(f32::NEG_INFINITY);
+        while tile < tiles {
+            maximum = f32::max(maximum, partial[(row * tiles + tile) * 2]);
+            tile += 32;
+        }
+        maximum = plane_max(maximum);
+        let mut sum = 0.0f32;
+        tile = lane;
+        while tile < tiles {
+            let pos = (row * tiles + tile) * 2;
+            sum += partial[pos + 1] * (partial[pos] - maximum).exp();
+            tile += 32;
+        }
+        let log_sum = plane_sum(sum).ln();
+        if lane == 0 {
+            stats[row * 2] = maximum;
+            stats[row * 2 + 1] = log_sum;
+            let target = targets[row];
+            let mut loss = 0.0f32;
+            if target != ignore {
+                if target < 0i64 || target >= i64::cast_from(x.shape(1)) {
+                    invalid[0].store(1u32);
+                } else {
+                    loss = (maximum - f32::cast_from(x[row * x.shape(1) + usize::cast_from(target)])) + log_sum;
+                }
+            }
+            losses[row] = loss;
+        }
+    }
+}
+
+#[ruda(launch)]
+fn cross_entropy_backward<S: Float + RudaElement>(
+    x: &Tensor<S>, targets: &Tensor<i64>, stats: &Tensor<f32>,
+    grad: &Tensor<f32>, dx: &mut Tensor<S>, ignore: i64,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < x.len() {
+        let width = x.shape(1);
+        let row = pos / width;
+        let target = targets[row];
+        let mut value = 0.0f32;
+        if target != ignore {
+            let log_probability = (f32::cast_from(x[pos]) - stats[row * 2]) - stats[row * 2 + 1];
+            value = log_probability.exp();
+            if i64::cast_from(pos % width) == target { value -= 1.0f32; }
+            value *= grad[row];
+        }
+        dx[pos] = S::cast_from(value);
+    }
+}
+
+pub(super) fn dispatch_fused_cross_entropy(op: u32, xs: &[View], ints: &[i64]) {
+    assert_eq!(ints.len(), 1);
+    assert_eq!(xs.len(), if op == 650 { 4 } else { 5 });
+    for x in xs {
+        let mut stride = 1usize;
+        for (&dim, &actual) in x.shape.iter().zip(&x.strides).rev() {
+            assert!(dim <= 1 || actual == stride, "cross entropy requires contiguous storage");
+            stride = stride.checked_mul(dim).expect("loss shape overflow");
+        }
+    }
+    let x = &xs[0]; let target = &xs[1];
+    assert_eq!(x.shape.len(), 2);
+    let rows = x.shape[0]; let width = x.shape[1];
+    assert!(x.dtype <= 2 && width > 0);
+    assert_eq!(target.dtype, 4); assert_eq!(target.shape, vec![rows]);
+    let (losses, stats) = if op == 650 { (&xs[2], &xs[3]) } else { (&xs[3], &xs[2]) };
+    assert_eq!((losses.dtype, &losses.shape), (0, &vec![rows]));
+    assert_eq!((stats.dtype, &stats.shape), (0, &vec![rows, 2]));
+    if op == 651 { assert_eq!(xs[4].shape, x.shape); assert_eq!(xs[4].dtype, x.dtype); }
+    if rows == 0 { return; }
+    let c = client(); let dim = RudaDim::new_1d(128);
+    if op == 650 {
+        let tiles = width.div_ceil(1024);
+        let elements = rows.checked_mul(tiles).and_then(|n| n.checked_mul(2)).expect("loss partial overflow");
+        let partial = View::packed(c.empty(elements.checked_mul(4).expect("loss allocation overflow")), vec![rows, tiles, 2], 0);
+        let invalid = status(&c);
+        let work = rows.checked_mul(tiles).and_then(|n| n.checked_mul(32)).expect("loss grid overflow");
+        macro_rules! run { ($s:ty) => { unsafe {
+            cross_entropy_tiles::launch::<$s,CudaRuntime>(&c,grid(work),dim,x.arg(),partial.arg());
+            cross_entropy_finish::launch::<$s,CudaRuntime>(&c,grid(rows.checked_mul(32).expect("loss grid overflow")),dim,
+                x.arg(),target.arg(),partial.arg(),losses.arg(),stats.arg(),invalid.arg(),ints[0]);
+        } }; }
+        match x.dtype { 0=>run!(f32), 1=>run!(f16), 2=>run!(bf16), _=>unreachable!() }
+        check(&c, &invalid, "cross entropy target is out of bounds");
+    } else {
+        macro_rules! run { ($s:ty) => { unsafe {
+            cross_entropy_backward::launch::<$s,CudaRuntime>(&c,grid(x.len),dim,
+                x.arg(),target.arg(),stats.arg(),losses.arg(),xs[4].arg(),ints[0]);
+        } }; }
+        match x.dtype { 0=>run!(f32), 1=>run!(f16), 2=>run!(bf16), _=>unreachable!() }
+    }
+}
+
 fn nll_dispatch<S:Float+RudaElement,F:Float+RudaElement>(c:&ComputeClient<CudaRuntime>,op:u32,xs:&[View],ints:&[i64]) {
     let a=&xs[0];let target=&xs[1];let weight=&xs[2];let out=xs.last().unwrap();
     let reduction=ints[0] as u32;let ignore=ints[1];let mode=ints[2];let weighted=ints[3]!=0;

@@ -1019,6 +1019,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   });
   m.def("training_rms_forward", training_rms_forward);
   m.def("training_rms_backward", training_rms_backward);
+  m.attr("training_fusion_api_version") = 1;
+  m.def("training_hf_rms_forward", training_hf_rms_forward);
+  m.def("training_hf_rms_backward", training_hf_rms_backward);
   m.def("training_layer_forward", training_layer_forward);
   m.def("training_layer_backward", training_layer_backward);
   m.def("training_silu_forward", training_silu_forward);

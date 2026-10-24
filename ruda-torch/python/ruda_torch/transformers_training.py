@@ -135,7 +135,7 @@ def enable_transformers_moe(model):
     return model
 
 
-def prepare_causal_lm(model, *, backbone=None, head=None, ruda_kernels=True,
+def prepare_causal_lm(model, *, backbone=None, head=None, ruda_kernels=True, ruda_attention=None,
                       auxiliary_loss='auto', **finetuner_options):
     """Connect an existing causal LM to SFTTrainer/CausalLMTrainer, without copies.
 
@@ -176,6 +176,8 @@ def prepare_causal_lm(model, *, backbone=None, head=None, ruda_kernels=True,
     if isinstance(auxiliary_loss, HfRouterAuxiliaryLoss):
         options['backbone_kwargs'] = dict(options.get('backbone_kwargs') or {}, output_router_logits=True)
     if ruda_kernels:
+        from .transformers_fused import enable_transformers_fused
+        enable_transformers_fused(backbone, attention=ruda_attention)
         if kind in ('qwen3_5_text', 'qwen3_5_moe_text'):
             from .transformers_qwen35 import enable_transformers_qwen35
             enable_transformers_qwen35(backbone)

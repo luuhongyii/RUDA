@@ -124,9 +124,13 @@ def run(args):
     training = importlib.import_module(cft.__package__ + '.transformers_training')
     model = training.prepare_causal_lm(pretrained, backbone=args.backbone, head=args.head,
         ruda_kernels=not args.cpu_reference, token_chunk_size=args.token_chunk_size,
+        ruda_attention=getattr(args, 'ruda_attention', None) if not args.cpu_reference else None,
         checkpoint_modules=args.checkpoint_modules,
         preserve_rng_state=not args.no_preserve_rng_state)
-    optimizer = optimizer_class([p for p in model.parameters() if p.requires_grad], lr=args.lr)
+    optimizer_options = {} if args.cpu_reference else dict(fused_step=True, hierarchical_stats=True)
+    config['optimizer_options'] = optimizer_options
+    optimizer = optimizer_class([p for p in model.parameters() if p.requires_grad], lr=args.lr,
+                                **optimizer_options)
     compiler = importlib.import_module(cft.__package__ + '.compiler')
     executable = (compiler.compile(model, device_type='cpu' if args.cpu_reference else 'ruda',
                                    native='off' if args.cpu_reference else 'auto', fullgraph=True)
@@ -182,6 +186,8 @@ def main():
     parser.add_argument('--checkpoint-modules', nargs='+')
     parser.add_argument('--auto-class', default='AutoModelForCausalLM')
     parser.add_argument('--attention', default='eager')
+    parser.add_argument('--ruda-attention', choices=('native',),
+                        help='connect the fused native dense-attention training adapter')
     parser.add_argument('--cpu-reference', action='store_true')
     parser.add_argument('--compile', action='store_true', help='reuse RUDA AOT forward/backward capture')
     parser.add_argument('--no-preserve-rng-state', action='store_true',

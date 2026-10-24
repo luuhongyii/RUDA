@@ -5,7 +5,7 @@ use ruda_kernel::dsl::prelude::*;
 #[ruda(launch)]
 pub fn rms_forward<F: Float + RudaElement, W: Float + RudaElement>(
     x: &Tensor<F>, weight: &Tensor<W>, y: &mut Tensor<F>, rstd: &mut Tensor<f32>,
-    epsilon: f32, #[comptime] weighted: bool,
+    epsilon: f32, #[comptime] weighted: bool, #[comptime] hf_rounding: bool,
 ) {
     let row = (ABSOLUTE_POS / 32) as usize;
     let lane = (ABSOLUTE_POS % 32) as usize;
@@ -23,6 +23,7 @@ pub fn rms_forward<F: Float + RudaElement, W: Float + RudaElement>(
         let mut col = lane;
         while col < width {
             let mut value = f32::cast_from(x[row * width + col]) * inv;
+            if comptime!(hf_rounding) { value = f32::cast_from(F::cast_from(value)); }
             if comptime!(weighted) { value *= f32::cast_from(weight[col]); }
             y[row * width + col] = F::cast_from(value);
             col += 32;
@@ -33,7 +34,7 @@ pub fn rms_forward<F: Float + RudaElement, W: Float + RudaElement>(
 #[ruda(launch)]
 pub fn rms_dx<F: Float + RudaElement, W: Float + RudaElement>(
     x: &Tensor<F>, weight: &Tensor<W>, dy: &Tensor<F>, rstd: &Tensor<f32>,
-    dx: &mut Tensor<F>, #[comptime] weighted: bool,
+    dx: &mut Tensor<F>, #[comptime] weighted: bool, #[comptime] hf_rounding: bool,
 ) {
     let row = (ABSOLUTE_POS / 32) as usize;
     let lane = (ABSOLUTE_POS % 32) as usize;
@@ -46,6 +47,7 @@ pub fn rms_dx<F: Float + RudaElement, W: Float + RudaElement>(
             let pos = row * width + col;
             let mut g = f32::cast_from(dy[pos]);
             if comptime!(weighted) { g *= f32::cast_from(weight[col]); }
+            if comptime!(hf_rounding) { g = f32::cast_from(F::cast_from(g)); }
             dot += g * f32::cast_from(x[pos]) * inv;
             col += 32;
         }
@@ -55,6 +57,7 @@ pub fn rms_dx<F: Float + RudaElement, W: Float + RudaElement>(
             let pos = row * width + col;
             let mut g = f32::cast_from(dy[pos]);
             if comptime!(weighted) { g *= f32::cast_from(weight[col]); }
+            if comptime!(hf_rounding) { g = f32::cast_from(F::cast_from(g)); }
             dx[pos] = F::cast_from(inv * (g - f32::cast_from(x[pos]) * inv * correction));
             col += 32;
         }
@@ -66,6 +69,7 @@ pub fn rms_dx<F: Float + RudaElement, W: Float + RudaElement>(
 #[ruda(launch)]
 pub fn rms_dw_partial<F: Float + RudaElement>(
     x: &Tensor<F>, dy: &Tensor<F>, rstd: &Tensor<f32>, partial: &mut Tensor<f32>,
+    #[comptime] hf_rounding: bool,
 ) {
     let pos = ABSOLUTE_POS as usize;
     let width = partial.shape(1);
@@ -75,8 +79,14 @@ pub fn rms_dw_partial<F: Float + RudaElement>(
         let mut row = pos / width;
         let mut sum = 0.0f32;
         while row < rstd.len() {
-            sum += f32::cast_from(dy[row * width + col])
-                * f32::cast_from(x[row * width + col]) * rstd[row];
+            if comptime!(hf_rounding) {
+                let normalized = F::cast_from(f32::cast_from(x[row * width + col]) * rstd[row]);
+                sum += f32::cast_from(F::cast_from(
+                    f32::cast_from(dy[row * width + col]) * f32::cast_from(normalized)));
+            } else {
+                sum += f32::cast_from(dy[row * width + col])
+                    * f32::cast_from(x[row * width + col]) * rstd[row];
+            }
             row += parts;
         }
         partial[pos] = sum;

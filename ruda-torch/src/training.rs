@@ -30,19 +30,22 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
     let width = *x.shape.last().unwrap();
     assert!(width > 0, "normalization width must be positive");
     let rows = x.len / width;
-    let weighted = flag(s[if op == 0 { 1 } else { 0 }]);
+    let forward = op == 0 || op == 11;
+    let hf_rounding = op == 11 || op == 12;
+    let weighted = flag(s[if forward { 1 } else { 0 }]);
     if weighted {
         assert_eq!(w.shape, vec![width]);
         assert!(w.dtype == x.dtype || w.dtype == 0);
+        if hf_rounding { assert_eq!(w.dtype, x.dtype); }
     }
     let c = client(); let mut launches = 0;
-    if op == 0 {
+    if forward {
         same(x, &v[2]); assert_eq!((v[3].dtype, v[3].len), (0, rows));
         assert!(s[0].is_finite() && s[0] > 0.0);
         if rows > 0 {
             unsafe { k::rms_forward::launch::<F, W, CudaRuntime>(
                 &c, count(rows.checked_mul(32).expect("norm grid overflow")), RudaDim::new_1d(128),
-                x.arg(), w.arg(), v[2].arg(), v[3].arg(), s[0], weighted); }
+                x.arg(), w.arg(), v[2].arg(), v[3].arg(), s[0], weighted, hf_rounding); }
             launches += 1;
         }
     } else {
@@ -52,7 +55,7 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
             if rows > 0 {
                 unsafe { k::rms_dx::launch::<F, W, CudaRuntime>(
                     &c, count(rows.checked_mul(32).expect("norm grid overflow")), RudaDim::new_1d(128),
-                    x.arg(), w.arg(), v[2].arg(), v[3].arg(), v[4].arg(), weighted); }
+                    x.arg(), w.arg(), v[2].arg(), v[3].arg(), v[4].arg(), weighted, hf_rounding); }
                 launches += 1;
             }
         }
@@ -63,7 +66,7 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
             let partial = View::packed(c.empty(len.checked_mul(4).expect("norm allocation overflow")), vec![parts, width], 0);
             unsafe {
                 k::rms_dw_partial::launch::<F, CudaRuntime>(&c, count(len), RudaDim::new_1d(128),
-                    x.arg(), v[2].arg(), v[3].arg(), partial.arg());
+                    x.arg(), v[2].arg(), v[3].arg(), partial.arg(), hf_rounding);
                 k::rms_dw_merge::launch::<W, CudaRuntime>(&c, count(width), RudaDim::new_1d(128),
                     partial.arg(), v[5].arg());
             }
@@ -288,6 +291,9 @@ fn batch_adamw(v: &[View], s: &[f32]) -> usize {
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_training_api_version() -> u32 { 4 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_training_fusion_api_version() -> u32 { 1 }
+
 /// Descriptors and scalar arrays are owned/validated by the in-process C++ bridge.
 /// API 1 operations: RMS fwd/bwd, SiLU-mul fwd/bwd, unscale/check, AdamW.
 #[unsafe(no_mangle)]
@@ -300,7 +306,7 @@ pub unsafe extern "C" fn ruda_torch_training(
             6 => { assert!((3..=4098).contains(&n)); (n,2) },
             8 => { assert!((4..=4099).contains(&n)); (n,2) },
             7 => { assert!((5..=20480).contains(&n) && n % 5 == 0); (n,2 + (n / 5) * 7) },
-            9 => (6,3), 10 => (9,5),
+            9 => (6,3), 10 => (9,5), 11 => (4,2), 12 => (6,3),
             _ => panic!("unsupported training opcode") };
         assert_eq!((n,ns), expected); assert!(!descriptors.is_null());
         let descriptors = unsafe { crate::abi::slice(descriptors,n) };
@@ -309,7 +315,7 @@ pub unsafe extern "C" fn ruda_torch_training(
         let s = if ns == 0 { &[] } else {
             assert!(!scalars.is_null()); unsafe { crate::abi::slice(scalars,ns) }
         };
-        let launches = if op <= 1 {
+        let launches = if op <= 1 || op == 11 || op == 12 {
             match (v[0].dtype, v[1].dtype) {
                 (0,0) => norm::<f32,f32>(op,&v,s),
                 (1,0) => norm::<f16,f32>(op,&v,s), (1,1) => norm::<f16,f16>(op,&v,s),

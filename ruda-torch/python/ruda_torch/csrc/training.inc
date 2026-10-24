@@ -35,24 +35,41 @@ void training_norm_inputs(const at::Tensor& x, const std::optional<at::Tensor>& 
     TORCH_CHECK(w->scalar_type()==x.scalar_type() || w->scalar_type()==at::kFloat, "RMSNorm weight must match input dtype or be FP32");
   }
 }
-std::tuple<at::Tensor,at::Tensor> training_rms_forward(const at::Tensor& x,const std::optional<at::Tensor>& w,double eps) {
+std::tuple<at::Tensor,at::Tensor> training_rms_forward_impl(const at::Tensor& x,const std::optional<at::Tensor>& w,double eps,bool hf) {
   training_norm_inputs(x,w);
+  TORCH_CHECK(!hf || !w || w->scalar_type()==x.scalar_type(), "HF RMSNorm requires matching input/weight dtypes");
   TORCH_CHECK(std::isfinite(eps) && std::isfinite(float(eps)) && float(eps)>0, "epsilon must be finite and positive in FP32");
   auto y=at::empty(x.sizes(),x.options());
   auto stats=at::empty({x.numel()/x.size(-1)},x.options().dtype(at::kFloat));
-  training_call(0,{x,w.value_or(x),y,stats},{float(eps),w?1.f:0.f});
+  training_call(hf?11:0,{x,w.value_or(x),y,stats},{float(eps),w?1.f:0.f});
   return {y,stats};
 }
-std::tuple<at::Tensor,at::Tensor> training_rms_backward(const at::Tensor& x,const std::optional<at::Tensor>& w,
-    const at::Tensor& dy,const at::Tensor& stats,bool need_x,bool need_w) {
+std::tuple<at::Tensor,at::Tensor> training_rms_backward_impl(const at::Tensor& x,const std::optional<at::Tensor>& w,
+    const at::Tensor& dy,const at::Tensor& stats,bool need_x,bool need_w,bool hf) {
   training_norm_inputs(x,w);training_same(x,dy);training_tensor(stats);
+  TORCH_CHECK(!hf || !w || w->scalar_type()==x.scalar_type(), "HF RMSNorm requires matching input/weight dtypes");
   TORCH_CHECK(stats.scalar_type()==at::kFloat && stats.dim()==1 && stats.numel()==x.numel()/x.size(-1), "RMSNorm saved statistics mismatch");
   TORCH_CHECK(!need_w || w, "weight gradient requested without a weight");
   at::Tensor dx,dw;
   if(need_x) dx=at::empty(x.sizes(),x.options());
   if(need_w) dw=at::empty(w->sizes(),w->options());
-  training_call(1,{x,w.value_or(x),dy,stats,need_x?dx:x,need_w?dw:x},{w?1.f:0.f,need_x?1.f:0.f,need_w?1.f:0.f});
+  training_call(hf?12:1,{x,w.value_or(x),dy,stats,need_x?dx:x,need_w?dw:x},{w?1.f:0.f,need_x?1.f:0.f,need_w?1.f:0.f});
   return {dx,dw};
+}
+
+std::tuple<at::Tensor,at::Tensor> training_rms_forward(const at::Tensor& x,const std::optional<at::Tensor>& w,double eps) {
+  return training_rms_forward_impl(x,w,eps,false);
+}
+std::tuple<at::Tensor,at::Tensor> training_hf_rms_forward(const at::Tensor& x,const std::optional<at::Tensor>& w,double eps) {
+  return training_rms_forward_impl(x,w,eps,true);
+}
+std::tuple<at::Tensor,at::Tensor> training_rms_backward(const at::Tensor& x,const std::optional<at::Tensor>& w,
+    const at::Tensor& dy,const at::Tensor& stats,bool need_x,bool need_w) {
+  return training_rms_backward_impl(x,w,dy,stats,need_x,need_w,false);
+}
+std::tuple<at::Tensor,at::Tensor> training_hf_rms_backward(const at::Tensor& x,const std::optional<at::Tensor>& w,
+    const at::Tensor& dy,const at::Tensor& stats,bool need_x,bool need_w) {
+  return training_rms_backward_impl(x,w,dy,stats,need_x,need_w,true);
 }
 
 void training_layer_inputs(const at::Tensor& x,const std::optional<at::Tensor>& w,const std::optional<at::Tensor>& b) {
