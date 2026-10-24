@@ -25,6 +25,17 @@ def test_bf16_kv_sliced_reduction(seed,offset):
     torch.testing.assert_close(actual,expected,rtol=.01,atol=.01)
 
 
+def test_bf16_kv_bias_is_added_before_sliced_accumulator_merge():
+    a=torch.zeros(512,3584,dtype=torch.bfloat16)
+    w=torch.zeros(512,3584,dtype=torch.bfloat16)
+    a[:,0]=4096; a[:,32]=4096
+    w[:,0]=4096; w[:,32]=-4096
+    bias=torch.ones(512,dtype=torch.bfloat16)
+    expected=F.linear(a.cuda(),w.cuda(),bias.cuda()).cpu()
+    actual=F.linear(a.to('ruda'),w.to('ruda'),bias.to('ruda')).cpu()
+    torch.testing.assert_close(actual,expected,rtol=0,atol=0)
+
+
 @pytest.mark.parametrize('seed',[263,269])
 @pytest.mark.parametrize('offset',[False,True])
 @pytest.mark.parametrize('inner',[3584,18944])
