@@ -116,3 +116,74 @@ def test_strided_gqa_rotary_forward_backward(dtype, need_q, need_k):
         gradient = torch.randn_like(expected_k)
         actual_k.backward(gradient.to('ruda')); expected_k.backward(gradient)
         torch.testing.assert_close(k.grad.cpu(), k_ref.grad, rtol=tolerance, atol=tolerance)
+
+
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('scale', [1., 1. / 3., 1.75])
+@pytest.mark.parametrize('need_base,need_update', [(True, True), (True, False), (False, True)])
+def test_lora_epilogue_strided_forward_backward_and_storage_rounding(dtype, scale, need_base, need_update):
+    torch.manual_seed(203)
+    base_host = torch.randn(7, 3, dtype=dtype)
+    update_host = torch.randn(7, 3, dtype=torch.float32)
+    reference = base_host.transpose(0, 1).detach().requires_grad_(need_base)
+    ref_update = update_host.transpose(0, 1).detach().requires_grad_(need_update)
+    base = base_host.to('ruda').transpose(0, 1).detach().requires_grad_(need_base)
+    update = update_host.to('ruda').transpose(0, 1).detach().requires_grad_(need_update)
+    expected = reference + (ref_update * scale).to(dtype)
+    actual = r.lora_epilogue(base, update, scale)
+    torch.testing.assert_close(actual.cpu(), expected, rtol=0, atol=0)
+    gradient = torch.randn(1, 7, dtype=dtype).expand(3, 7)
+    actual.backward(gradient.to('ruda')); expected.backward(gradient)
+    if need_base:
+        torch.testing.assert_close(base.grad.cpu(), reference.grad, rtol=0, atol=0)
+    if need_update:
+        torch.testing.assert_close(update.grad.cpu(), ref_update.grad, rtol=0, atol=0)
+
+
+def test_lora_epilogue_keeps_the_intermediate_low_precision_cast():
+    base = torch.tensor([-1., -1.], dtype=torch.bfloat16).to('ruda')
+    update = torch.tensor([1.001, 1.003], dtype=torch.float32).to('ruda')
+    result = r.lora_epilogue(base, update, 1.)
+    torch.testing.assert_close(result.cpu(), torch.zeros(2, dtype=torch.bfloat16), rtol=0, atol=0)
+
+
+def test_cross_entropy_accepts_zero_stride_backward_gradient():
+    torch.manual_seed(207)
+    host = torch.randn(5, 2053)
+    labels = torch.tensor([0, -100, 2052, 3, 17])
+    reference = host.clone().requires_grad_()
+    actual = host.to('ruda').requires_grad_()
+    result = r.cross_entropy(actual, labels.to('ruda'), reduction='none')
+    expected = F.cross_entropy(reference, labels, reduction='none')
+    gradient = torch.tensor(.25).to('ruda').expand(5)
+    assert gradient.stride() == (0,)
+    result.backward(gradient); expected.backward(torch.full((5,), .25))
+    torch.testing.assert_close(actual.grad.cpu(), reference.grad, rtol=3e-5, atol=3e-5)
+
+
+def test_ignored_cross_entropy_rows_have_zero_loss_and_gradient():
+    host = torch.randn(4, 2053)
+    host[1] = float('nan'); host[3] = float('-inf')
+    labels = torch.tensor([0, -100, 4, -100]).to('ruda')
+    actual = host.to('ruda').requires_grad_()
+    losses = r.cross_entropy(actual, labels, reduction='none')
+    losses.sum().backward()
+    assert torch.isfinite(losses.cpu()).all()
+    assert torch.count_nonzero(losses.cpu()[[1, 3]]) == 0
+    assert torch.count_nonzero(actual.grad.cpu()[[1, 3]]) == 0
+
+
+def test_lora_epilogue_survives_aot_forward_and_backward():
+    from torch._dynamo.backends.common import aot_autograd
+    graphs = []
+    def capture(graph, inputs):
+        graphs.append(graph)
+        return graph.forward
+    function = torch.compile(lambda base, update: r.lora_epilogue(base, update, .5).sum(),
+        backend=aot_autograd(fw_compiler=capture, bw_compiler=capture), fullgraph=True)
+    base = torch.ones(3, 7, dtype=torch.bfloat16).to('ruda').requires_grad_()
+    update = torch.ones(3, 7, dtype=torch.float32).to('ruda').requires_grad_()
+    function(base, update).backward()
+    targets = {str(node.target) for graph in graphs for node in graph.graph.nodes}
+    assert any('lora_epilogue_forward' in name for name in targets)
+    assert any('lora_epilogue_backward' in name for name in targets)

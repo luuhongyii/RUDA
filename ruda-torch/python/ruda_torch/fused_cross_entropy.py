@@ -41,7 +41,7 @@ def _gradient(ctx, grad, ignored_stats):
     if grad is None:
         return None, None, None
     logits, targets, stats = ctx.saved_tensors
-    return _backward(logits, targets, stats, grad.contiguous(), ctx.ignore), None, None
+    return _backward(logits, targets, stats, grad.resolve_neg(), ctx.ignore), None, None
 
 
 _forward.register_autograd(_gradient, setup_context=_setup)

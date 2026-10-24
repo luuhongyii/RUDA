@@ -40,6 +40,7 @@ mod vendor_bridge;
 mod kernels;
 mod training;
 mod rotary;
+mod lora_epilogue;
 mod router;
 mod nf4;
 mod sequence_training;

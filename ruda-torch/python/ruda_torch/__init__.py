@@ -368,12 +368,13 @@ if hasattr(_native, "ruda_torch_training_api_version") and hasattr(_C, "initiali
 _training_fusion_available = False
 if _training_available and hasattr(_native, 'ruda_torch_training_fusion_api_version'):
     _native.ruda_torch_training_fusion_api_version.restype = ctypes.c_uint32
-    _training_fusion_available = (_native.ruda_torch_training_fusion_api_version() == 2
-                                 and getattr(_C, 'training_fusion_api_version', 0) == 2)
+    _training_fusion_available = (_native.ruda_torch_training_fusion_api_version() == 3
+                                 and getattr(_C, 'training_fusion_api_version', 0) == 3)
 from .training import LayerNorm, layer_norm, RMSNorm, rms_norm, silu_mul, AdamW, GradScaler
 from . import _fused_training_ops
 from .fused_cross_entropy import cross_entropy
 from .rotary import apply_rotary_pos_emb
+from .lora_epilogue import lora_epilogue
 
 # Optional router-weight extension. Existing base ABI 10/training API 4 remain
 # loadable without it; a router operation fails clearly instead of falling back.

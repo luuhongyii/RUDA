@@ -332,6 +332,7 @@ pub unsafe extern "C" fn ruda_torch_scientific(op: u32, descriptors: *const Desc
         let ints = if integer_count == 0 { &[][..] } else { unsafe { crate::abi::slice(integers,integer_count) } };
         let values = if scalar_count == 0 { &[][..] } else { unsafe { crate::abi::slice(scalars,scalar_count) } };
         match op {
+            654..=655 => {crate::lora_epilogue::dispatch(op,&xs,ints,values);}
             652..=653 => {crate::rotary::dispatch(op,&xs,ints);}
             650..=651 => {crate::loss::dispatch_fused_cross_entropy(op,&xs,ints);}
             579..=583 => {crate::quantized_embedding::dispatch(op,&xs,ints,values);}

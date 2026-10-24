@@ -305,7 +305,7 @@ fn batch_adamw(v: &[View], s: &[f32]) -> usize {
 pub extern "C" fn ruda_torch_training_api_version() -> u32 { 4 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ruda_torch_training_fusion_api_version() -> u32 { 2 }
+pub extern "C" fn ruda_torch_training_fusion_api_version() -> u32 { 3 }
 
 /// Descriptors and scalar arrays are owned/validated by the in-process C++ bridge.
 /// API 1 operations: RMS fwd/bwd, SiLU-mul fwd/bwd, unscale/check, AdamW.

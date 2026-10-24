@@ -144,13 +144,17 @@ fn check(c:&ComputeClient<CudaRuntime>,value:&View,message:&str) {
 }
 
 #[ruda(launch)]
-fn cross_entropy_tiles<S: Float + RudaElement>(x: &Tensor<S>, partial: &mut Tensor<f32>) {
+fn cross_entropy_tiles<S: Float + RudaElement>(
+    x: &Tensor<S>, targets: &Tensor<i64>, partial: &mut Tensor<f32>, ignore: i64,
+) {
     let warp = (ABSOLUTE_POS / 32) as usize;
     let lane = (ABSOLUTE_POS % 32) as usize;
     let tiles = partial.shape(1);
     let row = warp / tiles;
     let tile = warp % tiles;
-    if row < x.shape(0) {
+    let mut active = false;
+    if row < x.shape(0) { active = targets[row] != ignore; }
+    if active {
         let width = x.shape(1);
         let mut maximum = f32::new(f32::NEG_INFINITY);
         let mut cached = Array::<f32>::new(32usize);
@@ -178,6 +182,9 @@ fn cross_entropy_tiles<S: Float + RudaElement>(x: &Tensor<S>, partial: &mut Tens
             partial[warp * 2] = maximum;
             partial[warp * 2 + 1] = sum;
         }
+    } else if row < x.shape(0) && lane == 0 {
+        partial[warp * 2] = 0.0f32;
+        partial[warp * 2 + 1] = 0.0f32;
     }
 }
 
@@ -189,7 +196,9 @@ fn cross_entropy_finish<S: Float + RudaElement>(
 ) {
     let row = (ABSOLUTE_POS / 32) as usize;
     let lane = (ABSOLUTE_POS % 32) as usize;
-    if row < targets.len() {
+    let mut target = ignore;
+    if row < targets.len() { target = targets[row]; }
+    if target != ignore {
         let tiles = partial.shape(1);
         let mut tile = lane;
         let mut maximum = f32::new(f32::NEG_INFINITY);
@@ -209,17 +218,18 @@ fn cross_entropy_finish<S: Float + RudaElement>(
         if lane == 0 {
             stats[row * 2] = maximum;
             stats[row * 2 + 1] = log_sum;
-            let target = targets[row];
             let mut loss = 0.0f32;
-            if target != ignore {
-                if target < 0i64 || target >= i64::cast_from(x.shape(1)) {
-                    invalid[0].store(1u32);
-                } else {
-                    loss = (maximum - f32::cast_from(x[row * x.shape(1) + usize::cast_from(target)])) + log_sum;
-                }
+            if target < 0i64 || target >= i64::cast_from(x.shape(1)) {
+                invalid[0].store(1u32);
+            } else {
+                loss = (maximum - f32::cast_from(x[row * x.shape(1) + usize::cast_from(target)])) + log_sum;
             }
             losses[row] = loss;
         }
+    } else if row < targets.len() && lane == 0 {
+        stats[row * 2] = 0.0f32;
+        stats[row * 2 + 1] = 0.0f32;
+        losses[row] = 0.0f32;
     }
 }
 
@@ -238,7 +248,7 @@ fn cross_entropy_backward<S: Float + RudaElement>(
             let log_probability = (f32::cast_from(x[pos]) - stats[row * 2]) - stats[row * 2 + 1];
             value = log_probability.exp();
             if i64::cast_from(pos % width) == target { value -= 1.0f32; }
-            value *= grad[row];
+            value *= grad[address(grad, row)];
         }
         dx[pos] = S::cast_from(value);
     }
@@ -247,7 +257,8 @@ fn cross_entropy_backward<S: Float + RudaElement>(
 pub(super) fn dispatch_fused_cross_entropy(op: u32, xs: &[View], ints: &[i64]) {
     assert_eq!(ints.len(), 1);
     assert_eq!(xs.len(), if op == 650 { 4 } else { 5 });
-    for x in xs {
+    for (index, x) in xs.iter().enumerate() {
+        if op == 651 && index == 3 { continue; }
         let mut stride = 1usize;
         for (&dim, &actual) in x.shape.iter().zip(&x.strides).rev() {
             assert!(dim <= 1 || actual == stride, "cross entropy requires contiguous storage");
@@ -272,7 +283,8 @@ pub(super) fn dispatch_fused_cross_entropy(op: u32, xs: &[View], ints: &[i64]) {
         let invalid = status(&c);
         let work = rows.checked_mul(tiles).and_then(|n| n.checked_mul(32)).expect("loss grid overflow");
         macro_rules! run { ($s:ty) => { unsafe {
-            cross_entropy_tiles::launch::<$s,CudaRuntime>(&c,grid(work),dim,x.arg(),partial.arg());
+            cross_entropy_tiles::launch::<$s,CudaRuntime>(&c,grid(work),dim,
+                x.arg(),target.arg(),partial.arg(),ints[0]);
             cross_entropy_finish::launch::<$s,CudaRuntime>(&c,grid(rows.checked_mul(32).expect("loss grid overflow")),dim,
                 x.arg(),target.arg(),partial.arg(),losses.arg(),stats.arg(),invalid.arg(),ints[0]);
         } }; }
