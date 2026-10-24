@@ -6,20 +6,26 @@ import ruda_torch as r
 
 
 @pytest.mark.parametrize('column_major', [False, True])
+@pytest.mark.parametrize('transpose_a', [False, True])
 @pytest.mark.parametrize('shape', [(512, 3584, 16), (512, 18944, 16), (32, 152064, 16),
                                   (31, 1537, 7), (3, 513, 1), (2, 512, 17), (1, 1025, 32)])
-def test_skinny_fp32_matmul_split_k(shape, column_major):
+def test_skinny_fp32_matmul_split_k(shape, column_major, transpose_a):
     m, k, n = shape
     torch.manual_seed(179)
-    a = torch.randn(m, k)
+    a_backing = torch.randn(k + 3, m) if transpose_a else torch.randn(m, k)
+    a = a_backing[1:k + 1].t() if transpose_a else a_backing
+    native_a_backing = a_backing.to('ruda')
+    native_a = native_a_backing[1:k + 1].t() if transpose_a else native_a_backing
     # Nonzero storage offsets and padded strides must survive native binding.
     backing = torch.randn(n, k + 3) if column_major else torch.randn(k, n + 3)
     b = backing[:, 1:k + 1].t() if column_major else backing[:, 1:n + 1]
+    native_backing = backing.to('ruda')
+    native_b = native_backing[:, 1:k + 1].t() if column_major else native_backing[:, 1:n + 1]
     old_tf32 = torch.backends.cuda.matmul.allow_tf32
     torch.backends.cuda.matmul.allow_tf32 = False
     try:
         expected = a.cuda() @ b.cuda()
-        actual = a.to('ruda') @ b.to('ruda')
+        actual = native_a @ native_b
         host = actual.cpu()
         torch.testing.assert_close(host, expected.cpu(), rtol=1e-4, atol=3e-3)
         relative = (host.double() - expected.cpu().double()).norm() / expected.double().norm().cpu()

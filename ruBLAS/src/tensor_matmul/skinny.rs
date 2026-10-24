@@ -14,14 +14,14 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
     let (m, k, n) = (a.meta.shape()[0], a.meta.shape()[1], b.meta.shape()[1]);
     let hw = &a.client.properties().hardware;
     if m == 0 || k < 512 || n == 0 || n > 32 || b.meta.shape()[0] != k
-        || out.meta.shape()[..] != [m, n] || a.meta.strides()[1] != 1
+        || out.meta.shape()[..] != [m, n] || (a.meta.strides()[1] != 1 && a.meta.strides()[0] != 1)
         || out.meta.strides()[1] != 1 || (m > 1 && out.meta.strides()[0] != n)
         || hw.plane_size_min != 32 || hw.plane_size_max != 32
     { return false; }
     let column_major = b.meta.strides()[0] == 1;
     if !column_major && b.meta.strides()[1] != 1 { return false; }
     for tensor in [a, b, out] {
-        let span = tensor.meta.shape().iter().zip(tensor.meta.strides()).try_fold(1usize,
+        let span = tensor.meta.shape().iter().zip(tensor.meta.strides().iter()).try_fold(1usize,
             |sum, (&dim, &stride)| sum.checked_add((dim - 1).checked_mul(stride)?));
         if span.is_none_or(|span| span > u32::MAX as usize) { return false; }
     }
@@ -61,7 +61,7 @@ fn columns(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
         for offset in 0usize..32 {
             let inner = split * 1024 + offset * 32 + lane;
             if inner < k as usize {
-                acc = fma(a[row * a.stride(0) + inner], b[inner + col * b.stride(1)], acc);
+                acc = fma(a[row * a.stride(0) + inner * a.stride(1)], b[inner + col * b.stride(1)], acc);
             }
         }
         let total = plane_sum(acc);
@@ -82,7 +82,7 @@ fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
         for offset in 0usize..(512 / (32 / cols)) {
             let inner = split * 512 + offset * (32 / cols) + lane / cols;
             if inner < k as usize && col < n as usize {
-                acc = fma(a[row * a.stride(0) + inner], b[inner * b.stride(0) + col], acc);
+                acc = fma(a[row * a.stride(0) + inner * a.stride(1)], b[inner * b.stride(0) + col], acc);
             }
         }
         let mut distance = cols as u32;
