@@ -13,7 +13,7 @@ def test_owned_attention_matches_fp32_math(dtype, batch, heads, kv_heads, mask_k
     torch.manual_seed(211)
     host = [torch.randn(batch, h, 512, 128, dtype=dtype) for h in (heads, kv_heads, kv_heads)]
     actual_inputs = [value.to('ruda').requires_grad_() for value in host]
-    reference_inputs = [value.float().cuda().requires_grad_() for value in host]
+    reference_inputs = [value.float().requires_grad_() for value in host]
     mask = None
     if mask_kind == 'boolean':
         mask = torch.rand(1, 1, 512, 512) > .2
@@ -32,10 +32,10 @@ def test_owned_attention_matches_fp32_math(dtype, batch, heads, kv_heads, mask_k
     try:
         with sdpa_kernel(SDPBackend.MATH):
             expected = F.scaled_dot_product_attention(q, k.repeat_interleave(group, 1),
-                v.repeat_interleave(group, 1), attn_mask=None if mask is None else mask.cuda(), **options)
+                v.repeat_interleave(group, 1), attn_mask=mask, **options)
         gradient = torch.randn_like(host[0])
         actual.backward(gradient.to('ruda'))
-        expected.backward(gradient.float().cuda())
+        expected.backward(gradient.float())
         tolerance = 3e-2 if dtype == torch.bfloat16 else 5e-3 if dtype == torch.float16 else 2e-4
         absolute = 3e-3 if dtype != torch.float32 else 2e-5
         torch.testing.assert_close(actual.cpu().float(), expected.cpu(), rtol=tolerance, atol=absolute)
