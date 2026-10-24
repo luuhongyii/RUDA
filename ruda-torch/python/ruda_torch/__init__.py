@@ -572,6 +572,11 @@ def enable_transformers_qwen35(model):
     return enable(model)
 
 
+def enable_transformers_qwen2(model, **kwargs):
+    from .transformers_qwen2 import enable_transformers_qwen2 as enable
+    return enable(model, **kwargs)
+
+
 def enable_transformers_context_parallel(model, group, **kwargs):
     from .transformers_context_parallel import enable_transformers_context_parallel as enable
     return enable(model, group, **kwargs)

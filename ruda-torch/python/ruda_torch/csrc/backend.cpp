@@ -542,6 +542,7 @@ class PagedPlanBridge {
 
 #include "static_graph.inc"
 #include "operation_graph.inc"
+#include "qwen_graph.inc"
 #include "collective_program.inc"
 
 at::Tensor empty(c10::IntArrayRef size, std::optional<c10::ScalarType> dtype,
@@ -1101,6 +1102,19 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("q"),pybind11::arg("k"),pybind11::arg("v"),pybind11::arg("qp"),pybind11::arg("kp"),
         pybind11::arg("grad"),pybind11::arg("scale"),pybind11::arg("causal"),pybind11::arg("needs"),pybind11::arg("ordered")=false);
   m.def("execute", execute);
+  m.attr("qwen_graph_api_version")=1;
+  m.def("initialize_qwen_graph",[](uintptr_t graph,uintptr_t flash){
+    TORCH_CHECK(allocate_native && graph && flash && !qwen_graph_native,"invalid or repeated Qwen graph initialization");
+    qwen_graph_native=reinterpret_cast<QwenGraphCommand>(graph);qwen_flash_native=reinterpret_cast<QwenFlashCommand>(flash);
+  });
+  m.def("qwen_flash",qwen_flash);
+  pybind11::class_<QwenGraphBridge,std::shared_ptr<QwenGraphBridge>>(m,"NativeQwenGraph")
+    .def(pybind11::init<const std::vector<at::Tensor>&,const std::vector<uint64_t>&,const std::vector<float>&,uint64_t>())
+    .def("run",&QwenGraphBridge::run,pybind11::arg("hidden"),pybind11::arg("length"),pybind11::arg("eager")=false,
+      pybind11::call_guard<pybind11::gil_scoped_release>())
+    .def("close",&QwenGraphBridge::close,pybind11::call_guard<pybind11::gil_scoped_release>())
+    .def("synchronize",&QwenGraphBridge::synchronize,pybind11::call_guard<pybind11::gil_scoped_release>())
+    .def_property_readonly("kernel_count",&QwenGraphBridge::kernel_count);
   m.def("addmm", addmm);
   m.def("layer_norm", layer_norm);
   m.def("rms_norm", rms_norm);

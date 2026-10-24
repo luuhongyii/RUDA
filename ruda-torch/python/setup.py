@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class TorchBuildExtension(BuildExtension):
     def build_extensions(self):
+        for extension in self.extensions:
+            extension.depends.append(str(ROOT / 'ruda-torch/python/ruda_torch/csrc/qwen_graph.inc'))
         if self.compiler.compiler_type == "unix" and "GCC" in torch.__config__.show():
             version = subprocess.check_output(self.compiler.compiler_cxx + ["--version"], text=True)
             if "clang" in version.lower():

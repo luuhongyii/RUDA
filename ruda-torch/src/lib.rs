@@ -136,6 +136,11 @@ mod matmul;
 mod pointwise;
 mod softmax;
 mod normalization;
+mod inference;
+mod qwen_kernels;
+mod qwen_graph;
+mod qwen_flash;
+mod qwen_prefill;
 mod normalization_ops;
 mod pooling_ops;
 mod padding_ops;
@@ -325,6 +330,7 @@ pub unsafe extern "C" fn ruda_torch_fill(out: *const Descriptor, bits: u64) -> i
 }
 
 fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
+    if (109..=111).contains(&op) { inference::launch(op, a, b, out, scalar); return; }
     if out.len == 0 { return; }
     if op == 0 { convert(a, out); return; }
     if op != 108 && (matches!(a.dtype,9..=11|14) || matches!(b.dtype,9..=11|14) || matches!(out.dtype,9..=11|14)) {
@@ -652,6 +658,7 @@ pub unsafe extern "C" fn ruda_torch_execute(op: u32, a: *const Descriptor, b: *c
     checked(|| {
         let (a, b, out) = unsafe { (crate::abi::view(a), crate::abi::view(b), crate::abi::view(out)) };
         match op {
+            109..=111 => { inference::launch(op, &a, &b, &out, scalar); return; }
             0..=4 | 8..=29 | 35..=73 => { assert_eq!(a.shape, out.shape); assert_eq!(b.shape, out.shape); }
             78..=97 | 121..=128 => { assert_eq!(a.shape, out.shape); assert_eq!(b.shape, out.shape); }
             98..=99 => {

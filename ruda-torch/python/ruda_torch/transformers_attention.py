@@ -1,6 +1,8 @@
 """Opt-in Transformers AttentionInterface registration for RUDA block attention."""
 from __future__ import annotations
 
+import torch
+from .attention import scaled_dot_product_attention
 from .block_attention import block_scaled_dot_product_attention
 
 
@@ -48,10 +50,18 @@ def register_transformers_attention(name='ruda_block',*,query_block_size=128,key
             window=(requested_window-1,0)
         from ._parallel_rng import module_partition
         partition=module_partition(module,query.shape[1]) if query.device.type=='ruda' else {}
-        output=block_scaled_dot_product_attention(query,key,value,attn_mask=attention_mask,
-            dropout_p=dropout,is_causal=causal,scale=scaling,enable_gqa=query.shape[1]!=key.shape[1],
-            query_block_size=query_block_size,key_block_size=key_block_size,
-            causal_offset=key.shape[-2]-query.shape[-2],window_size=window,softcap=kwargs.get('softcap'),**partition)
+        offset=key.shape[-2]-query.shape[-2]
+        if (query.device.type=='ruda' and query.dtype in (torch.float16,torch.bfloat16,torch.float32)
+                and not torch.is_grad_enabled() and dropout==0 and window is None
+                and kwargs.get('softcap') is None and (not causal or offset==0)
+                and query.shape[-2]>0 and key.shape[-2]>0):
+            output=scaled_dot_product_attention(query,key,value,attn_mask=attention_mask,
+                is_causal=causal,scale=scaling,enable_gqa=query.shape[1]!=key.shape[1],**partition)
+        else:
+            output=block_scaled_dot_product_attention(query,key,value,attn_mask=attention_mask,
+                dropout_p=dropout,is_causal=causal,scale=scaling,enable_gqa=query.shape[1]!=key.shape[1],
+                query_block_size=query_block_size,key_block_size=key_block_size,
+                causal_offset=offset,window_size=window,softcap=kwargs.get('softcap'),**partition)
         return output.transpose(1,2).contiguous(),None
 
     # An unregistered mask backend would make HF discard padding/packed masks.

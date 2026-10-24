@@ -53,6 +53,30 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
         scalar(op, a, b, out);
         return;
     }
+    if op == 7 && a.shape[0] == 1 && matches!(a.dtype, 1 | 2) {
+        match rublas::tensor_matmul::launch_gemv_low_precision(
+            primitives::tensor(a), primitives::tensor(b), primitives::tensor(out)) {
+            Ok(()) => {
+                finish_dispatch(&client());
+                RUBLAS_CALLS.fetch_add(1, Ordering::Relaxed);
+                LAUNCHES.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_)
+                | MatmulSetupError::Vectorization(_)) => {}
+            Err(error) => panic!("RUDA ruBLAS GEMV failed: {error}"),
+        }
+    }
+    if op==7 && matches!(a.dtype,1|2) && a.shape[0]>=64 && a.shape[1]>=128 && b.shape[1]>=128
+        && a.strides[1]==1 && a.strides[0]==a.shape[1] && b.strides[0]==1 && b.strides[1]==b.shape[0]
+        && out.strides[1]==1 && out.strides[0]==out.shape[1] {
+        match rublas::tensor_matmul::launch_matmul_pipelined(primitives::tensor(a),primitives::tensor(b),
+            primitives::tensor(out),F32MathMode::Strict) {
+            Ok(())=>{finish_dispatch(&client());RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);LAUNCHES.fetch_add(1,Ordering::Relaxed);return;}
+            Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_) | MatmulSetupError::Vectorization(_))=>{}
+            Err(error)=>panic!("RUDA pipelined GEMM failed: {error}"),
+        }
+    }
     let output = primitives::tensor(out);
     let dtype = output.dtype;
     let result = matmul_with_precision(
@@ -121,6 +145,7 @@ pub(super) fn addmm(bias: &View, a: &View, b: &View, out: &View, alpha: f32, bet
         launch(7, a, b, out);
         return;
     }
+    if super::qwen_graph::fused_addmm(bias,a,b,out,alpha,beta) {return;}
     let client = client();
     // F32 can use its own output for accumulation. For low precision, only
     // M*N values are held in F32; inputs/weights/bias are never promoted.
