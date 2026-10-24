@@ -78,7 +78,13 @@ pub fn matmul_with_precision<R: Runtime>(
                 && lhs.meta.num_dims() == 2 && rhs.meta.num_dims() == 2
                 && lhs.meta.shape()[0] >= 32 && lhs.meta.shape()[1] >= 256 && rhs.meta.shape()[1] >= 128
             {
-                if lhs.dtype == DType::BF16 {
+                if lhs.dtype == DType::BF16 && rhs.meta.shape()[0] == lhs.meta.shape()[1]
+                    && out.meta.num_dims() == 2
+                    && out.meta.shape()[..] == [lhs.meta.shape()[0], rhs.meta.shape()[1]]
+                    && matches!(out.dtype, DType::BF16 | DType::F32) && out.qparams.is_none()
+                    && out.meta.strides()[1] == 1 && out.meta.strides()[0] == rhs.meta.shape()[1]
+                    && lhs.client.same_execution_queue(&rhs.client) && lhs.client.same_execution_queue(&out.client)
+                {
                     return Ok(super::training_tune::matmul(lhs, rhs, out, f32_math));
                 }
                 match launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
