@@ -1,5 +1,6 @@
 mod base;
 mod skinny;
+mod accurate;
 mod training_tune;
 #[allow(unsafe_code)]
 mod gemm;

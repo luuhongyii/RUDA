@@ -73,6 +73,9 @@ pub fn matmul_with_precision<R: Runtime>(
             if super::skinny::try_launch(&lhs, &rhs, &out) {
                 return Ok(out);
             }
+            if super::accurate::try_launch(&lhs, &rhs, &out, f32_math)? {
+                return Ok(out);
+            }
             if matches!(lhs.dtype, DType::BF16 | DType::F16) && lhs.dtype == rhs.dtype
                 && lhs.qparams.is_none() && rhs.qparams.is_none()
                 && lhs.meta.num_dims() == 2 && rhs.meta.num_dims() == 2
