@@ -103,12 +103,12 @@ pub fn forward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
             let maximum = factors[soft_row];
             let mut max_scaled = 0.0f32;
             if maximum != f32::NEG_INFINITY { max_scaled = maximum * scale_log2; }
-            denominator *= factors[16+soft_row];
             #[unroll]
             for i in 0usize..16 {
                 let col = (i/2)*8+soft_lane*2+i%2;
                 let p = flash_exp2(scores[soft_row*64+col]*scale_log2-max_scaled);
-                denominator += p;
+                if i == 0 { denominator = fma(denominator,factors[16+soft_row],p); }
+                else { denominator += p; }
                 probability[soft_row*64+col] = F::cast_from(p);
             }
         }

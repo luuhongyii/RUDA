@@ -11,7 +11,7 @@ def flash_cases(tmp_path_factory):
     directory=tmp_path_factory.mktemp('flash_precision')
     cases=[]
     for causal in (False,True):
-        for batch,heads,kv in ((1,2,2),(1,14,2),(2,4,2)):
+        for batch,heads,kv in ((1,2,2),(1,14,2),(2,4,2),(1,28,4)):
             torch.manual_seed(239)
             q=torch.randn(batch,heads,512,128,dtype=torch.bfloat16)
             k=torch.randn(batch,kv,512,128,dtype=torch.bfloat16)
@@ -36,7 +36,7 @@ torch.save(results,directory/'expected.pt')
     return cases,torch.load(directory/'expected.pt',weights_only=True)
 
 
-@pytest.mark.parametrize('index',range(6))
+@pytest.mark.parametrize('index',range(8))
 def test_flash_precision_forward_backward(flash_cases,index):
     cases,references=flash_cases;case=cases[index];reference=references[index]
     values=[case[name].to('ruda').requires_grad_() for name in ('q','k','v')]
@@ -45,6 +45,8 @@ def test_flash_precision_forward_backward(flash_cases,index):
     y.backward(case['dy'].to('ruda'))
     actual=[y.cpu(),*(value.grad.cpu() for value in values)]
     expected=[reference['output'],*reference['gradients']]
+    if case['q'].shape[1]==28:
+        assert torch.equal(actual[0].view(torch.int16),expected[0].view(torch.int16))
     for i,(a,b) in enumerate(zip(actual,expected)):
         a,b=a.double(),b.double()
         assert torch.isfinite(a).all()
