@@ -10,7 +10,7 @@ import ruda_torch as r
 def cuda_rms_cases(tmp_path_factory):
     directory=tmp_path_factory.mktemp('cuda_rms_precision')
     cases=[]
-    for rows in (8,512):
+    for rows in (16,512):
         for exponent in (-4,0,4):
             torch.manual_seed(293)
             x=(torch.randn(rows,3584)*2.**exponent).to(torch.bfloat16)
@@ -45,3 +45,15 @@ def test_cuda_rms_reduction_and_bf16_boundaries(cuda_rms_cases,index,monkeypatch
     actual,expected=x.grad.cpu().double(),reference['dx'].double()
     assert torch.isfinite(actual).all()
     assert (actual-expected).norm()/expected.norm() < 1e-3
+
+
+def test_cuda_rms_small_row_geometry_preserves_existing_path(monkeypatch):
+    torch.manual_seed(307)
+    x=torch.randn(8,3584,dtype=torch.bfloat16).to('ruda')
+    w=torch.randn(3584,dtype=torch.bfloat16).to('ruda')
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION','fp32')
+    expected=r._C.training_hf_rms_forward(x,w,1e-6)
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION','cuda')
+    actual=r._C.training_hf_rms_forward(x,w,1e-6)
+    for a,b in zip(actual,expected):
+        torch.testing.assert_close(a.cpu(),b.cpu(),rtol=0,atol=0)
