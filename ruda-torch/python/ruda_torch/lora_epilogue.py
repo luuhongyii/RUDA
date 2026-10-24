@@ -5,6 +5,8 @@ import torch
 @torch.library.custom_op('ruda::lora_epilogue_forward', mutates_args=())
 def _forward(base: torch.Tensor, update: torch.Tensor, scale: float) -> torch.Tensor:
     from . import _C
+    if any(value.is_neg() or value.is_conj() for value in (base, update)):
+        raise ValueError('expected resolved RUDA base and adapter update')
     result = base.new_empty(base.shape)
     _C.scientific_call(654, [base, update, result], [], [scale])
     return result
@@ -61,8 +63,7 @@ def lora_epilogue(base, update, scale):
     if not _training_fusion_available:
         raise RuntimeError('LoRA epilogue fusion requires rebuilding both native libraries')
     if (base.device.type != 'ruda' or base.dtype not in (torch.float16, torch.bfloat16)
-            or update.device != base.device or update.dtype != torch.float32 or update.shape != base.shape
-            or any(value.is_neg() or value.is_conj() for value in (base, update))):
+            or update.device != base.device or update.dtype != torch.float32 or update.shape != base.shape):
         raise ValueError('expected same-shape RUDA FP16/BF16 base and FP32 adapter update')
     if type(scale) not in (int, float):
         raise TypeError('LoRA scale must be a Python number')

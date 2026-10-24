@@ -22,6 +22,7 @@ def _native():
     return _C
 
 
+@torch.compiler.assume_constant_result
 def _f32(value: float, name: str, *, positive=False, nonnegative=False) -> float:
     if isinstance(value, (bool, torch.Tensor)):
         raise TypeError(f"{name} must be a Python number")
@@ -38,7 +39,10 @@ def _f32(value: float, name: str, *, positive=False, nonnegative=False) -> float
 def _tensor(x: torch.Tensor, name: str):
     if not isinstance(x, torch.Tensor) or x.device.type != 'ruda' or x.device.index not in (None, 0):
         raise ValueError(f"{name} must be a ruda:0 tensor; CPU fallback is disabled")
-    if x.dtype not in _DTYPES or x.layout != torch.strided or not x.is_contiguous() or x.is_conj() or x.is_neg():
+    if x.dtype not in _DTYPES or x.layout != torch.strided or not x.is_contiguous():
+        raise ValueError(f"{name} must be contiguous FP32/FP16/BF16 without unresolved view bits")
+    # The opaque native operator enforces the same view-bit check at runtime.
+    if not torch.compiler.is_compiling() and (x.is_conj() or x.is_neg()):
         raise ValueError(f"{name} must be contiguous FP32/FP16/BF16 without unresolved view bits")
 
 

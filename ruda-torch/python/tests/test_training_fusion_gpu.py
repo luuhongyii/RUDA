@@ -5,6 +5,38 @@ from torch.nn import functional as F
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('column_major', [False, True])
+@pytest.mark.parametrize('shape', [(512, 3584, 16), (512, 18944, 16), (32, 152064, 16),
+                                  (31, 1537, 7), (3, 513, 1), (2, 512, 17), (1, 1025, 32)])
+def test_skinny_fp32_matmul_split_k(shape, column_major):
+    m, k, n = shape
+    torch.manual_seed(179)
+    a = torch.randn(m, k)
+    # Nonzero storage offsets and padded strides must survive native binding.
+    backing = torch.randn(n, k + 3) if column_major else torch.randn(k, n + 3)
+    b = backing[:, 1:k + 1].t() if column_major else backing[:, 1:n + 1]
+    old_tf32 = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        expected = a.cuda() @ b.cuda()
+        actual = a.to('ruda') @ b.to('ruda')
+        host = actual.cpu()
+        torch.testing.assert_close(host, expected.cpu(), rtol=1e-4, atol=3e-3)
+        relative = (host.double() - expected.cpu().double()).norm() / expected.double().norm().cpu()
+        assert relative < 4e-6
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = old_tf32
+
+
+def test_skinny_fp32_matmul_nonfinite_values():
+    a = torch.zeros(3, 513)
+    b = torch.ones(513, 7)
+    a[0, 0] = float('nan')
+    b[1, 1] = float('inf')
+    b[2, 2] = float('-inf')
+    torch.testing.assert_close((a.to('ruda') @ b.to('ruda')).cpu(), a @ b, equal_nan=True)
+
+
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('width', [1, 47, 1024, 2053])
 def test_cross_entropy_full_vocabulary_forward_backward(dtype, width):

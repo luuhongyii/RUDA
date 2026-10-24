@@ -1,4 +1,5 @@
 mod base;
+mod skinny;
 #[allow(unsafe_code)]
 mod gemm;
 mod fused;
