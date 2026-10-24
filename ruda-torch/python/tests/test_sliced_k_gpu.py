@@ -53,3 +53,21 @@ def test_serial_geometry_preserves_fp32_output_accumulation():
     ruda_torch._C.execute(7,a.to('ruda'),w.to('ruda').t(),actual,0.0)
     expected=(a.double()@w.double().t()).float()
     torch.testing.assert_close(actual.cpu(),expected,rtol=1e-3,atol=1e-3)
+
+
+@pytest.mark.parametrize('inner',[3584,18944])
+@pytest.mark.parametrize('offset',[False,True])
+def test_bf16_frozen_linear_input_gradient_serial_writeback(inner,offset):
+    torch.manual_seed(283)
+    a=torch.randn(512,inner+2 if offset else inner,dtype=torch.bfloat16)
+    b=torch.randn(inner,3586 if offset else 3584,dtype=torch.bfloat16)
+    x,y=a.to('ruda'),b.to('ruda')
+    if offset:
+        a,b=a[:,1:inner+1],b[:,1:3585]
+        x,y=x[:,1:inner+1],y[:,1:3585]
+    expected=(a.contiguous().cuda()@b.contiguous().cuda()).cpu()
+    actual=(x@y).cpu()
+    aa,bb=actual.double(),expected.double()
+    assert torch.isfinite(actual).all()
+    assert (aa-bb).norm()/bb.norm() < 1e-4
+    torch.testing.assert_close(actual,expected,rtol=.01,atol=.01)

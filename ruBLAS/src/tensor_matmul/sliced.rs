@@ -39,7 +39,7 @@ pub fn matmul_bf16_serial_k3<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
         || a.meta.shape()[0]!=512 || !matches!(a.meta.shape()[1],3584|18944)
         || b.meta.shape()[..]!=[a.meta.shape()[1],3584]
         || out.meta.shape()[..]!=[512,3584] || out.meta.strides()[..]!=[3584,1]
-        || a.meta.strides()[1]!=1 || b.meta.strides()[0]!=1
+        || a.meta.strides()[1]!=1 || (b.meta.strides()[0]!=1 && b.meta.strides()[1]!=1)
         || !a.client.same_execution_queue(&b.client) || !a.client.same_execution_queue(&out.client)
     {
         return Err(MatmulSetupError::InvalidConfig(Box::new("unsupported BF16 serial-K3 projection".to_string())));
