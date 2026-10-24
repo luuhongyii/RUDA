@@ -39,6 +39,7 @@ mod fft_bridge;
 mod vendor_bridge;
 mod kernels;
 mod training;
+mod rotary;
 mod router;
 mod nf4;
 mod sequence_training;

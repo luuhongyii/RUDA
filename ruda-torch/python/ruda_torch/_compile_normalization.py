@@ -1,6 +1,7 @@
 """Expand AOT normalization tuples into native graph arithmetic and casts."""
 import math
 import operator
+import sys
 
 import torch
 from torch.fx import Graph, GraphModule, Node
@@ -140,6 +141,60 @@ def _backward(writer,args,source,outputs):
     return tuple(results)
 
 
+def _fused(writer, args, source, outputs, backward):
+    package = sys.modules.get(__package__)
+    if (not getattr(package, '_training_available', False) or not source.is_contiguous()
+            or len(args['normalized_shape']) != 1):
+        return None
+    for name in ('weight', 'bias'):
+        if args[name] is not None and not _value(args[name]).is_contiguous():
+            return None
+    if not backward and not torch.finfo(torch.float32).tiny <= args['eps'] <= torch.finfo(torch.float32).max:
+        return None
+    from . import _fused_training_ops
+    rows = source.numel() // source.shape[-1]
+    if backward:
+        grad = args['grad_out']
+        if not _value(grad).is_contiguous():
+            grad = writer.emit(torch.ops.aten.clone.default, (grad,), tuple(source.shape), source.dtype,
+                               memory_format=torch.contiguous_format)
+        statistics = []
+        for name in ('mean', 'rstd'):
+            value = writer.cast(args[name], torch.float32)
+            value = writer.emit(torch.ops.aten.reshape.default, (value, (rows,)), (rows,), torch.float32)
+            value = writer.emit(torch.ops.aten.clone.default, (value,), (rows,), torch.float32,
+                                memory_format=torch.contiguous_format)
+            statistics.append(value)
+        call = writer.graph.call_function(torch.ops.ruda.training_layer_backward.default,
+            (args['input'], args['weight'], args['bias'], grad, *statistics,
+             *(result is not None for result in outputs)))
+        with source.fake_mode:
+            metadata = tuple(None if result is None else torch.empty(
+                result.shape, device=source.device,
+                dtype=source.dtype if i == 0 else _value(args['weight' if i == 1 else 'bias']).dtype)
+                for i, result in enumerate(outputs))
+    else:
+        call = writer.graph.call_function(torch.ops.ruda.training_layer_forward.default,
+            (args['input'], args['weight'], args['bias'], args['eps']))
+        with source.fake_mode:
+            metadata = (torch.empty_like(source),
+                        torch.empty((rows,), device=source.device, dtype=torch.float32),
+                        torch.empty((rows,), device=source.device, dtype=torch.float32))
+    call.meta['val'] = metadata
+    results = []
+    for i, expected in enumerate(outputs):
+        if expected is None:
+            results.append(None)
+            continue
+        value = writer.graph.call_function(operator.getitem, (call, i))
+        value.meta['val'] = metadata[i]
+        if tuple(metadata[i].shape) != tuple(expected.shape):
+            value = writer.emit(torch.ops.aten.reshape.default, (value, tuple(expected.shape)),
+                                tuple(expected.shape), metadata[i].dtype)
+        results.append(writer.cast(value, expected.dtype))
+    return tuple(results)
+
+
 def expand_normalizations(gm):
     contracts={node:contract for node in gm.graph.nodes if (contract:=_contract(node)) is not None}
     if not contracts:return gm
@@ -148,7 +203,9 @@ def expand_normalizations(gm):
         if node in contracts:
             args,source,outputs,_=contracts[node]
             args=map_arg(args,lambda old:env[old]);writer=_Writer(graph,source)
-            result=(_backward if node.target==_BACKWARD else _forward)(writer,args,source,outputs)
+            result = _fused(writer, args, source, outputs, node.target == _BACKWARD)
+            if result is None:
+                result=(_backward if node.target==_BACKWARD else _forward)(writer,args,source,outputs)
             env[node]=result[0] if node.target==_PUBLIC else result
         elif (node.op=='call_function' and node.target is operator.getitem and len(node.args)==2
               and not node.kwargs and isinstance(node.args[0],Node) and node.args[0] in contracts

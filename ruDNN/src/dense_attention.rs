@@ -226,7 +226,8 @@ pub fn backward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, mask: &Tenso
                     let d = lane + j * lanes;
                     if d < key_dim {
                         qgrad[j] = fma(ds * scale, f32::cast_from(k[cache_row * key_dim + d]), qgrad[j]);
-                        dk[cache_row * key_dim + d].fetch_add(ds * scale * query[j]);
+                        let delta = ds * scale * query[j];
+                        if delta != 0.0 { dk[cache_row * key_dim + d].fetch_add(delta); }
                     }
                 }
                 #[unroll]
@@ -234,9 +235,12 @@ pub fn backward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, mask: &Tenso
                     let d = lane + j * lanes;
                     let mut dropped_probability = probability * multiplier;
                     if comptime!(dropout) { if p == 1.0 { dropped_probability = 0.0; } }
-                    if d < value_dim { dv[cache_row * value_dim + d].fetch_add(dropped_probability * dy[j]); }
+                    if d < value_dim {
+                        let delta = dropped_probability * dy[j];
+                        if delta != 0.0 { dv[cache_row * value_dim + d].fetch_add(delta); }
+                    }
                 }
-                if comptime!(need_mask) { if lane == 0 { dm[mi].fetch_add(ds); } }
+                if comptime!(need_mask) { if lane == 0 && ds != 0.0 { dm[mi].fetch_add(ds); } }
             }
         }
     }

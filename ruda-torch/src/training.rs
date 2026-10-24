@@ -39,13 +39,20 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
         if hf_rounding { assert_eq!(w.dtype, x.dtype); }
     }
     let c = client(); let mut launches = 0;
+    let cached = (1024..=8192).contains(&width);
     if forward {
         same(x, &v[2]); assert_eq!((v[3].dtype, v[3].len), (0, rows));
         assert!(s[0].is_finite() && s[0] > 0.0);
         if rows > 0 {
-            unsafe { k::rms_forward::launch::<F, W, CudaRuntime>(
-                &c, count(rows.checked_mul(32).expect("norm grid overflow")), RudaDim::new_1d(128),
-                x.arg(), w.arg(), v[2].arg(), v[3].arg(), s[0], weighted, hf_rounding); }
+            if cached {
+                unsafe { k::rms_forward_cached::launch::<F, W, CudaRuntime>(
+                    &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1), RudaDim::new_1d(128),
+                    x.arg(), w.arg(), v[2].arg(), v[3].arg(), s[0], weighted, hf_rounding, width); }
+            } else {
+                unsafe { k::rms_forward::launch::<F, W, CudaRuntime>(
+                    &c, count(rows.checked_mul(32).expect("norm grid overflow")), RudaDim::new_1d(128),
+                    x.arg(), w.arg(), v[2].arg(), v[3].arg(), s[0], weighted, hf_rounding); }
+            }
             launches += 1;
         }
     } else {
@@ -53,9 +60,15 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
         if flag(s[1]) {
             same(x, &v[4]);
             if rows > 0 {
-                unsafe { k::rms_dx::launch::<F, W, CudaRuntime>(
-                    &c, count(rows.checked_mul(32).expect("norm grid overflow")), RudaDim::new_1d(128),
-                    x.arg(), w.arg(), v[2].arg(), v[3].arg(), v[4].arg(), weighted, hf_rounding); }
+                if cached {
+                    unsafe { k::rms_dx_cached::launch::<F, W, CudaRuntime>(
+                        &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1), RudaDim::new_1d(128),
+                        x.arg(), w.arg(), v[2].arg(), v[3].arg(), v[4].arg(), weighted, hf_rounding, width); }
+                } else {
+                    unsafe { k::rms_dx::launch::<F, W, CudaRuntime>(
+                        &c, count(rows.checked_mul(32).expect("norm grid overflow")), RudaDim::new_1d(128),
+                        x.arg(), w.arg(), v[2].arg(), v[3].arg(), v[4].arg(), weighted, hf_rounding); }
+                }
                 launches += 1;
             }
         }
@@ -292,7 +305,7 @@ fn batch_adamw(v: &[View], s: &[f32]) -> usize {
 pub extern "C" fn ruda_torch_training_api_version() -> u32 { 4 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ruda_torch_training_fusion_api_version() -> u32 { 1 }
+pub extern "C" fn ruda_torch_training_fusion_api_version() -> u32 { 2 }
 
 /// Descriptors and scalar arrays are owned/validated by the in-process C++ bridge.
 /// API 1 operations: RMS fwd/bwd, SiLU-mul fwd/bwd, unscale/check, AdamW.

@@ -97,7 +97,8 @@ def _training_norm(a, shape, *parameters):
 
 def layer_norm(a, normalized_shape, weight, bias, eps, *, out0=None, out1=None, out2=None):
     shape, rows, width, stat_shape = _layer_shape(a, normalized_shape, weight, bias)
-    if _training_norm(a, shape, weight, bias) and math.isfinite(eps) and eps > 0:
+    if (_training_norm(a, shape, weight, bias) and math.isfinite(eps)
+            and torch.finfo(torch.float32).tiny <= eps <= torch.finfo(torch.float32).max):
         value, mean, inv = _C.training_layer_forward(a, weight, bias, eps)
         return _write((value, mean.reshape(stat_shape), inv.reshape(stat_shape)),
                       (out0, out1, out2), (a, weight, bias))
@@ -127,7 +128,8 @@ def layer_backward(grad, a, normalized_shape, mean, rstd, weight, bias, output_m
 def rms_norm(a, normalized_shape, weight, eps):
     shape, rows, width, stat_shape = _layer_shape(a, normalized_shape, weight)
     epsilon = torch.finfo(_acc(a)).eps if eps is None else float(eps)
-    if _training_norm(a, shape, weight) and math.isfinite(epsilon) and epsilon > 0:
+    if (_training_norm(a, shape, weight) and math.isfinite(epsilon)
+            and torch.finfo(torch.float32).tiny <= epsilon <= torch.finfo(torch.float32).max):
         value, inv = _C.training_rms_forward(a, weight, epsilon)
         return value, inv.reshape(stat_shape)
     x = a.resolve_neg().reshape(rows, width)

@@ -45,10 +45,11 @@ def test_cross_entropy_invalid_target_is_rejected():
 
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('need_x,need_w', [(True, True), (True, False), (False, True)])
-def test_hf_rms_norm_storage_boundaries_and_gradients(dtype, need_x, need_w):
+@pytest.mark.parametrize('width', [129, 1024, 3584, 8192, 8193])
+def test_hf_rms_norm_storage_boundaries_and_gradients(dtype, need_x, need_w, width):
     torch.manual_seed(71)
-    host = torch.randn(7, 129, dtype=dtype)
-    weight = torch.randn(129, dtype=dtype)
+    host = torch.randn(7, width, dtype=dtype)
+    weight = torch.randn(width, dtype=dtype)
     reference = host.clone().requires_grad_(need_x)
     ref_weight = weight.clone().requires_grad_(need_w)
     x = host.to('ruda').requires_grad_(need_x)
@@ -85,3 +86,33 @@ def test_fused_operators_survive_real_aot_forward_backward():
     assert any('training_rms_backward' in name for name in targets)
     assert any('training_silu_forward' in name for name in targets)
     assert any('training_silu_backward' in name for name in targets)
+
+
+@pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('need_q,need_k', [(True, True), (True, False), (False, True)])
+def test_strided_gqa_rotary_forward_backward(dtype, need_q, need_k):
+    torch.manual_seed(81)
+    q_base = torch.randn(2, 17, 4, 130, dtype=dtype)
+    k_base = torch.randn(2, 17, 2, 130, dtype=dtype)
+    q_ref = q_base.transpose(1, 2).detach().requires_grad_(need_q)
+    k_ref = k_base.transpose(1, 2).detach().requires_grad_(need_k)
+    q = q_base.to('ruda').transpose(1, 2).detach().requires_grad_(need_q)
+    k = k_base.to('ruda').transpose(1, 2).detach().requires_grad_(need_k)
+    angles = torch.randn(2, 17, 130)
+    cos, sin = angles.cos().to(dtype), angles.sin().to(dtype)
+    def reference(x):
+        rotated = torch.cat((-x[..., 65:], x[..., :65]), dim=-1)
+        return x * cos.unsqueeze(1) + rotated * sin.unsqueeze(1)
+    expected_q, expected_k = reference(q_ref), reference(k_ref)
+    actual_q, actual_k = r.apply_rotary_pos_emb(q, k, cos.to('ruda'), sin.to('ruda'))
+    tolerance = 2e-5 if dtype == torch.float32 else 2e-3 if dtype == torch.float16 else 2e-2
+    torch.testing.assert_close(actual_q.cpu(), expected_q, rtol=tolerance, atol=tolerance)
+    torch.testing.assert_close(actual_k.cpu(), expected_k, rtol=tolerance, atol=tolerance)
+    if need_q:
+        gradient = torch.randn_like(expected_q)
+        actual_q.backward(gradient.to('ruda')); expected_q.backward(gradient)
+        torch.testing.assert_close(q.grad.cpu(), q_ref.grad, rtol=tolerance, atol=tolerance)
+    if need_k:
+        gradient = torch.randn_like(expected_k)
+        actual_k.backward(gradient.to('ruda')); expected_k.backward(gradient)
+        torch.testing.assert_close(k.grad.cpu(), k_ref.grad, rtol=tolerance, atol=tolerance)

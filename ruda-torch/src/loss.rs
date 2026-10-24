@@ -152,21 +152,26 @@ fn cross_entropy_tiles<S: Float + RudaElement>(x: &Tensor<S>, partial: &mut Tens
     let tile = warp % tiles;
     if row < x.shape(0) {
         let width = x.shape(1);
-        let end = (tile + 1) * 1024;
-        let mut col = tile * 1024 + lane;
         let mut maximum = f32::new(f32::NEG_INFINITY);
-        while col < end && col < width {
-            maximum = f32::max(maximum, f32::cast_from(x[row * width + col]));
-            col += 32;
+        let mut cached = Array::<f32>::new(32usize);
+        #[unroll]
+        for j in 0usize..32usize {
+            let col = tile * 1024 + lane + j * 32;
+            let mut value = f32::new(f32::NEG_INFINITY);
+            if col < width {
+                value = f32::cast_from(x[row * width + col]);
+                maximum = f32::max(maximum, value);
+            }
+            cached[j] = value;
         }
         maximum = plane_max(maximum);
         let mut sum = 0.0f32;
-        col = tile * 1024 + lane;
-        while col < end && col < width {
-            if maximum != f32::new(f32::NEG_INFINITY) {
-                sum += (f32::cast_from(x[row * width + col]) - maximum).exp();
+        #[unroll]
+        for j in 0usize..32usize {
+            let col = tile * 1024 + lane + j * 32;
+            if col < width && maximum != f32::new(f32::NEG_INFINITY) {
+                sum += (cached[j] - maximum).exp();
             }
-            col += 32;
         }
         sum = plane_sum(sum);
         if lane == 0 {
