@@ -85,11 +85,11 @@ fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
                 acc = fma(a[row * a.stride(0) + inner * a.stride(1)], b[inner * b.stride(0) + col], acc);
             }
         }
-        let mut distance = cols as u32;
-        while distance < 32 {
-            acc += plane_shuffle_xor(acc, distance);
-            distance *= 2;
-        }
+        if comptime!(cols <= 16) { acc += plane_shuffle_xor(acc, 16u32); }
+        if comptime!(cols <= 8) { acc += plane_shuffle_xor(acc, 8u32); }
+        if comptime!(cols <= 4) { acc += plane_shuffle_xor(acc, 4u32); }
+        if comptime!(cols <= 2) { acc += plane_shuffle_xor(acc, 2u32); }
+        if comptime!(cols == 1) { acc += plane_shuffle_xor(acc, 1u32); }
         if lane < cols && col < n as usize {
             partial[(split * m as usize + row) * n as usize + col] = acc;
         }

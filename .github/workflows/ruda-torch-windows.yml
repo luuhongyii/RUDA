@@ -182,6 +182,14 @@ jobs:
           cargo build --release --locked -p ruda-torch-native
           cargo check --release --locked -p ruDNN --lib --tests --features tensor-paged-attention,ruda-test-runtime/cuda
           cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
+      - name: Save Linux native library
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ruda-torch-native-linux-x86_64-abi10-${{ github.sha }}
+          path: target/release/libruda_torch_native.so
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 14
       - name: Save Linux build cache
         if: always() && steps.linux-cache.outcome == 'success'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
