@@ -24,8 +24,8 @@ fn inputs<R: Runtime>(_: &MatmulAutotuneKey,
 pub(super) fn matmul<R: Runtime>(lhs: RudaTensor<R>, rhs: RudaTensor<R>,
     out: RudaTensor<R>, math: F32MathMode,
 ) -> RudaTensor<R> {
-    static STRICT: LocalTuner<MatmulAutotuneKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::strict_f32::v1");
-    static TF32: LocalTuner<MatmulAutotuneKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::allow_tf32::v1");
+    static STRICT: LocalTuner<MatmulAutotuneKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::strict_f32::v2");
+    static TF32: LocalTuner<MatmulAutotuneKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::allow_tf32::v2");
     let tuner = match math { F32MathMode::Strict => &STRICT, F32MathMode::AllowTf32 => &TF32 };
     let client = lhs.client.clone();
     let id = RudaTuneId::new(&client, &lhs.device);
@@ -37,7 +37,9 @@ pub(super) fn matmul<R: Runtime>(lhs: RudaTensor<R>, rhs: RudaTensor<R>,
             Strategy::DoubleAsyncCyclicCmma(Default::default()),
             Strategy::DoubleCyclicCmma(Default::default()),
             Strategy::SimpleAsyncCyclicCmma(Default::default()),
-            Strategy::OrderedDoubleCmma(Default::default())]
+            Strategy::OrderedDoubleCmma(Default::default()),
+            Strategy::DoubleAsyncCyclicMma(Default::default()),
+            Strategy::SimpleAsyncCyclicMma(Default::default())]
         {
             set = set.with(Tunable::new(&strategy.to_string(),
                 move |(a, b, output): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>)| {
