@@ -30,23 +30,26 @@ pub fn matmul_bf16_sliced_k2<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
     Ok(out)
 }
 
-/// A100 Qwen down projection: ordered serial split-K with BF16 writeback.
+/// A100 Qwen output/down projections: ordered serial split-K with BF16 writeback.
 pub fn matmul_bf16_serial_k3<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
     out: RudaTensor<R>) -> Result<RudaTensor<R>, MatmulSetupError> {
     if a.dtype != DType::BF16 || b.dtype != DType::BF16 || out.dtype != DType::BF16
         || a.qparams.is_some() || b.qparams.is_some() || out.qparams.is_some()
         || a.meta.num_dims()!=2 || b.meta.num_dims()!=2 || out.meta.num_dims()!=2
-        || a.meta.shape()[..]!=[512,18944] || b.meta.shape()[..]!=[18944,3584]
+        || a.meta.shape()[0]!=512 || !matches!(a.meta.shape()[1],3584|18944)
+        || b.meta.shape()[..]!=[a.meta.shape()[1],3584]
         || out.meta.shape()[..]!=[512,3584] || out.meta.strides()[..]!=[3584,1]
         || a.meta.strides()[1]!=1 || b.meta.strides()[0]!=1
         || !a.client.same_execution_queue(&b.client) || !a.client.same_execution_queue(&out.client)
     {
         return Err(MatmulSetupError::InvalidConfig(Box::new("unsupported BF16 serial-K3 projection".to_string())));
     }
+    let k = a.meta.shape()[1];
+    let block = k.div_ceil(3*64)*64;
     let partial = empty_device_contiguous_dtype(a.client.clone(),a.device.clone(),Shape::from([3,512,3584]),DType::F32);
     for part in 0..3 {
-        let start = part*6336;
-        let len = (18944-start).min(6336);
+        let start = part*block;
+        let len = (k-start).min(block);
         let mut left = a.clone();
         left.meta.shape_mut()[1] = len;
         left.handle.offset_start = Some(a.handle.offset_start.unwrap_or(0)+(start*a.meta.strides()[1]*2) as u64);
