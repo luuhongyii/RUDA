@@ -55,3 +55,17 @@ def test_flash_precision_rejects_unsupported_calls():
     q=torch.randn(1,2,32,128,dtype=torch.bfloat16).to('ruda')
     with pytest.raises(ValueError,match='flash precision requires'):
         r.scaled_dot_product_attention(q,q,q,precision='flash')
+
+
+@pytest.mark.parametrize('scale',[0.0,-.125])
+def test_transformers_keeps_fp32_path_for_nonpositive_scale(scale):
+    from types import SimpleNamespace
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+    from ruda_torch.transformers_attention import register_transformers_attention
+    name='ruda_nonpositive_scale_'+('zero' if scale==0 else 'negative')
+    register_transformers_attention(name,implementation='native')
+    torch.manual_seed(241)
+    q=torch.randn(1,2,512,128,dtype=torch.bfloat16).to('ruda')
+    expected=r.scaled_dot_product_attention(q,q,q,scale=scale)
+    actual,_=ALL_ATTENTION_FUNCTIONS[name](SimpleNamespace(is_causal=False),q,q,q,None,scaling=scale)
+    torch.testing.assert_close(actual.cpu(),expected.transpose(1,2).contiguous().cpu(),rtol=0,atol=0)

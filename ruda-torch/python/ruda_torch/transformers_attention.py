@@ -57,6 +57,7 @@ def register_transformers_attention(name='ruda_block',*,query_block_size=128,key
                 from .attention import scaled_dot_product_attention
                 import torch
                 precision = ('flash' if query.dtype == torch.bfloat16 and dropout == 0
+                    and (scaling is None or scaling > 0)
                     and attention_mask is None and query.shape[-2:] == (512,128)
                     and key.shape[-2:] == (512,128) and value.shape[-2:] == (512,128) else 'fp32')
                 output = scaled_dot_product_attention(query, key, value, attn_mask=attention_mask,
