@@ -254,7 +254,7 @@ pub fn backward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, mask: &Tenso
 // Four warps own one query row. Cache only its P and dP in shared memory,
 // retaining FP32 probabilities and the unrounded Jacobian contraction.
 #[ruda(fast_math = FastMath::ReducedPrecision.into())]
-fn flash_exp2(value: f32) -> f32 { 2.0f32.powf(value) }
+fn flash_exp2(value: f32) -> f32 { f32::powf(2.0f32,value) }
 
 #[ruda(fast_math = FastMath::ReducedPrecision | FastMath::NotNaN | FastMath::NotInf)]
 fn flash_log(value: f32) -> f32 { value.ln() }
@@ -281,7 +281,7 @@ pub fn forward_flash<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
         acc[j] = 0.0;
     }
     let scale_log2 = scale * 1.4426950408889634f32;
-    let mut maximum = f32::NEG_INFINITY;
+    let mut maximum = f32::new(f32::NEG_INFINITY);
     let mut denominator = 0.0f32;
     let mut blocks = 8usize;
     if comptime!(causal) { blocks = (row % 512 / 128 + 1) * 2; }
@@ -299,7 +299,7 @@ pub fn forward_flash<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
             if lane == 0 { cache[local] = score; }
         }
         sync_ruda();
-        let mut candidate = f32::NEG_INFINITY;
+        let mut candidate = f32::new(f32::NEG_INFINITY);
         if thread < 64 { candidate = cache[thread]; }
         let wm = plane_max(candidate);
         if lane == 0 { cache[192 + warp] = wm; }
