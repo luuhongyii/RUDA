@@ -1,7 +1,7 @@
 use ruda_core::tensor::{DType, Shape};
 use ruda_kernel::dsl as kernel_dsl;
 use ruda_kernel::dsl::prelude::*;
-use ruda_kernel::tensor::{RudaTensor, allocation::empty_device_contiguous_dtype};
+use ruda_kernel::tensor::{RudaTensor, allocation::empty_device_contiguous_dtype, permutation::swap_dims};
 
 // Split K keeps low-rank FP32 projections parallel even with a tiny M or N.
 // No TF32 conversion or floating-point atomic accumulation is used.
@@ -12,10 +12,17 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
         || !a.client.same_execution_queue(&b.client) || !a.client.same_execution_queue(&out.client)
     { return false; }
     let (m, k, n) = (a.meta.shape()[0], a.meta.shape()[1], b.meta.shape()[1]);
+    if m > 0 && m <= 32 && n > 32 && k >= 512 && b.meta.shape()[0] == k
+        && out.meta.shape()[..] == [m, n]
+    {
+        return try_launch(&swap_dims(b.clone(), 0, 1), &swap_dims(a.clone(), 0, 1),
+                          &swap_dims(out.clone(), 0, 1));
+    }
     let hw = &a.client.properties().hardware;
     if m == 0 || k < 512 || n == 0 || n > 32 || b.meta.shape()[0] != k
         || out.meta.shape()[..] != [m, n] || (a.meta.strides()[1] != 1 && a.meta.strides()[0] != 1)
-        || out.meta.strides()[1] != 1 || (m > 1 && out.meta.strides()[0] != n)
+        || !((out.meta.strides()[1] == 1 && (m == 1 || out.meta.strides()[0] == n))
+            || (out.meta.strides()[0] == 1 && (n == 1 || out.meta.strides()[1] == m)))
         || hw.plane_size_min != 32 || hw.plane_size_max != 32
     { return false; }
     let column_major = b.meta.strides()[0] == 1;
@@ -43,7 +50,7 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
             m as u32, k as u32, n as u32, splits as u32, n.next_power_of_two());
     }
     reduce::launch::<R>(&a.client, RudaCount::Static((m * n).div_ceil(128) as u32, 1, 1),
-        RudaDim::new_1d(128), partial.into_array_arg(), out.clone().into_array_arg(), splits as u32);
+        RudaDim::new_1d(128), partial.into_array_arg(), out.clone().into_tensor_arg(), splits as u32);
     true
 }
 
@@ -97,11 +104,13 @@ fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
 }
 
 #[ruda(launch)]
-fn reduce(partial: &Array<f32>, out: &mut Array<f32>, splits: u32) {
+fn reduce(partial: &Array<f32>, out: &mut Tensor<f32>, splits: u32) {
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() {
         let mut sum = 0.0f32;
         for split in 0usize..splits as usize { sum += partial[split * out.len() + pos]; }
-        out[pos] = sum;
+        let row = pos / out.shape(1);
+        let col = pos % out.shape(1);
+        out[row * out.stride(0) + col * out.stride(1)] = sum;
     }
 }

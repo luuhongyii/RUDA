@@ -73,6 +73,20 @@ pub fn matmul_with_precision<R: Runtime>(
             if super::skinny::try_launch(&lhs, &rhs, &out) {
                 return Ok(out);
             }
+            if matches!(lhs.dtype, DType::BF16 | DType::F16) && lhs.dtype == rhs.dtype
+                && lhs.qparams.is_none() && rhs.qparams.is_none()
+                && lhs.meta.num_dims() == 2 && rhs.meta.num_dims() == 2
+                && lhs.meta.shape()[0] >= 32 && lhs.meta.shape()[1] >= 256 && rhs.meta.shape()[1] >= 128
+            {
+                match launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
+                    lhs.clone(), rhs.clone(), out.clone(), f32_math)
+                {
+                    Ok(()) => return Ok(out),
+                    Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_)
+                        | MatmulSetupError::Vectorization(_)) => {},
+                    Err(error) => return Err(error),
+                }
+            }
             if lhs.dtype == DType::F64 {
                 launch_matmul_naive(&Strategy::Naive, lhs, rhs, out.clone())?;
             } else {

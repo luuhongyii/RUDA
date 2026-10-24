@@ -8,7 +8,8 @@ import ruda_torch as r
 @pytest.mark.parametrize('column_major', [False, True])
 @pytest.mark.parametrize('transpose_a', [False, True])
 @pytest.mark.parametrize('shape', [(512, 3584, 16), (512, 18944, 16), (32, 152064, 16),
-                                  (31, 1537, 7), (3, 513, 1), (2, 512, 17), (1, 1025, 32)])
+                                  (31, 1537, 7), (3, 513, 1), (2, 512, 17), (1, 1025, 32),
+                                  (16, 512, 3584), (16, 512, 18944), (7, 1025, 129), (1, 512, 3584)])
 def test_skinny_fp32_matmul_split_k(shape, column_major, transpose_a):
     m, k, n = shape
     torch.manual_seed(179)
@@ -41,6 +42,43 @@ def test_skinny_fp32_matmul_nonfinite_values():
     b[1, 1] = float('inf')
     b[2, 2] = float('-inf')
     torch.testing.assert_close((a.to('ruda') @ b.to('ruda')).cpu(), a @ b, equal_nan=True)
+
+
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('transpose_a,transpose_b', [(False, False), (False, True), (True, False)])
+@pytest.mark.parametrize('shape', [(512, 3584, 18944), (512, 18944, 3584), (32, 512, 3584),
+                                  (31, 513, 129), (64, 257, 129)])
+def test_pipelined_half_gemm(shape, dtype, transpose_a, transpose_b):
+    m, k, n = shape
+    torch.manual_seed(191)
+    a = torch.randn(k, m, dtype=dtype) if transpose_a else torch.randn(m, k, dtype=dtype)
+    b = torch.randn(n, k, dtype=dtype) if transpose_b else torch.randn(k, n, dtype=dtype)
+    x, y = a.to('ruda'), b.to('ruda')
+    if transpose_a:
+        a, x = a.t(), x.t()
+    if transpose_b:
+        b, y = b.t(), y.t()
+    old_tf32 = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        expected = (a.cuda().float() @ b.cuda().float()).to(dtype).cpu()
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = old_tf32
+    actual = (x @ y).cpu()
+    tolerance = 2.5e-2 if dtype == torch.bfloat16 else 5e-3
+    torch.testing.assert_close(actual, expected, rtol=tolerance, atol=tolerance)
+
+
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+def test_pipelined_addmm_fp32_epilogue(dtype):
+    torch.manual_seed(193)
+    a = torch.randn(64, 512, dtype=dtype)
+    b = torch.randn(512, 1024, dtype=dtype)
+    bias = torch.randn(1024, dtype=dtype)
+    expected = (a.float() @ b.float() + bias.float()).to(dtype)
+    actual = torch.addmm(bias.to('ruda'), a.to('ruda'), b.to('ruda')).cpu()
+    tolerance = 2.5e-2 if dtype == torch.bfloat16 else 5e-3
+    torch.testing.assert_close(actual, expected, rtol=tolerance, atol=tolerance)
 
 
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
