@@ -75,6 +75,46 @@ pub fn matmul_bf16_serial_k3<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
     Ok(out)
 }
 
+/// Parallel LM-head input gradients without copying the frozen vocabulary weight.
+pub fn matmul_bf16_head_parallel_k6<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
+    out: RudaTensor<R>) -> Result<RudaTensor<R>, MatmulSetupError> {
+    if a.dtype!=DType::BF16 || b.dtype!=DType::BF16 || out.dtype!=DType::BF16
+        || a.qparams.is_some() || b.qparams.is_some() || out.qparams.is_some()
+        || a.meta.num_dims()!=2 || b.meta.num_dims()!=2 || out.meta.num_dims()!=2
+        || !matches!(a.meta.shape()[0],31|32) || a.meta.shape()[1]!=152064
+        || b.meta.shape()[..]!=[152064,3584] || out.meta.shape()[..]!=[a.meta.shape()[0],3584]
+        || a.meta.strides()[..]!=[152064,1] || b.meta.strides()[..]!=[3584,1]
+        || out.meta.strides()[..]!=[3584,1]
+        || a.handle.offset_start.unwrap_or(0)%16!=0 || b.handle.offset_start.unwrap_or(0)%16!=0
+        || !a.client.same_execution_queue(&b.client) || !a.client.same_execution_queue(&out.client)
+    {
+        return Err(MatmulSetupError::InvalidConfig(Box::new("unsupported BF16 parallel LM-head gradient".to_string())));
+    }
+    let m = a.meta.shape()[0];
+    let mut left = a.clone();
+    left.meta.shape_mut()[1] = 25344;
+    left.meta.insert(0,6,25344);
+    let mut right = b;
+    right.meta.shape_mut()[0] = 25344;
+    right.meta.insert(0,6,25344*3584);
+    let partial = empty_device_contiguous_dtype(a.client.clone(),a.device.clone(),Shape::from([6,m,3584]),DType::F32);
+    launch_matmul_with_precision(&Strategy::Auto,left,right,partial.clone(),F32MathMode::Strict)?;
+    parallel_reduce::launch::<R>(&a.client,RudaCount::Static((m*3584).div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
+        partial.into_array_arg(),out.clone().into_array_arg(),DType::BF16.into());
+    Ok(out)
+}
+
+#[ruda(launch)]
+fn parallel_reduce<F: Float>(partial: &Array<f32>, out: &mut Array<F>, #[define(F)] _dtype: StorageType) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        let mut value = partial[pos];
+        #[unroll]
+        for part in 1usize..6 { value += partial[part*out.len()+pos]; }
+        out[pos] = F::cast_from(value);
+    }
+}
+
 #[ruda(launch)]
 fn serial_reduce<F: Float>(partial: &Array<f32>, out: &mut Array<F>, #[define(F)] _dtype: StorageType) {
     let pos = ABSOLUTE_POS as usize;

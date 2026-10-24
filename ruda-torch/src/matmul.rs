@@ -61,6 +61,18 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
         scalar(op, a, b, out);
         return;
     }
+    if op==7 && a.dtype==2 && out.dtype==2 && matches!(a.shape[0],31|32) && a.shape[1]==152064
+        && b.shape[..]==[152064,3584] && a.strides[..]==[152064,1] && b.strides[..]==[3584,1]
+        && out.strides[..]==[3584,1] && a.handle.offset_start.unwrap_or(0)%16==0
+        && b.handle.offset_start.unwrap_or(0)%16==0 && cuda_bf16_precision()
+    {
+        rublas::tensor_matmul::matmul_bf16_head_parallel_k6(primitives::tensor(a),primitives::tensor(b),primitives::tensor(out))
+            .unwrap_or_else(|error|panic!("RUDA parallel LM-head gradient failed: {error}"));
+        finish_dispatch(&client());
+        RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);
+        LAUNCHES.fetch_add(2,Ordering::Relaxed);
+        return;
+    }
     if op==7 && a.dtype==2 && out.dtype==2 && a.shape[0]==512 && matches!(a.shape[1],3584|18944)
         && b.shape[..]==[a.shape[1],3584]
         && a.strides[1]==1 && (b.strides[0]==1 || b.strides[1]==1) && out.strides[..]==[3584,1]
