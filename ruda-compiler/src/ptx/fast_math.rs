@@ -1,5 +1,5 @@
 use super::{Result, emit::Emitter, invalid, types::Scalar};
-use ruda_core::ir::{Arithmetic, FastMath, Instruction, Operation};
+use ruda_core::ir::{Arithmetic, ConstantValue, FastMath, Instruction, Operation, VariableKind};
 
 impl Emitter {
     pub(super) fn fast_math_instruction(&mut self, instruction: &Instruction) -> Result<bool> {
@@ -10,6 +10,15 @@ impl Emitter {
         }
         let flags = instruction.modes.fp_math_mode;
         match operation {
+            Arithmetic::Powf(op) if flags.contains(FastMath::ReducedPrecision)
+                && matches!(op.lhs.kind, VariableKind::Constant(ConstantValue::Float(value)) if value == 2.0) => {
+                if op.lhs.ty != out.ty || op.rhs.ty != out.ty {
+                    return Err(invalid("fast base-two exponential operand types differ"));
+                }
+                let input = self.value(op.rhs)?;
+                let dst = self.destination(out)?;
+                self.line(format!("ex2.approx.f32 {dst}, {input};"));
+            }
             Arithmetic::InverseSqrt(op) if flags.contains(FastMath::ReducedPrecision) => {
                 if op.input.ty != out.ty {
                     return Err(invalid("fast inverse square root operand types differ"));

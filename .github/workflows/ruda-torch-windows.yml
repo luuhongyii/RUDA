@@ -181,6 +181,7 @@ jobs:
         run: |
           cargo build --release --locked -p ruda-torch-native
           cargo check --release --locked -p ruDNN --lib --tests --features tensor-paged-attention,ruda-test-runtime/cuda
+          cargo test --release --locked -p ruda-compiler --no-default-features --features ptx base_two_exponential_requires_explicit_reduced_precision
           cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
       - name: Save Linux native library
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

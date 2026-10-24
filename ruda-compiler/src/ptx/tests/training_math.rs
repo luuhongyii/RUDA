@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn base_two_exponential_requires_explicit_reduced_precision() {
+    for reduced in [false, true] {
+        let ty=Type::scalar(ElemType::Float(FloatKind::F32));let mut k=kernel("base_two_exp");
+        let input=buffer(&mut k,ty,Visibility::Read);let output=buffer(&mut k,ty,Visibility::ReadWrite);
+        let index=Variable::builtin(Builtin::AbsolutePosX,UIntKind::U32.into());let x=local(0,ty);let y=local(1,ty);
+        load(&mut k.body,input,index,x);
+        let base=Variable::constant(ConstantValue::Float(2.0),ty);
+        let mut op=Instruction::new(Arithmetic::Powf(BinaryOperator{lhs:base,rhs:x}),y);
+        if reduced {op.modes.fp_math_mode=FastMath::ReducedPrecision.into();}
+        k.body.instructions.push(op);store(&mut k.body,output,index,y);
+        let ptx=compile(k,ExecutionMode::Checked,UIntKind::U32).unwrap();
+        assert_eq!(ptx.source.contains("ex2.approx.f32"),reduced);
+    }
+}
+
+#[test]
 fn inverse_sqrt_reduced_precision_is_explicit_and_f32_only() {
     for kind in [FloatKind::F32, FloatKind::F64] {
         for reduced in [false, true] {
