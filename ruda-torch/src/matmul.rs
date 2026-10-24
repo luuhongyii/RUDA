@@ -130,7 +130,15 @@ pub(super) fn addmm(bias: &View, a: &View, b: &View, out: &View, alpha: f32, bet
         Some(View::packed(client.empty(bytes), out.shape.clone(), 0))
     } else { None };
     let accumulator = scratch.as_ref().unwrap_or(out);
-    launch(7, a, b, accumulator);
+    if a.dtype==2 && alpha==1.0 && beta==1.0 && a.shape[..]==[512,3584] && b.shape[..]==[3584,512]
+        && a.strides[1]==1 && b.strides[0]==1 && policy()!=Policy::Scalar
+    {
+        rublas::tensor_matmul::matmul_bf16_sliced_k2(primitives::tensor(a),primitives::tensor(b),primitives::tensor(accumulator))
+            .unwrap_or_else(|error|panic!("RUDA sliced-K2 projection failed: {error}"));
+        finish_dispatch(&client);
+        RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);
+        LAUNCHES.fetch_add(4,Ordering::Relaxed);
+    } else { launch(7, a, b, accumulator); }
     // ABSOLUTE_POS is a u32 in these compatibility kernels.
     assert!(out.len <= u32::MAX as usize, "native pointwise/scalar grid exceeds 32-bit indexing");
     let count = u32::try_from(out.len.div_ceil(128)).expect("launch grid overflow");
