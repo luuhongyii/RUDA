@@ -53,6 +53,16 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
         scalar(op, a, b, out);
         return;
     }
+    if op==7 && a.dtype==2 && out.dtype==2 && a.shape[..]==[512,18944] && b.shape[..]==[18944,3584]
+        && a.strides[1]==1 && b.strides[0]==1 && out.strides[..]==[3584,1]
+    {
+        rublas::tensor_matmul::matmul_bf16_serial_k3(primitives::tensor(a),primitives::tensor(b),primitives::tensor(out))
+            .unwrap_or_else(|error|panic!("RUDA serial-K3 projection failed: {error}"));
+        finish_dispatch(&client());
+        RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);
+        LAUNCHES.fetch_add(4,Ordering::Relaxed);
+        return;
+    }
     let output = primitives::tensor(out);
     let dtype = output.dtype;
     let result = matmul_with_precision(

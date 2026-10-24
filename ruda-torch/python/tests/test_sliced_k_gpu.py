@@ -23,3 +23,22 @@ def test_bf16_kv_sliced_reduction(seed,offset):
     assert torch.isfinite(actual).all()
     assert (aa-bb).norm()/bb.norm() < 1e-4
     torch.testing.assert_close(actual,expected,rtol=.01,atol=.01)
+
+
+@pytest.mark.parametrize('seed',[263,269])
+@pytest.mark.parametrize('offset',[False,True])
+def test_bf16_down_projection_serial_writeback(seed,offset):
+    torch.manual_seed(seed)
+    width=18946 if offset else 18944
+    a=torch.randn(512,width,dtype=torch.bfloat16)
+    w=torch.randn(3584,width,dtype=torch.bfloat16)
+    x,y=a.to('ruda'),w.to('ruda')
+    if offset:
+        a,w=a[:,1:18945],w[:,1:18945]
+        x,y=x[:,1:18945],y[:,1:18945]
+    expected=F.linear(a.contiguous().cuda(),w.contiguous().cuda()).cpu()
+    actual=F.linear(x,y).cpu()
+    aa,bb=actual.double(),expected.double()
+    assert torch.isfinite(actual).all()
+    assert (aa-bb).norm()/bb.norm() < 1e-4
+    torch.testing.assert_close(actual,expected,rtol=.01,atol=.01)

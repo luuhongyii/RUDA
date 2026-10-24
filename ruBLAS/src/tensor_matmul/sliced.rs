@@ -30,6 +30,50 @@ pub fn matmul_bf16_sliced_k2<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
     Ok(out)
 }
 
+/// A100 Qwen down projection: ordered serial split-K with BF16 writeback.
+pub fn matmul_bf16_serial_k3<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
+    out: RudaTensor<R>) -> Result<RudaTensor<R>, MatmulSetupError> {
+    if a.dtype != DType::BF16 || b.dtype != DType::BF16 || out.dtype != DType::BF16
+        || a.qparams.is_some() || b.qparams.is_some() || out.qparams.is_some()
+        || a.meta.num_dims()!=2 || b.meta.num_dims()!=2 || out.meta.num_dims()!=2
+        || a.meta.shape()[..]!=[512,18944] || b.meta.shape()[..]!=[18944,3584]
+        || out.meta.shape()[..]!=[512,3584] || out.meta.strides()[..]!=[3584,1]
+        || a.meta.strides()[1]!=1 || b.meta.strides()[0]!=1
+        || !a.client.same_execution_queue(&b.client) || !a.client.same_execution_queue(&out.client)
+    {
+        return Err(MatmulSetupError::InvalidConfig(Box::new("unsupported BF16 serial-K3 projection".to_string())));
+    }
+    let partial = empty_device_contiguous_dtype(a.client.clone(),a.device.clone(),Shape::from([3,512,3584]),DType::F32);
+    for part in 0..3 {
+        let start = part*6336;
+        let len = (18944-start).min(6336);
+        let mut left = a.clone();
+        left.meta.shape_mut()[1] = len;
+        left.handle.offset_start = Some(a.handle.offset_start.unwrap_or(0)+(start*a.meta.strides()[1]*2) as u64);
+        let mut right = b.clone();
+        right.meta.shape_mut()[0] = len;
+        right.handle.offset_start = Some(b.handle.offset_start.unwrap_or(0)+(start*b.meta.strides()[0]*2) as u64);
+        let mut output = partial.clone();
+        output.meta.remove(0);
+        output.handle.offset_start = Some(partial.handle.offset_start.unwrap_or(0)+(part*512*3584*4) as u64);
+        launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
+            left,right,output,F32MathMode::Strict)?;
+    }
+    serial_reduce::launch::<R>(&a.client,RudaCount::Static((512*3584/128) as u32,1,1),RudaDim::new_1d(128),
+        partial.into_array_arg(),out.clone().into_array_arg(),DType::BF16.into());
+    Ok(out)
+}
+
+#[ruda(launch)]
+fn serial_reduce<F: Float>(partial: &Array<f32>, out: &mut Array<F>, #[define(F)] _dtype: StorageType) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        let first = F::cast_from(partial[pos]);
+        let second = F::cast_from(f32::cast_from(first)+partial[out.len()+pos]);
+        out[pos] = F::cast_from(f32::cast_from(second)+partial[2*out.len()+pos]);
+    }
+}
+
 #[ruda(launch)]
 fn pack<F: Float>(input: &Tensor<F>, output: &mut Array<F>,
     #[comptime] rhs: bool, #[define(F)] _dtype: StorageType) {
