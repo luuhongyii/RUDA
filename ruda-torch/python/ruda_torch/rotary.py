@@ -17,7 +17,8 @@ def _forward_fake(q, k, cos, sin):
     return q.new_empty(q.shape), k.new_empty(k.shape)
 
 
-@torch.library.custom_op('ruda::rotary_qk_backward', mutates_args=())
+@torch.library.custom_op('ruda::rotary_qk_backward', mutates_args=(),
+    schema='(Tensor? dq, Tensor? dk, Tensor cos, Tensor sin, SymInt[] q_shape, SymInt[] k_shape) -> (Tensor?, Tensor?)')
 def _backward(dq: Optional[torch.Tensor], dk: Optional[torch.Tensor], cos: torch.Tensor,
                sin: torch.Tensor, q_shape: list[int], k_shape: list[int]
                ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:

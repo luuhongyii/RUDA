@@ -110,7 +110,7 @@ def test_strided_gqa_rotary_forward_backward(dtype, need_q, need_k):
     torch.testing.assert_close(actual_k.cpu(), expected_k, rtol=tolerance, atol=tolerance)
     if need_q:
         gradient = torch.randn_like(expected_q)
-        actual_q.backward(gradient.to('ruda')); expected_q.backward(gradient)
+        actual_q.backward(gradient.to('ruda'), retain_graph=need_k); expected_q.backward(gradient)
         torch.testing.assert_close(q.grad.cpu(), q_ref.grad, rtol=tolerance, atol=tolerance)
     if need_k:
         gradient = torch.randn_like(expected_k)
