@@ -61,8 +61,14 @@ pub fn matmul_bf16_serial_k3<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
         let mut output = partial.clone();
         output.meta.remove(0);
         output.handle.offset_start = Some(partial.handle.offset_start.unwrap_or(0)+(part*512*3584*4) as u64);
-        launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
-            left,right,output,F32MathMode::Strict)?;
+        match launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
+            left.clone(),right.clone(),output.clone(),F32MathMode::Strict) {
+            Ok(()) => {},
+            Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_) | MatmulSetupError::Vectorization(_)) => {
+                launch_matmul_with_precision(&Strategy::Auto,left,right,output,F32MathMode::Strict)?;
+            },
+            Err(error) => return Err(error),
+        }
     }
     serial_reduce::launch::<R>(&a.client,RudaCount::Static((512*3584/128) as u32,1,1),RudaDim::new_1d(128),
         partial.into_array_arg(),out.clone().into_array_arg(),DType::BF16.into());

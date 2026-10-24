@@ -44,7 +44,11 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
         same(x, &v[2]); assert_eq!((v[3].dtype, v[3].len), (0, rows));
         assert!(s[0].is_finite() && s[0] > 0.0);
         if rows > 0 {
-            if cached {
+            if hf_rounding && x.dtype==2 && width==3584 && rows%4==0 && super::matmul::cuda_bf16_precision() {
+                unsafe { k::rms_cuda_3584::launch::<F,W,CudaRuntime>(
+                    &c,RudaCount::Static(u32::try_from(rows/4).expect("norm grid overflow"),1,1),RudaDim::new_1d(128),
+                    x.arg(),w.arg(),v[2].arg(),v[3].arg(),s[0],weighted); }
+            } else if cached {
                 unsafe { k::rms_forward_cached::launch::<F, W, CudaRuntime>(
                     &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1), RudaDim::new_1d(128),
                     x.arg(), w.arg(), v[2].arg(), v[3].arg(), s[0], weighted, hf_rounding, width); }

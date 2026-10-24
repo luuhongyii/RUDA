@@ -2,6 +2,53 @@
 //! Inputs/outputs are contiguous; host validation enforces shapes and aliases.
 use ruda_kernel::dsl::prelude::*;
 
+#[ruda(fast_math=FastMath::ReducedPrecision.into())]
+fn cuda_rsqrt(value: f32) -> f32 { value.inverse_sqrt() }
+
+#[ruda(launch)]
+pub fn rms_cuda_3584<F: Float + RudaElement, W: Float + RudaElement>(
+    x: &Tensor<F>, weight: &Tensor<W>, y: &mut Tensor<F>, rstd: &mut Tensor<f32>,
+    epsilon: f32, #[comptime] weighted: bool,
+) {
+    let thread = UNIT_POS as usize;
+    let lane = thread%32;
+    let warp = thread/32;
+    let row = RUDA_POS_X as usize*4+warp;
+    let mut local = Array::<f32>::new(4usize);
+    let mut sums = SharedMemory::<f32>::new(128usize);
+    #[unroll]
+    for j in 0usize..4 { local[j] = 0.0; }
+    #[unroll]
+    for i in 0usize..28 {
+        #[unroll]
+        for j in 0usize..4 {
+            let value = f32::cast_from(x[row*3584+i*128+lane*4+j]);
+            local[j] += value*value;
+        }
+    }
+    sums[thread] = ((local[0]+local[1])+local[2])+local[3];
+    sync_ruda();
+    #[unroll]
+    for stage in 0usize..5 {
+        let offset = 16usize>>stage;
+        if lane < offset { sums[thread] = sums[thread]+sums[thread+offset]; }
+        sync_ruda();
+    }
+    let inv = cuda_rsqrt(sums[warp*32]*(1.0f32/3584.0f32)+epsilon);
+    if lane == 0 { rstd[row] = inv; }
+    #[unroll]
+    for i in 0usize..28 {
+        #[unroll]
+        for j in 0usize..4 {
+            let col = i*128+lane*4+j;
+            let normalized = F::cast_from(f32::cast_from(x[row*3584+col])*inv);
+            let mut value = f32::cast_from(normalized);
+            if comptime!(weighted) { value *= f32::cast_from(weight[col]); }
+            y[row*3584+col] = F::cast_from(value);
+        }
+    }
+}
+
 #[ruda(launch)]
 pub fn rms_forward_cached<F: Float + RudaElement, W: Float + RudaElement>(
     x: &Tensor<F>, weight: &Tensor<W>, y: &mut Tensor<F>, rstd: &mut Tensor<f32>,

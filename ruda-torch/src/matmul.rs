@@ -26,7 +26,7 @@ fn policy() -> Policy {
     }
 }
 
-fn cuda_bf16_precision() -> bool {
+pub(super) fn cuda_bf16_precision() -> bool {
     match std::env::var("RUDA_TORCH_BF16_PRECISION").as_deref() {
         Ok("cuda") => true,
         Ok("fp32") | Err(std::env::VarError::NotPresent) => false,
