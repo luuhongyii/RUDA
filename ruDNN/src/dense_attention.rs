@@ -256,6 +256,9 @@ pub fn backward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, mask: &Tenso
 #[ruda(fast_math = FastMath::ReducedPrecision)]
 fn flash_exp2(value: f32) -> f32 { 2.0f32.powf(value) }
 
+#[ruda(fast_math = FastMath::ReducedPrecision | FastMath::NotNaN | FastMath::NotInf)]
+fn flash_log(value: f32) -> f32 { value.ln() }
+
 // Native Flash-compatible storage boundaries: reverse 64-key blocks, BF16
 // unnormalized P, FP32 accumulation, and the rounded O saved for backward.
 #[ruda(launch)]
@@ -351,11 +354,12 @@ pub fn forward_flash<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
             let mut total = 0.0f32;
             #[unroll]
             for w in 0usize..4 { total += cache[256 + w * 128 + d]; }
-            let result = F::cast_from(total / denominator);
+            let reciprocal = 1.0f32 / denominator;
+            let result = F::cast_from(total * reciprocal);
             out[row * 128 + d] = result;
             stats[out.len() / 128 * 2 + row * 128 + d] = f32::cast_from(result);
         }
-        if lane == 0 { stats[row * 2] = maximum * scale + denominator.ln(); stats[row * 2 + 1] = denominator; }
+        if lane == 0 { stats[row * 2] = fma(maximum,scale,flash_log(denominator)); stats[row * 2 + 1] = denominator; }
     }
 }
 
