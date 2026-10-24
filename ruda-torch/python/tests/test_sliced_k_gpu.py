@@ -5,6 +5,11 @@ from torch.nn import functional as F
 import ruda_torch
 
 
+@pytest.fixture(autouse=True)
+def cuda_precision(monkeypatch):
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION','cuda')
+
+
 @pytest.mark.parametrize('seed',[251,257])
 @pytest.mark.parametrize('offset',[False,True])
 def test_bf16_kv_sliced_reduction(seed,offset):
@@ -34,6 +39,17 @@ def test_bf16_kv_bias_is_added_before_sliced_accumulator_merge():
     expected=F.linear(a.cuda(),w.cuda(),bias.cuda()).cpu()
     actual=F.linear(a.to('ruda'),w.to('ruda'),bias.to('ruda')).cpu()
     torch.testing.assert_close(actual,expected,rtol=0,atol=0)
+
+
+def test_default_bf16_precision_preserves_fp32_bias_association(monkeypatch):
+    monkeypatch.delenv('RUDA_TORCH_BF16_PRECISION',raising=False)
+    a=torch.zeros(512,3584,dtype=torch.bfloat16)
+    w=torch.zeros(512,3584,dtype=torch.bfloat16)
+    a[:,0]=4096; a[:,32]=4096
+    w[:,0]=4096; w[:,32]=-4096
+    bias=torch.ones(512,dtype=torch.bfloat16)
+    actual=F.linear(a.to('ruda'),w.to('ruda'),bias.to('ruda')).cpu()
+    torch.testing.assert_close(actual,torch.ones_like(actual),rtol=0,atol=0)
 
 
 @pytest.mark.parametrize('seed',[263,269])

@@ -26,6 +26,14 @@ fn policy() -> Policy {
     }
 }
 
+fn cuda_bf16_precision() -> bool {
+    match std::env::var("RUDA_TORCH_BF16_PRECISION").as_deref() {
+        Ok("cuda") => true,
+        Ok("fp32") | Err(std::env::VarError::NotPresent) => false,
+        _ => panic!("RUDA_TORCH_BF16_PRECISION must be fp32 or cuda"),
+    }
+}
+
 fn validate(op: u32, a: &View, b: &View, out: &View) {
     assert!(op == 7 || op == 30);
     assert!(a.dtype <= 2 && a.dtype == b.dtype, "matmul inputs must have matching floating dtypes");
@@ -56,6 +64,7 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
     if op==7 && a.dtype==2 && out.dtype==2 && a.shape[0]==512 && matches!(a.shape[1],3584|18944)
         && b.shape[..]==[a.shape[1],3584]
         && a.strides[1]==1 && (b.strides[0]==1 || b.strides[1]==1) && out.strides[..]==[3584,1]
+        && cuda_bf16_precision()
     {
         rublas::tensor_matmul::matmul_bf16_serial_k3(primitives::tensor(a),primitives::tensor(b),primitives::tensor(out))
             .unwrap_or_else(|error|panic!("RUDA serial-K3 projection failed: {error}"));
@@ -134,7 +143,8 @@ pub(super) fn addmm(bias: &View, a: &View, b: &View, out: &View, alpha: f32, bet
     }
     let client = client();
     if a.dtype==2 && alpha==1.0 && beta==1.0 && a.shape[..]==[512,3584] && b.shape[..]==[3584,512]
-        && a.strides[1]==1 && b.strides[0]==1 && policy()!=Policy::Scalar
+        && a.strides[1]==1 && b.strides[0]==1 && out.strides[..]==[512,1]
+        && policy()!=Policy::Scalar && cuda_bf16_precision()
     {
         rublas::tensor_matmul::matmul_bf16_sliced_k2_bias(primitives::tensor(a),primitives::tensor(b),
             primitives::tensor(bias),primitives::tensor(out))
