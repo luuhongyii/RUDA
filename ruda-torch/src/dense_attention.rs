@@ -143,6 +143,29 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
             let dqt = primitives::tensor(&xs[6]);
             let dkt = primitives::tensor(&xs[7]); let dvt = primitives::tensor(&xs[8]);
             let dmt = primitives::tensor(dm);
+            if dropout_p == 0.0 && !need_mask && l == 512 && s == 512 && d == 128 && dv == 128 && rows != 0 {
+                let contraction = View::packed(c.empty(rows.checked_mul(4).expect("attention contraction overflow")), vec![rows], 0);
+                let ct = primitives::tensor(&contraction);
+                let dtype = match q.dtype {0=>DType::F32,1=>DType::F16,2=>DType::BF16,_=>unreachable!()};
+                unsafe {
+                    if dm.len != 0 {
+                        kernel::zero::launch::<CudaRuntime>(&c,
+                            RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
+                    }
+                    kernel::backward_query_cached::launch::<CudaRuntime>(&c,grid,RudaDim::new_1d(128),
+                        qt.clone().into_array_arg(),kt.clone().into_array_arg(),vt.clone().into_array_arg(),mt.clone().into_tensor_arg(),
+                        ot.clone().into_array_arg(),st.clone().into_array_arg(),dqt.into_array_arg(),ct.clone().into_array_arg(),
+                        h as u32,kh as u32,scale,causal,mask_kind,dtype.into());
+                    kernel::backward_kv_owned::launch::<CudaRuntime>(&c,
+                        RudaCount::Static((k.len / 128) as u32,1,1),RudaDim::new_1d(128),
+                        qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),mt.into_tensor_arg(),
+                        ot.into_array_arg(),st.into_array_arg(),ct.into_array_arg(),dkt.into_array_arg(),dvt.into_array_arg(),
+                        h as u32,kh as u32,scale,causal,mask_kind,dtype.into());
+                }
+                LAUNCHES.fetch_add(2 + u64::from(dm.len != 0),Ordering::Relaxed);
+                finish_dispatch(&c);
+                return;
+            }
             let wk = View::packed(c.empty(k.len.max(1)*4),k.shape.clone(),0);
             let wv = View::packed(c.empty(v.len.max(1)*4),v.shape.clone(),0);
             let wkt = primitives::tensor(&wk); let wvt = primitives::tensor(&wv);

@@ -251,6 +251,185 @@ pub fn backward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, mask: &Tenso
     }
 }
 
+// Four warps own one query row. Cache only its P and dP in shared memory,
+// retaining FP32 probabilities and the unrounded Jacobian contraction.
+#[ruda(launch)]
+pub fn backward_query_cached<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
+    mask: &Tensor<f32>, grad: &Array<F>, stats: &Array<f32>, dq: &mut Array<F>,
+    delta: &mut Array<f32>, heads: u32, kv_heads: u32, scale: f32,
+    #[comptime] causal: bool, #[comptime] mask_kind: u32, #[define(F)] _dtype: StorageType) {
+    let row = RUDA_POS_X as usize;
+    let lane = UNIT_POS as usize % 32;
+    let warp = UNIT_POS as usize / 32;
+    let head = (row / 512) % heads as usize;
+    let batch = row / (heads as usize * 512);
+    let kh = head / (heads / kv_heads) as usize;
+    let maximum = stats[row * 2];
+    let denominator = stats[row * 2 + 1];
+    let mut cache = SharedMemory::<f32>::new(2052usize);
+    let mut query = Array::<f32>::new(4usize);
+    let mut dy = Array::<f32>::new(4usize);
+    let mut qgrad = Array::<f32>::new(4usize);
+    #[unroll]
+    for j in 0usize..4 {
+        query[j] = f32::cast_from(q[row * 128 + lane + j * 32]);
+        dy[j] = f32::cast_from(grad[row * 128 + lane + j * 32]);
+        qgrad[j] = 0.0;
+    }
+    let mut expected = 0.0f32;
+    for part in 0usize..128 {
+        let token = part * 4 + warp;
+        let cache_row = (batch * kv_heads as usize + kh) * 512 + token;
+        let mut score_local = 0.0f32;
+        let mut dp_local = 0.0f32;
+        #[unroll]
+        for j in 0usize..4 {
+            let d = lane + j * 32;
+            score_local = fma(query[j], f32::cast_from(k[cache_row * 128 + d]), score_local);
+            dp_local = fma(dy[j], f32::cast_from(v[cache_row * 128 + d]), dp_local);
+        }
+        let mut score = plane_sum(score_local) * scale;
+        let dp = plane_sum(dp_local);
+        let mut allowed = true;
+        if comptime!(causal) { allowed = token <= row % 512; }
+        if comptime!(mask_kind != 0) {
+            let value = mask[mask_offset(mask, row * 512 + token)];
+            if comptime!(mask_kind == 1) { allowed = value != 0.0; }
+            else { score += value; }
+        }
+        if comptime!(mask_kind == 2) { allowed = score != f32::NEG_INFINITY; }
+        let mut probability = 0.0f32;
+        if allowed && denominator != 0.0 { probability = (score - maximum).exp() / denominator; }
+        expected += probability * dp;
+        if lane == 0 {
+            cache[token] = probability;
+            cache[512 + token] = dp;
+            cache[1024 + token] = f32::cast_from(allowed);
+        }
+    }
+    if lane == 0 { cache[2048 + warp] = expected; }
+    sync_ruda();
+    if warp == 0 {
+        let mut value = 0.0f32;
+        if lane < 4 { value = cache[2048 + lane]; }
+        let total = plane_sum(value);
+        if lane == 0 { cache[2048] = total; delta[row] = total; }
+    }
+    sync_ruda();
+    let contraction = cache[2048];
+    for part in 0usize..128 {
+        let token = part * 4 + warp;
+        let cache_row = (batch * kv_heads as usize + kh) * 512 + token;
+        let mut ds = 0.0f32;
+        if cache[1024 + token] != 0.0 { ds = cache[token] * (cache[512 + token] - contraction); }
+        #[unroll]
+        for j in 0usize..4 {
+            qgrad[j] = fma(ds * scale, f32::cast_from(k[cache_row * 128 + lane + j * 32]), qgrad[j]);
+        }
+    }
+    #[unroll]
+    for j in 0usize..4 { cache[1536 + warp * 128 + lane + j * 32] = qgrad[j]; }
+    sync_ruda();
+    if warp == 0 {
+        #[unroll]
+        for j in 0usize..4 {
+            let d = lane + j * 32;
+            let mut total = 0.0f32;
+            #[unroll]
+            for w in 0usize..4 { total += cache[1536 + w * 128 + d]; }
+            dq[row * 128 + d] = F::cast_from(total);
+        }
+    }
+}
+
+// Each KV row owns its gradient, including every query head in its GQA group.
+// No global atomics or full sequence-by-sequence probability tensor is needed.
+#[ruda(launch)]
+pub fn backward_kv_owned<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
+    mask: &Tensor<f32>, grad: &Array<F>, stats: &Array<f32>, delta: &Array<f32>,
+    dk: &mut Array<F>, dv: &mut Array<F>, heads: u32, kv_heads: u32, scale: f32,
+    #[comptime] causal: bool, #[comptime] mask_kind: u32, #[define(F)] _dtype: StorageType) {
+    let row = RUDA_POS_X as usize;
+    let lane = UNIT_POS as usize % 32;
+    let warp = UNIT_POS as usize / 32;
+    let token = row % 512;
+    let kh = (row / 512) % kv_heads as usize;
+    let batch = row / (kv_heads as usize * 512);
+    let group = (heads / kv_heads) as usize;
+    let mut key = Array::<f32>::new(4usize);
+    let mut value = Array::<f32>::new(4usize);
+    let mut key_grad = Array::<f32>::new(4usize);
+    let mut value_grad = Array::<f32>::new(4usize);
+    let mut sums = SharedMemory::<f32>::new(1024usize);
+    #[unroll]
+    for j in 0usize..4 {
+        key[j] = f32::cast_from(k[row * 128 + lane + j * 32]);
+        value[j] = f32::cast_from(v[row * 128 + lane + j * 32]);
+        key_grad[j] = 0.0;
+        value_grad[j] = 0.0;
+    }
+    for part in 0usize..group * 128 {
+        let index = part * 4 + warp;
+        let query_index = index % 512;
+        let head = kh * group + index / 512;
+        let qr = (batch * heads as usize + head) * 512 + query_index;
+        let mut query = Array::<f32>::new(4usize);
+        let mut dy = Array::<f32>::new(4usize);
+        let mut score_local = 0.0f32;
+        let mut dp_local = 0.0f32;
+        #[unroll]
+        for j in 0usize..4 {
+            query[j] = f32::cast_from(q[qr * 128 + lane + j * 32]);
+            dy[j] = f32::cast_from(grad[qr * 128 + lane + j * 32]);
+            score_local = fma(query[j], key[j], score_local);
+            dp_local = fma(dy[j], value[j], dp_local);
+        }
+        let mut score = plane_sum(score_local) * scale;
+        let dp = plane_sum(dp_local);
+        let mut allowed = true;
+        if comptime!(causal) { allowed = token <= query_index; }
+        if comptime!(mask_kind != 0) {
+            let m = mask[mask_offset(mask, qr * 512 + token)];
+            if comptime!(mask_kind == 1) { allowed = m != 0.0; }
+            else { score += m; }
+        }
+        if comptime!(mask_kind == 2) { allowed = score != f32::NEG_INFINITY; }
+        let mut probability = 0.0f32;
+        let mut ds = 0.0f32;
+        if allowed {
+            if stats[qr * 2 + 1] != 0.0 { probability = (score - stats[qr * 2]).exp() / stats[qr * 2 + 1]; }
+            ds = probability * (dp - delta[qr]);
+        }
+        #[unroll]
+        for j in 0usize..4 {
+            key_grad[j] = fma(ds * scale, query[j], key_grad[j]);
+            value_grad[j] = fma(probability, dy[j], value_grad[j]);
+        }
+    }
+    #[unroll]
+    for j in 0usize..4 {
+        let d = lane + j * 32;
+        sums[warp * 128 + d] = key_grad[j];
+        sums[512 + warp * 128 + d] = value_grad[j];
+    }
+    sync_ruda();
+    if warp == 0 {
+        #[unroll]
+        for j in 0usize..4 {
+            let d = lane + j * 32;
+            let mut total_k = 0.0f32;
+            let mut total_v = 0.0f32;
+            #[unroll]
+            for w in 0usize..4 {
+                total_k += sums[w * 128 + d];
+                total_v += sums[512 + w * 128 + d];
+            }
+            dk[row * 128 + d] = F::cast_from(total_k);
+            dv[row * 128 + d] = F::cast_from(total_v);
+        }
+    }
+}
+
 #[ruda(launch)]
 pub fn zero(out: &mut Array<f32>) {
     let pos = ABSOLUTE_POS as usize;
