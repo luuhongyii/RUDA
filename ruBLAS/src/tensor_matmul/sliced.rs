@@ -78,7 +78,7 @@ pub fn matmul_bf16_serial_k3<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
 /// Parallel LM-head input gradients without copying the frozen vocabulary weight.
 pub fn matmul_bf16_head_parallel_k6<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
     out: RudaTensor<R>) -> Result<RudaTensor<R>, MatmulSetupError> {
-    if a.dtype!=DType::BF16 || b.dtype!=DType::BF16 || out.dtype!=DType::BF16
+    if a.dtype!=DType::BF16 || b.dtype!=DType::BF16 || !matches!(out.dtype,DType::BF16|DType::F32)
         || a.qparams.is_some() || b.qparams.is_some() || out.qparams.is_some()
         || a.meta.num_dims()!=2 || b.meta.num_dims()!=2 || out.meta.num_dims()!=2
         || !matches!(a.meta.shape()[0],31|32) || a.meta.shape()[1]!=152064
@@ -100,7 +100,7 @@ pub fn matmul_bf16_head_parallel_k6<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<
     let partial = empty_device_contiguous_dtype(a.client.clone(),a.device.clone(),Shape::from([6,m,3584]),DType::F32);
     launch_matmul_with_precision(&Strategy::Auto,left,right,partial.clone(),F32MathMode::Strict)?;
     parallel_reduce::launch::<R>(&a.client,RudaCount::Static((m*3584).div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
-        partial.into_array_arg(),out.clone().into_array_arg(),DType::BF16.into());
+        partial.into_array_arg(),out.clone().into_array_arg(),out.dtype.into());
     Ok(out)
 }
 

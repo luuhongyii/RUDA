@@ -25,11 +25,13 @@ def test_parallel_head_gradient_and_aligned_storage_offsets(head_case,rows,monke
     torch.testing.assert_close(actual,expected,rtol=.025,atol=.025)
 
 
-def test_head_geometry_preserves_fp32_output(head_case,monkeypatch):
+@pytest.mark.parametrize('rows',[31,32])
+def test_head_geometry_preserves_fp32_output(head_case,rows,monkeypatch):
     monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION','cuda')
     a,b,reference=head_case
-    target=torch.empty(32,3584,device='ruda',dtype=torch.float32)
-    r._C.execute(7,a.to('ruda')[1:],b.to('ruda')[1:],target,0.0)
+    target=torch.empty(rows,3584,device='ruda',dtype=torch.float32)
+    r._C.execute(7,a.to('ruda')[1:rows+1],b.to('ruda')[1:],target,0.0)
     actual=target.cpu().double()
     assert torch.isfinite(actual).all()
-    assert (actual-reference).norm()/reference.norm() < 1e-4
+    expected=reference[:rows]
+    assert (actual-expected).norm()/expected.norm() < 1e-4

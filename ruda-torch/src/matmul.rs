@@ -61,7 +61,7 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
         scalar(op, a, b, out);
         return;
     }
-    if op==7 && a.dtype==2 && out.dtype==2 && matches!(a.shape[0],31|32) && a.shape[1]==152064
+    if op==7 && a.dtype==2 && matches!(out.dtype,0|2) && matches!(a.shape[0],31|32) && a.shape[1]==152064
         && b.shape[..]==[152064,3584] && a.strides[..]==[152064,1] && b.strides[..]==[3584,1]
         && out.strides[..]==[3584,1] && a.handle.offset_start.unwrap_or(0)%16==0
         && b.handle.offset_start.unwrap_or(0)%16==0 && cuda_bf16_precision()
