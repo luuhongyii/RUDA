@@ -133,7 +133,8 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
         let dim = RudaDim::new_1d(32);
         if op == 0 {
             if flash && rows != 0 {
-                unsafe { kernel::forward_flash::launch::<CudaRuntime>(&c,grid,RudaDim::new_1d(128),
+                unsafe { rudnn::flash_training::forward::launch::<CudaRuntime>(&c,
+                    RudaCount::Static((rows/16) as u32,1,1),RudaDim::new_1d(128),
                     qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),ot.into_array_arg(),st.into_array_arg(),
                     h as u32,kh as u32,scale,causal,DType::BF16.into()); }
                 LAUNCHES.fetch_add(1,Ordering::Relaxed);

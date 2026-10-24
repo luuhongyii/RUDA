@@ -254,10 +254,10 @@ pub fn backward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, mask: &Tenso
 // Four warps own one query row. Cache only its P and dP in shared memory,
 // retaining FP32 probabilities and the unrounded Jacobian contraction.
 #[ruda(fast_math = FastMath::ReducedPrecision.into())]
-fn flash_exp2(value: f32) -> f32 { f32::powf(2.0f32,value) }
+pub(crate) fn flash_exp2(value: f32) -> f32 { f32::powf(2.0f32,value) }
 
 #[ruda(fast_math = FastMath::ReducedPrecision | FastMath::NotNaN | FastMath::NotInf)]
-fn flash_log(value: f32) -> f32 { value.ln() }
+pub(crate) fn flash_log(value: f32) -> f32 { value.ln() }
 
 // Native Flash-compatible storage boundaries: reverse 64-key blocks, BF16
 // unnormalized P, FP32 accumulation, and the rounded O saved for backward.
