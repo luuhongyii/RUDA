@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, AutotuneKey)]
 struct TileKey {
+    m: usize,
     k: usize,
     n: usize,
     lda: usize,
@@ -14,7 +15,7 @@ struct TileKey {
 
 fn key<R: Runtime>((a, b, out): &(RudaTensor<R>, RudaTensor<R>, RudaTensor<R>)) -> TileKey {
     let nt = b.meta.strides()[0] == 1;
-    TileKey { k: a.meta.shape()[1], n: b.meta.shape()[1], lda: a.meta.strides()[0],
+    TileKey { m: a.meta.shape()[0], k: a.meta.shape()[1], n: b.meta.shape()[1], lda: a.meta.strides()[0],
         ldb: if nt { b.meta.strides()[1] } else { b.meta.strides()[0] }, nt, output: out.dtype.into() }
 }
 
@@ -30,7 +31,7 @@ fn inputs<R: Runtime>(_: &TileKey,
 }
 
 pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>) {
-    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v1");
+    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v2");
     let client = a.client.clone();
     let id = RudaTuneId::new(&client, &a.device);
     let candidates = TUNER.init_for_device(&id, || {
@@ -42,6 +43,9 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("async_128x128x32", 128, 128, 32, true),
             ("async_128x64x64", 128, 64, 64, true),
             ("async_128x128x64", 128, 128, 64, true),
+            ("sync_32x128x32", 32, 128, 32, false),
+            ("async_32x128x32", 32, 128, 32, true),
+            ("async_32x128x64", 32, 128, 64, true),
         ] {
             set = set.with(Tunable::new(name,
                 move |(a, b, out): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>)| {
@@ -59,8 +63,9 @@ mod tests {
 
     #[test]
     fn ordered_tile_keys_do_not_bucket_k_or_strides() {
-        let a = TileKey { k: 96, n: 256, lda: 128, ldb: 256, nt: false,
+        let a = TileKey { m: 512, k: 96, n: 256, lda: 128, ldb: 256, nt: false,
             output: ruda_core::tensor::DType::F32.into() };
+        assert_ne!(a, TileKey { m: 32, ..a.clone() });
         assert_ne!(a, TileKey { k: 128, ..a.clone() });
         assert_ne!(a, TileKey { lda: 256, ..a.clone() });
         assert_ne!(a, TileKey { ldb: 512, ..a.clone() });

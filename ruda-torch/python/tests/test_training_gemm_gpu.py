@@ -8,10 +8,11 @@ import ruda_torch as r
 @pytest.mark.parametrize('padded', [False, True])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize('k', [32, 64, 96, 160])
-def test_bf16_training_tile_layout(nt, padded, dtype, k, monkeypatch):
+@pytest.mark.parametrize('m', [32, 512])
+def test_bf16_training_tile_layout(nt, padded, dtype, k, m, monkeypatch):
     monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', 'cuda')
     torch.manual_seed(261025)
-    m, n = 512, 256
+    n = 256
     pad = 8 if padded else 0
     a = torch.randn(m, k + pad, dtype=torch.bfloat16)
     b = torch.randn(n, k + pad, dtype=torch.bfloat16) if nt else torch.randn(k, n + pad, dtype=torch.bfloat16)

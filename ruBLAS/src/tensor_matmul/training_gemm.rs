@@ -14,7 +14,7 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
     let nt = b.meta.strides()[0] == 1;
     let lda = a.meta.strides()[0];
     let ldb = if nt { b.meta.strides()[1] } else { b.meta.strides()[0] };
-    if m != 512 || k == 0 || k % 32 != 0 || n < 128 || n % 128 != 0
+    if !matches!(m, 32 | 512) || k == 0 || k % 32 != 0 || n < 128 || n % 128 != 0
         || b.meta.shape()[0] != k || a.meta.strides()[1] != 1 || lda < k || lda % 8 != 0
         || (!nt && b.meta.strides()[1] != 1) || ldb < (if nt { k } else { n }) || ldb % 8 != 0
         || out.meta.shape()[..] != [m, n] || out.meta.strides()[..] != [n, 1]
@@ -38,18 +38,19 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
 #[allow(unsafe_code)]
 pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>,
     bm: usize, bn: usize, bk: usize, asynchronous: bool) -> Result<RudaTensor<R>, String> {
-    let (k, n) = (a.meta.shape()[1], b.meta.shape()[1]);
+    let (m, k, n) = (a.meta.shape()[0], a.meta.shape()[1], b.meta.shape()[1]);
+    if m % bm != 0 || (m == 512 && bm == 32) { return Err("training M tile does not match the row geometry".into()); }
     if k % bk != 0 { return Err("training K tile does not divide the reduction".into()); }
     let nt = b.meta.strides()[0] == 1;
     let lda = a.meta.strides()[0];
     let ldb = if nt { b.meta.strides()[1] } else { b.meta.strides()[0] };
-    let a_span = 511 * lda + k;
+    let a_span = (m - 1) * lda + k;
     let b_span = if nt { (n - 1) * ldb + k } else { (k - 1) * ldb + n };
     let mut left = a.clone(); left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
     let mut right = b.clone(); right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
-    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (512 / bm)) as u32, 1, 1), RudaDim::new_1d((bm * 2) as u32),
+    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, 1, 1), RudaDim::new_1d((bm * 2) as u32),
         left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, nt,
-        bm, bn, bk, asynchronous,
+        m, bm, bn, bk, asynchronous,
         DType::BF16.into(), out.dtype.into()); }
     Ok(out)
 }
@@ -58,14 +59,14 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
 fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<O>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] nt: bool,
-    #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
+    #[comptime] m: usize, #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
     #[define(F)] _input: StorageType, #[define(O)] _output: StorageType) {
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
     let warp = thread / 32;
     // Adjacent CTAs reuse the weight tile; smaller tiles keep serial-K views occupied.
-    let row = RUDA_POS_X as usize % (512 / bm) * bm;
-    let col = RUDA_POS_X as usize / (512 / bm) * bn;
+    let row = RUDA_POS_X as usize % (m / bm) * bm;
+    let col = RUDA_POS_X as usize / (m / bm) * bn;
     let wm = warp / 2 * 32;
     let wn = warp % 2 * (bn / 2);
     let banks = comptime!(if asynchronous { 2usize } else { 1usize });

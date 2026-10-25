@@ -243,7 +243,12 @@ fn cuda_device() -> CudaDevice {
         Err(_) => panic!("RUDA_TORCH_CUDA_DEVICE must be valid Unicode"),
     }) }
 }
-fn client() -> ComputeClient<CudaRuntime> { let mut c=CudaRuntime::client(&cuda_device()); streams::bind(&mut c); c }
+fn client() -> ComputeClient<CudaRuntime> {
+    static CLIENT: OnceLock<ComputeClient<CudaRuntime>> = OnceLock::new();
+    let mut c = CLIENT.get_or_init(|| CudaRuntime::client(&cuda_device())).clone();
+    streams::bind(&mut c);
+    c
+}
 fn sync(client: &ComputeClient<CudaRuntime>) { block_on(client.sync()).expect("RUDA CUDA synchronization failed"); }
 fn async_dispatch_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
