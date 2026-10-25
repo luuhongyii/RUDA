@@ -7,6 +7,7 @@ import ruda_torch as r
 
 @pytest.mark.parametrize('with_norm', [False, True])
 @pytest.mark.parametrize('bad', [None, float('nan'), float('inf'), -float('inf')])
+@torch.no_grad()
 def test_batched_gradient_analysis_preserves_each_warp(with_norm, bad):
     torch.manual_seed(261041)
     sizes = [0, 1, 31, 32, 33, 127, 128, 129, 32767, 32769, 65537]
@@ -41,6 +42,7 @@ def test_batched_gradient_analysis_preserves_each_warp(with_norm, bad):
 
 
 @pytest.mark.parametrize('inverse,clip', [(1., 1.), (.125, .7), (1e-20, 1e-20)])
+@torch.no_grad()
 def test_batched_adamw_matches_single_updates_with_mixed_ragged_buffers(inverse, clip):
     torch.manual_seed(261042)
     dtypes = [torch.float32, torch.float16, torch.bfloat16]
