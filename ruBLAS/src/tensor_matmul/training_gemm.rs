@@ -7,24 +7,33 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
     if R::name(&a.client) != "cuda"
         || a.dtype != DType::BF16 || b.dtype != DType::BF16 || !matches!(out.dtype, DType::BF16 | DType::F32)
         || a.qparams.is_some() || b.qparams.is_some() || out.qparams.is_some()
-        || a.meta.num_dims() != 2 || b.meta.num_dims() != 2 || out.meta.num_dims() != 2
+        || !matches!(a.meta.num_dims(), 2 | 3) || b.meta.num_dims() != a.meta.num_dims() || out.meta.num_dims() != a.meta.num_dims()
         || !a.client.same_execution_queue(&b.client) || !a.client.same_execution_queue(&out.client)
     { return false; }
-    let (m, k, n) = (a.meta.shape()[0], a.meta.shape()[1], b.meta.shape()[1]);
-    let nt = b.meta.strides()[0] == 1;
-    let lda = a.meta.strides()[0];
-    let ldb = if nt { b.meta.strides()[1] } else { b.meta.strides()[0] };
+    let d = a.meta.num_dims() - 2;
+    let (m, k, n) = (a.meta.shape()[d], a.meta.shape()[d+1], b.meta.shape()[d+1]);
+    let nt = b.meta.strides()[d] == 1;
+    let lda = a.meta.strides()[d];
+    let ldb = if nt { b.meta.strides()[d+1] } else { b.meta.strides()[d] };
     if !matches!(m, 32 | 512) || k == 0 || k % 32 != 0 || n < 128 || n % 128 != 0
-        || b.meta.shape()[0] != k || a.meta.strides()[1] != 1 || lda < k || lda % 8 != 0
-        || (!nt && b.meta.strides()[1] != 1) || ldb < (if nt { k } else { n }) || ldb % 8 != 0
-        || out.meta.shape()[..] != [m, n] || out.meta.strides()[..] != [n, 1]
+        || b.meta.shape()[d] != k || a.meta.strides()[d+1] != 1 || lda < k || lda % 8 != 0
+        || (!nt && b.meta.strides()[d+1] != 1) || ldb < (if nt { k } else { n }) || ldb % 8 != 0
+        || out.meta.shape()[d..] != [m, n] || out.meta.strides()[d..] != [n, 1]
         || a.handle.offset_start.unwrap_or(0) % 16 != 0 || b.handle.offset_start.unwrap_or(0) % 16 != 0
     { return false; }
     let Some(a_span) = (m - 1).checked_mul(lda).and_then(|v| v.checked_add(k)) else { return false; };
     let Some(b_span) = (if nt { n - 1 } else { k - 1 }).checked_mul(ldb)
         .and_then(|v| v.checked_add(if nt { k } else { n })) else { return false; };
-    if a_span > u32::MAX as usize || b_span > u32::MAX as usize
-        || m.checked_mul(n).is_none_or(|v| v > u32::MAX as usize)
+    let batch = if d == 0 { 1 } else { a.meta.shape()[0] };
+    let a_batch = if d == 0 { 0 } else { a.meta.strides()[0] };
+    let b_batch = if d == 0 { 0 } else { b.meta.strides()[0] };
+    if batch == 0 || batch > a.client.properties().hardware.max_ruda_count.1 as usize
+        || (d == 1 && (b.meta.shape()[0] != batch || out.meta.shape()[0] != batch
+            || a_batch < a_span || b_batch < b_span || a_batch % 8 != 0 || b_batch % 8 != 0
+            || m.checked_mul(n) != Some(out.meta.strides()[0])))
+        || (batch - 1).checked_mul(a_batch).and_then(|v| v.checked_add(a_span)).is_none_or(|v| v > u32::MAX as usize)
+        || (batch - 1).checked_mul(b_batch).and_then(|v| v.checked_add(b_span)).is_none_or(|v| v > u32::MAX as usize)
+        || m.checked_mul(n).and_then(|v| v.checked_mul(batch)).is_none_or(|v| v > u32::MAX as usize)
         || !a.client.features().copy_async
         || !a.client.features().matmul.cmma.contains(&MmaConfig {
             a_type: DType::BF16.into(), b_type: DType::BF16.into(), cd_type: DType::F32.into(),
@@ -38,19 +47,26 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
 #[allow(unsafe_code)]
 pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>,
     bm: usize, bn: usize, bk: usize, asynchronous: bool) -> Result<RudaTensor<R>, String> {
-    let (m, k, n) = (a.meta.shape()[0], a.meta.shape()[1], b.meta.shape()[1]);
+    let d = a.meta.num_dims() - 2;
+    let (m, k, n) = (a.meta.shape()[d], a.meta.shape()[d+1], b.meta.shape()[d+1]);
     if m % bm != 0 || (m == 512 && bm == 32) { return Err("training M tile does not match the row geometry".into()); }
     if k % bk != 0 { return Err("training K tile does not divide the reduction".into()); }
-    let nt = b.meta.strides()[0] == 1;
-    let lda = a.meta.strides()[0];
-    let ldb = if nt { b.meta.strides()[1] } else { b.meta.strides()[0] };
-    let a_span = (m - 1) * lda + k;
-    let b_span = if nt { (n - 1) * ldb + k } else { (k - 1) * ldb + n };
-    let mut left = a.clone(); left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
-    let mut right = b.clone(); right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
-    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, 1, 1), RudaDim::new_1d((bm * 2) as u32),
+    let nt = b.meta.strides()[d] == 1;
+    let lda = a.meta.strides()[d];
+    let ldb = if nt { b.meta.strides()[d+1] } else { b.meta.strides()[d] };
+    let batch = if d == 0 { 1 } else { a.meta.shape()[0] };
+    let a_batch = if d == 0 { 0 } else { a.meta.strides()[0] };
+    let b_batch = if d == 0 { 0 } else { b.meta.strides()[0] };
+    let a_span = (batch - 1) * a_batch + (m - 1) * lda + k;
+    let b_span = (batch - 1) * b_batch + if nt { (n - 1) * ldb + k } else { (k - 1) * ldb + n };
+    let mut left = a.clone();
+    let mut right = b.clone();
+    if d == 1 { left.meta.remove(0); right.meta.remove(0); }
+    left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
+    right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
+    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d((bm * 2) as u32),
         left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, nt,
-        m, bm, bn, bk, asynchronous,
+        m, a_batch, b_batch, bm, bn, bk, asynchronous,
         DType::BF16.into(), out.dtype.into()); }
     Ok(out)
 }
@@ -59,7 +75,8 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
 fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<O>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] nt: bool,
-    #[comptime] m: usize, #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
+    #[comptime] m: usize, #[comptime] a_batch: usize, #[comptime] b_batch: usize,
+    #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
     #[define(F)] _input: StorageType, #[define(O)] _output: StorageType) {
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
@@ -83,7 +100,7 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
             16usize, 16usize, 16usize, cmma::MatrixLayout::Undefined, 0.0f32));
     }
     if comptime!(asynchronous) {
-        load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, nt, bm, bn, bk, asynchronous);
+        load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
         loaded.commit_copy_async();
     }
     for block in 0usize..k / bk {
@@ -91,11 +108,11 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
         if comptime!(asynchronous) {
             loaded.arrive_and_wait();
             if block + 1 < k / bk {
-                load_stage(a, b, &mut sa, &mut sb, row, col, block + 1, 1 - bank, lda, ldb, nt, bm, bn, bk, asynchronous);
+                load_stage(a, b, &mut sa, &mut sb, row, col, block + 1, 1 - bank, lda, ldb, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
                 loaded.commit_copy_async();
             }
         } else {
-            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, nt, bm, bn, bk, asynchronous);
+            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
             sync_ruda();
         }
         #[unroll]
@@ -143,7 +160,7 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
             #[unroll]
             for t in 0usize..8 {
                 let pos = lane + t * 32;
-                out[(row + wm + i * 16 + pos / 16) * n + col + wn + j * 16 + pos % 16]
+                out[(RUDA_POS_Y as usize * m + row + wm + i * 16 + pos / 16) * n + col + wn + j * 16 + pos % 16]
                     = O::cast_from(epilogue[warp * 256 + pos]);
             }
             sync_plane();
@@ -156,11 +173,12 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
     sa: &mut SharedMemory<Vector<F, Const<8>>>, sb: &mut SharedMemory<Vector<F, Const<8>>>,
     row: usize, col: usize, block: usize, bank: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] nt: bool,
+    #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool) {
     #[unroll]
     for i in 0usize..(bk / 16) {
         let p = UNIT_POS as usize + i * (bm * 2);
-        let source = ((row + p / (bk / 8)) * lda + block * bk) / 8 + p % (bk / 8);
+        let source = (RUDA_POS_Y as usize * a_batch + (row + p / (bk / 8)) * lda + block * bk) / 8 + p % (bk / 8);
         let target = bank * bm * (bk / 8 + 1) + (p / (bk / 8)) * (bk / 8 + 1) + p % (bk / 8);
         if comptime!(asynchronous) {
             copy_async(&a.slice(source, source + 1), &mut sa.slice_mut(target, target + 1), 8u32);
@@ -170,13 +188,13 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
     for i in 0usize..(bn * bk / (bm * 16)) {
         let p = UNIT_POS as usize + i * (bm * 2);
         if comptime!(nt) {
-            let source = ((col + p / (bk / 8)) * ldb + block * bk) / 8 + p % (bk / 8);
+            let source = (RUDA_POS_Y as usize * b_batch + (col + p / (bk / 8)) * ldb + block * bk) / 8 + p % (bk / 8);
             let target = bank * bn * (bk / 8 + 1) + (p / (bk / 8)) * (bk / 8 + 1) + p % (bk / 8);
             if comptime!(asynchronous) {
                 copy_async(&b.slice(source, source + 1), &mut sb.slice_mut(target, target + 1), 8u32);
             } else { sb[target] = b[source]; }
         } else {
-            let source = ((block * bk + p / (bn / 8)) * ldb + col) / 8 + p % (bn / 8);
+            let source = (RUDA_POS_Y as usize * b_batch + (block * bk + p / (bn / 8)) * ldb + col) / 8 + p % (bn / 8);
             let target = bank * bk * (bn / 8 + 1) + (p / (bn / 8)) * (bn / 8 + 1) + p % (bn / 8);
             if comptime!(asynchronous) {
                 copy_async(&b.slice(source, source + 1), &mut sb.slice_mut(target, target + 1), 8u32);

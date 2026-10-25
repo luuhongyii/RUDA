@@ -25,8 +25,11 @@ pub fn matmul_bf16_sliced_k2_bias<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>
             input.into_tensor_arg(),output.into_array_arg(),rhs,DType::BF16.into());
     }
     let partial = empty_device_contiguous_dtype(a.client.clone(),a.device.clone(),Shape::from([2,512,512]),DType::F32);
-    launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
-        left,swap_dims(right,1,2),partial.clone(),F32MathMode::Strict)?;
+    let right = swap_dims(right, 1, 2);
+    if !super::matmul_bf16_training(&left, &right, &partial) {
+        launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
+            left, right, partial.clone(), F32MathMode::Strict)?;
+    }
     reduce::launch::<R>(&a.client,RudaCount::Static((512*512/128) as u32,1,1),RudaDim::new_1d(128),
         partial.into_array_arg(),bias.into_tensor_arg(),out.clone().into_array_arg(),DType::BF16.into());
     Ok(out)

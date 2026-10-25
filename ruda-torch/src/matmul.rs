@@ -85,7 +85,7 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
         LAUNCHES.fetch_add(4,Ordering::Relaxed);
         return;
     }
-    if op == 7 && a.dtype == 2 && cuda_bf16_precision()
+    if matches!(op, 7 | 30) && a.dtype == 2 && cuda_bf16_precision()
         && rublas::tensor_matmul::matmul_bf16_training(&primitives::tensor(a), &primitives::tensor(b), &primitives::tensor(out))
     {
         finish_dispatch(&client());

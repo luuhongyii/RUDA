@@ -38,6 +38,33 @@ def test_bf16_training_tile_layout(nt, padded, dtype, k, m, monkeypatch):
     torch.testing.assert_close(host, reference, rtol=2e-5, atol=2e-5)
 
 
+@pytest.mark.parametrize('batch', [1, 3])
+@pytest.mark.parametrize('m', [32, 512])
+@pytest.mark.parametrize('nt', [False, True])
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+def test_batched_training_tile_preserves_gapped_strides(batch, m, nt, dtype, monkeypatch):
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', 'cuda')
+    torch.manual_seed(261031)
+    k, n, pad = 96, 256, 8
+    a = torch.randn(batch+1, m, k+pad, dtype=torch.bfloat16)
+    b = torch.randn(batch+1, n, k+pad, dtype=torch.bfloat16) if nt else torch.randn(batch+1, k, n+pad, dtype=torch.bfloat16)
+    x, weight = a.to('ruda')[1:, :, pad:], b.to('ruda')[1:, :, pad:]
+    left, right = a[1:, :, pad:].double(), b[1:, :, pad:].double()
+    if nt:
+        weight = weight.transpose(1, 2); right = right.transpose(1, 2)
+    out = torch.empty(batch+1, m, n, dtype=dtype, device='ruda')[1:]
+    r._C.execute(30, x, weight, out, 0.)
+    reference = left @ right
+    actual = out.cpu()
+    if dtype == torch.bfloat16:
+        accum = torch.empty(batch, m, n, dtype=torch.float32, device='ruda')
+        r._C.execute(30, x, weight, accum, 0.)
+        accum = accum.cpu()
+        torch.testing.assert_close(actual, accum.bfloat16(), rtol=0, atol=0)
+        actual = accum
+    torch.testing.assert_close(actual, reference.float(), rtol=2e-5, atol=2e-5)
+
+
 @pytest.mark.parametrize('m,n', [(16, 128), (32, 3584), (512, 18944)])
 @pytest.mark.parametrize('offset', [0, 1])
 def test_fp32_rank16_projection(m, n, offset):
@@ -64,13 +91,17 @@ def test_fp32_rank16_nonfinite_values():
 
 @pytest.mark.parametrize('m,k', [(16, 512), (64, 1024), (3584, 1536)])
 @pytest.mark.parametrize('padded', [False, True])
-def test_fp32_transposed_lora_gradient(m, k, padded):
+@pytest.mark.parametrize('transposed', [False, True])
+def test_fp32_transposed_lora_gradient(m, k, padded, transposed):
     torch.manual_seed(261027)
     pad = 4 if padded else 0
-    a = torch.randn(k, m + pad)
+    a = torch.randn(k, m + pad) if transposed else torch.randn(m, k + pad)
     b = torch.randn(k, 16 + pad)
-    x, y = a.to('ruda')[:, pad:].t(), b.to('ruda')[:, pad:]
-    reference = (a[:, pad:].double().t() @ b[:, pad:].double()).float()
+    x, y = a.to('ruda')[:, pad:], b.to('ruda')[:, pad:]
+    left = a[:, pad:].double()
+    if transposed:
+        x = x.t(); left = left.t()
+    reference = (left @ b[:, pad:].double()).float()
     actual = (x @ y).cpu()
     torch.testing.assert_close(actual, reference, rtol=2e-4, atol=5e-5)
     assert float((actual.double() - reference.double()).norm() / reference.double().norm()) < 1e-6
