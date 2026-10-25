@@ -81,6 +81,7 @@ impl<'a> Command<'a> {
 
     /// Explicitly cleanup gpu memory on the current stream.
     pub fn memory_cleanup(&mut self) {
+        self.streams.current().metadata.clear();
         self.streams.current().memory_management_gpu.cleanup(true)
     }
 
@@ -473,17 +474,18 @@ impl<'a> Command<'a> {
         Ok(())
     }
 
-    /// Allocates a new GPU memory buffer and immediately copies contiguous host data into it.
+    /// Upload launch metadata, reusing immutable data only on this stream.
     ///
     /// # Parameters
     ///
     /// * `data` - The host data to copy to the GPU.
+    /// * `private` - Keep explicit graph metadata out of the immutable cache.
     ///
     /// # Returns
     ///
     /// * `Ok(Handle)` - A handle to the newly allocated and populated GPU memory.
     /// * `Err(IoError)` - If the allocation or data copy fails.
-    pub fn create_with_data(&mut self, data: &[u8]) -> Result<Handle, IoError> {
+    pub fn create_with_data(&mut self, data: &[u8], private: bool) -> Result<Handle, IoError> {
         let state = &self.streams.current().capture;
         let cache = state.warming || state.recording;
         if cache {
@@ -493,6 +495,14 @@ impl<'a> Command<'a> {
                     description: "Graph metadata was not populated during warmup".into(),
                     backtrace: BackTrace::capture(),
                 });
+            }
+        }
+        // Explicit graphs own mutable scalar storage; capture warmup has its
+        // own retained metadata. Neither may alias the ordinary launch cache.
+        let immutable = !cache && !private;
+        if immutable {
+            if let Some(handle) = self.streams.current().metadata.get(data) {
+                return Ok(handle.clone());
             }
         }
         let mut staging =
@@ -517,6 +527,7 @@ impl<'a> Command<'a> {
         )?;
 
         if cache { self.streams.current().capture.metadata.insert(data.to_vec(), handle.clone()); }
+        if immutable { self.streams.current().metadata.insert(data, handle.clone()); }
         Ok(handle)
     }
 

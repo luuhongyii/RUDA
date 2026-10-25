@@ -22,6 +22,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Stream {
     pub(crate) capture: super::capture::CaptureState,
+    pub(crate) metadata: super::metadata_cache::MetadataCache<ruda::runtime::server::Handle>,
     pub sys: cudarc::driver::sys::CUstream,
     pub memory_management_gpu: MemoryManagement<GpuStorage>,
     pub memory_management_cpu: MemoryManagement<PinnedMemoryStorage>,
@@ -153,6 +154,7 @@ impl CudaStreamBackend {
 
         Stream {
             capture: Default::default(),
+            metadata: Default::default(),
             sys: stream,
             memory_management_gpu,
             memory_management_cpu,

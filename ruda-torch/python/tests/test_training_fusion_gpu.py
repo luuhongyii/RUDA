@@ -5,6 +5,37 @@ from torch.nn import functional as F
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
+def test_launch_metadata_reuse_keeps_shapes_strides_and_streams(dtype):
+    streams = [r.Stream(), r.Stream()]
+    host = torch.arange(512, dtype=torch.float32).reshape(16, 32).to(dtype)
+    pending = []
+    for iteration in range(8):
+        for index, stream in enumerate(streams):
+            with r.stream(stream):
+                base = host.to('ruda')
+                source = base.transpose(0, 1) if (iteration + index) % 2 else base[:, ::2]
+                expected = host.T if (iteration + index) % 2 else host[:, ::2]
+                output = torch.empty(source.shape, device='ruda', dtype=dtype)
+                output.copy_(source)
+                pending.append((output, expected.clone()))
+    for output, expected in pending:
+        torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
+
+
+def test_launch_metadata_eviction_preserves_inflight_outputs():
+    width = 2064
+    host = torch.arange(2 * (width + 4), dtype=torch.float32).reshape(2, width + 4)
+    source = host.to('ruda')
+    pending = []
+    for length in list(range(1, width + 1)) + [1, 17, 64, width]:
+        output = torch.empty((2, length), dtype=torch.float32, device='ruda')
+        output.copy_(source[:, :length])
+        pending.append((output, length))
+    for output, length in pending:
+        torch.testing.assert_close(output.cpu(), host[:, :length], rtol=0, atol=0)
+
+
 @pytest.mark.parametrize('source_dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('target_dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('length,offset', [(512, 0), (512, 4), (513, 1), (512, 1)])

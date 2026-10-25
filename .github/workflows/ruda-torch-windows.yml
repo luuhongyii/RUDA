@@ -184,6 +184,8 @@ jobs:
           RUDA_PTX_TEST_OUTPUT="$GITHUB_WORKSPACE/target/ptx-vector-memory" cargo test --release --locked -p ruda-compiler --no-default-features --features ptx ptx::tests
           test "$(find target/ptx-vector-memory -maxdepth 1 -name 'packed_vector_memory_*.ptx' | wc -l)" -eq 48
           test "$(find target/ptx-vector-memory -maxdepth 1 -name 'unsigned_power2_*.ptx' | wc -l)" -eq 288
+          cargo test --release --locked -p ruda-driver-cuda --features direct-ptx --test graph-update --no-run --message-format=json > target/graph-update-build.jsonl
+          python -c "import json, shutil; rows=[json.loads(line) for line in open('target/graph-update-build.jsonl')]; binaries=[row['executable'] for row in rows if row.get('reason')=='compiler-artifact' and row.get('target',{}).get('name')=='graph-update' and row.get('executable')]; assert len(binaries)==1, binaries; shutil.copyfile(binaries[0], 'target/release/ruda_graph_update_test')"
           cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
       - name: Save Linux native library
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -191,6 +193,7 @@ jobs:
           name: ruda-torch-native-linux-x86_64-abi10-${{ github.sha }}
           path: |
             target/release/libruda_torch_native.so
+            target/release/ruda_graph_update_test
             target/ptx-vector-memory/packed_vector_memory_*.ptx
             target/ptx-vector-memory/unsigned_power2_*.ptx
           compression-level: 6
