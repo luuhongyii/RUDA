@@ -51,6 +51,7 @@ fn conditional_assignment(scope: &Scope, initial: ConstantValue, changed: Consta
 #[test]
 fn mutable_const_expression_is_a_runtime_loop_bound() {
     let mut scope = Scope::root(false);
+    scope.register_type::<usize>(ruda_core::ir::UIntKind::U32.into());
     let condition = scope.create_local(ElemType::Bool.into()).into();
     split_bound::expand(&mut scope, 1216, 64, condition);
     let target = conditional_assignment(&scope, ConstantValue::UInt(19), ConstantValue::UInt(18));

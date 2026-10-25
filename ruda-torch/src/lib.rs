@@ -564,16 +564,31 @@ fn convert(a: &View, out: &View) {
     }
     if a.dtype >= 9 || out.dtype >= 9 { scientific::convert(a,out);finish_dispatch(&client());return; }
     let client = client();
+    let contiguous_input = a.is_contiguous();
+    let packed_rows = !contiguous_input
+        && a.shape.last().is_some_and(|size| *size > 0 && size % 4 == 0)
+        && a.strides.last() == Some(&1)
+        && a.shape.iter().zip(&a.strides).take(a.shape.len().saturating_sub(1))
+            .all(|(&size, &stride)| size <= 1 || stride % 4 == 0)
+        && a.shape.iter().zip(&a.strides).try_fold(1usize, |span, (&size, &stride)| {
+            size.saturating_sub(1).checked_mul(stride).and_then(|v| span.checked_add(v))
+        }).is_some_and(|span| span <= u32::MAX as usize);
     if a.dtype <= 2 && out.dtype <= 2 && out.len % 4 == 0 && out.len <= u32::MAX as usize
-        && a.is_contiguous() && out.is_contiguous()
+        && (contiguous_input || packed_rows) && out.is_contiguous()
         && a.handle.offset_start.unwrap_or(0) % (4 * element_bytes(a.dtype)) as u64 == 0
         && out.handle.offset_start.unwrap_or(0) % (4 * element_bytes(out.dtype)) as u64 == 0
     {
         macro_rules! packed {
             ($i:ty, $o:ty) => { unsafe {
-                kernels::convert_contiguous::launch_unchecked::<$i, $o, CudaRuntime>(
-                    &client, RudaCount::Static(out.len.div_ceil(512) as u32, 1, 1), RudaDim::new_1d(128),
-                    primitives::tensor(a).into_array_arg(), primitives::tensor(out).into_array_arg());
+                if contiguous_input {
+                    kernels::convert_contiguous::launch_unchecked::<$i, $o, CudaRuntime>(
+                        &client, RudaCount::Static(out.len.div_ceil(512) as u32, 1, 1), RudaDim::new_1d(128),
+                        primitives::tensor(a).into_array_arg(), primitives::tensor(out).into_array_arg());
+                } else {
+                    kernels::convert_rows::launch_unchecked::<$i, $o, CudaRuntime>(
+                        &client, RudaCount::Static(out.len.div_ceil(512) as u32, 1, 1), RudaDim::new_1d(128),
+                        a.arg(), primitives::tensor(out).into_array_arg());
+                }
             } };
         }
         match (a.dtype, out.dtype) {

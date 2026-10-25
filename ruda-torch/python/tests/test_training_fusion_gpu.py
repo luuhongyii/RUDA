@@ -23,6 +23,39 @@ def test_contiguous_conversion_preserves_strided_reference(source_dtype, target_
     assert torch.equal(torch.signbit(a[~torch.isnan(a)]), torch.signbit(b[~torch.isnan(b)]))
 
 
+@pytest.mark.parametrize('source_dtype', [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('target_dtype', [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('layout', ['transpose', 'padded', 'broadcast', 'offset', 'tail', 'unaligned_rows'])
+def test_row_vector_conversion_preserves_layout_and_rounding(source_dtype, target_dtype, layout):
+    torch.manual_seed(261035)
+    width = {'padded': 24, 'offset': 20, 'tail': 15, 'unaligned_rows': 19}.get(layout, 16)
+    host = torch.randn(1 if layout == 'broadcast' else 2, 3, 7, width, dtype=source_dtype)
+    host.flatten()[:8] = torch.tensor([0., -0., float('nan'), float('inf'), float('-inf'),
+                                     1.00390625, -1.00390625, 2. ** -24], dtype=source_dtype)
+    def view(x):
+        if layout == 'transpose':
+            return x.transpose(1, 2)
+        if layout == 'padded':
+            return x[..., 4:20]
+        if layout == 'broadcast':
+            return x.expand(2, 3, 7, 16)
+        if layout == 'offset':
+            return x[..., 1:17]
+        if layout == 'unaligned_rows':
+            return x[..., :16]
+        return x
+    source = view(host.to('ruda'))
+    expected = view(host).to(target_dtype)
+    output = torch.empty(source.shape, dtype=target_dtype, device='ruda')
+    output.copy_(source)
+    actual = output.cpu()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+    assert torch.equal(torch.signbit(actual[~torch.isnan(actual)]), torch.signbit(expected[~torch.isnan(expected)]))
+    fallback = view(host).unsqueeze(-1).expand(*source.shape, 2).contiguous().to('ruda')[..., 0]
+    output.copy_(fallback)
+    torch.testing.assert_close(actual, output.cpu(), rtol=0, atol=0, equal_nan=True)
+
+
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('operation', ['add', 'mul', 'neg'])
 @pytest.mark.parametrize('length,offset', [(512, 0), (512, 4), (513, 1), (512, 1)])
