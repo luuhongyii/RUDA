@@ -27,7 +27,12 @@ impl Statement {
                         Some(quote_spanned![as_const.span()=> #expand::from_lit(scope, #as_const)])
                     } else if let Some(as_const) = init.as_ref().and_then(|it| it.as_const(context))
                     {
-                        Some(quote_spanned![as_const.span()=> #as_const.clone()])
+                        let primitive = frontend_type("PrimitiveRuntime");
+                        let fallback = frontend_type("PrimitiveRuntimeFallback");
+                        Some(quote_spanned![as_const.span()=> {
+                            use #fallback as _;
+                            #primitive(#as_const.clone()).primitive_runtime(scope)
+                        }])
                     } else {
                         init.as_ref().map(|it| it.to_tokens(context))
                     }
