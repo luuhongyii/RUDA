@@ -5,6 +5,44 @@ from torch.nn import functional as F
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('source_dtype', [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('target_dtype', [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('length,offset', [(512, 0), (512, 4), (513, 1), (512, 1)])
+def test_contiguous_conversion_preserves_strided_reference(source_dtype, target_dtype, length, offset):
+    torch.manual_seed(261032)
+    host = torch.randn(length + offset, dtype=source_dtype)
+    host[offset:offset + 8] = torch.tensor([0., -0., float('nan'), float('inf'), float('-inf'),
+                                          1.00390625, -1.00390625, 2. ** -24], dtype=source_dtype)
+    packed = host.to('ruda')[offset:]
+    strided = host[:, None].expand(-1, 2).contiguous().to('ruda')[offset:, 0]
+    actual = torch.empty(length + offset, device='ruda', dtype=target_dtype)[offset:]
+    expected = torch.empty_like(actual)
+    actual.copy_(packed); expected.copy_(strided)
+    a, b = actual.cpu(), expected.cpu()
+    torch.testing.assert_close(a, b, rtol=0, atol=0, equal_nan=True)
+    assert torch.equal(torch.signbit(a[~torch.isnan(a)]), torch.signbit(b[~torch.isnan(b)]))
+
+
+@pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('operation', ['add', 'mul', 'neg'])
+@pytest.mark.parametrize('length,offset', [(512, 0), (512, 4), (513, 1), (512, 1)])
+def test_contiguous_arithmetic_preserves_strided_reference(dtype, operation, length, offset):
+    torch.manual_seed(261033)
+    hosts = [torch.randn(length + offset, dtype=dtype) for _ in range(2)]
+    hosts[0][offset:offset + 6] = torch.tensor([0., -0., float('nan'), float('inf'), float('-inf'), 2. ** -24], dtype=dtype)
+    values = [x.to('ruda')[offset:] for x in hosts]
+    strided = [x[:, None].expand(-1, 2).contiguous().to('ruda')[offset:, 0] for x in hosts]
+    def run(x, y, out=None):
+        if operation == 'add':
+            return torch.add(x, y, alpha=1. / 3., out=out)
+        return torch.mul(x, y, out=out) if operation == 'mul' else torch.neg(x, out=out)
+    a, b = run(*values).cpu(), run(*strided).cpu()
+    torch.testing.assert_close(a, b, rtol=0, atol=0, equal_nan=True)
+    assert torch.equal(torch.signbit(a[~torch.isnan(a)]), torch.signbit(b[~torch.isnan(b)]))
+    a, b = run(*values, out=values[0]).cpu(), run(*strided, out=strided[0]).cpu()
+    torch.testing.assert_close(a, b, rtol=0, atol=0, equal_nan=True)
+
+
 @pytest.mark.parametrize('column_major', [False, True])
 @pytest.mark.parametrize('transpose_a', [False, True])
 @pytest.mark.parametrize('shape', [(512, 3584, 16), (512, 18944, 16), (32, 152064, 16),

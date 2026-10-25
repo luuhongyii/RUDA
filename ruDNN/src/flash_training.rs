@@ -17,7 +17,11 @@ pub fn forward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
     let kv_base = (batch * kv_heads as usize + head / (heads / kv_heads) as usize) * 512;
     let def = MmaDefinition::<F,F,f32>::new(16usize,8usize,16usize);
     let mut scores = SharedMemory::<f32>::new(1024usize);
-    let mut probability = SharedMemory::<F>::new(1024usize);
+    let mut probability = SharedMemory::<F>::new_aligned(1024usize, 16usize);
+    let mut q_tile = SharedMemory::<F>::new_aligned(16usize * 136, 16usize);
+    let mut k_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
+    let mut v_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
+    backward::stage(q, &mut q_tile, row_base, 16usize);
     let mut partial = SharedMemory::<f32>::new(64usize);
     let mut factors = SharedMemory::<f32>::new(48usize);
     let mut output_acc = Array::<Vector<f32,Const<2>>>::new(8usize);
@@ -33,35 +37,20 @@ pub fn forward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
     sync_ruda();
     for step in 0usize..blocks {
         let block = blocks - 1 - step;
+        backward::stage(k, &mut k_tile, kv_base + block * 64, 64usize);
+        backward::stage(v, &mut v_tile, kv_base + block * 64, 64usize);
+        sync_ruda();
         #[unroll]
         for tile in 0usize..2 {
-            let mut a = Array::<Vector<F,Const<2>>>::new(4usize);
-            let mut b = Array::<Vector<F,Const<2>>>::new(2usize);
             let mut acc = Array::<Vector<f32,Const<2>>>::new(2usize);
             #[unroll]
             for i in 0usize..2 { acc[i] = Vector::new(0.0f32); }
             #[unroll]
             for chunk in 0usize..8 {
-                #[unroll]
-                for i in 0usize..4 {
-                    let mut value = Vector::<F,Const<2>>::new(F::cast_from(0.0f32));
-                    #[unroll]
-                    for j in 0usize..2 {
-                        let (r,c) = def.position_of_nth(lane as u32,(i*2+j) as u32,MatrixIdent::A);
-                        value[j] = q[(row_base+r as usize)*128+chunk*16+c as usize];
-                    }
-                    a[i] = value;
-                }
-                #[unroll]
-                for i in 0usize..2 {
-                    let mut value = Vector::<F,Const<2>>::new(F::cast_from(0.0f32));
-                    #[unroll]
-                    for j in 0usize..2 {
-                        let (r,c) = def.position_of_nth(lane as u32,(i*2+j) as u32,MatrixIdent::B);
-                        value[j] = k[(kv_base+block*64+warp*16+tile*8+c as usize)*128+chunk*16+r as usize];
-                    }
-                    b[i] = value;
-                }
+                let a_start = (lane % 16) * 136 + chunk * 16 + (lane / 16) * 8;
+                let b_start = (warp * 16 + tile * 8 + lane % 8) * 136 + chunk * 16 + (lane / 8 % 2) * 8;
+                let a = def.load_matrix::<_, Const<2>>(&q_tile.slice(a_start, a_start + 8), MatrixIdent::A, 4usize, false);
+                let b = def.load_matrix::<_, Const<2>>(&k_tile.slice(b_start, b_start + 8), MatrixIdent::B, 2usize, false);
                 let result = def.execute(&a,&b,&acc);
                 #[unroll]
                 for i in 0usize..2 { acc[i] = result[i]; }
@@ -129,28 +118,10 @@ pub fn forward<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>,
             }
             #[unroll]
             for chunk in 0usize..4 {
-                let mut a = Array::<Vector<F,Const<2>>>::new(4usize);
-                let mut b = Array::<Vector<F,Const<2>>>::new(2usize);
-                #[unroll]
-                for i in 0usize..4 {
-                    let mut value = Vector::<F,Const<2>>::new(F::cast_from(0.0f32));
-                    #[unroll]
-                    for j in 0usize..2 {
-                        let (r,c) = def.position_of_nth(lane as u32,(i*2+j) as u32,MatrixIdent::A);
-                        value[j] = probability[r as usize*64+chunk*16+c as usize];
-                    }
-                    a[i] = value;
-                }
-                #[unroll]
-                for i in 0usize..2 {
-                    let mut value = Vector::<F,Const<2>>::new(F::cast_from(0.0f32));
-                    #[unroll]
-                    for j in 0usize..2 {
-                        let (r,c) = def.position_of_nth(lane as u32,(i*2+j) as u32,MatrixIdent::B);
-                        value[j] = v[(kv_base+block*64+chunk*16+r as usize)*128+warp*32+tile*8+c as usize];
-                    }
-                    b[i] = value;
-                }
+                let a_start = (lane % 16) * 64 + chunk * 16 + (lane / 16) * 8;
+                let b_start = (chunk * 16 + lane % 16) * 136 + warp * 32 + tile * 8;
+                let a = def.load_matrix::<_, Const<2>>(&probability.slice(a_start, a_start + 8), MatrixIdent::A, 4usize, false);
+                let b = def.load_matrix::<_, Const<2>>(&v_tile.slice(b_start, b_start + 8), MatrixIdent::B, 2usize, true);
                 let result = def.execute(&a,&b,&acc);
                 #[unroll]
                 for i in 0usize..2 { acc[i] = result[i]; }

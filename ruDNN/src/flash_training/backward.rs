@@ -4,7 +4,7 @@ use ruda_kernel::dsl::{cmma::MmaDefinition, ir::MatrixIdent, prelude::*};
 use crate::dense_attention::flash_exp2;
 
 #[ruda]
-fn stage<F: Float>(input: &Array<F>, tile: &mut SharedMemory<F>, row: usize, #[comptime] rows: usize) {
+pub(super) fn stage<F: Float>(input: &Array<F>, tile: &mut SharedMemory<F>, row: usize, #[comptime] rows: usize) {
     let thread = UNIT_POS as usize;
     for block in 0usize..rows / 4 {
         #[unroll]
@@ -26,28 +26,10 @@ fn dot_tile<F: Float>(a: &SharedMemory<F>, b: &SharedMemory<F>, tile: &mut Share
         for i in 0usize..2 { acc[i] = Vector::new(0.0f32); }
         #[unroll]
         for chunk in 0usize..8 {
-            let mut ar = Array::<Vector<F, Const<2>>>::new(4usize);
-            let mut br = Array::<Vector<F, Const<2>>>::new(2usize);
-            #[unroll]
-            for i in 0usize..4 {
-                let mut value = Vector::<F, Const<2>>::empty();
-                #[unroll]
-                for j in 0usize..2 {
-                    let (r, c) = def.position_of_nth(lane as u32, (i * 2 + j) as u32, MatrixIdent::A);
-                    value[j] = a[r as usize * 136 + chunk * 16 + c as usize];
-                }
-                ar[i] = value;
-            }
-            #[unroll]
-            for i in 0usize..2 {
-                let mut value = Vector::<F, Const<2>>::empty();
-                #[unroll]
-                for j in 0usize..2 {
-                    let (r, c) = def.position_of_nth(lane as u32, (i * 2 + j) as u32, MatrixIdent::B);
-                    value[j] = b[(warp * 16 + col * 8 + c as usize) * 136 + chunk * 16 + r as usize];
-                }
-                br[i] = value;
-            }
+            let a_start = (lane % 16) * 136 + chunk * 16 + (lane / 16) * 8;
+            let b_start = (warp * 16 + col * 8 + lane % 8) * 136 + chunk * 16 + (lane / 8 % 2) * 8;
+            let ar = def.load_matrix::<_, Const<2>>(&a.slice(a_start, a_start + 8), MatrixIdent::A, 4usize, false);
+            let br = def.load_matrix::<_, Const<2>>(&b.slice(b_start, b_start + 8), MatrixIdent::B, 2usize, false);
             let value = def.execute(&ar, &br, &acc);
             #[unroll]
             for i in 0usize..2 { acc[i] = value[i]; }
@@ -76,28 +58,10 @@ fn contract_tile<F: Float>(weights: &SharedMemory<F>, input: &SharedMemory<F>,
         for i in 0usize..2 { cv[i] = acc[col * 2 + i]; }
         #[unroll]
         for chunk in 0usize..4 {
-            let mut ar = Array::<Vector<F, Const<2>>>::new(4usize);
-            let mut br = Array::<Vector<F, Const<2>>>::new(2usize);
-            #[unroll]
-            for i in 0usize..4 {
-                let mut value = Vector::<F, Const<2>>::empty();
-                #[unroll]
-                for j in 0usize..2 {
-                    let (r, c) = def.position_of_nth(lane as u32, (i * 2 + j) as u32, MatrixIdent::A);
-                    value[j] = weights[r as usize * 64 + chunk * 16 + c as usize];
-                }
-                ar[i] = value;
-            }
-            #[unroll]
-            for i in 0usize..2 {
-                let mut value = Vector::<F, Const<2>>::empty();
-                #[unroll]
-                for j in 0usize..2 {
-                    let (r, c) = def.position_of_nth(lane as u32, (i * 2 + j) as u32, MatrixIdent::B);
-                    value[j] = input[(chunk * 16 + r as usize) * 136 + warp * 32 + col * 8 + c as usize];
-                }
-                br[i] = value;
-            }
+            let a_start = (lane % 16) * 64 + chunk * 16 + (lane / 16) * 8;
+            let b_start = (chunk * 16 + lane % 16) * 136 + warp * 32 + col * 8;
+            let ar = def.load_matrix::<_, Const<2>>(&weights.slice(a_start, a_start + 8), MatrixIdent::A, 4usize, false);
+            let br = def.load_matrix::<_, Const<2>>(&input.slice(b_start, b_start + 8), MatrixIdent::B, 2usize, true);
             let value = def.execute(&ar, &br, &cv);
             #[unroll]
             for i in 0usize..2 { cv[i] = value[i]; }
@@ -134,11 +98,11 @@ pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>
     let batch = row / (512 * heads as usize);
     let key = (batch * kv_heads as usize + head / (heads / kv_heads) as usize) * 512;
     let mut scores = SharedMemory::<f32>::new(2048usize);
-    let mut ds = SharedMemory::<F>::new(1024usize);
-    let mut q_tile = SharedMemory::<F>::new(16usize * 136);
-    let mut g_tile = SharedMemory::<F>::new(16usize * 136);
-    let mut k_tile = SharedMemory::<F>::new(64usize * 136);
-    let mut v_tile = SharedMemory::<F>::new(64usize * 136);
+    let mut ds = SharedMemory::<F>::new_aligned(1024usize, 16usize);
+    let mut q_tile = SharedMemory::<F>::new_aligned(16usize * 136, 16usize);
+    let mut g_tile = SharedMemory::<F>::new_aligned(16usize * 136, 16usize);
+    let mut k_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
+    let mut v_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
     stage(q, &mut q_tile, row, 16usize);
     stage(grad, &mut g_tile, row, 16usize);
     let mut acc = Array::<Vector<f32, Const<2>>>::new(8usize);
@@ -208,12 +172,12 @@ fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arr
     let batch = key / (512 * kv_heads as usize);
     let group = (heads / kv_heads) as usize;
     let mut scores = SharedMemory::<f32>::new(2048usize);
-    let mut ds = SharedMemory::<F>::new(1024usize);
-    let mut probability = SharedMemory::<F>::new(1024usize);
-    let mut k_tile = SharedMemory::<F>::new(16usize * 136);
-    let mut v_tile = SharedMemory::<F>::new(16usize * 136);
-    let mut q_tile = SharedMemory::<F>::new(64usize * 136);
-    let mut g_tile = SharedMemory::<F>::new(64usize * 136);
+    let mut ds = SharedMemory::<F>::new_aligned(1024usize, 16usize);
+    let mut probability = SharedMemory::<F>::new_aligned(1024usize, 16usize);
+    let mut k_tile = SharedMemory::<F>::new_aligned(16usize * 136, 16usize);
+    let mut v_tile = SharedMemory::<F>::new_aligned(16usize * 136, 16usize);
+    let mut q_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
+    let mut g_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
     stage(k, &mut k_tile, key, 16usize);
     stage(v, &mut v_tile, key, 16usize);
     let mut sum_k = Array::<Vector<f32, Const<2>>>::new(8usize);

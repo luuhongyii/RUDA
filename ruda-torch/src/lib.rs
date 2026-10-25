@@ -214,6 +214,15 @@ fn element_bytes(dtype: u32) -> usize {
 }
 
 impl View {
+    fn is_contiguous(&self) -> bool {
+        let mut stride = 1usize;
+        for (&size, &actual) in self.shape.iter().zip(&self.strides).rev() {
+            if size > 1 && stride != actual { return false; }
+            let Some(next) = stride.checked_mul(size) else { return false; };
+            stride = next;
+        }
+        true
+    }
     fn arg(&self) -> TensorArg<CudaRuntime> {
         unsafe { TensorArg::from_raw_parts(self.handle.clone(), self.strides.clone().into(), self.shape.clone().into()) }
     }
@@ -555,6 +564,28 @@ fn convert(a: &View, out: &View) {
     }
     if a.dtype >= 9 || out.dtype >= 9 { scientific::convert(a,out);finish_dispatch(&client());return; }
     let client = client();
+    if a.dtype <= 2 && out.dtype <= 2 && out.len % 4 == 0 && out.len <= u32::MAX as usize
+        && a.is_contiguous() && out.is_contiguous()
+        && a.handle.offset_start.unwrap_or(0) % (4 * element_bytes(a.dtype)) as u64 == 0
+        && out.handle.offset_start.unwrap_or(0) % (4 * element_bytes(out.dtype)) as u64 == 0
+    {
+        macro_rules! packed {
+            ($i:ty, $o:ty) => { unsafe {
+                kernels::convert_contiguous::launch_unchecked::<$i, $o, CudaRuntime>(
+                    &client, RudaCount::Static(out.len.div_ceil(512) as u32, 1, 1), RudaDim::new_1d(128),
+                    primitives::tensor(a).into_array_arg(), primitives::tensor(out).into_array_arg());
+            } };
+        }
+        match (a.dtype, out.dtype) {
+            (0, 0) => packed!(f32, f32), (0, 1) => packed!(f32, f16), (0, 2) => packed!(f32, bf16),
+            (1, 0) => packed!(f16, f32), (1, 1) => packed!(f16, f16), (1, 2) => packed!(f16, bf16),
+            (2, 0) => packed!(bf16, f32), (2, 1) => packed!(bf16, f16), (2, 2) => packed!(bf16, bf16),
+            _ => unreachable!(),
+        }
+        finish_dispatch(&client);
+        LAUNCHES.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     let byte_work = a.dtype >= 3 && out.dtype >= 3;
     let work = if byte_work { out.len.checked_mul(element_bytes(out.dtype)).expect("byte length overflow") } else { out.len };
     let count = u32::try_from(work.div_ceil(128)).expect("launch grid overflow");

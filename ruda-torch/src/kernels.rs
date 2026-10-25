@@ -62,6 +62,14 @@ pub fn convert<I: Numeric + RudaElement, O: Numeric + RudaElement>(a: &Tensor<I>
     }
 }
 
+#[ruda(launch_unchecked)]
+pub fn convert_contiguous<I: Float + RudaElement, O: Float + RudaElement>(
+    a: &Array<Vector<I, Const<4>>>, out: &mut Array<Vector<O, Const<4>>>,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() { out[pos] = Vector::cast_from(a[pos]); }
+}
+
 #[ruda]
 fn broadcast_offset<F: Numeric>(input: &Tensor<F>, output: &Tensor<F>, position: usize) -> usize {
     let mut remaining = position;
