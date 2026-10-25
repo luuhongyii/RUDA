@@ -303,9 +303,8 @@ pub unsafe extern "C" fn ruda_torch_cuda_device_index(index: *mut u32) -> i32 {
 pub unsafe extern "C" fn ruda_torch_alloc(bytes: usize, allocation: *mut *mut Allocation, ptr: *mut u64) -> i32 {
     checked(|| {
         let client = client();
-        let handle = client.empty(bytes.max(4));
-        let resource = client.get_resource(handle.clone()).expect("RUDA CUDA allocation failed");
-        // get_resource runs on the owning device service and returns the
+        let (handle, resource) = client.try_empty_with_resource(bytes.max(4)).expect("RUDA CUDA allocation failed");
+        // Allocation and lookup run on the owning device service and return the
         // stream-ordered allocation pointer. In opt-in async mode subsequent
         // RUDA bindings/stream events protect its use; do not drain this queue
         // for every freshly allocated PyTorch output tensor.

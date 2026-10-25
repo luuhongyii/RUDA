@@ -636,11 +636,35 @@ impl<R: Runtime> ComputeClient<R> {
 
     /// Reserve a buffer and wait for its allocation result, without copying its bytes.
     pub fn try_empty(&self, size: usize) -> Result<Handle, ServerError> {
+        self.try_empty_with_resource(size).map(|(handle, _)| handle)
+    }
+
+    /// Reserve a buffer and resolve its resource in one device-service command.
+    /// The returned resource retains the same storage lease as [`Self::get_resource`].
+    pub fn try_empty_with_resource(
+        &self,
+        size: usize,
+    ) -> Result<
+        (Handle, ManagedResource<<<R::Server as ComputeServer>::Storage as ComputeStorage>::Resource>),
+        ServerError,
+    > {
         let shape: Shape = [size].into();
         let descriptor = MemoryLayoutDescriptor::new(MemoryLayoutStrategy::Contiguous, shape, 1);
-        let handle = self.do_empty(vec![descriptor])?.remove(0).memory;
-        self.get_resource(handle.clone())?;
-        Ok(handle)
+        let stream_id = self.stream_id();
+        let (base, mut layouts) = self.utilities.layout_policy.apply(self.service_id(), stream_id, &[descriptor]);
+        let handle = layouts.remove(0).memory;
+        let binding = handle.clone().binding();
+        self.local(&binding)?;
+        let (size, memory) = (base.size(), base.memory);
+        let resource = self.device.submit_blocking(move |server| {
+            server.initialize_memory(memory, size, stream_id);
+            if let Some(error) = binding.failure() { return Err(error); }
+            server.get_resource(binding, stream_id)
+        }).map_err(|error| ServerError::Generic {
+            reason: format!("Allocation resource lookup failed: {error:?}"),
+            backtrace: BackTrace::capture(),
+        })??;
+        Ok((handle, resource))
     }
 
     /// Reserves `shape` in the storage, and returns a tensor handle for it.
