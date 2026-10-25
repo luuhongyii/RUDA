@@ -72,14 +72,20 @@ pub(super) fn serial_k3<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, partia
 
 #[allow(unsafe_code)]
 pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>,
-    last_k: usize, bm: usize, bn: usize, bk: usize, asynchronous: bool) -> Result<RudaTensor<R>, String> {
+    last_k: usize, bm: usize, bn: usize, bk: usize, asynchronous: bool, warp_m: usize) -> Result<RudaTensor<R>, String> {
     let d = a.meta.num_dims() - 2;
     let (m, k, n) = (a.meta.shape()[d], a.meta.shape()[d+1], b.meta.shape()[d+1]);
     if m % bm != 0 || n % bn != 0 { return Err("training tile does not divide the output geometry".into()); }
     if k % bk != 0 || last_k == 0 || last_k > k || last_k % bk != 0 {
         return Err("training K tile does not divide the reduction".into());
     }
-    if bn * bk % (bm * 16) != 0 { return Err("training B tile does not divide the cooperative load".into()); }
+    if !matches!(warp_m, 32 | 64) || bm % warp_m != 0 {
+        return Err("training warp tile does not divide the block rows".into());
+    }
+    let threads = bm / warp_m * 64;
+    if bm * bk % (threads * 8) != 0 || bn * bk % (threads * 8) != 0 {
+        return Err("training tile does not divide the cooperative load".into());
+    }
     let ta = a.meta.strides()[d] == 1;
     let nt = b.meta.strides()[d] == 1;
     let lda = if ta { a.meta.strides()[d+1] } else { a.meta.strides()[d] };
@@ -87,6 +93,14 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     let batch = if d == 0 { 1 } else { a.meta.shape()[0] };
     let a_batch = if d == 0 { 0 } else { a.meta.strides()[0] };
     let b_batch = if d == 0 { 0 } else { b.meta.strides()[0] };
+    let a_stage = if ta { bk * (bm / 8 + 1) } else { bm * (bk / 8 + 1) };
+    let b_stage = if nt { bn * (bk / 8 + 1) } else { bk * (bn / 8 + 1) };
+    let shared = (a_stage + b_stage) * (if asynchronous { 2 } else { 1 }) * 16
+        + threads / 32 * 256 * 4 + 32;
+    if shared > a.client.properties().hardware.max_shared_memory_size
+        || threads > a.client.properties().hardware.max_units_per_ruda as usize {
+        return Err("training tile exceeds the device block resources".into());
+    }
     if n / bn * (m / bm) > a.client.properties().hardware.max_ruda_count.0 as usize {
         return Err("training output grid exceeds the device limit".into());
     }
@@ -97,9 +111,9 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     if d == 1 { left.meta.remove(0); right.meta.remove(0); }
     left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
     right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
-    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d((bm * 2) as u32),
+    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
         left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, ta, nt,
-        m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous,
+        m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m,
         DType::BF16.into(), out.dtype.into()); }
     Ok(out)
 }
@@ -111,6 +125,7 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
     #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
+    #[comptime] warp_m: usize,
     #[define(F)] _input: StorageType, #[define(O)] _output: StorageType) {
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
@@ -118,23 +133,23 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
     // Adjacent CTAs reuse the weight tile; smaller tiles keep serial-K views occupied.
     let row = RUDA_POS_X as usize % (m / bm) * bm;
     let col = RUDA_POS_X as usize / (m / bm) * bn;
-    let wm = warp / 2 * 32;
+    let wm = warp / 2 * warp_m;
     let wn = warp % 2 * (bn / 2);
     let banks = comptime!(if asynchronous { 2usize } else { 1usize });
     let a_stage = comptime!(if ta { bk * (bm / 8 + 1) } else { bm * (bk / 8 + 1) });
     let b_stage = comptime!(if nt { bn * (bk / 8 + 1) } else { bk * (bn / 8 + 1) });
     let mut sa = SharedMemory::<Vector<F, Const<8>>>::new_aligned(a_stage * banks, 32usize);
     let mut sb = SharedMemory::<Vector<F, Const<8>>>::new_aligned(b_stage * banks, 32usize);
-    let mut epilogue = SharedMemory::<f32>::new_aligned(bm * 16, 32usize);
+    let mut epilogue = SharedMemory::<f32>::new_aligned(bm / warp_m * 512usize, 32usize);
     let loaded = Barrier::shared(RUDA_DIM, UNIT_POS == 0);
     let mut acc = Sequence::<cmma::Matrix<f32>>::new();
     #[unroll]
-    for _ in 0usize..(bn / 16) {
+    for _ in 0usize..(warp_m / 16 * (bn / 32)) {
         acc.push(cmma::Matrix::<f32>::from_value(cmma::MatrixIdent::Accumulator,
             16usize, 16usize, 16usize, cmma::MatrixLayout::Undefined, 0.0f32));
     }
     if comptime!(asynchronous) {
-        load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
+        load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
         loaded.commit_copy_async();
     }
     let blocks = k / bk - usize::cast_from(RUDA_POS_Y as usize == batch - 1) * ((k - last_k) / bk);
@@ -143,11 +158,11 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
         if comptime!(asynchronous) {
             loaded.arrive_and_wait();
             if block + 1 < blocks {
-                load_stage(a, b, &mut sa, &mut sb, row, col, block + 1, 1 - bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
+                load_stage(a, b, &mut sa, &mut sb, row, col, block + 1, 1 - bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
                 loaded.commit_copy_async();
             }
         } else {
-            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
+            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
             sync_ruda();
         }
         #[unroll]
@@ -155,7 +170,7 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
             let mut ar = Sequence::<cmma::Matrix<Vector<F, Const<8>>>>::new();
             let mut br = Sequence::<cmma::Matrix<Vector<F, Const<8>>>>::new();
             #[unroll]
-            for i in 0usize..2 {
+            for i in 0usize..(warp_m / 16) {
                 if comptime!(ta) {
                     let offset = bank * a_stage + half * 16 * (bm / 8 + 1) + (wm + i * 16) / 8;
                     ar.push(cmma::Matrix::<Vector<F, Const<8>>>::from_slice(cmma::MatrixIdent::A,
@@ -183,7 +198,7 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
                 }
             }
             #[unroll]
-            for i in 0usize..2 {
+            for i in 0usize..(warp_m / 16) {
                 #[unroll]
                 for j in 0usize..(bn / 32) {
                     cmma::execute(&ar[i], &br[j], &acc[i * (bn / 32) + j], &acc[i * (bn / 32) + j]);
@@ -193,7 +208,7 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
         if comptime!(!asynchronous) { sync_ruda(); }
     }
     #[unroll]
-    for i in 0usize..2 {
+    for i in 0usize..(warp_m / 16) {
         #[unroll]
         for j in 0usize..(bn / 32) {
             cmma::store(&mut epilogue.slice_mut(warp * 256, warp * 256 + 256),
@@ -216,10 +231,12 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
     row: usize, col: usize, block: usize, bank: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] a_batch: usize, #[comptime] b_batch: usize,
-    #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool) {
+    #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
+    #[comptime] warp_m: usize) {
+    let threads = comptime!(bm / warp_m * 64);
     #[unroll]
-    for i in 0usize..(bk / 16) {
-        let p = UNIT_POS as usize + i * (bm * 2);
+    for i in 0usize..(bm * bk / (threads * 8)) {
+        let p = UNIT_POS as usize + i * threads;
         if comptime!(ta) {
             let source = (RUDA_POS_Y as usize * a_batch + (block * bk + p / (bm / 8)) * lda + row) / 8 + p % (bm / 8);
             let target = bank * bk * (bm / 8 + 1) + (p / (bm / 8)) * (bm / 8 + 1) + p % (bm / 8);
@@ -235,8 +252,8 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
         }
     }
     #[unroll]
-    for i in 0usize..(bn * bk / (bm * 16)) {
-        let p = UNIT_POS as usize + i * (bm * 2);
+    for i in 0usize..(bn * bk / (threads * 8)) {
+        let p = UNIT_POS as usize + i * threads;
         if comptime!(nt) {
             let source = (RUDA_POS_Y as usize * b_batch + (col + p / (bk / 8)) * ldb + block * bk) / 8 + p % (bk / 8);
             let target = bank * bn * (bk / 8 + 1) + (p / (bk / 8)) * (bk / 8 + 1) + p % (bk / 8);

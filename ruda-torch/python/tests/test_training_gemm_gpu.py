@@ -4,6 +4,37 @@ import torch
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('shape', [(256, 256, 128), (512, 512, 256)])
+@pytest.mark.parametrize('ta,nt', [(False, False), (False, True), (True, False), (True, True)])
+@pytest.mark.parametrize('precision', ['fp32', 'cuda'])
+def test_large_bf16_warp_tiles_keep_row_partition_results(shape, ta, nt, precision, monkeypatch):
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', precision)
+    torch.manual_seed(261044)
+    m, k, n = shape
+    a = torch.randn(2, k, m + 8, dtype=torch.bfloat16) if ta else torch.randn(2, m, k + 8, dtype=torch.bfloat16)
+    b = torch.randn(2, n, k + 8, dtype=torch.bfloat16) if nt else torch.randn(2, k, n + 8, dtype=torch.bfloat16)
+    x, y = a.to('ruda')[:, :, 8:], b.to('ruda')[:, :, 8:]
+    left, right = a[:, :, 8:].double(), b[:, :, 8:].double()
+    if ta:
+        x, left = x.transpose(1, 2), left.transpose(1, 2)
+    if nt:
+        y, right = y.transpose(1, 2), right.transpose(1, 2)
+    storage = torch.full((3, m, n), float('nan'), dtype=torch.float32, device='ruda')
+    output = storage[1:]
+    r._C.execute(30, x, y, output, 0.)
+    actual = output.cpu()
+    expected = (left @ right).float()
+    torch.testing.assert_close(actual, expected, rtol=1e-4, atol=2e-4)
+    assert float((actual.double() - expected.double()).norm() / expected.double().norm()) < 2e-6
+    for batch in range(2):
+        for start in range(0, m, 32):
+            small = torch.empty(32, n, dtype=torch.float32, device='ruda')
+            r._C.execute(7, x[batch, start:start + 32], y[batch], small, 0.)
+            torch.testing.assert_close(small.cpu(), actual[batch, start:start + 32], rtol=0, atol=0)
+    torch.testing.assert_close((x @ y).cpu(), actual.bfloat16(), rtol=0, atol=0)
+    assert torch.isnan(storage[0].cpu()).all()
+
+
 @pytest.mark.parametrize('nt', [False, True])
 @pytest.mark.parametrize('padded', [False, True])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
