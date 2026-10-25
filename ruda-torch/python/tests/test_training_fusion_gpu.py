@@ -36,6 +36,33 @@ def test_launch_metadata_eviction_preserves_inflight_outputs():
         torch.testing.assert_close(output.cpu(), host[:, :length], rtol=0, atol=0)
 
 
+def test_idempotent_stream_exchange_preserves_tls_and_rejects_invalid_ids():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    streams = [r.Stream(), r.Stream()]
+    barrier = Barrier(2)
+    previous = r.current_stream().stream_id
+    def worker(stream):
+        initial = r.current_stream().stream_id
+        with r.stream(stream):
+            barrier.wait()
+            for _ in range(16):
+                assert r._C.stream_command(2, stream.stream_id) == stream.stream_id
+                assert r.current_stream().stream_id == stream.stream_id
+            with pytest.raises(RuntimeError, match='invalid stream'):
+                r._C.stream_command(2, (1 << 63) - 1)
+            assert r.current_stream().stream_id == stream.stream_id
+            output = torch.ones(257, device='ruda') * 3
+        assert r.current_stream().stream_id == initial
+        return output
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outputs = list(executor.map(worker, streams))
+    assert r.current_stream().stream_id == previous
+    assert r._C.stream_command(2, previous) == previous
+    for output in outputs:
+        torch.testing.assert_close(output.cpu(), torch.full((257,), 3.0), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize('source_dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('target_dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('length,offset', [(512, 0), (512, 4), (513, 1), (512, 1)])
