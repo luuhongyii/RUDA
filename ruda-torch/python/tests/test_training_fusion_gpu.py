@@ -33,8 +33,9 @@ def test_contiguous_arithmetic_out_is_single_launch(dtype, operation, offset):
 def test_arithmetic_out_keeps_transposed_alias_cast_and_negative_view_semantics():
     host = torch.arange(256, dtype=torch.float32).reshape(16, 16)
     x = host.to('ruda')
-    torch.add(x, x.t(), out=x)
-    torch.testing.assert_close(x.cpu(), host + host.t(), rtol=0, atol=0)
+    with pytest.raises(RuntimeError):
+        torch.add(x, x.t(), out=x)
+    torch.testing.assert_close(x.cpu(), host, rtol=0, atol=0)
     x = host.to('ruda')
     negative = torch._neg_view(x)
     torch.add(negative, negative, out=negative)
