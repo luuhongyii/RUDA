@@ -4,7 +4,8 @@ use ruda_kernel::{dsl as kernel_dsl, dsl::{cmma, prelude::*}, tensor::RudaTensor
 /// Fixed-layout BF16 training GEMM. Accumulation stays FP32, in increasing K order.
 #[allow(unsafe_code)]
 pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: &RudaTensor<R>) -> bool {
-    if a.dtype != DType::BF16 || b.dtype != DType::BF16 || !matches!(out.dtype, DType::BF16 | DType::F32)
+    if R::name(&a.client) != "cuda"
+        || a.dtype != DType::BF16 || b.dtype != DType::BF16 || !matches!(out.dtype, DType::BF16 | DType::F32)
         || a.qparams.is_some() || b.qparams.is_some() || out.qparams.is_some()
         || a.meta.num_dims() != 2 || b.meta.num_dims() != 2 || out.meta.num_dims() != 2
         || !a.client.same_execution_queue(&b.client) || !a.client.same_execution_queue(&out.client)
