@@ -1,5 +1,5 @@
 use crate::dsl::prelude::*;
-use ruda_core::ir::{Branch, ConstantValue, Operation, Variable, VariableKind};
+use ruda_core::ir::{Branch, ConstantValue, ElemType, Operation, Variable, VariableKind};
 
 #[ruda]
 fn split_bound(#[comptime] k: usize, #[comptime] bk: usize, last: bool) -> usize {
@@ -52,7 +52,7 @@ fn conditional_assignment(scope: &Scope, initial: ConstantValue, changed: Consta
 fn mutable_const_expression_is_a_runtime_loop_bound() {
     let mut scope = Scope::root(false);
     let condition = scope.create_local(ElemType::Bool.into()).into();
-    split_bound::__expand(&mut scope, 1216, 64, condition);
+    split_bound::expand(&mut scope, 1216, 64, condition);
     let target = conditional_assignment(&scope, ConstantValue::UInt(19), ConstantValue::UInt(18));
     let bound = scope.instructions.iter().find_map(|inst| match &inst.operation {
         Operation::Branch(Branch::RangeLoop(branch)) => Some(branch.end),
@@ -65,17 +65,17 @@ fn mutable_const_expression_is_a_runtime_loop_bound() {
 fn mutable_const_parameters_and_folded_floats_keep_branch_updates() {
     let mut scope = Scope::root(false);
     let condition = scope.create_local(ElemType::Bool.into()).into();
-    parameter_bound::__expand(&mut scope, 11, condition);
+    parameter_bound::expand(&mut scope, 11, condition);
     conditional_assignment(&scope, ConstantValue::UInt(11), ConstantValue::UInt(7));
 
     let mut scope = Scope::root(false);
     let condition = scope.create_local(ElemType::Bool.into()).into();
-    float_bound::__expand(&mut scope, 2.0, condition);
+    float_bound::expand(&mut scope, 2.0, condition);
     conditional_assignment(&scope, ConstantValue::Float(4.0), ConstantValue::Float(-3.0));
 
     let mut scope = Scope::root(false);
     let condition = scope.create_local(ElemType::Bool.into()).into();
-    boolean_bound::__expand(&mut scope, true, condition);
+    boolean_bound::expand(&mut scope, true, condition);
     conditional_assignment(&scope, ConstantValue::Bool(true), ConstantValue::Bool(false));
 }
 
