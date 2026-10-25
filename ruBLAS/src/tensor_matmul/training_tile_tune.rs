@@ -70,7 +70,7 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("async_64x128x64", 64, 128, 64, true),
         ] {
             for manual in [false, true] {
-                set = set.with(Tunable::new(if manual { format!("mma_{name}") } else { name.into() },
+                set = set.with(Tunable::new(&if manual { format!("mma_{name}") } else { name.into() },
                     move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
                         super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, asynchronous, 32, manual)
                     }));
@@ -85,7 +85,7 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("async_wm64_256x64x64", 256, 64, 64),
         ] {
             for manual in [false, true] {
-                set = set.with(Tunable::new(if manual { format!("mma_{name}") } else { name.into() },
+                set = set.with(Tunable::new(&if manual { format!("mma_{name}") } else { name.into() },
                     move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
                         super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 64, manual)
                     }));
