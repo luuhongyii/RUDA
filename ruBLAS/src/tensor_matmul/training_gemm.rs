@@ -1,7 +1,8 @@
 use ruda_core::{ir::features::MmaConfig, tensor::DType};
-use ruda_kernel::{dsl as kernel_dsl, dsl::{cmma::MmaDefinition, ir::MatrixIdent, prelude::*}, tensor::RudaTensor};
+use ruda_kernel::{dsl as kernel_dsl, dsl::{cmma, prelude::*}, tensor::RudaTensor};
 
 /// Fixed-layout BF16 training GEMM. Accumulation stays FP32, in increasing K order.
+#[allow(unsafe_code)]
 pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: &RudaTensor<R>) -> bool {
     if a.dtype != DType::BF16 || b.dtype != DType::BF16 || !matches!(out.dtype, DType::BF16 | DType::F32)
         || a.qparams.is_some() || b.qparams.is_some() || out.qparams.is_some()
@@ -23,17 +24,18 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
         .and_then(|v| v.checked_add(if nt { k } else { n })) else { return false; };
     if a_span > u32::MAX as usize || b_span > u32::MAX as usize
         || m.checked_mul(n).is_none_or(|v| v > u32::MAX as usize)
-        || !a.client.features().matmul.mma.contains(&MmaConfig {
+        || !a.client.features().matmul.cmma.contains(&MmaConfig {
             a_type: DType::BF16.into(), b_type: DType::BF16.into(), cd_type: DType::F32.into(),
-            m: 16, n: 8, k: 16,
+            m: 16, n: 16, k: 16,
         })
     { return false; }
     // Array bindings must describe the physical span, including serial-K view gaps.
     let mut left = a.clone(); left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
     let mut right = b.clone(); right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
-    tiled::launch::<R>(&a.client, RudaCount::Static((n / 128 * 4) as u32, 1, 1), RudaDim::new_1d(256),
+    // Full tiles, aligned bindings and checked physical spans bound every access.
+    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / 128 * 4) as u32, 1, 1), RudaDim::new_1d(256),
         left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, nt,
-        DType::BF16.into(), out.dtype.into());
+        DType::BF16.into(), out.dtype.into()); }
     true
 }
 
@@ -50,12 +52,15 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
     let col = RUDA_POS_X as usize / 4 * 128;
     let wm = warp / 2 * 32;
     let wn = warp % 2 * 64;
-    let def = MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);
-    let mut sa = SharedMemory::<Vector<F, Const<8>>>::new_aligned(640usize, 16usize);
-    let mut sb = SharedMemory::<Vector<F, Const<8>>>::new_aligned(if nt { 640usize } else { 544usize }, 16usize);
-    let mut acc = Array::<Vector<f32, Const<2>>>::new(32usize);
+    let mut sa = SharedMemory::<Vector<F, Const<8>>>::new_aligned(640usize, 32usize);
+    let mut sb = SharedMemory::<Vector<F, Const<8>>>::new_aligned(if nt { 640usize } else { 544usize }, 32usize);
+    let mut epilogue = SharedMemory::<f32>::new_aligned(2048usize, 32usize);
+    let mut acc = Sequence::<cmma::Matrix<f32>>::new();
     #[unroll]
-    for i in 0usize..32 { acc[i] = Vector::new(0.0f32); }
+    for _ in 0usize..8 {
+        acc.push(cmma::Matrix::<f32>::from_value(cmma::MatrixIdent::Accumulator,
+            16usize, 16usize, 16usize, cmma::MatrixLayout::Undefined, 0.0f32));
+    }
     for block in 0usize..k / 32 {
         #[unroll]
         for i in 0usize..2 {
@@ -70,37 +75,34 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
         sync_ruda();
         #[unroll]
         for half in 0usize..2 {
-            let mut ar = Array::<Vector<F, Const<2>>>::new(8usize);
-            let mut br = Array::<Vector<F, Const<2>>>::new(16usize);
+            let mut ar = Sequence::<cmma::Matrix<Vector<F, Const<8>>>>::new();
+            let mut br = Sequence::<cmma::Matrix<Vector<F, Const<8>>>>::new();
             #[unroll]
             for i in 0usize..2 {
-                let offset = (wm + i * 16 + lane % 16) * 5 + half * 2 + lane / 16;
-                let fragment = def.load_matrix::<_, Const<2>>(&sa.slice(offset, offset + 1), MatrixIdent::A, 4usize, false);
-                #[unroll]
-                for j in 0usize..4 { ar[i * 4 + j] = fragment[j]; }
+                let offset = (wm + i * 16) * 5 + half * 2;
+                ar.push(cmma::Matrix::<Vector<F, Const<8>>>::from_slice(cmma::MatrixIdent::A,
+                    16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor,
+                    &sa.slice(offset, 640usize), 40u32));
             }
             #[unroll]
-            for i in 0usize..8 {
-                let mut offset = (wn + i * 8 + lane % 8) * 5 + half * 2 + (lane / 8) % 2;
-                if comptime!(!nt) { offset = (half * 16 + lane % 16) * 17 + wn / 8 + i; }
-                let fragment = def.load_matrix::<_, Const<2>>(&sb.slice(offset, offset + 1), MatrixIdent::B, 2usize, !nt);
-                #[unroll]
-                for j in 0usize..2 { br[i * 2 + j] = fragment[j]; }
+            for i in 0usize..4 {
+                if comptime!(nt) {
+                    let offset = (wn + i * 16) * 5 + half * 2;
+                    br.push(cmma::Matrix::<Vector<F, Const<8>>>::from_slice(cmma::MatrixIdent::B,
+                        16usize, 16usize, 16usize, cmma::MatrixLayout::ColMajor,
+                        &sb.slice(offset, 640usize), 40u32));
+                } else {
+                    let offset = half * 16 * 17 + wn / 8 + i * 2;
+                    br.push(cmma::Matrix::<Vector<F, Const<8>>>::from_slice(cmma::MatrixIdent::B,
+                        16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor,
+                        &sb.slice(offset, 544usize), 136u32));
+                }
             }
             #[unroll]
             for i in 0usize..2 {
-                let mut av = Array::<Vector<F, Const<2>>>::new(4usize);
                 #[unroll]
-                for t in 0usize..4 { av[t] = ar[i * 4 + t]; }
-                #[unroll]
-                for j in 0usize..8 {
-                    let mut bv = Array::<Vector<F, Const<2>>>::new(2usize);
-                    let mut cv = Array::<Vector<f32, Const<2>>>::new(2usize);
-                    #[unroll]
-                    for t in 0usize..2 { bv[t] = br[j * 2 + t]; cv[t] = acc[(i * 8 + j) * 2 + t]; }
-                    let value = def.execute(&av, &bv, &cv);
-                    #[unroll]
-                    for t in 0usize..2 { acc[(i * 8 + j) * 2 + t] = value[t]; }
+                for j in 0usize..4 {
+                    cmma::execute(&ar[i], &br[j], &acc[i * 4 + j], &acc[i * 4 + j]);
                 }
             }
         }
@@ -109,16 +111,17 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
     #[unroll]
     for i in 0usize..2 {
         #[unroll]
-        for j in 0usize..8 {
+        for j in 0usize..4 {
+            cmma::store(&mut epilogue.slice_mut(warp * 256, warp * 256 + 256),
+                &acc[i * 4 + j], 16u32, cmma::MatrixLayout::RowMajor);
+            sync_plane();
             #[unroll]
-            for t in 0usize..2 {
-                let value = acc[(i * 8 + j) * 2 + t];
-                #[unroll]
-                for v in 0usize..2 {
-                    let (r, c) = def.position_of_nth(lane as u32, (t * 2 + v) as u32, MatrixIdent::Accumulator);
-                    out[(row + wm + i * 16 + r as usize) * n + col + wn + j * 8 + c as usize] = O::cast_from(value[v]);
-                }
+            for t in 0usize..8 {
+                let pos = lane + t * 32;
+                out[(row + wm + i * 16 + pos / 16) * n + col + wn + j * 16 + pos % 16]
+                    = O::cast_from(epilogue[warp * 256 + pos]);
             }
+            sync_plane();
         }
     }
 }

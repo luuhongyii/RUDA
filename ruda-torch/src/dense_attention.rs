@@ -172,15 +172,15 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                             kernel::zero::launch::<CudaRuntime>(&c,
                                 RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
                         }
-                        rudnn::flash_training::backward::contraction::launch::<CudaRuntime>(&c,
+                        rudnn::flash_training::backward::contraction::launch_unchecked::<CudaRuntime>(&c,
                             RudaCount::Static((rows / 4) as u32,1,1),RudaDim::new_1d(128),
                             ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dtype.into());
-                        rudnn::flash_training::backward::query::launch::<CudaRuntime>(&c,
+                        rudnn::flash_training::backward::query::launch_unchecked::<CudaRuntime>(&c,
                             RudaCount::Static((rows / 16) as u32,1,1),RudaDim::new_1d(128),
                             qt.clone().into_array_arg(),kt.clone().into_array_arg(),vt.clone().into_array_arg(),
                             ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dqt.into_array_arg(),
                             h as u32,kh as u32,scale,causal,dtype.into());
-                        rudnn::flash_training::backward::key_value::launch::<CudaRuntime>(&c,
+                        rudnn::flash_training::backward::key_value::launch_unchecked::<CudaRuntime>(&c,
                             RudaCount::Static((k.len / 128 / 16) as u32,1,1),RudaDim::new_1d(128),
                             qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),ot.into_array_arg(),
                             st.into_array_arg(),ct.into_array_arg(),dkt.into_array_arg(),dvt.into_array_arg(),
