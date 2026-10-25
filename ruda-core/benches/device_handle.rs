@@ -48,6 +48,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         type_id: 0,
         index_id: 0,
     });
+    c.bench_function("device handle blocking round trip", |b| {
+        b.iter(|| black_box(device_handle.submit_blocking(|service| {
+            service.id += 1;
+            service.id
+        }).unwrap()))
+    });
     c.bench_function("device handle single thread", |b| {
         let device = device_handle.clone();
         b.iter(|| {

@@ -169,6 +169,13 @@ impl<S: DeviceService + 'static> ChannelDeviceHandle<S> {
         let mut slot = Some(move || sender.send(task()).unwrap());
         // Send the erased shim to the device thread.
         self.send::<_, SEND_FLUSH>(create_shim(&mut slot))?;
+        for _ in 0..1024 {
+            match recv.try_recv() {
+                Ok(value) => return Ok(value),
+                Err(oneshot::TryRecvError::Disconnected) => return Err(CallError),
+                Err(oneshot::TryRecvError::Empty) => core::hint::spin_loop(),
+            }
+        }
         recv.recv().map_err(|_| CallError)
     }
 
@@ -985,6 +992,26 @@ mod tests {
         fn utilities(&self) -> ServerUtilitiesHandle {
             Arc::new(())
         }
+    }
+
+    #[test]
+    fn test_blocking_reply_after_hot_wait_preserves_stack_borrows() {
+        let handle = ChannelDeviceHandle::<MockService>::new(DeviceId { type_id: 0, index_id: 12 });
+        let mut borrowed = [0usize; 4];
+        let result = handle.submit_blocking(|state| {
+            std::thread::sleep(Duration::from_millis(2));
+            borrowed.fill(17);
+            state.counter = borrowed.iter().sum();
+            state.counter
+        });
+        assert_eq!(result.unwrap(), 68);
+        assert_eq!(borrowed, [17; 4]);
+        let failure: Result<(), _> = handle.submit_blocking(|_| {
+            std::thread::sleep(Duration::from_millis(2));
+            panic!("delayed task failure");
+        });
+        assert!(failure.is_err());
+        assert_eq!(handle.submit_blocking(|state| state.counter).unwrap(), 68);
     }
 
     #[test]
