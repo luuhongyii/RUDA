@@ -60,6 +60,11 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
         unsafe { columns::launch_unchecked::<R>(&a.client, grid, RudaDim::new_1d(128),
             a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
             m, k, n, splits, a.meta.strides()[0], a.meta.strides()[1], b.meta.strides()[1]); }
+    } else if n == 16 && m % 16 == 0 && k % 512 == 0 && a.meta.strides()[0] == 1 {
+        unsafe { rows_transposed::launch_unchecked::<R>(&a.client,
+            RudaCount::Static((m / 16 * splits) as u32, 1, 1), RudaDim::new_1d(128),
+            a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
+            m, splits, a.meta.strides()[1], b.meta.strides()[0]); }
     } else {
         unsafe { rows::launch_unchecked::<R>(&a.client, grid, RudaDim::new_1d(128),
             a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
@@ -118,6 +123,34 @@ fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
         if lane < cols && col < n as usize {
             partial[(split * m as usize + row) * n as usize + col] = acc;
         }
+    }
+}
+
+#[ruda(launch_unchecked)]
+fn rows_transposed(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
+    #[comptime] m: usize, #[comptime] splits: usize, #[comptime] as1: usize, #[comptime] bs0: usize) {
+    let thread = UNIT_POS as usize;
+    let split = RUDA_POS_X as usize % splits;
+    let row = RUDA_POS_X as usize / splits * 16 + thread / 32 * 4 + thread % 4;
+    let parity = thread / 4 % 2;
+    let col = thread % 32 / 8 * 4;
+    let mut acc = Array::<f32>::new(4usize);
+    #[unroll]
+    for j in 0usize..4 { acc[j] = 0.0f32; }
+    // Keep the original even/odd FMA chains and split reduction order exactly.
+    for group in 0usize..64 {
+        #[unroll]
+        for i in 0usize..4 {
+            let inner = split * 512 + group * 8 + i * 2 + parity;
+            let value = a[row + inner * as1];
+            #[unroll]
+            for j in 0usize..4 { acc[j] = fma(value, b[inner * bs0 + col + j], acc[j]); }
+        }
+    }
+    #[unroll]
+    for j in 0usize..4 {
+        let sum = acc[j] + plane_shuffle_xor(acc[j], 4u32);
+        if parity == 0 { partial[(split * m + row) * 16 + col + j] = sum; }
     }
 }
 

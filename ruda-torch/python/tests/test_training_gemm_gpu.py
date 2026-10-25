@@ -7,10 +7,11 @@ import ruda_torch as r
 @pytest.mark.parametrize('nt', [False, True])
 @pytest.mark.parametrize('padded', [False, True])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
-def test_bf16_training_tile_layout(nt, padded, dtype, monkeypatch):
+@pytest.mark.parametrize('k', [32, 64, 96, 160])
+def test_bf16_training_tile_layout(nt, padded, dtype, k, monkeypatch):
     monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', 'cuda')
     torch.manual_seed(261025)
-    m, k, n = 512, 96, 256
+    m, n = 512, 256
     pad = 8 if padded else 0
     a = torch.randn(m, k + pad, dtype=torch.bfloat16)
     b = torch.randn(n, k + pad, dtype=torch.bfloat16) if nt else torch.randn(k, n + pad, dtype=torch.bfloat16)
@@ -52,3 +53,17 @@ def test_fp32_rank16_nonfinite_values():
     b[1, 1] = float('inf')
     b[2, 2] = float('-inf')
     torch.testing.assert_close((a.to('ruda') @ b.to('ruda').t()).cpu(), a @ b.t(), equal_nan=True)
+
+
+@pytest.mark.parametrize('m,k', [(16, 512), (64, 1024), (3584, 1536)])
+@pytest.mark.parametrize('padded', [False, True])
+def test_fp32_transposed_lora_gradient(m, k, padded):
+    torch.manual_seed(261027)
+    pad = 4 if padded else 0
+    a = torch.randn(k, m + pad)
+    b = torch.randn(k, 16 + pad)
+    x, y = a.to('ruda')[:, pad:].t(), b.to('ruda')[:, pad:]
+    reference = (a[:, pad:].double().t() @ b[:, pad:].double()).float()
+    actual = (x @ y).cpu()
+    torch.testing.assert_close(actual, reference, rtol=2e-4, atol=5e-5)
+    assert float((actual.double() - reference.double()).norm() / reference.double().norm()) < 1e-6
