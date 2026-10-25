@@ -164,6 +164,61 @@ std::tuple<at::Tensor,at::Tensor> training_silu_backward(const at::Tensor& gate,
   training_call(3,{gate,up,dy,need_gate?dg:gate,need_up?du:up},{need_gate?1.f:0.f,need_up?1.f:0.f});
   return {dg,du};
 }
+
+std::optional<at::Tensor> training_optional(const at::Tensor& value) {
+  return value.defined() ? std::optional<at::Tensor>(value) : std::nullopt;
+}
+std::tuple<std::optional<at::Tensor>,std::optional<at::Tensor>> training_rms_backward_op(
+    const at::Tensor& x,const std::optional<at::Tensor>& w,const at::Tensor& dy,
+    const at::Tensor& stats,bool need_x,bool need_w,bool hf) {
+  auto [dx,dw]=training_rms_backward_impl(x,w,dy,stats,need_x,need_w,hf);
+  return {training_optional(dx),training_optional(dw)};
+}
+std::tuple<std::optional<at::Tensor>,std::optional<at::Tensor>,std::optional<at::Tensor>> training_layer_backward_op(
+    const at::Tensor& x,const std::optional<at::Tensor>& w,const std::optional<at::Tensor>& b,
+    const at::Tensor& dy,const at::Tensor& mean,const at::Tensor& stats,bool need_x,bool need_w,bool need_b) {
+  auto [dx,dw,db]=training_layer_backward(x,w,b,dy,mean,stats,need_x,need_w,need_b);
+  return {training_optional(dx),training_optional(dw),training_optional(db)};
+}
+std::tuple<std::optional<at::Tensor>,std::optional<at::Tensor>> training_silu_backward_op(
+    const at::Tensor& gate,const at::Tensor& up,const at::Tensor& dy,bool need_gate,bool need_up) {
+  auto [dg,du]=training_silu_backward(gate,up,dy,need_gate,need_up);
+  return {training_optional(dg),training_optional(du)};
+}
+
+std::tuple<at::Tensor,at::Tensor> rotary_qk_forward(const at::Tensor& q,const at::Tensor& k,
+    const at::Tensor& cos,const at::Tensor& sin) {
+  auto oq=at::empty(q.sizes(),q.options()),ok=at::empty(k.sizes(),k.options());
+  scientific_call(652,{q,k,cos,sin,oq,ok},{},{});
+  return {oq,ok};
+}
+std::tuple<std::optional<at::Tensor>,std::optional<at::Tensor>> rotary_qk_backward(
+    const std::optional<at::Tensor>& dq,const std::optional<at::Tensor>& dk,
+    const at::Tensor& cos,const at::Tensor& sin,c10::SymIntArrayRef q_shape,c10::SymIntArrayRef k_shape) {
+  auto iq=dq ? *dq : cos.expand_symint(q_shape);
+  auto ik=dk ? *dk : cos.expand_symint(k_shape);
+  std::optional<at::Tensor> oq,ok;
+  if(dq) oq=at::empty_symint(q_shape,dq->options());
+  if(dk) ok=at::empty_symint(k_shape,dk->options());
+  scientific_call(653,{iq,ik,cos,sin,oq.value_or(iq),ok.value_or(ik)},
+      {int64_t(dq.has_value()),int64_t(dk.has_value())},{});
+  return {oq,ok};
+}
+
+std::tuple<at::Tensor,at::Tensor> cross_entropy_forward(const at::Tensor& logits,
+    const at::Tensor& targets,c10::SymInt ignore) {
+  auto losses=at::empty({logits.size(0)},logits.options().dtype(at::kFloat));
+  auto stats=at::empty({logits.size(0),2},logits.options().dtype(at::kFloat));
+  scientific_call(650,{logits,targets,losses,stats},{ignore.expect_int()},{});
+  return {losses,stats};
+}
+at::Tensor cross_entropy_backward(const at::Tensor& logits,const at::Tensor& targets,
+    const at::Tensor& stats,const at::Tensor& grad,c10::SymInt ignore) {
+  auto result=at::empty_like(logits);
+  scientific_call(651,{logits,targets,stats,grad,result},{ignore.expect_int()},{});
+  return result;
+}
+
 void training_unscale(std::vector<at::Tensor> grads,double inverse,at::Tensor workspace,at::Tensor found) {
   TORCH_CHECK(!grads.empty() && grads.size()<=4096,"unscale requires 1..4096 gradients");
   TORCH_CHECK(std::isfinite(inverse) && std::isfinite(float(inverse)) && float(inverse)>0,"inverse scale must be finite positive FP32");

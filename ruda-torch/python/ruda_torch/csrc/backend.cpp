@@ -784,6 +784,16 @@ TORCH_LIBRARY_IMPL(ruda, PrivateUse1, m) {
   m.impl("lora_epilogue_forward",lora_epilogue_forward);
   m.impl("lora_epilogue_backward",lora_epilogue_backward);
   m.impl("lora_rank16_residual",lora_rank16_residual);
+  m.impl("training_rms_forward",training_rms_forward_impl);
+  m.impl("training_rms_backward",training_rms_backward_op);
+  m.impl("training_layer_forward",training_layer_forward);
+  m.impl("training_layer_backward",training_layer_backward_op);
+  m.impl("training_silu_forward",training_silu_forward);
+  m.impl("training_silu_backward",training_silu_backward_op);
+  m.impl("rotary_qk_forward",rotary_qk_forward);
+  m.impl("rotary_qk_backward",rotary_qk_backward);
+  m.impl("cross_entropy_forward",cross_entropy_forward);
+  m.impl("cross_entropy_backward",cross_entropy_backward);
 }
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("addr", TORCH_FN(at::native::addr));
