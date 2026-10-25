@@ -60,16 +60,19 @@ fn conditional_assignment(scope: &Scope, initial: ConstantValue, changed: Consta
 
 #[test]
 fn mutable_const_expression_is_a_runtime_loop_bound() {
-    let mut scope = Scope::root(false);
-    scope.register_type::<usize>(ruda_core::ir::UIntKind::U32.into());
-    let condition = scope.create_local(ElemType::Bool.into()).into();
-    split_bound::expand(&mut scope, 1216, 64, condition);
-    let target = conditional_assignment(&scope, ConstantValue::UInt(19), ConstantValue::UInt(18));
-    let bound = scope.instructions.iter().find_map(|inst| match &inst.operation {
-        Operation::Branch(Branch::RangeLoop(branch)) => Some(branch.end),
-        _ => None,
-    }).expect("runtime loop must be present");
-    assert_eq!(bound, target);
+    for address in [ruda_core::ir::UIntKind::U32, ruda_core::ir::UIntKind::U64] {
+        let mut scope = Scope::root(false);
+        scope.register_type::<usize>(address.into());
+        let condition = scope.create_local(ElemType::Bool.into()).into();
+        split_bound::expand(&mut scope, 1216, 64, condition);
+        let target = conditional_assignment(&scope, ConstantValue::UInt(19), ConstantValue::UInt(18));
+        let bound = scope.instructions.iter().find_map(|inst| match &inst.operation {
+            Operation::Branch(Branch::RangeLoop(branch)) => Some(branch.end),
+            _ => None,
+        }).expect("runtime loop must be present");
+        assert_eq!(target.ty, ruda_core::ir::Type::from(address));
+        assert_eq!(bound, target);
+    }
 }
 
 #[test]

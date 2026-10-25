@@ -1,7 +1,7 @@
 use ruda_kernel::dsl::prelude::*;
 
 #[ruda]
-fn offset<F: Numeric>(tensor: &Tensor<F>, position: usize) -> usize {
+fn offset<F: RudaPrimitive>(tensor: &Tensor<F>, position: usize) -> usize {
     let mut remaining = position;
     let mut offset = 0usize;
     let mut dim = tensor.rank();

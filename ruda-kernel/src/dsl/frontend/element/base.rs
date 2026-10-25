@@ -244,9 +244,9 @@ pub struct ValueSnapshot<T>(pub T);
 #[doc(hidden)]
 pub struct PrimitiveRuntime<T>(pub T);
 
-impl<T: RudaPrimitive + IntoRuntime> PrimitiveRuntime<T> {
+impl<T: RudaPrimitive + Into<ConstantValue>> PrimitiveRuntime<T> {
     pub fn primitive_runtime(self, scope: &mut Scope) -> NativeExpand<T> {
-        self.0.__expand_runtime_method(scope)
+        NativeExpand::from_lit(scope, self.0)
     }
 }
 
