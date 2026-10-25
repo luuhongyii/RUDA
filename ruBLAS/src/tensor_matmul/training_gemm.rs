@@ -31,7 +31,7 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
     // Array bindings must describe the physical span, including serial-K view gaps.
     let mut left = a.clone(); left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
     let mut right = b.clone(); right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
-    tiled::launch::<R>(&a.client, RudaCount::Static((n / 128) as u32, 4, 1), RudaDim::new_1d(256),
+    tiled::launch::<R>(&a.client, RudaCount::Static((n / 128 * 4) as u32, 1, 1), RudaDim::new_1d(256),
         left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, nt,
         DType::BF16.into(), out.dtype.into());
     true
@@ -45,8 +45,9 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
     let warp = thread / 32;
-    let row = RUDA_POS_Y as usize * 128;
-    let col = RUDA_POS_X as usize * 128;
+    // Adjacent CTAs reuse the same weight tile across all four M blocks.
+    let row = RUDA_POS_X as usize % 4 * 128;
+    let col = RUDA_POS_X as usize / 4 * 128;
     let wm = warp / 2 * 32;
     let wn = warp % 2 * 64;
     let def = MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);

@@ -59,6 +59,40 @@ def test_flash_precision_rejects_unsupported_calls():
         r.scaled_dot_product_attention(q,q,q,precision='flash')
 
 
+@pytest.mark.parametrize('causal', [False, True])
+def test_flash_backward_explicit_scale_and_accumulation(tmp_path, causal):
+    torch.manual_seed(261027)
+    case = {name: torch.randn(1, heads, 512, 128, dtype=torch.bfloat16)
+            for name, heads in [('q', 4), ('k', 2), ('v', 2), ('dy', 4)]}
+    torch.save(case, tmp_path / 'case.pt')
+    code = '''
+import sys,torch
+from pathlib import Path
+from torch.nn import functional as F
+from torch.nn.attention import SDPBackend,sdpa_kernel
+p=Path(sys.argv[1]);case=torch.load(p/'case.pt',weights_only=True)
+values=[case[n].cuda().requires_grad_() for n in ('q','k','v')]
+with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+    y=F.scaled_dot_product_attention(*values,is_causal=sys.argv[2]=='True',scale=.2,enable_gqa=True)
+    y.backward(case['dy'].cuda(),retain_graph=True)
+    y.backward(case['dy'].cuda())
+torch.save([v.grad.cpu() for v in values],p/'expected.pt')
+'''
+    subprocess.run([sys.executable, '-c', code, str(tmp_path), str(causal)],
+                   check=True, capture_output=True, text=True)
+    values = [case[n].to('ruda').requires_grad_() for n in ('q', 'k', 'v')]
+    y = r.scaled_dot_product_attention(*values, is_causal=causal, scale=.2,
+                                      enable_gqa=True, precision='flash')
+    dy = case['dy'].to('ruda')
+    y.backward(dy, retain_graph=True)
+    y.backward(dy)
+    expected = torch.load(tmp_path / 'expected.pt', weights_only=True)
+    for value, ref in zip(values, expected):
+        a, b = value.grad.cpu().double(), ref.double()
+        assert torch.isfinite(a).all()
+        assert float((a - b).norm() / b.norm()) < .008
+
+
 @pytest.mark.parametrize('scale',[0.0,-.125])
 def test_transformers_keeps_fp32_path_for_nonpositive_scale(scale):
     from types import SimpleNamespace

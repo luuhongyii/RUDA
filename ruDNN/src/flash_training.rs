@@ -1,4 +1,5 @@
 //! Native SM80 BF16 forward with warp MMA and Flash storage boundaries.
+pub mod backward;
 use ruda_kernel::dsl as kernel_dsl;
 use ruda_kernel::dsl::{cmma::MmaDefinition, ir::MatrixIdent, prelude::*};
 use crate::dense_attention::{flash_exp2,flash_log};

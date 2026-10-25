@@ -166,6 +166,30 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                 let contraction = View::packed(c.empty(rows.checked_mul(4).expect("attention contraction overflow")), vec![rows], 0);
                 let ct = primitives::tensor(&contraction);
                 let dtype = match q.dtype {0=>DType::F32,1=>DType::F16,2=>DType::BF16,_=>unreachable!()};
+                if flash {
+                    unsafe {
+                        if dm.len != 0 {
+                            kernel::zero::launch::<CudaRuntime>(&c,
+                                RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
+                        }
+                        rudnn::flash_training::backward::contraction::launch::<CudaRuntime>(&c,
+                            RudaCount::Static((rows / 4) as u32,1,1),RudaDim::new_1d(128),
+                            ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dtype.into());
+                        rudnn::flash_training::backward::query::launch::<CudaRuntime>(&c,
+                            RudaCount::Static((rows / 16) as u32,1,1),RudaDim::new_1d(128),
+                            qt.clone().into_array_arg(),kt.clone().into_array_arg(),vt.clone().into_array_arg(),
+                            ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dqt.into_array_arg(),
+                            h as u32,kh as u32,scale,causal,dtype.into());
+                        rudnn::flash_training::backward::key_value::launch::<CudaRuntime>(&c,
+                            RudaCount::Static((k.len / 128 / 16) as u32,1,1),RudaDim::new_1d(128),
+                            qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),ot.into_array_arg(),
+                            st.into_array_arg(),ct.into_array_arg(),dkt.into_array_arg(),dvt.into_array_arg(),
+                            h as u32,kh as u32,scale,causal,dtype.into());
+                    }
+                    LAUNCHES.fetch_add(3 + u64::from(dm.len != 0),Ordering::Relaxed);
+                    finish_dispatch(&c);
+                    return;
+                }
                 unsafe {
                     if dm.len != 0 {
                         kernel::zero::launch::<CudaRuntime>(&c,
