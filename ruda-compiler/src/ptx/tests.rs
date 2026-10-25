@@ -13,6 +13,7 @@ mod bitwise;
 mod native_memory;
 mod training_math;
 mod vector_memory;
+mod unsigned_power2;
 mod scaled;
 
 fn options() -> PtxCompilationOptions {
