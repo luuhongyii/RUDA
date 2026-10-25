@@ -91,6 +91,38 @@ def test_ordered_bf16_tiles_general_shapes(shape, nt, precision, monkeypatch):
     torch.testing.assert_close((x @ y).cpu(), actual.cpu().bfloat16(), rtol=0, atol=0)
 
 
+@pytest.mark.parametrize('shape', [(32, 32, 32), (64, 96, 96), (96, 64, 160),
+                                   (128, 160, 32), (160, 96, 96), (256, 256, 512),
+                                   (64, 4096, 32), (128, 8192, 32)])
+@pytest.mark.parametrize('ta,nt', [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize('precision', ['fp32', 'cuda'])
+def test_ordered_bf16_tiles_transposed_left_and_narrow_output(shape, ta, nt, precision, monkeypatch):
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', precision)
+    torch.manual_seed(261037)
+    m, k, n = shape
+    a = torch.randn(3, k, m + 8, dtype=torch.bfloat16) if ta else torch.randn(3, m, k + 8, dtype=torch.bfloat16)
+    b = torch.randn(3, n, k + 8, dtype=torch.bfloat16) if nt else torch.randn(3, k, n + 8, dtype=torch.bfloat16)
+    x, y = a.to('ruda')[1:, :, 8:], b.to('ruda')[1:, :, 8:]
+    left, right = a[1:, :, 8:].double(), b[1:, :, 8:].double()
+    if ta:
+        x = x.transpose(1, 2); left = left.transpose(1, 2)
+    if nt:
+        y = y.transpose(1, 2); right = right.transpose(1, 2)
+    expected = (left @ right).float()
+    backing = torch.full((3, m, n), float('nan'), dtype=torch.float32, device='ruda')
+    actual = backing[1:]
+    r._C.execute(30, x, y, actual, 0.)
+    values = actual.cpu()
+    torch.testing.assert_close(values, expected, rtol=1e-4, atol=2e-4)
+    assert float((values.double() - expected.double()).norm() / expected.double().norm()) < 2e-6
+    assert torch.isnan(backing[0].cpu()).all()
+    for index in range(2):
+        single = torch.empty(m, n, dtype=torch.float32, device='ruda')
+        r._C.execute(7, x[index], y[index], single, 0.)
+        torch.testing.assert_close(single.cpu(), values[index], rtol=0, atol=0)
+    torch.testing.assert_close((x @ y).cpu(), values.bfloat16(), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize('m,n', [(16, 128), (32, 3584), (512, 18944)])
 @pytest.mark.parametrize('offset', [0, 1])
 def test_fp32_rank16_projection(m, n, offset):
