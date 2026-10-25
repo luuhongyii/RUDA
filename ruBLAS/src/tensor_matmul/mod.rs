@@ -4,6 +4,7 @@ mod accurate;
 mod sliced;
 mod training_tune;
 mod training_gemm;
+mod training_tile_tune;
 #[allow(unsafe_code)]
 mod gemm;
 mod fused;

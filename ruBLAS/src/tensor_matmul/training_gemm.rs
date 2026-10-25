@@ -31,89 +31,113 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
             m: 16, n: 16, k: 16,
         })
     { return false; }
-    // Array bindings must describe the physical span, including serial-K view gaps.
+    super::training_tile_tune::matmul(a.clone(), b.clone(), out.clone());
+    true
+}
+
+#[allow(unsafe_code)]
+pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>,
+    bm: usize, bn: usize, bk: usize, asynchronous: bool) -> Result<RudaTensor<R>, String> {
+    let (k, n) = (a.meta.shape()[1], b.meta.shape()[1]);
+    if k % bk != 0 { return Err("training K tile does not divide the reduction".into()); }
+    let nt = b.meta.strides()[0] == 1;
+    let lda = a.meta.strides()[0];
+    let ldb = if nt { b.meta.strides()[1] } else { b.meta.strides()[0] };
+    let a_span = 511 * lda + k;
+    let b_span = if nt { (n - 1) * ldb + k } else { (k - 1) * ldb + n };
     let mut left = a.clone(); left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
     let mut right = b.clone(); right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
-    // Full tiles, aligned bindings and checked physical spans bound every access.
-    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / 64 * 8) as u32, 1, 1), RudaDim::new_1d(128),
+    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (512 / bm)) as u32, 1, 1), RudaDim::new_1d((bm * 2) as u32),
         left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, nt,
+        bm, bn, bk, asynchronous,
         DType::BF16.into(), out.dtype.into()); }
-    true
+    Ok(out)
 }
 
 #[ruda(launch_unchecked)]
 fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<O>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] nt: bool,
+    #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
     #[define(F)] _input: StorageType, #[define(O)] _output: StorageType) {
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
     let warp = thread / 32;
     // Adjacent CTAs reuse the weight tile; smaller tiles keep serial-K views occupied.
-    let row = RUDA_POS_X as usize % 8 * 64;
-    let col = RUDA_POS_X as usize / 8 * 64;
+    let row = RUDA_POS_X as usize % (512 / bm) * bm;
+    let col = RUDA_POS_X as usize / (512 / bm) * bn;
     let wm = warp / 2 * 32;
-    let wn = warp % 2 * 32;
-    let mut sa = SharedMemory::<Vector<F, Const<8>>>::new_aligned(640usize, 32usize);
-    let b_stage = comptime!(if nt { 320usize } else { 288usize });
-    let mut sb = SharedMemory::<Vector<F, Const<8>>>::new_aligned(b_stage * 2, 32usize);
-    let mut epilogue = SharedMemory::<f32>::new_aligned(1024usize, 32usize);
+    let wn = warp % 2 * (bn / 2);
+    let banks = comptime!(if asynchronous { 2usize } else { 1usize });
+    let a_stage = comptime!(bm * (bk / 8 + 1));
+    let b_stage = comptime!(if nt { bn * (bk / 8 + 1) } else { bk * (bn / 8 + 1) });
+    let mut sa = SharedMemory::<Vector<F, Const<8>>>::new_aligned(a_stage * banks, 32usize);
+    let mut sb = SharedMemory::<Vector<F, Const<8>>>::new_aligned(b_stage * banks, 32usize);
+    let mut epilogue = SharedMemory::<f32>::new_aligned(bm * 16, 32usize);
     let loaded = Barrier::shared(RUDA_DIM, UNIT_POS == 0);
     let mut acc = Sequence::<cmma::Matrix<f32>>::new();
     #[unroll]
-    for _ in 0usize..4 {
+    for _ in 0usize..(bn / 16) {
         acc.push(cmma::Matrix::<f32>::from_value(cmma::MatrixIdent::Accumulator,
             16usize, 16usize, 16usize, cmma::MatrixLayout::Undefined, 0.0f32));
     }
-    load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, nt, b_stage);
-    loaded.commit_copy_async();
-    for block in 0usize..k / 32 {
-        loaded.arrive_and_wait();
-        let bank = block % 2;
-        if block + 1 < k / 32 {
-            load_stage(a, b, &mut sa, &mut sb, row, col, block + 1, 1 - bank, lda, ldb, nt, b_stage);
-            loaded.commit_copy_async();
+    if comptime!(asynchronous) {
+        load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, nt, bm, bn, bk, asynchronous);
+        loaded.commit_copy_async();
+    }
+    for block in 0usize..k / bk {
+        let bank = block % banks;
+        if comptime!(asynchronous) {
+            loaded.arrive_and_wait();
+            if block + 1 < k / bk {
+                load_stage(a, b, &mut sa, &mut sb, row, col, block + 1, 1 - bank, lda, ldb, nt, bm, bn, bk, asynchronous);
+                loaded.commit_copy_async();
+            }
+        } else {
+            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, nt, bm, bn, bk, asynchronous);
+            sync_ruda();
         }
         #[unroll]
-        for half in 0usize..2 {
+        for half in 0usize..(bk / 16) {
             let mut ar = Sequence::<cmma::Matrix<Vector<F, Const<8>>>>::new();
             let mut br = Sequence::<cmma::Matrix<Vector<F, Const<8>>>>::new();
             #[unroll]
             for i in 0usize..2 {
-                let offset = bank * 320 + (wm + i * 16) * 5 + half * 2;
+                let offset = bank * a_stage + (wm + i * 16) * (bk / 8 + 1) + half * 2;
                 ar.push(cmma::Matrix::<Vector<F, Const<8>>>::from_slice(cmma::MatrixIdent::A,
                     16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor,
-                    &sa.slice(offset, 640usize), 40u32));
+                    &sa.slice(offset, a_stage * banks), (bk + 8) as u32));
             }
             #[unroll]
-            for i in 0usize..2 {
+            for i in 0usize..(bn / 32) {
                 if comptime!(nt) {
-                    let offset = bank * b_stage + (wn + i * 16) * 5 + half * 2;
+                    let offset = bank * b_stage + (wn + i * 16) * (bk / 8 + 1) + half * 2;
                     br.push(cmma::Matrix::<Vector<F, Const<8>>>::from_slice(cmma::MatrixIdent::B,
                         16usize, 16usize, 16usize, cmma::MatrixLayout::ColMajor,
-                        &sb.slice(offset, b_stage * 2), 40u32));
+                        &sb.slice(offset, b_stage * banks), (bk + 8) as u32));
                 } else {
-                    let offset = bank * b_stage + half * 16 * 9 + wn / 8 + i * 2;
+                    let offset = bank * b_stage + half * 16 * (bn / 8 + 1) + wn / 8 + i * 2;
                     br.push(cmma::Matrix::<Vector<F, Const<8>>>::from_slice(cmma::MatrixIdent::B,
                         16usize, 16usize, 16usize, cmma::MatrixLayout::RowMajor,
-                        &sb.slice(offset, b_stage * 2), 72u32));
+                        &sb.slice(offset, b_stage * banks), (bn + 8) as u32));
                 }
             }
             #[unroll]
             for i in 0usize..2 {
                 #[unroll]
-                for j in 0usize..2 {
-                    cmma::execute(&ar[i], &br[j], &acc[i * 2 + j], &acc[i * 2 + j]);
+                for j in 0usize..(bn / 32) {
+                    cmma::execute(&ar[i], &br[j], &acc[i * (bn / 32) + j], &acc[i * (bn / 32) + j]);
                 }
             }
         }
+        if comptime!(!asynchronous) { sync_ruda(); }
     }
     #[unroll]
     for i in 0usize..2 {
         #[unroll]
-        for j in 0usize..2 {
+        for j in 0usize..(bn / 32) {
             cmma::store(&mut epilogue.slice_mut(warp * 256, warp * 256 + 256),
-                &acc[i * 2 + j], 16u32, cmma::MatrixLayout::RowMajor);
+                &acc[i * (bn / 32) + j], 16u32, cmma::MatrixLayout::RowMajor);
             sync_plane();
             #[unroll]
             for t in 0usize..8 {
@@ -130,21 +154,32 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
 fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     sa: &mut SharedMemory<Vector<F, Const<8>>>, sb: &mut SharedMemory<Vector<F, Const<8>>>,
     row: usize, col: usize, block: usize, bank: usize,
-    #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] nt: bool, #[comptime] b_stage: usize) {
+    #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] nt: bool,
+    #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool) {
     #[unroll]
-    for i in 0usize..2 {
-        let p = UNIT_POS as usize + i * 128;
-        let source = ((row + p / 4) * lda + block * 32) / 8 + p % 4;
-        let target = bank * 320 + (p / 4) * 5 + p % 4;
-        copy_async(&a.slice(source, source + 1), &mut sa.slice_mut(target, target + 1), 8u32);
+    for i in 0usize..(bk / 16) {
+        let p = UNIT_POS as usize + i * (bm * 2);
+        let source = ((row + p / (bk / 8)) * lda + block * bk) / 8 + p % (bk / 8);
+        let target = bank * bm * (bk / 8 + 1) + (p / (bk / 8)) * (bk / 8 + 1) + p % (bk / 8);
+        if comptime!(asynchronous) {
+            copy_async(&a.slice(source, source + 1), &mut sa.slice_mut(target, target + 1), 8u32);
+        } else { sa[target] = a[source]; }
+    }
+    #[unroll]
+    for i in 0usize..(bn * bk / (bm * 16)) {
+        let p = UNIT_POS as usize + i * (bm * 2);
         if comptime!(nt) {
-            let source = ((col + p / 4) * ldb + block * 32) / 8 + p % 4;
-            let target = bank * b_stage + (p / 4) * 5 + p % 4;
-            copy_async(&b.slice(source, source + 1), &mut sb.slice_mut(target, target + 1), 8u32);
+            let source = ((col + p / (bk / 8)) * ldb + block * bk) / 8 + p % (bk / 8);
+            let target = bank * bn * (bk / 8 + 1) + (p / (bk / 8)) * (bk / 8 + 1) + p % (bk / 8);
+            if comptime!(asynchronous) {
+                copy_async(&b.slice(source, source + 1), &mut sb.slice_mut(target, target + 1), 8u32);
+            } else { sb[target] = b[source]; }
         } else {
-            let source = ((block * 32 + p / 8) * ldb + col) / 8 + p % 8;
-            let target = bank * b_stage + (p / 8) * 9 + p % 8;
-            copy_async(&b.slice(source, source + 1), &mut sb.slice_mut(target, target + 1), 8u32);
+            let source = ((block * bk + p / (bn / 8)) * ldb + col) / 8 + p % (bn / 8);
+            let target = bank * bk * (bn / 8 + 1) + (p / (bn / 8)) * (bn / 8 + 1) + p % (bn / 8);
+            if comptime!(asynchronous) {
+                copy_async(&b.slice(source, source + 1), &mut sb.slice_mut(target, target + 1), 8u32);
+            } else { sb[target] = b[source]; }
         }
     }
 }
