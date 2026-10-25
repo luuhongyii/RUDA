@@ -55,6 +55,9 @@ def arithmetic(a, b=None, *, op, alpha=1, inplace=False, out=None):
 
     left = operand(a, scalar[0])
     right = left if unary else operand(b, scalar[1])
-    result = torch.empty(shape, dtype=dtype, device=device)
+    direct = (out is not None and out.dtype == dtype and out.shape == shape
+              and not out.is_neg() and not out.is_conj()
+              and all(value.is_contiguous() and value.shape == shape for value in (left, right, out)))
+    result = out if direct else torch.empty(shape, dtype=dtype, device=device)
     _C.scientific_call(485, [left, right, result], [2 if unary else 1 if op == 2 else 0, int(scalar[0]), int(scalar[1]), coefficient], [])
-    return _output(result, out, tensors, cast=True)
+    return result if direct else _output(result, out, tensors, cast=True)

@@ -5,6 +5,50 @@ from torch.nn import functional as F
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16, torch.float64, torch.int64, torch.int32])
+@pytest.mark.parametrize('operation', ['add', 'sub', 'mul', 'neg'])
+@pytest.mark.parametrize('offset', [0, 1])
+def test_contiguous_arithmetic_out_is_single_launch(dtype, operation, offset):
+    torch.manual_seed(261043)
+    hosts = [torch.randint(-20, 20, (4, 129 + offset)).to(dtype) for _ in range(2)]
+    values = [x.flatten().to('ruda')[offset:offset + 512].view(4, 128) for x in hosts]
+    x, y = values
+    if operation == 'neg':
+        run = lambda out: torch.neg(x, out=out)
+    elif operation == 'mul':
+        run = lambda out: torch.mul(x, y, out=out)
+    else:
+        op = torch.add if operation == 'add' else torch.sub
+        run = lambda out: op(x, y, alpha=3, out=out)
+    expected = run(None).cpu()
+    pointer = x.data_ptr()
+    version = x._version
+    before = r.execution_stats()['kernel_launches']
+    result = run(x)
+    assert r.execution_stats()['kernel_launches'] - before == 1
+    assert result is x and x.data_ptr() == pointer and x._version > version
+    torch.testing.assert_close(x.cpu(), expected, rtol=0, atol=0)
+
+
+def test_arithmetic_out_keeps_transposed_alias_cast_and_negative_view_semantics():
+    host = torch.arange(256, dtype=torch.float32).reshape(16, 16)
+    x = host.to('ruda')
+    torch.add(x, x.t(), out=x)
+    torch.testing.assert_close(x.cpu(), host + host.t(), rtol=0, atol=0)
+    x = host.to('ruda')
+    negative = torch._neg_view(x)
+    torch.add(negative, negative, out=negative)
+    torch.testing.assert_close(negative.cpu(), -2 * host, rtol=0, atol=0)
+    low = torch.empty_like(x, dtype=torch.bfloat16)
+    torch.mul(x, x, out=low)
+    torch.testing.assert_close(low.cpu(), (4 * host * host).bfloat16(), rtol=0, atol=0)
+    overlap = torch.arange(513, dtype=torch.float32).to('ruda')
+    before = overlap.cpu()
+    with pytest.raises(RuntimeError):
+        torch.add(overlap[:-1], overlap[:-1], out=overlap[1:])
+    torch.testing.assert_close(overlap.cpu(), before, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize('with_norm', [False, True])
 @pytest.mark.parametrize('bad', [None, float('nan'), float('inf'), -float('inf')])
 @torch.no_grad()
