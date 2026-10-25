@@ -4,6 +4,33 @@ import torch
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize('ta,nt', [(False, False), (False, True), (True, False), (True, True)])
+@pytest.mark.parametrize('batched', [False, True])
+@pytest.mark.parametrize('offset', [0, 3])
+def test_ordered_mma_lane_layout_and_broadcast_batch(dtype, ta, nt, batched, offset):
+    m, k, n = 96, 160, 96
+    a_shape = (k, m + 8) if ta else (m, k + 8)
+    b_shape = (n, k + 8) if nt else (k, n + 8)
+    a = ((torch.arange(a_shape[0] * a_shape[1]).reshape(a_shape) % 7) - 3).bfloat16()
+    b = ((torch.arange(b_shape[0] * b_shape[1]).reshape(b_shape) % 5) - 2).bfloat16()
+    x, y = a.to('ruda')[:, 8:], b.to('ruda')[:, 8:]
+    left, right = a[:, 8:].double(), b[:, 8:].double()
+    if ta: x, left = x.t(), left.t()
+    if nt: y, right = y.t(), right.t()
+    if batched:
+        x, y = x.expand(3, *x.shape), y.expand(3, *y.shape)
+        left, right = left.expand(3, *left.shape), right.expand(3, *right.shape)
+    shape = (3, m, n) if batched else (m, n)
+    count = (3 if batched else 1) * m * n
+    storage = torch.full((count + offset + 8,), float('nan'), dtype=dtype, device='ruda')
+    output = storage[offset:offset + count].view(shape)
+    r._C.execute(30 if batched else 7, x, y, output, 0.)
+    torch.testing.assert_close(output.cpu(), (left @ right).to(dtype), rtol=0, atol=0)
+    assert torch.isnan(storage[:offset].cpu()).all()
+    assert torch.isnan(storage[offset + count:].cpu()).all()
+
+
 @pytest.mark.parametrize('shape', [(128, 160, 64), (256, 256, 128)])
 @pytest.mark.parametrize('ta,nt', [(False, False), (False, True), (True, False), (True, True)])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
