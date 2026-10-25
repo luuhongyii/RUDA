@@ -16,6 +16,7 @@ struct TileKey {
     ta: bool,
     nt: bool,
     output: StorageType,
+    output_vector_size: usize,
 }
 
 fn key<R: Runtime>((a, b, out, last_k): &(RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)) -> TileKey {
@@ -26,7 +27,8 @@ fn key<R: Runtime>((a, b, out, last_k): &(RudaTensor<R>, RudaTensor<R>, RudaTens
         a_batch: if d == 0 { 0 } else { a.meta.strides()[0] }, b_batch: if d == 0 { 0 } else { b.meta.strides()[0] },
         m: a.meta.shape()[d], k: a.meta.shape()[d+1], last_k: *last_k, n: b.meta.shape()[d+1],
         lda: if ta { a.meta.strides()[d+1] } else { a.meta.strides()[d] },
-        ldb: if nt { b.meta.strides()[d+1] } else { b.meta.strides()[d] }, ta, nt, output: out.dtype.into() }
+        ldb: if nt { b.meta.strides()[d+1] } else { b.meta.strides()[d] }, ta, nt, output: out.dtype.into(),
+        output_vector_size: super::training_gemm::output_vector_size(out) }
 }
 
 fn inputs<R: Runtime>(_: &TileKey,
@@ -41,7 +43,7 @@ fn inputs<R: Runtime>(_: &TileKey,
 }
 
 pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>, last_k: usize) {
-    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v7");
+    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v8");
     let client = a.client.clone();
     let id = RudaTuneId::new(&client, &a.device);
     let candidates = TUNER.init_for_device(&id, || {
@@ -97,7 +99,7 @@ mod tests {
     #[test]
     fn ordered_tile_keys_do_not_bucket_k_or_strides() {
         let a = TileKey { batch: 1, a_batch: 0, b_batch: 0, m: 512, k: 96, last_k: 96, n: 256, lda: 128, ldb: 256, ta: false, nt: false,
-            output: ruda_core::tensor::DType::F32.into() };
+            output: ruda_core::tensor::DType::F32.into(), output_vector_size: 4 };
         assert_ne!(a, TileKey { m: 32, ..a.clone() });
         assert_ne!(a, TileKey { batch: 2, ..a.clone() });
         assert_ne!(a, TileKey { a_batch: 65536, ..a.clone() });
@@ -109,5 +111,6 @@ mod tests {
         assert_ne!(a, TileKey { ta: true, ..a.clone() });
         assert_ne!(a, TileKey { nt: true, ..a.clone() });
         assert_ne!(a, TileKey { output: ruda_core::tensor::DType::BF16.into(), ..a.clone() });
+        assert_ne!(a, TileKey { output_vector_size: 1, ..a.clone() });
     }
 }

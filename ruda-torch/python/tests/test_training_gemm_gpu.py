@@ -4,6 +4,56 @@ import torch
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('shape', [(128, 160, 64), (256, 256, 128)])
+@pytest.mark.parametrize('ta,nt', [(False, False), (False, True), (True, False), (True, True)])
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize('precision', ['fp32', 'cuda'])
+def test_ordered_bf16_vector_epilogue_matches_unaligned_output(shape, ta, nt, dtype, precision, monkeypatch):
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', precision)
+    torch.manual_seed(261045)
+    m, k, n = shape
+    a = torch.randn(2, k, m + 8, dtype=torch.bfloat16) if ta else torch.randn(2, m, k + 8, dtype=torch.bfloat16)
+    b = torch.randn(2, n, k + 8, dtype=torch.bfloat16) if nt else torch.randn(2, k, n + 8, dtype=torch.bfloat16)
+    x, y = a.to('ruda')[:, :, 8:], b.to('ruda')[:, :, 8:]
+    left, right = a[:, :, 8:].double(), b[:, :, 8:].double()
+    if ta:
+        x, left = x.transpose(1, 2), left.transpose(1, 2)
+    if nt:
+        y, right = y.transpose(1, 2), right.transpose(1, 2)
+    reference = (left @ right).float()
+    values = []
+    for offset in (0, 1, 3, 4, 8):
+        storage = torch.full((2 * m * n + offset + 8,), float('nan'), dtype=dtype, device='ruda')
+        output = storage[offset:offset + 2 * m * n].view(2, m, n)
+        r._C.execute(30, x, y, output, 0.)
+        values.append(output.cpu())
+        assert torch.isnan(storage[:offset].cpu()).all()
+        assert torch.isnan(storage[offset + 2 * m * n:].cpu()).all()
+    for actual in values[1:]:
+        torch.testing.assert_close(actual, values[0], rtol=0, atol=0)
+    if dtype == torch.float32:
+        torch.testing.assert_close(values[0], reference, rtol=1e-4, atol=2e-4)
+        assert float((values[0].double() - reference.double()).norm() / reference.double().norm()) < 2e-6
+    else:
+        accumulator = torch.empty((2, m, n), dtype=torch.float32, device='ruda')
+        r._C.execute(30, x, y, accumulator, 0.)
+        torch.testing.assert_close(values[0], accumulator.cpu().bfloat16(), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+def test_ordered_bf16_vector_epilogue_nonfinite_values(dtype):
+    a, b = torch.ones(128, 64, dtype=torch.bfloat16), torch.ones(64, 128, dtype=torch.bfloat16)
+    a[0, 0], a[1, 0], a[2, 0] = float('inf'), float('-inf'), float('nan')
+    b[0, 3] = 0
+    x, y = a.to('ruda'), b.to('ruda')
+    output = torch.empty((128, 128), dtype=dtype, device='ruda')
+    unaligned = torch.empty((128 * 128 + 1,), dtype=dtype, device='ruda')[1:].view(128, 128)
+    r._C.execute(7, x, y, output, 0.)
+    r._C.execute(7, x, y, unaligned, 0.)
+    torch.testing.assert_close(output.cpu(), unaligned.cpu(), rtol=0, atol=0, equal_nan=True)
+    torch.testing.assert_close(output.cpu(), (a.float() @ b.float()).to(dtype), rtol=0, atol=0, equal_nan=True)
+
+
 @pytest.mark.parametrize('shape', [(256, 256, 128), (512, 512, 256)])
 @pytest.mark.parametrize('ta,nt', [(False, False), (False, True), (True, False), (True, True)])
 @pytest.mark.parametrize('precision', ['fp32', 'cuda'])

@@ -114,19 +114,26 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
         left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, ta, nt,
         m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m,
-        DType::BF16.into(), out.dtype.into()); }
+        DType::BF16.into(), out.dtype.into(), output_vector_size(&out)); }
     Ok(out)
 }
 
+pub(super) fn output_vector_size<R: Runtime>(out: &RudaTensor<R>) -> usize {
+    if out.handle.offset_start.unwrap_or(0) % 16 == 0 {
+        if out.dtype == DType::BF16 { 8 } else { 4 }
+    } else { 1 }
+}
+
 #[ruda(launch_unchecked)]
-fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
-    out: &mut Array<O>, #[comptime] k: usize, #[comptime] n: usize,
+fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
+    out: &mut Array<Vector<O, OS>>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
     #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
     #[comptime] warp_m: usize,
-    #[define(F)] _input: StorageType, #[define(O)] _output: StorageType) {
+    #[define(F)] _input: StorageType, #[define(O)] _output: StorageType,
+    #[define(OS)] _output_vector_size: usize) {
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
     let warp = thread / 32;
@@ -215,10 +222,15 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
                 &acc[i * (bn / 32) + j], 16u32, cmma::MatrixLayout::RowMajor);
             sync_plane();
             #[unroll]
-            for t in 0usize..8 {
-                let pos = lane + t * 32;
-                out[(RUDA_POS_Y as usize * m + row + wm + i * 16 + pos / 16) * n + col + wn + j * 16 + pos % 16]
-                    = O::cast_from(epilogue[warp * 256 + pos]);
+            for t in 0usize..(8 / OS::value()) {
+                let pos = (lane + t * 32) * OS::value();
+                let mut values = Vector::<O, OS>::empty();
+                #[unroll]
+                for v in 0usize..OS::value() {
+                    values[v] = O::cast_from(epilogue[warp * 256 + pos + v]);
+                }
+                out[((RUDA_POS_Y as usize * m + row + wm + i * 16 + pos / 16) * n + col + wn + j * 16 + pos % 16) / OS::value()]
+                    = values;
             }
             sync_plane();
         }
