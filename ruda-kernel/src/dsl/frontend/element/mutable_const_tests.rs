@@ -31,6 +31,16 @@ fn boolean_bound(#[comptime] initial: bool, condition: bool) -> bool {
     value
 }
 
+#[ruda]
+fn comptime_counters() {
+    let mut method = 1u32.comptime();
+    let mut literal = comptime!(2u32);
+    comptime!(method += 2);
+    comptime!(literal += 4);
+    assert_eq!(method, 3u32);
+    assert_eq!(literal, 6u32);
+}
+
 fn conditional_assignment(scope: &Scope, initial: ConstantValue, changed: ConstantValue) -> Variable {
     let target = scope.instructions.iter().find_map(|inst| match inst.operation {
         Operation::Copy(Variable { kind: VariableKind::Constant(value), .. }) if value == initial => inst.out,
@@ -86,5 +96,12 @@ fn mutable_const_nonprimitive_fallback_preserves_host_values() {
     let mut scope = Scope::root(false);
     let values = alloc::vec![3usize, 5];
     assert_eq!(PrimitiveRuntime(values.clone()).primitive_runtime(&mut scope), values);
+    assert!(scope.instructions.is_empty());
+}
+
+#[test]
+fn mutable_const_explicit_comptime_counters_stay_on_the_host() {
+    let mut scope = Scope::root(false);
+    comptime_counters::expand(&mut scope);
     assert!(scope.instructions.is_empty());
 }
