@@ -155,7 +155,7 @@ def test_rank16_native_dispatch_is_visible_to_torch_dispatch_modes():
 
 
 @pytest.mark.parametrize('op', ['projection', 'epilogue'])
-def test_lora_native_dispatch_opcheck(op):
+def test_lora_native_dispatch_schema_fake_and_aot(op):
     from ruda_torch.lora_epilogue import _forward
     base = torch.randn(16, 128, dtype=torch.bfloat16).to('ruda').requires_grad_()
     if op == 'projection':
@@ -165,7 +165,8 @@ def test_lora_native_dispatch_opcheck(op):
     else:
         fn = _forward
         args = (base, torch.randn(16, 128).to('ruda').requires_grad_(), .375)
-    torch.library.opcheck(fn, args)
+    assert torch._C._dispatch_has_kernel_for_dispatch_key(fn._opoverload.name(), 'Autograd')
+    torch.library.opcheck(fn, args, test_utils=('test_schema', 'test_faketensor', 'test_aot_dispatch_dynamic'))
 
 
 def test_rank16_native_dispatch_vmap_matches_individual_calls():
