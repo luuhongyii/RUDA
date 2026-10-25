@@ -56,7 +56,12 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
     if warps.div_ceil(4) > hw.max_ruda_count.0 as usize { return false; }
     let partial = empty_device_contiguous_dtype(a.client.clone(), a.device.clone(), Shape::from([count]), DType::F32);
     let grid = RudaCount::Static(warps.div_ceil(4) as u32, 1, 1);
-    if column_major {
+    if column_major && n == 16 && m % 4 == 0 && a.meta.strides()[1] == 1 {
+        unsafe { columns_reuse::launch_unchecked::<R>(&a.client,
+            RudaCount::Static((m / 4 * 2 * splits) as u32, 1, 1), RudaDim::new_1d(128),
+            a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
+            m, k, splits, a.meta.strides()[0], b.meta.strides()[1]); }
+    } else if column_major {
         unsafe { columns::launch_unchecked::<R>(&a.client, grid, RudaDim::new_1d(128),
             a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
             m, k, n, splits, a.meta.strides()[0], a.meta.strides()[1], b.meta.strides()[1]); }
@@ -95,6 +100,33 @@ fn columns(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
         }
         let total = plane_sum(acc);
         if lane == 0 { partial[split * m as usize * n as usize + output] = total; }
+    }
+}
+
+#[ruda(launch_unchecked)]
+fn columns_reuse(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
+    #[comptime] m: usize, #[comptime] k: usize, #[comptime] splits: usize,
+    #[comptime] as0: usize, #[comptime] bs1: usize) {
+    let tile = RUDA_POS_X as usize / 2;
+    let row = tile / splits * 4 + UNIT_POS as usize / 32;
+    let split = tile % splits;
+    let col = RUDA_POS_X as usize % 2 * 8;
+    let lane = UNIT_POS as usize % 32;
+    let mut acc = Array::<f32>::new(8usize);
+    #[unroll]
+    for j in 0usize..8 { acc[j] = 0.0f32; }
+    for offset in 0usize..32 {
+        let inner = split * 1024 + offset * 32 + lane;
+        if inner < k {
+            let value = a[row * as0 + inner];
+            #[unroll]
+            for j in 0usize..8 { acc[j] = fma(value, b[inner + (col + j) * bs1], acc[j]); }
+        }
+    }
+    #[unroll]
+    for j in 0usize..8 {
+        let sum = plane_sum(acc[j]);
+        if lane == 0 { partial[(split * m + row) * 16 + col + j] = sum; }
     }
 }
 

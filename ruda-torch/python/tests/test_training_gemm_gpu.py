@@ -27,8 +27,14 @@ def test_bf16_training_tile_layout(nt, padded, dtype, k, monkeypatch):
     host = actual.cpu()
     tolerance = 2e-5 if dtype == torch.float32 else 5e-3
     assert float((host.double() - reference.double()).norm() / reference.double().norm()) < tolerance
-    torch.testing.assert_close(host, reference, rtol=2e-3 if dtype == torch.bfloat16 else 2e-5,
-                               atol=.125 if dtype == torch.bfloat16 else 2e-5)
+    if dtype == torch.bfloat16:
+        accumulator = torch.empty(m, n, dtype=torch.float32, device='ruda')
+        r._C.execute(7, x, weight, accumulator, 0.0)
+        accumulator = accumulator.cpu()
+        torch.testing.assert_close(host, accumulator.bfloat16(), rtol=0, atol=0)
+        host = accumulator
+        reference = (left @ (right.t() if nt else right)).float()
+    torch.testing.assert_close(host, reference, rtol=2e-5, atol=2e-5)
 
 
 @pytest.mark.parametrize('m,n', [(16, 128), (32, 3584), (512, 18944)])
@@ -64,6 +70,20 @@ def test_fp32_transposed_lora_gradient(m, k, padded):
     b = torch.randn(k, 16 + pad)
     x, y = a.to('ruda')[:, pad:].t(), b.to('ruda')[:, pad:]
     reference = (a[:, pad:].double().t() @ b[:, pad:].double()).float()
+    actual = (x @ y).cpu()
+    torch.testing.assert_close(actual, reference, rtol=2e-4, atol=5e-5)
+    assert float((actual.double() - reference.double()).norm() / reference.double().norm()) < 1e-6
+
+
+@pytest.mark.parametrize('m,k', [(4, 513), (32, 1536), (512, 3584)])
+@pytest.mark.parametrize('padded', [False, True])
+def test_fp32_lora_projection_reuses_input(m, k, padded):
+    torch.manual_seed(261029)
+    pad = 3 if padded else 0
+    a = torch.randn(m, k + pad)
+    b = torch.randn(16, k + pad)
+    x, y = a.to('ruda')[:, pad:], b.to('ruda')[:, pad:].t()
+    reference = (a[:, pad:].double() @ b[:, pad:].double().t()).float()
     actual = (x @ y).cpu()
     torch.testing.assert_close(actual, reference, rtol=2e-4, atol=5e-5)
     assert float((actual.double() - reference.double()).norm() / reference.double().norm()) < 1e-6
