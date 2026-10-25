@@ -370,6 +370,10 @@ if _training_available and hasattr(_native, 'ruda_torch_training_fusion_api_vers
     _native.ruda_torch_training_fusion_api_version.restype = ctypes.c_uint32
     _training_fusion_available = (_native.ruda_torch_training_fusion_api_version() == 3
                                  and getattr(_C, 'training_fusion_api_version', 0) == 3)
+_lora_projection_available = False
+if _training_fusion_available and hasattr(_native, 'ruda_torch_lora_projection_api_version'):
+    _native.ruda_torch_lora_projection_api_version.restype = ctypes.c_uint32
+    _lora_projection_available = _native.ruda_torch_lora_projection_api_version() == 1
 from .training import LayerNorm, layer_norm, RMSNorm, rms_norm, silu_mul, AdamW, GradScaler
 from . import _fused_training_ops
 from .fused_cross_entropy import cross_entropy

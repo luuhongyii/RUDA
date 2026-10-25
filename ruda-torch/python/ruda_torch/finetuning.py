@@ -282,7 +282,12 @@ class LoRALinear(nn.Module):
                 adapted = native_dropout(adapted,self.dropout)[0]
             else:
                 adapted = F.dropout(adapted,p=self.dropout,training=True)
-        update = F.linear(F.linear(adapted, self.lora_A), self.lora_B)
+        rank = F.linear(adapted, self.lora_A)
+        if result.device.type == 'ruda' and self.rank == 16:
+            from .lora_epilogue import rank16_residual_eligible, _rank16_residual
+            if rank16_residual_eligible(result, rank, self.lora_B):
+                return _rank16_residual(result, rank, self.lora_B, self.scaling)
+        update = F.linear(rank, self.lora_B)
         if (result.device.type == 'ruda' and result.dtype in (torch.float16, torch.bfloat16)
                 and update.dtype == torch.float32 and update.device == result.device and result.shape == update.shape
                 and not any(value.is_neg() or value.is_conj() for value in (result, update))):
