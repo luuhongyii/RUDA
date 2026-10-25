@@ -132,8 +132,7 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
         load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
         loaded.commit_copy_async();
     }
-    let mut blocks = k / bk;
-    if comptime!(last_k != k) { if RUDA_POS_Y as usize == batch - 1 { blocks = last_k / bk; } }
+    let blocks = k / bk - usize::cast_from(RUDA_POS_Y as usize == batch - 1) * ((k - last_k) / bk);
     for block in 0usize..blocks {
         let bank = block % banks;
         if comptime!(asynchronous) {

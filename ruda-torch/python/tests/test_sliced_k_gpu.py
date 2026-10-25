@@ -112,3 +112,12 @@ def test_batched_serial_partitions_keep_short_tail_and_bf16_writebacks(inner, tr
     b = weight.t() if transposed else weight.t().contiguous()
     actual = (a.to('ruda') @ b.to('ruda')).cpu()
     torch.testing.assert_close(actual, torch.zeros_like(actual), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('inner', [3584, 18944])
+@pytest.mark.parametrize('transposed', [False, True])
+def test_batched_serial_short_tail_counts_exactly_once(inner, transposed):
+    a = torch.ones(512, inner, dtype=torch.bfloat16).to('ruda')
+    b = torch.ones(3584, inner, dtype=torch.bfloat16).to('ruda').t() if transposed else torch.ones(inner, 3584, dtype=torch.bfloat16).to('ruda')
+    actual = (a @ b).cpu()
+    torch.testing.assert_close(actual, torch.full_like(actual, inner), rtol=0, atol=0)
