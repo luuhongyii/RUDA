@@ -5,6 +5,7 @@ use ruda_kernel::tensor::{RudaTensor, allocation::empty_device_contiguous_dtype,
 
 // Split K keeps low-rank FP32 projections parallel even with a tiny M or N.
 // No TF32 conversion or floating-point atomic accumulation is used.
+#[allow(unsafe_code)]
 pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: &RudaTensor<R>) -> bool {
     if a.dtype != DType::F32 || b.dtype != DType::F32 || out.dtype != DType::F32
         || a.qparams.is_some() || b.qparams.is_some() || out.qparams.is_some()
@@ -23,9 +24,9 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
         && hw.plane_size_min == 32 && hw.plane_size_max == 32
         && n / 128 <= hw.max_ruda_count.0 as usize && m / 16 <= hw.max_ruda_count.1 as usize
     {
-        rank16::launch::<R>(&a.client, RudaCount::Static((n / 128) as u32, (m / 16) as u32, 1),
+        unsafe { rank16::launch_unchecked::<R>(&a.client, RudaCount::Static((n / 128) as u32, (m / 16) as u32, 1),
             RudaDim::new_1d(128), a.clone().into_array_arg(), b.clone().into_array_arg(),
-            out.clone().into_array_arg(), n);
+            out.clone().into_array_arg(), n); }
         return true;
     }
     if m > 0 && m <= 32 && n > 32 && k >= 512 && b.meta.shape()[0] == k
@@ -56,13 +57,13 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
     let partial = empty_device_contiguous_dtype(a.client.clone(), a.device.clone(), Shape::from([count]), DType::F32);
     let grid = RudaCount::Static(warps.div_ceil(4) as u32, 1, 1);
     if column_major {
-        columns::launch::<R>(&a.client, grid, RudaDim::new_1d(128),
+        unsafe { columns::launch_unchecked::<R>(&a.client, grid, RudaDim::new_1d(128),
             a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
-            m, k, n, splits, a.meta.strides()[0], a.meta.strides()[1], b.meta.strides()[1]);
+            m, k, n, splits, a.meta.strides()[0], a.meta.strides()[1], b.meta.strides()[1]); }
     } else {
-        rows::launch::<R>(&a.client, grid, RudaDim::new_1d(128),
+        unsafe { rows::launch_unchecked::<R>(&a.client, grid, RudaDim::new_1d(128),
             a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
-            m, k, n, splits, n.next_power_of_two(), a.meta.strides()[0], a.meta.strides()[1], b.meta.strides()[0]);
+            m, k, n, splits, n.next_power_of_two(), a.meta.strides()[0], a.meta.strides()[1], b.meta.strides()[0]); }
     }
     reduce::launch::<R>(&a.client, RudaCount::Static((m * n).div_ceil(128) as u32, 1, 1),
         RudaDim::new_1d(128), partial.into_array_arg(), out.clone().into_tensor_arg(), splits as u32);
