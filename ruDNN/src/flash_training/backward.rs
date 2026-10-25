@@ -167,6 +167,20 @@ pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>
 pub fn key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, dk: &mut Array<F>, dv: &mut Array<F>,
     heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[define(F)] _dtype: StorageType) {
+    key_value_impl(q, k, v, grad, stats, delta, dk, dv, heads, kv_heads, scale, causal, false);
+}
+
+#[ruda(launch_unchecked)]
+pub fn key_value_parallel<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
+    stats: &Array<f32>, delta: &Array<f32>, dk: &mut Array<F>, dv: &mut Array<F>,
+    heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[define(F)] _dtype: StorageType) {
+    key_value_impl(q, k, v, grad, stats, delta, dk, dv, heads, kv_heads, scale, causal, true);
+}
+
+#[ruda]
+fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
+    stats: &Array<f32>, delta: &Array<f32>, dk: &mut Array<F>, dv: &mut Array<F>,
+    heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[comptime] split_heads: bool) {
     let key = RUDA_POS_X as usize * 16;
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
@@ -181,7 +195,11 @@ pub fn key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arra
     let mut sum_v = Array::<Vector<f32, Const<2>>>::new(8usize);
     #[unroll]
     for i in 0usize..8 { sum_k[i] = Vector::new(0.0f32); sum_v[i] = Vector::new(0.0f32); }
-    for head_in_group in 0usize..group {
+    let mut count = group;
+    if comptime!(split_heads) { count = 1; }
+    for index in 0usize..count {
+        let mut head_in_group = index;
+        if comptime!(split_heads) { head_in_group = RUDA_POS_Y as usize; }
         let query = (batch * heads as usize + kh * group + head_in_group) * 512;
         let mut acc_k = Array::<Vector<f32, Const<2>>>::new(8usize);
         let mut acc_v = Array::<Vector<f32, Const<2>>>::new(8usize);
@@ -232,10 +250,29 @@ pub fn key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arra
             #[unroll]
             for j in 0usize..2 {
                 let (r, c) = def.position_of_nth(lane as u32, (i * 2 + j) as u32, MatrixIdent::Accumulator);
-                let at = (key + r as usize) * 128 + warp * 32 + col * 8 + c as usize;
+                let mut at = (key + r as usize) * 128 + warp * 32 + col * 8 + c as usize;
+                if comptime!(split_heads) { at += RUDA_POS_Y as usize * (dk.len() / group); }
                 dk[at] = F::cast_from(sum_k[col * 2 + i][j]);
                 dv[at] = F::cast_from(sum_v[col * 2 + i][j]);
             }
         }
+    }
+}
+
+#[ruda(launch_unchecked)]
+pub fn reduce_heads<F: Float>(partial_k: &Array<F>, partial_v: &Array<F>,
+    dk: &mut Array<F>, dv: &mut Array<F>, #[comptime] group: usize, #[define(F)] _dtype: StorageType) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < dk.len() {
+        let mut sum_k = 0.0f32;
+        let mut sum_v = 0.0f32;
+        // Per-head BF16 rounding precedes this ordered FP32 sum, as in the serial kernel.
+        #[unroll]
+        for head in 0usize..group {
+            sum_k += f32::cast_from(partial_k[head * dk.len() + pos]);
+            sum_v += f32::cast_from(partial_v[head * dv.len() + pos]);
+        }
+        dk[pos] = F::cast_from(sum_k);
+        dv[pos] = F::cast_from(sum_v);
     }
 }

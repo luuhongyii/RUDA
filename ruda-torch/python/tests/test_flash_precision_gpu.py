@@ -60,6 +60,31 @@ def test_flash_precision_rejects_unsupported_calls():
 
 
 @pytest.mark.parametrize('causal', [False, True])
+@pytest.mark.parametrize('batch,heads,kv_heads', [(1, 7, 1), (2, 6, 2)])
+def test_flash_grouped_gradients_preserve_per_head_rounding(causal, batch, heads, kv_heads):
+    torch.manual_seed(261028)
+    host = [torch.randn(batch, h, 512, 128, dtype=torch.bfloat16) for h in (heads, kv_heads, kv_heads)]
+    grad = torch.randn_like(host[0])
+    values = [x.to('ruda').requires_grad_() for x in host]
+    y = r.scaled_dot_product_attention(*values, is_causal=causal, scale=.2, enable_gqa=True, precision='flash')
+    y.backward(grad.to('ruda'))
+    group = heads // kv_heads
+    expected_k, expected_v = [torch.zeros_like(x, dtype=torch.float32) for x in host[1:]]
+    expected_q = torch.empty_like(host[0])
+    for head in range(heads):
+        kh = head // group
+        single = [host[0][:, head:head+1].contiguous().to('ruda').requires_grad_(),
+                  *[x[:, kh:kh+1].contiguous().to('ruda').requires_grad_() for x in host[1:]]]
+        result = r.scaled_dot_product_attention(*single, is_causal=causal, scale=.2, precision='flash')
+        result.backward(grad[:, head:head+1].contiguous().to('ruda'))
+        expected_q[:, head:head+1] = single[0].grad.cpu()
+        expected_k[:, kh:kh+1] += single[1].grad.cpu().float()
+        expected_v[:, kh:kh+1] += single[2].grad.cpu().float()
+    for actual, expected in zip(values, [expected_q, expected_k.bfloat16(), expected_v.bfloat16()]):
+        torch.testing.assert_close(actual.grad.cpu(), expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('causal', [False, True])
 def test_flash_backward_explicit_scale_and_accumulation(tmp_path, causal):
     torch.manual_seed(261027)
     case = {name: torch.randn(1, heads, 512, 128, dtype=torch.bfloat16)
