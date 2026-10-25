@@ -181,13 +181,15 @@ jobs:
         run: |
           cargo build --release --locked -p ruda-torch-native
           cargo check --release --locked -p ruDNN --lib --tests --features tensor-paged-attention,ruda-test-runtime/cuda
-          cargo test --release --locked -p ruda-compiler --no-default-features --features ptx base_two_exponential_requires_explicit_reduced_precision
+          RUDA_PTX_TEST_OUTPUT=target/ptx-vector-memory cargo test --release --locked -p ruda-compiler --no-default-features --features ptx ptx::tests
           cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
       - name: Save Linux native library
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ruda-torch-native-linux-x86_64-abi10-${{ github.sha }}
-          path: target/release/libruda_torch_native.so
+          path: |
+            target/release/libruda_torch_native.so
+            target/ptx-vector-memory/packed_vector_memory_*.ptx
           compression-level: 6
           if-no-files-found: error
           retention-days: 14

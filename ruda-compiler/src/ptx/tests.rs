@@ -12,6 +12,7 @@ mod half_precision;
 mod bitwise;
 mod native_memory;
 mod training_math;
+mod vector_memory;
 mod scaled;
 
 fn options() -> PtxCompilationOptions {
