@@ -12,6 +12,44 @@ void training_same(const at::Tensor& a, const at::Tensor& b) {
   TORCH_CHECK(a.sizes()==b.sizes() && a.scalar_type()==b.scalar_type() && a.device()==b.device(),
               "training tensor shape/dtype/device mismatch");
 }
+
+at::Tensor lora_epilogue_forward(const at::Tensor& base,const at::Tensor& update,double scale) {
+  TORCH_CHECK_VALUE(!base.is_neg() && !base.is_conj() && !update.is_neg() && !update.is_conj(),
+      "expected resolved RUDA base and adapter update");
+  auto result=at::empty(base.sizes(),base.options());
+  scientific_call(654,{base,update,result},{},{scale});
+  return result;
+}
+
+at::Tensor lora_epilogue_backward(const at::Tensor& grad,double scale) {
+  auto result=at::empty(grad.sizes(),grad.options().dtype(at::kFloat));
+  scientific_call(655,{grad,result},{},{scale});
+  return result;
+}
+
+at::Tensor lora_rank16_residual(const at::Tensor& base,const at::Tensor& rank,
+    const at::Tensor& weight,double scale) {
+  bool eligible=base.device().type()==c10::DeviceType::PrivateUse1 && base.dim()>0
+      && (base.scalar_type()==at::kHalf || base.scalar_type()==at::kBFloat16)
+      && rank.scalar_type()==at::kFloat && weight.scalar_type()==at::kFloat
+      && rank.device()==base.device() && weight.device()==base.device()
+      && rank.dim()==base.dim() && weight.dim()==2;
+  if(eligible) {
+    eligible=rank.size(-1)==16 && weight.size(0)==base.size(-1) && weight.size(1)==16
+        && base.size(-1)>=128 && base.size(-1)%128==0
+        && rank.numel()>0 && rank.numel()/16<=16*65535 && rank.numel()%256==0
+        && weight.storage_offset()%4==0;
+    for(int64_t i=0;i<base.dim()-1;++i) eligible &= rank.size(i)==base.size(i);
+  }
+  for(const auto& value:{base,rank,weight})
+    eligible &= value.is_contiguous() && value.numel()<=int64_t(UINT32_MAX)
+        && !value.is_neg() && !value.is_conj();
+  TORCH_CHECK_VALUE(eligible,"unsupported RUDA rank-16 residual projection geometry");
+  auto result=at::empty(base.sizes(),base.options());
+  scientific_call(656,{base,rank,weight,result},{},{scale});
+  return result;
+}
+
 void training_mutable(const at::Tensor& t) {
   training_tensor(t);
   TORCH_CHECK(!c10::GradMode::is_enabled(), "optimizer mutation requires no_grad");

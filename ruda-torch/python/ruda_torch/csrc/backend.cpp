@@ -780,6 +780,11 @@ void record_tensor_stream(at::Tensor& value, c10::Stream stream) {
   check_stream(stream); Argument arg(value);
   stream_command(12,stream.id(),reinterpret_cast<uintptr_t>(arg.desc.allocation));
 }
+TORCH_LIBRARY_IMPL(ruda, PrivateUse1, m) {
+  m.impl("lora_epilogue_forward",lora_epilogue_forward);
+  m.impl("lora_epilogue_backward",lora_epilogue_backward);
+  m.impl("lora_rank16_residual",lora_rank16_residual);
+}
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("addr", TORCH_FN(at::native::addr));
   m.impl("addr.out", TORCH_FN(at::native::addr_out));
