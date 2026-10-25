@@ -70,7 +70,7 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
     true
 }
 
-#[ruda(launch)]
+#[ruda(launch_unchecked)]
 fn columns(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
     #[comptime] m: usize, #[comptime] k: usize, #[comptime] n: usize, #[comptime] splits: usize,
     #[comptime] as0: usize, #[comptime] as1: usize, #[comptime] bs1: usize) {
@@ -93,7 +93,7 @@ fn columns(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
     }
 }
 
-#[ruda(launch)]
+#[ruda(launch_unchecked)]
 fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
     #[comptime] m: usize, #[comptime] k: usize, #[comptime] n: usize, #[comptime] splits: usize,
     #[comptime] cols: usize, #[comptime] as0: usize, #[comptime] as1: usize, #[comptime] bs0: usize) {
@@ -121,7 +121,7 @@ fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
     }
 }
 
-#[ruda(launch)]
+#[ruda(launch_unchecked)]
 fn rank16(a: &Array<f32>, b: &Array<Vector<f32, Const<4>>>, out: &mut Array<f32>,
     #[comptime] n: usize) {
     let thread = UNIT_POS as usize;

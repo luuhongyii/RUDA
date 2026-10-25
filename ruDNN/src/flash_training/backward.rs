@@ -97,7 +97,7 @@ fn contract_tile<F: Float>(weights: &SharedMemory<F>, input: &Array<F>, input_ro
     }
 }
 
-#[ruda(launch)]
+#[ruda(launch_unchecked)]
 pub fn contraction<F: Float>(grad: &Array<F>, stats: &Array<f32>, delta: &mut Array<f32>,
     #[define(F)] _dtype: StorageType) {
     let lane = UNIT_POS as usize % 32;
@@ -112,7 +112,7 @@ pub fn contraction<F: Float>(grad: &Array<F>, stats: &Array<f32>, delta: &mut Ar
     if lane == 0 { delta[row] = sum; }
 }
 
-#[ruda(launch)]
+#[ruda(launch_unchecked)]
 pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, dq: &mut Array<F>, heads: u32, kv_heads: u32,
     scale: f32, #[comptime] causal: bool, #[define(F)] _dtype: StorageType) {
@@ -163,7 +163,7 @@ pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>
     }
 }
 
-#[ruda(launch)]
+#[ruda(launch_unchecked)]
 pub fn key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, dk: &mut Array<F>, dv: &mut Array<F>,
     heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[define(F)] _dtype: StorageType) {
