@@ -211,6 +211,34 @@ fn adamw<F: Float + RudaElement>(v: &[View], s: &[f32]) -> usize {
 
 
 // New operations are additive. Opcodes 0..5 retain API-1 semantics.
+fn analyze_batches(gradients: &[View], workspace: &View, inv: f32, with_norm: bool) -> usize {
+    let mut offset = 0usize;
+    let stats: Vec<_> = gradients.iter().map(|grad| {
+        let size = grad.len.div_ceil(32).clamp(1, 1024) * 3;
+        let view = View::packed(workspace.handle.clone().offset_start((offset * 4) as u64), vec![size], 0);
+        offset += size;
+        view
+    }).collect();
+    let c = client();
+    let mut launches = 0;
+    for dtype in [0, 1, 2] {
+        let indices: Vec<_> = (0..gradients.len()).filter(|&i| gradients[i].dtype == dtype).collect();
+        for batch in indices.chunks(16) {
+            let blocks: usize = batch.iter().map(|&i| (stats[i].len / 3).div_ceil(4)).sum();
+            macro_rules! run { ($f:ty) => { unsafe {
+                let inputs = batch.iter().map(|&i| gradients[i].arg()).collect::<SequenceArg<CudaRuntime, Tensor<$f>>>();
+                let outputs = batch.iter().map(|&i| stats[i].arg()).collect::<SequenceArg<CudaRuntime, Tensor<f32>>>();
+                optim::analyze_gradients::launch::<$f, CudaRuntime>(&c,
+                    RudaCount::Static(u32::try_from(blocks).expect("gradient batch grid overflow"), 1, 1),
+                    RudaDim::new_1d(128), inputs, outputs, inv, with_norm);
+            } }; }
+            match dtype { 0 => run!(f32), 1 => run!(f16), 2 => run!(bf16), _ => unreachable!() }
+            launches += 1;
+        }
+    }
+    launches
+}
+
 fn analyze(v: &[View], inv: f32, with_norm: bool) -> usize {
     assert!(inv.is_finite() && inv > 0.0);
     let n = v.len() - 2;
@@ -219,20 +247,11 @@ fn analyze(v: &[View], inv: f32, with_norm: bool) -> usize {
     assert_eq!((report.dtype, report.len), (0, 3));
     let required: usize = v[..n].iter().map(|g| g.len.div_ceil(32).clamp(1, 1024) * 3).sum();
     assert_eq!(workspace.len, required);
-    let c = client(); let mut offset = 0usize;
-    for grad in &v[..n] {
-        let warps = grad.len.div_ceil(32).clamp(1, 1024);
-        let stats = View::packed(workspace.handle.clone().offset_start((offset * 4) as u64), vec![warps * 3], 0);
-        macro_rules! run { ($f:ty) => { unsafe {
-            optim::analyze_gradient::launch::<$f, CudaRuntime>(&c, count(warps * 32), RudaDim::new_1d(128),
-                grad.arg(), stats.arg(), inv, with_norm);
-        } }; }
-        match grad.dtype { 0 => run!(f32), 1 => run!(f16), 2 => run!(bf16), _ => unreachable!() }
-        offset += warps * 3;
-    }
+    let c = client();
+    let launches = analyze_batches(&v[..n], workspace, inv, with_norm);
     unsafe { optim::merge_gradient_stats::launch::<CudaRuntime>(
         &c, RudaCount::Static(1, 1, 1), RudaDim::new_1d(32), workspace.arg(), report.arg()); }
-    finish_dispatch(&c); n + 1
+    finish_dispatch(&c); launches + 1
 }
 
 // API 4: reuse caller-owned scratch for bounded parallel statistics reduction.
@@ -247,17 +266,8 @@ fn analyze_hierarchical(v: &[View], inv: f32, with_norm: bool) -> usize {
     assert_eq!((scratch.dtype, scratch.len), (0, plan.scratch_elements));
     assert_eq!((report.dtype, report.len), (0, 3));
     // All layout checks are above the first write, including scratch capacity.
-    let c = client(); let mut offset = 0usize;
-    for grad in &v[..n] {
-        let warps = grad.len.div_ceil(32).clamp(1, 1024);
-        let stats = View::packed(workspace.handle.clone().offset_start((offset * 4) as u64), vec![warps * 3], 0);
-        macro_rules! run { ($f:ty) => { unsafe {
-            optim::analyze_gradient::launch::<$f, CudaRuntime>(&c, count(warps * 32), RudaDim::new_1d(128),
-                grad.arg(), stats.arg(), inv, with_norm);
-        } }; }
-        match grad.dtype { 0 => run!(f32), 1 => run!(f16), 2 => run!(bf16), _ => unreachable!() }
-        offset += warps * 3;
-    }
+    let c = client();
+    let launches = analyze_batches(&v[..n], workspace, inv, with_norm);
     let mut current = View::packed(workspace.handle.clone(), vec![rows * 3], 0);
     for stage in &plan.stages {
         let next = View::packed(scratch.handle.clone().offset_start((stage.output_offset * 4) as u64),
@@ -271,7 +281,7 @@ fn analyze_hierarchical(v: &[View], inv: f32, with_norm: bool) -> usize {
     }
     unsafe { optim::merge_gradient_stats::launch::<CudaRuntime>(
         &c, RudaCount::Static(1, 1, 1), RudaDim::new_1d(32), current.arg(), report.arg()); }
-    finish_dispatch(&c); n + plan.stages.len() + 1
+    finish_dispatch(&c); launches + plan.stages.len() + 1
 }
 
 fn batch_adamw(v: &[View], s: &[f32]) -> usize {
@@ -288,16 +298,25 @@ fn batch_adamw(v: &[View], s: &[f32]) -> usize {
             && h[3] > 0.0 && h[4] >= 0.0 && h[5] > 0.0 && h[5] <= 1.0 && h[6] > 0.0 && h[6] <= 1.0);
     }
     let c = client(); let mut launches = 0usize;
-    for i in 0..n {
-        let a = &v[i * 5..i * 5 + 5]; let h = &s[2 + i * 7..2 + (i + 1) * 7];
-        if a[0].len == 0 { continue; }
-        macro_rules! run { ($f:ty) => { unsafe {
-            optim::adamw_scaled::launch::<$f, CudaRuntime>(&c, count(a[0].len), RudaDim::new_1d(128),
-                a[0].arg(), a[1].arg(), a[2].arg(), a[3].arg(), a[4].arg(),
-                h[0], h[1], h[2], h[3], h[4], h[5], h[6], s[0], s[1], a[0].dtype != 0);
-        } }; }
-        match a[0].dtype { 0 => run!(f32), 1 => run!(f16), 2 => run!(bf16), _ => unreachable!() }
-        launches += 1;
+    for dtype in [0, 1, 2] {
+        let indices: Vec<_> = (0..n).filter(|&i| v[i * 5].dtype == dtype && v[i * 5].len != 0).collect();
+        for batch in indices.chunks(16) {
+            let blocks: usize = batch.iter().map(|&i| v[i * 5].len.div_ceil(128)).sum();
+            macro_rules! run { ($f:ty) => { unsafe {
+                let ps = batch.iter().map(|&i| v[i * 5].arg()).collect::<SequenceArg<CudaRuntime, Tensor<$f>>>();
+                let gs = batch.iter().map(|&i| v[i * 5 + 1].arg()).collect::<SequenceArg<CudaRuntime, Tensor<$f>>>();
+                let masters = batch.iter().map(|&i| v[i * 5 + 2].arg()).collect::<SequenceArg<CudaRuntime, Tensor<f32>>>();
+                let first = batch.iter().map(|&i| v[i * 5 + 3].arg()).collect::<SequenceArg<CudaRuntime, Tensor<f32>>>();
+                let second = batch.iter().map(|&i| v[i * 5 + 4].arg()).collect::<SequenceArg<CudaRuntime, Tensor<f32>>>();
+                let hypers = batch.iter().flat_map(|&i| s[2 + i * 7..2 + (i + 1) * 7].iter().copied())
+                    .collect::<SequenceArg<CudaRuntime, f32>>();
+                optim::adamw_scaled_batch::launch::<$f, CudaRuntime>(&c,
+                    RudaCount::Static(u32::try_from(blocks).expect("AdamW batch grid overflow"), 1, 1),
+                    RudaDim::new_1d(128), ps, gs, masters, first, second, hypers, s[0], s[1], dtype != 0);
+            } }; }
+            match dtype { 0 => run!(f32), 1 => run!(f16), 2 => run!(bf16), _ => unreachable!() }
+            launches += 1;
+        }
     }
     // Same ordered runtime stream; references in v live through all submissions.
     // Unlike API 1 this does not synchronize after every parameter update.

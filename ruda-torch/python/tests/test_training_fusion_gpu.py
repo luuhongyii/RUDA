@@ -5,6 +5,85 @@ from torch.nn import functional as F
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('with_norm', [False, True])
+@pytest.mark.parametrize('bad', [None, float('nan'), float('inf'), -float('inf')])
+def test_batched_gradient_analysis_preserves_each_warp(with_norm, bad):
+    torch.manual_seed(261041)
+    sizes = [0, 1, 31, 32, 33, 127, 128, 129, 32767, 32769, 65537]
+    hosts = [torch.randn(sizes[(i // 3) % len(sizes)], dtype=[torch.float32, torch.float16, torch.bfloat16][i % 3])
+             for i in range(99)]
+    if bad is not None:
+        hosts[-1][-1] = bad
+    gradients = [x.to('ruda') for x in hosts]
+    rows = [max(1, min(1024, (x.numel() + 31) // 32)) for x in hosts]
+    workspace = torch.empty(sum(rows) * 3 + 2, device='ruda').fill_(-321.)
+    report = torch.empty(3, device='ruda')
+    before = r.execution_stats()['kernel_launches']
+    r._C.training_analyze(gradients, .125, workspace[1:-1], report, with_norm)
+    assert r.execution_stats()['kernel_launches'] - before == 10
+    actual = workspace.cpu()
+    assert actual[0] == actual[-1] == -321.
+    offset = 1
+    for gradient, row, host in zip(gradients, rows, hosts):
+        partial = torch.empty(row * 3, device='ruda')
+        single = torch.empty(3, device='ruda')
+        r._C.training_analyze([gradient], .125, partial, single, with_norm)
+        torch.testing.assert_close(actual[offset:offset + row * 3], partial.cpu(), rtol=0, atol=0)
+        torch.testing.assert_close(gradient.cpu(), host, rtol=0, atol=0, equal_nan=True)
+        offset += row * 3
+    result = report.cpu()
+    assert result[0] == (bad is not None)
+    if bad is None and with_norm:
+        reference = torch.cat([x.double() for x in hosts]).norm() * .125
+        torch.testing.assert_close(result[1].double() * result[2].double().sqrt(), reference, rtol=2e-6, atol=0)
+    if not with_norm:
+        assert result[1] == result[2] == 0
+
+
+@pytest.mark.parametrize('inverse,clip', [(1., 1.), (.125, .7), (1e-20, 1e-20)])
+def test_batched_adamw_matches_single_updates_with_mixed_ragged_buffers(inverse, clip):
+    torch.manual_seed(261042)
+    dtypes = [torch.float32, torch.float16, torch.bfloat16]
+    sizes = [1, 31, 32, 33, 127, 128, 129, 1025, 32769]
+    hosts = []
+    hypers = []
+    for i in range(99):
+        length, dtype = sizes[(i // 3) % len(sizes)], dtypes[i % 3]
+        p, g = torch.randn(length, dtype=dtype), torch.randn(length, dtype=dtype)
+        hosts.append([p, g, p.float(), torch.randn(length), torch.rand(length)])
+        hypers.append([.001 * (i % 4 + 1), .8 + .01 * (i % 5), .93, 1e-6, .03, .2, .07])
+    def buffers():
+        values, backing = [], []
+        for host in hosts:
+            group = []
+            for x in host:
+                storage = torch.full((x.numel() + 2,), -320., dtype=x.dtype, device='ruda')
+                storage[1:-1].copy_(x)
+                backing.append(storage)
+                group.append(storage[1:-1])
+            if host[0].dtype == torch.float32:
+                group[2] = group[0]
+            values.append(group)
+        return values, backing
+    actual, backing = buffers()
+    expected, _ = buffers()
+    stream = r.Stream()
+    with r.stream(stream):
+        for _ in range(2):
+            before = r.execution_stats()['kernel_launches']
+            r._C.training_adamw_batch_(*[list(x) for x in zip(*actual)], hypers, inverse, clip)
+            assert r.execution_stats()['kernel_launches'] - before == 9
+            for group, h in zip(expected, hypers):
+                r._C.training_adamw_batch_(*[[x] for x in group], [h], inverse, clip)
+    for a, b, host in zip(actual, expected, hosts):
+        for x, y in zip(a, b):
+            torch.testing.assert_close(x.cpu(), y.cpu(), rtol=0, atol=0)
+        torch.testing.assert_close(a[1].cpu(), host[1], rtol=0, atol=0)
+    for storage in backing:
+        values = storage.cpu()
+        assert values[0] == values[-1] == -320.
+
+
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
 def test_launch_metadata_reuse_keeps_shapes_strides_and_streams(dtype):
     streams = [r.Stream(), r.Stream()]

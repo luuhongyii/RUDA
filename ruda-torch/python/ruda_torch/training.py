@@ -389,8 +389,8 @@ class AdamW(torch.optim.Optimizer):
     def _step_fused(self, active, inverse, loss, global_grad_norm=None):
         """Two native calls: read-only analysis, then one batched update command.
 
-        This is not one multi-tensor GPU kernel: each parameter still launches
-        its own update. Gradients remain scaled and unchanged, so callers must
+        Updates use bounded, dtype-grouped multi-tensor kernels.
+        Gradients remain scaled and unchanged, so callers must
         zero them before accumulating the NEXT step. FP32-unscale rounding is
         deliberately not the same as API 1's FP16/BF16 gradient writeback.
         """

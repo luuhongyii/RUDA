@@ -84,11 +84,19 @@ pub fn analyze_gradient<F: Float + RudaElement>(
     grad: &Tensor<F>, stats: &mut Tensor<f32>, inv_scale: f32,
     #[comptime] with_norm: bool,
 ) {
-    let warp = (ABSOLUTE_POS / 32) as usize;
-    let lane = (ABSOLUTE_POS % 32) as usize;
+    analyze_gradient_at::<F>(grad, stats, inv_scale, ABSOLUTE_POS as usize, with_norm);
+}
+
+#[ruda]
+fn analyze_gradient_at<F: Float + RudaElement>(
+    grad: &Tensor<F>, stats: &mut Tensor<f32>, inv_scale: f32, position: usize,
+    #[comptime] with_norm: bool,
+) {
+    let warp = position / 32;
+    let lane = position % 32;
     let warps = stats.len() / 3;
     if warp < warps {
-        let mut pos = ABSOLUTE_POS as usize;
+        let mut pos = position;
         let mut bad = 0.0f32;
         let mut scale = 0.0f32;
         let mut sum = 0.0f32;
@@ -124,6 +132,26 @@ pub fn analyze_gradient<F: Float + RudaElement>(
             stats[warp * 3 + 1] = squares;
             stats[warp * 3 + 2] = invalid;
         }
+    }
+}
+
+#[ruda(launch)]
+pub fn analyze_gradients<F: Float + RudaElement>(
+    gradients: &Sequence<Tensor<F>>, stats: &mut Sequence<Tensor<f32>>, inv_scale: f32,
+    #[comptime] with_norm: bool,
+) {
+    let block = RUDA_POS_X as usize;
+    let mut first = 0usize;
+    #[unroll]
+    for tensor in 0..gradients.len() {
+        let output = stats.index_mut(tensor);
+        let warps = output.len() / 3;
+        let blocks = warps / 4 + usize::cast_from(warps % 4 != 0);
+        if block >= first && block < first + blocks {
+            analyze_gradient_at::<F>(gradients.index(tensor), output, inv_scale,
+                (block - first) * 128 + UNIT_POS as usize, with_norm);
+        }
+        first += blocks;
     }
 }
 
@@ -171,7 +199,18 @@ pub fn adamw_scaled<F: Float + RudaElement>(
     correction1: f32, correction2: f32, inv_scale: f32, clip: f32,
     #[comptime] separate_master: bool,
 ) {
-    let pos = ABSOLUTE_POS as usize;
+    adamw_scaled_at::<F>(parameter, gradient, master, first, second, lr, beta1, beta2, epsilon,
+        decay, correction1, correction2, inv_scale, clip, ABSOLUTE_POS as usize, separate_master);
+}
+
+#[ruda]
+fn adamw_scaled_at<F: Float + RudaElement>(
+    parameter: &mut Tensor<F>, gradient: &Tensor<F>, master: &mut Tensor<f32>,
+    first: &mut Tensor<f32>, second: &mut Tensor<f32>,
+    lr: f32, beta1: f32, beta2: f32, epsilon: f32, decay: f32,
+    correction1: f32, correction2: f32, inv_scale: f32, clip: f32, pos: usize,
+    #[comptime] separate_master: bool,
+) {
     if pos < parameter.len() {
         let g = (f32::cast_from(gradient[pos]) * inv_scale) * clip;
         let m = beta1 * first[pos] + (1.0f32 - beta1) * g;
@@ -184,6 +223,32 @@ pub fn adamw_scaled<F: Float + RudaElement>(
         second[pos] = v;
         if comptime!(separate_master) { master[pos] = p; }
         parameter[pos] = F::cast_from(p);
+    }
+}
+
+#[ruda(launch)]
+pub fn adamw_scaled_batch<F: Float + RudaElement>(
+    parameters: &mut Sequence<Tensor<F>>, gradients: &Sequence<Tensor<F>>,
+    masters: &mut Sequence<Tensor<f32>>, first: &mut Sequence<Tensor<f32>>,
+    second: &mut Sequence<Tensor<f32>>, hypers: &Sequence<f32>, inv_scale: f32, clip: f32,
+    #[comptime] separate_master: bool,
+) {
+    let block = RUDA_POS_X as usize;
+    let mut start = 0usize;
+    #[unroll]
+    for tensor in 0..parameters.len() {
+        let parameter = parameters.index_mut(tensor);
+        let blocks = parameter.len() / 128 + usize::cast_from(parameter.len() % 128 != 0);
+        if block >= start && block < start + blocks {
+            adamw_scaled_at::<F>(parameter, gradients.index(tensor), masters.index_mut(tensor),
+                first.index_mut(tensor), second.index_mut(tensor),
+                *hypers.index(tensor * 7), *hypers.index(tensor * 7 + 1),
+                *hypers.index(tensor * 7 + 2), *hypers.index(tensor * 7 + 3),
+                *hypers.index(tensor * 7 + 4), *hypers.index(tensor * 7 + 5),
+                *hypers.index(tensor * 7 + 6), inv_scale, clip,
+                (block - start) * 128 + UNIT_POS as usize, separate_master);
+        }
+        start += blocks;
     }
 }
 
