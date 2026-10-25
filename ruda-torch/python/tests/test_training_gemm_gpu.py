@@ -65,6 +65,32 @@ def test_batched_training_tile_preserves_gapped_strides(batch, m, nt, dtype, mon
     torch.testing.assert_close(actual, reference.float(), rtol=2e-5, atol=2e-5)
 
 
+@pytest.mark.parametrize('shape', [(32, 32, 64), (64, 96, 192), (96, 64, 384),
+                                   (128, 160, 64), (160, 96, 192), (256, 256, 512),
+                                   (768, 64, 128), (1024, 96, 256)])
+@pytest.mark.parametrize('nt', [False, True])
+@pytest.mark.parametrize('precision', ['fp32', 'cuda'])
+def test_ordered_bf16_tiles_general_shapes(shape, nt, precision, monkeypatch):
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', precision)
+    torch.manual_seed(261034)
+    m, k, n = shape
+    a = torch.randn(2, m, k + 8, dtype=torch.bfloat16)
+    b = torch.randn(2, n, k + 8, dtype=torch.bfloat16) if nt else torch.randn(2, k, n + 8, dtype=torch.bfloat16)
+    x, y = a.to('ruda')[:, :, 8:], b.to('ruda')[:, :, 8:]
+    left, right = a[:, :, 8:].double(), b[:, :, 8:].double()
+    if nt:
+        y = y.transpose(1, 2); right = right.transpose(1, 2)
+    expected = (left @ right).float()
+    actual = torch.empty(2, m, n, dtype=torch.float32, device='ruda')
+    r._C.execute(30, x, y, actual, 0.)
+    torch.testing.assert_close(actual.cpu(), expected, rtol=2e-5, atol=2e-5)
+    for index in range(2):
+        single = torch.empty(m, n, dtype=torch.float32, device='ruda')
+        r._C.execute(7, x[index], y[index], single, 0.)
+        torch.testing.assert_close(single.cpu(), actual[index].cpu(), rtol=0, atol=0)
+    torch.testing.assert_close((x @ y).cpu(), actual.cpu().bfloat16(), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize('m,n', [(16, 128), (32, 3584), (512, 18944)])
 @pytest.mark.parametrize('offset', [0, 1])
 def test_fp32_rank16_projection(m, n, offset):

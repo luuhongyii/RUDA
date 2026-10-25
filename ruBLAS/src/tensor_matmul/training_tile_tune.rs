@@ -38,7 +38,7 @@ fn inputs<R: Runtime>(_: &TileKey,
 }
 
 pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>, last_k: usize) {
-    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v4");
+    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v5");
     let client = a.client.clone();
     let id = RudaTuneId::new(&client, &a.device);
     let candidates = TUNER.init_for_device(&id, || {
@@ -53,6 +53,9 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("sync_32x128x32", 32, 128, 32, false),
             ("async_32x128x32", 32, 128, 32, true),
             ("async_32x128x64", 32, 128, 64, true),
+            ("sync_32x64x32", 32, 64, 32, false),
+            ("async_32x64x32", 32, 64, 32, true),
+            ("async_32x64x64", 32, 64, 64, true),
         ] {
             set = set.with(Tunable::new(name,
                 move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {

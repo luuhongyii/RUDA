@@ -15,7 +15,7 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
     let nt = b.meta.strides()[d] == 1;
     let lda = a.meta.strides()[d];
     let ldb = if nt { b.meta.strides()[d+1] } else { b.meta.strides()[d] };
-    if !matches!(m, 32 | 512) || k == 0 || k % 32 != 0 || n < 128 || n % 128 != 0
+    if m == 0 || m % 32 != 0 || k == 0 || k % 32 != 0 || n == 0 || n % 64 != 0
         || b.meta.shape()[d] != k || a.meta.strides()[d+1] != 1 || lda < k || lda % 8 != 0
         || (!nt && b.meta.strides()[d+1] != 1) || ldb < (if nt { k } else { n }) || ldb % 8 != 0
         || out.meta.shape()[d..] != [m, n] || out.meta.strides()[d..] != [n, 1]
@@ -72,7 +72,7 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     last_k: usize, bm: usize, bn: usize, bk: usize, asynchronous: bool) -> Result<RudaTensor<R>, String> {
     let d = a.meta.num_dims() - 2;
     let (m, k, n) = (a.meta.shape()[d], a.meta.shape()[d+1], b.meta.shape()[d+1]);
-    if m % bm != 0 || (m == 512 && bm == 32) { return Err("training M tile does not match the row geometry".into()); }
+    if m % bm != 0 || n % bn != 0 { return Err("training tile does not divide the output geometry".into()); }
     if k % bk != 0 || last_k == 0 || last_k > k || last_k % bk != 0 {
         return Err("training K tile does not divide the reduction".into());
     }
@@ -82,6 +82,9 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     let batch = if d == 0 { 1 } else { a.meta.shape()[0] };
     let a_batch = if d == 0 { 0 } else { a.meta.strides()[0] };
     let b_batch = if d == 0 { 0 } else { b.meta.strides()[0] };
+    if n / bn * (m / bm) > a.client.properties().hardware.max_ruda_count.0 as usize {
+        return Err("training output grid exceeds the device limit".into());
+    }
     let a_span = (batch - 1) * a_batch + (m - 1) * lda + last_k;
     let b_span = (batch - 1) * b_batch + if nt { (n - 1) * ldb + last_k } else { (last_k - 1) * ldb + n };
     let mut left = a.clone();
