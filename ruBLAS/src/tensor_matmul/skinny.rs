@@ -12,13 +12,28 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
         || !a.client.same_execution_queue(&b.client) || !a.client.same_execution_queue(&out.client)
     { return false; }
     let (m, k, n) = (a.meta.shape()[0], a.meta.shape()[1], b.meta.shape()[1]);
+    let hw = &a.client.properties().hardware;
+    if k == 16 && m > 0 && m % 16 == 0 && n >= 128 && n % 128 == 0
+        && a.meta.strides()[..] == [16, 1] && b.meta.shape()[0] == 16
+        && b.meta.strides()[..] == [1, 16] && out.meta.shape()[..] == [m, n]
+        && out.meta.strides()[..] == [n, 1]
+        && b.handle.offset_start.unwrap_or(0) % 16 == 0
+        && m.checked_mul(n).is_some_and(|v| v <= u32::MAX as usize)
+        && n <= u32::MAX as usize / 16 && m <= u32::MAX as usize / 16
+        && hw.plane_size_min == 32 && hw.plane_size_max == 32
+        && n / 128 <= hw.max_ruda_count.0 as usize && m / 16 <= hw.max_ruda_count.1 as usize
+    {
+        rank16::launch::<R>(&a.client, RudaCount::Static((n / 128) as u32, (m / 16) as u32, 1),
+            RudaDim::new_1d(128), a.clone().into_array_arg(), b.clone().into_array_arg(),
+            out.clone().into_array_arg(), n);
+        return true;
+    }
     if m > 0 && m <= 32 && n > 32 && k >= 512 && b.meta.shape()[0] == k
         && out.meta.shape()[..] == [m, n]
     {
         return try_launch(&swap_dims(b.clone(), 0, 1), &swap_dims(a.clone(), 0, 1),
                           &swap_dims(out.clone(), 0, 1));
     }
-    let hw = &a.client.properties().hardware;
     if m == 0 || k < 512 || n == 0 || n > 32 || b.meta.shape()[0] != k
         || out.meta.shape()[..] != [m, n] || (a.meta.strides()[1] != 1 && a.meta.strides()[0] != 1)
         || !((out.meta.strides()[1] == 1 && (m == 1 || out.meta.strides()[0] == n))
@@ -43,11 +58,11 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
     if column_major {
         columns::launch::<R>(&a.client, grid, RudaDim::new_1d(128),
             a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
-            m as u32, k as u32, n as u32, splits as u32);
+            m, k, n, splits, a.meta.strides()[0], a.meta.strides()[1], b.meta.strides()[1]);
     } else {
         rows::launch::<R>(&a.client, grid, RudaDim::new_1d(128),
             a.clone().into_tensor_arg(), b.clone().into_tensor_arg(), partial.clone().into_array_arg(),
-            m as u32, k as u32, n as u32, splits as u32, n.next_power_of_two());
+            m, k, n, splits, n.next_power_of_two(), a.meta.strides()[0], a.meta.strides()[1], b.meta.strides()[0]);
     }
     reduce::launch::<R>(&a.client, RudaCount::Static((m * n).div_ceil(128) as u32, 1, 1),
         RudaDim::new_1d(128), partial.into_array_arg(), out.clone().into_tensor_arg(), splits as u32);
@@ -56,7 +71,8 @@ pub(super) fn try_launch<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, out: 
 
 #[ruda(launch)]
 fn columns(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
-    m: u32, k: u32, n: u32, splits: u32) {
+    #[comptime] m: usize, #[comptime] k: usize, #[comptime] n: usize, #[comptime] splits: usize,
+    #[comptime] as0: usize, #[comptime] as1: usize, #[comptime] bs1: usize) {
     let warp = RUDA_POS_X as usize * 4 + UNIT_POS as usize / 32;
     let lane = UNIT_POS as usize % 32;
     let output = warp / splits as usize;
@@ -68,7 +84,7 @@ fn columns(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
         for offset in 0usize..32 {
             let inner = split * 1024 + offset * 32 + lane;
             if inner < k as usize {
-                acc = fma(a[row * a.stride(0) + inner * a.stride(1)], b[inner + col * b.stride(1)], acc);
+                acc = fma(a[row * as0 + inner * as1], b[inner + col * bs1], acc);
             }
         }
         let total = plane_sum(acc);
@@ -78,7 +94,8 @@ fn columns(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
 
 #[ruda(launch)]
 fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
-    m: u32, k: u32, n: u32, splits: u32, #[comptime] cols: usize) {
+    #[comptime] m: usize, #[comptime] k: usize, #[comptime] n: usize, #[comptime] splits: usize,
+    #[comptime] cols: usize, #[comptime] as0: usize, #[comptime] as1: usize, #[comptime] bs0: usize) {
     let warp = RUDA_POS_X as usize * 4 + UNIT_POS as usize / 32;
     let lane = UNIT_POS as usize % 32;
     let row = warp / splits as usize;
@@ -89,7 +106,7 @@ fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
         for offset in 0usize..(512 / (32 / cols)) {
             let inner = split * 512 + offset * (32 / cols) + lane / cols;
             if inner < k as usize && col < n as usize {
-                acc = fma(a[row * a.stride(0) + inner * a.stride(1)], b[inner * b.stride(0) + col], acc);
+                acc = fma(a[row * as0 + inner * as1], b[inner * bs0 + col], acc);
             }
         }
         if comptime!(cols <= 16) { acc += plane_shuffle_xor(acc, 16u32); }
@@ -101,6 +118,32 @@ fn rows(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
             partial[(split * m as usize + row) * n as usize + col] = acc;
         }
     }
+}
+
+#[ruda(launch)]
+fn rank16(a: &Array<f32>, b: &Array<Vector<f32, Const<4>>>, out: &mut Array<f32>,
+    #[comptime] n: usize) {
+    let thread = UNIT_POS as usize;
+    let row = RUDA_POS_Y as usize * 16;
+    let col = RUDA_POS_X as usize * 128 + thread;
+    let mut shared = SharedMemory::<f32>::new(256usize);
+    #[unroll]
+    for i in 0usize..2 { shared[thread + i * 128] = a[row * 16 + thread + i * 128]; }
+    sync_ruda();
+    let mut acc = Array::<f32>::new(16usize);
+    #[unroll]
+    for i in 0usize..16 { acc[i] = 0.0f32; }
+    #[unroll]
+    for group in 0usize..4 {
+        let value = b[col * 4 + group];
+        #[unroll]
+        for k in 0usize..4 {
+            #[unroll]
+            for i in 0usize..16 { acc[i] = fma(shared[i * 16 + group * 4 + k], value[k], acc[i]); }
+        }
+    }
+    #[unroll]
+    for i in 0usize..16 { out[(row + i) * n + col] = acc[i]; }
 }
 
 #[ruda(launch)]

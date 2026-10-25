@@ -61,6 +61,7 @@ pub fn matmul_bf16_serial_k3<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
         let mut output = partial.clone();
         output.meta.remove(0);
         output.handle.offset_start = Some(partial.handle.offset_start.unwrap_or(0)+(part*512*3584*4) as u64);
+        if super::matmul_bf16_training(&left, &right, &output) { continue; }
         match launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
             left.clone(),right.clone(),output.clone(),F32MathMode::Strict) {
             Ok(()) => {},

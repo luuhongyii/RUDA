@@ -3,6 +3,7 @@ mod skinny;
 mod accurate;
 mod sliced;
 mod training_tune;
+mod training_gemm;
 #[allow(unsafe_code)]
 mod gemm;
 mod fused;
@@ -17,6 +18,7 @@ mod tune;
 pub mod utils;
 
 pub use base::*;
+pub use training_gemm::matmul_bf16_training;
 pub use sliced::{matmul_bf16_sliced_k2_bias, matmul_bf16_serial_k3, matmul_bf16_head_parallel_k6};
 pub use gemm::{GemmOptions, gemm};
 pub use fused::{GemmActivation, FusedGemmStrategy, matmul_bias_activation};
