@@ -28,7 +28,9 @@ impl Emitter {
         if matches!(variable.kind, VariableKind::LocalArray { .. }) {
             let (base, space) = self.memory_base(variable, false)?;
             for (index, register) in registers.iter().enumerate() {
-                if ty.half() {
+                if ty.half() && variable.ty.vector_size() >= 2 {
+                    self.line(format!("ld.{space}.b32 {register}, [{base}+{}];", index * 4));
+                } else if ty.half() {
                     let low = self.reg(ty);
                     let high = self.reg(ty);
                     self.line(format!("ld.{space}.b16 {low}, [{base}+{}];", index * 4));
@@ -63,7 +65,9 @@ impl Emitter {
         if matches!(variable.kind, VariableKind::LocalArray { .. }) {
             let (base, space) = self.memory_base(variable, true)?;
             for (index, register) in registers.iter().enumerate() {
-                if ty.half() {
+                if ty.half() && variable.ty.vector_size() >= 2 {
+                    self.line(format!("st.{space}.b32 [{base}+{}], {register};", index * 4));
+                } else if ty.half() {
                     let low = self.reg(ty);
                     let high = self.reg(ty);
                     self.line(format!("mov.b32 {{{low}, {high}}}, {register};"));

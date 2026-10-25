@@ -15,6 +15,7 @@ mod training_math;
 mod vector_memory;
 mod unsigned_power2;
 mod scaled;
+mod matrix_registers;
 
 fn options() -> PtxCompilationOptions {
     PtxCompilationOptions {

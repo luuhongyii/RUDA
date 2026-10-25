@@ -43,7 +43,7 @@ fn inputs<R: Runtime>(_: &TileKey,
 }
 
 pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>, last_k: usize) {
-    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v9");
+    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v11");
     let client = a.client.clone();
     let id = RudaTuneId::new(&client, &a.device);
     let candidates = TUNER.init_for_device(&id, || {
@@ -69,10 +69,12 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("async_64x128x32", 64, 128, 32, true),
             ("async_64x128x64", 64, 128, 64, true),
         ] {
-            set = set.with(Tunable::new(name,
-                move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
-                    super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, asynchronous, 32)
-                }));
+            for manual in [false, true] {
+                set = set.with(Tunable::new(if manual { format!("mma_{name}") } else { name.into() },
+                    move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
+                        super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, asynchronous, 32, manual)
+                    }));
+            }
         }
         for (name, m, n, k) in [
             ("async_wm64_128x128x32", 128, 128, 32),
@@ -82,10 +84,12 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("async_wm64_256x64x32", 256, 64, 32),
             ("async_wm64_256x64x64", 256, 64, 64),
         ] {
-            set = set.with(Tunable::new(name,
-                move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
-                    super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 64)
-                }));
+            for manual in [false, true] {
+                set = set.with(Tunable::new(if manual { format!("mma_{name}") } else { name.into() },
+                    move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
+                        super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 64, manual)
+                    }));
+            }
         }
         set
     });

@@ -72,7 +72,11 @@ pub(super) fn serial_k3<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, partia
 
 #[allow(unsafe_code)]
 pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>,
-    last_k: usize, bm: usize, bn: usize, bk: usize, asynchronous: bool, warp_m: usize) -> Result<RudaTensor<R>, String> {
+    last_k: usize, bm: usize, bn: usize, bk: usize, asynchronous: bool, warp_m: usize, manual: bool) -> Result<RudaTensor<R>, String> {
+    if manual && !a.client.features().matmul.mma.contains(&MmaConfig {
+        a_type: DType::BF16.into(), b_type: DType::BF16.into(), cd_type: DType::F32.into(),
+        m: 16, n: 8, k: 16,
+    }) { return Err("manual BF16 MMA is unavailable on this device".into()); }
     let d = a.meta.num_dims() - 2;
     let (m, k, n) = (a.meta.shape()[d], a.meta.shape()[d+1], b.meta.shape()[d+1]);
     if m % bm != 0 || n % bn != 0 { return Err("training tile does not divide the output geometry".into()); }
@@ -111,10 +115,17 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     if d == 1 { left.meta.remove(0); right.meta.remove(0); }
     left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
     right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
-    unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
-        left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, ta, nt,
-        m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m,
-        DType::BF16.into(), out.dtype.into(), output_vector_size(&out)); }
+    if manual {
+        unsafe { super::training_mma::tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
+            left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, ta, nt,
+            m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m,
+            DType::BF16.into(), out.dtype.into(), output_vector_size(&out)); }
+    } else {
+        unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
+            left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, ta, nt,
+            m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m,
+            DType::BF16.into(), out.dtype.into(), output_vector_size(&out)); }
+    }
     Ok(out)
 }
 
@@ -239,7 +250,7 @@ fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array
 }
 
 #[ruda]
-fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
+pub(super) fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     sa: &mut SharedMemory<Vector<F, Const<8>>>, sb: &mut SharedMemory<Vector<F, Const<8>>>,
     row: usize, col: usize, block: usize, bank: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
