@@ -137,6 +137,7 @@ fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
     let warp = thread / 32;
+    let output_width = out.vector_size().comptime();
     // Adjacent CTAs reuse the weight tile; smaller tiles keep serial-K views occupied.
     let row = RUDA_POS_X as usize % (m / bm) * bm;
     let col = RUDA_POS_X as usize / (m / bm) * bn;
@@ -222,14 +223,14 @@ fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array
                 &acc[i * (bn / 32) + j], 16u32, cmma::MatrixLayout::RowMajor);
             sync_plane();
             #[unroll]
-            for t in 0usize..(8 / OS::value()) {
-                let pos = (lane + t * 32) * OS::value();
+            for t in 0usize..(8 / output_width) {
+                let pos = (lane + t * 32) * output_width;
                 let mut values = Vector::<O, OS>::empty();
                 #[unroll]
-                for v in 0usize..OS::value() {
+                for v in 0usize..output_width {
                     values[v] = O::cast_from(epilogue[warp * 256 + pos + v]);
                 }
-                out[((RUDA_POS_Y as usize * m + row + wm + i * 16 + pos / 16) * n + col + wn + j * 16 + pos % 16) / OS::value()]
+                out[((RUDA_POS_Y as usize * m + row + wm + i * 16 + pos / 16) * n + col + wn + j * 16 + pos % 16) / output_width]
                     = values;
             }
             sync_plane();

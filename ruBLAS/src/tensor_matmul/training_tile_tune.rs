@@ -43,7 +43,7 @@ fn inputs<R: Runtime>(_: &TileKey,
 }
 
 pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>, last_k: usize) {
-    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v8");
+    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v9");
     let client = a.client.clone();
     let id = RudaTuneId::new(&client, &a.device);
     let candidates = TUNER.init_for_device(&id, || {
