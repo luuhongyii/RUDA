@@ -32,7 +32,7 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
     let b_batch = if d == 0 { 0 } else { b.meta.strides()[0] };
     if batch == 0 || batch > a.client.properties().hardware.max_ruda_count.1 as usize
         || (d == 1 && (b.meta.shape()[0] != batch || out.meta.shape()[0] != batch
-            || a_batch < a_span || b_batch < b_span || a_batch % 8 != 0 || b_batch % 8 != 0
+            || a_batch % 8 != 0 || b_batch % 8 != 0
             || m.checked_mul(n) != Some(out.meta.strides()[0])))
         || (batch - 1).checked_mul(a_batch).and_then(|v| v.checked_add(a_span)).is_none_or(|v| v > u32::MAX as usize)
         || (batch - 1).checked_mul(b_batch).and_then(|v| v.checked_add(b_span)).is_none_or(|v| v > u32::MAX as usize)

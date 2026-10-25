@@ -211,3 +211,42 @@ def test_fp32_skinny_shared_tiles_nonfinite_values():
     a[0, 0], a[1, 0], a[2, 0] = float('inf'), float('-inf'), float('nan')
     b[0, 1] = 0
     torch.testing.assert_close((a.to('ruda') @ b.to('ruda')).cpu(), a @ b, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize('m,k,n', [(32, 64, 64), (64, 96, 32), (96, 128, 96)])
+@pytest.mark.parametrize('layout', ['interleaved_left', 'interleaved_right', 'broadcast_left', 'broadcast_right'])
+@pytest.mark.parametrize('precision', ['fp32', 'cuda'])
+def test_bf16_tiles_readonly_overlapping_batches(m, k, n, layout, precision, monkeypatch):
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', precision)
+    torch.manual_seed(261044)
+    batch = 3
+    a = torch.randn(1 if layout == 'broadcast_left' else batch, m, k + 8, dtype=torch.bfloat16)
+    b = torch.randn(1 if layout == 'broadcast_right' else batch, k, n + 8, dtype=torch.bfloat16)
+    left, right = a[:, :, 8:].expand(batch, m, k), b[:, :, 8:].expand(batch, k, n)
+    x = a.to('ruda')[:, :, 8:].expand(batch, m, k)
+    y = b.to('ruda')[:, :, 8:].expand(batch, k, n)
+    if layout == 'interleaved_left':
+        a = torch.randn(m, batch * k + 8, dtype=torch.bfloat16)
+        shape, strides = (batch, m, k), (k, batch * k + 8, 1)
+        left = a.as_strided(shape, strides, 8)
+        x = a.to('ruda').as_strided(shape, strides, 8)
+    if layout == 'interleaved_right':
+        b = torch.randn(n, batch * k + 8, dtype=torch.bfloat16)
+        shape, strides = (batch, k, n), (k, 1, batch * k + 8)
+        right = b.as_strided(shape, strides, 8)
+        y = b.to('ruda').as_strided(shape, strides, 8)
+    expected = (left.double() @ right.double()).float()
+    backing = torch.full((batch + 1, m, n), float('nan'), dtype=torch.float32, device='ruda')
+    actual = backing[1:]
+    r._C.execute(30, x, y, actual, 0.)
+    values = actual.cpu()
+    torch.testing.assert_close(values, expected, rtol=1e-4, atol=2e-4)
+    assert float((values.double() - expected.double()).norm() / expected.double().norm()) < 2e-6
+    assert torch.isnan(backing[0].cpu()).all()
+    torch.testing.assert_close(x.cpu(), left, rtol=0, atol=0)
+    torch.testing.assert_close(y.cpu(), right, rtol=0, atol=0)
+    for index in range(batch):
+        single = torch.empty(m, n, dtype=torch.float32, device='ruda')
+        r._C.execute(7, x[index], y[index], single, 0.)
+        torch.testing.assert_close(single.cpu(), values[index], rtol=0, atol=0)
+    torch.testing.assert_close((x @ y).cpu(), values.bfloat16(), rtol=0, atol=0)

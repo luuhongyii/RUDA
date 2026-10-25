@@ -104,7 +104,9 @@ pub fn matmul_bf16_head_parallel_k6<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<
     right.meta.shape_mut()[0] = 25344;
     right.meta.insert(0,6,25344*3584);
     let partial = empty_device_contiguous_dtype(a.client.clone(),a.device.clone(),Shape::from([6,m,3584]),DType::F32);
-    launch_matmul_with_precision(&Strategy::Auto,left,right,partial.clone(),F32MathMode::Strict)?;
+    if !super::matmul_bf16_training(&left, &right, &partial) {
+        launch_matmul_with_precision(&Strategy::Auto,left,right,partial.clone(),F32MathMode::Strict)?;
+    }
     parallel_reduce::launch::<R>(&a.client,RudaCount::Static((m*3584).div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
         partial.into_array_arg(),out.clone().into_array_arg(),out.dtype.into());
     Ok(out)
