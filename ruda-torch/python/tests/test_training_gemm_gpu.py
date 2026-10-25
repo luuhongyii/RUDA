@@ -177,3 +177,26 @@ def test_fp32_lora_projection_reuses_input(m, k, padded):
     actual = (x @ y).cpu()
     torch.testing.assert_close(actual, reference, rtol=2e-4, atol=5e-5)
     assert float((actual.double() - reference.double()).norm() / reference.double().norm()) < 1e-6
+
+
+@pytest.mark.parametrize('m,k', [(16, 512), (48, 1536), (80, 1024)])
+@pytest.mark.parametrize('transposed', [False, True])
+def test_fp32_skinny_shared_tiles_with_unaligned_views(m, k, transposed):
+    torch.manual_seed(261041)
+    a = torch.randn(k, m + 1) if transposed else torch.randn(m, k + 1)
+    b = torch.randn(k, 17)
+    x, y = a.to('ruda')[:, 1:], b.to('ruda')[:, 1:]
+    left = a[:, 1:].double()
+    if transposed:
+        x = x.t(); left = left.t()
+    expected = (left @ b[:, 1:].double()).float()
+    actual = (x @ y).cpu()
+    torch.testing.assert_close(actual, expected, rtol=2e-4, atol=5e-5)
+    assert float((actual.double() - expected.double()).norm() / expected.double().norm()) < 1e-6
+
+
+def test_fp32_skinny_shared_tiles_nonfinite_values():
+    a, b = torch.ones(48, 512), torch.ones(512, 16)
+    a[0, 0], a[1, 0], a[2, 0] = float('inf'), float('-inf'), float('nan')
+    b[0, 1] = 0
+    torch.testing.assert_close((a.to('ruda') @ b.to('ruda')).cpu(), a @ b, rtol=0, atol=0, equal_nan=True)

@@ -163,21 +163,40 @@ fn rows_transposed(a: &Tensor<f32>, b: &Tensor<f32>, partial: &mut Array<f32>,
     #[comptime] m: usize, #[comptime] splits: usize, #[comptime] as0: usize, #[comptime] as1: usize, #[comptime] bs0: usize) {
     let thread = UNIT_POS as usize;
     let split = RUDA_POS_X as usize % splits;
-    let row = RUDA_POS_X as usize / splits * 16 + thread / 32 * 4 + thread % 4;
+    let tile_row = RUDA_POS_X as usize / splits * 16;
+    let local_row = thread / 32 * 4 + thread % 4;
+    let row = tile_row + local_row;
     let parity = thread / 4 % 2;
     let col = thread % 32 / 8 * 4;
+    let stride = comptime!(if as0 == 1 { 16usize } else { 17usize });
+    let mut left = SharedMemory::<f32>::new_aligned(32 * stride, 32usize);
+    let mut right = SharedMemory::<f32>::new_aligned(32 * 16, 32usize);
     let mut acc = Array::<f32>::new(4usize);
     #[unroll]
     for j in 0usize..4 { acc[j] = 0.0f32; }
     // Keep the original even/odd FMA chains and split reduction order exactly.
-    for group in 0usize..64 {
+    for stage in 0usize..16 {
         #[unroll]
         for i in 0usize..4 {
-            let inner = split * 512 + group * 8 + i * 2 + parity;
-            let value = a[row * as0 + inner * as1];
-            #[unroll]
-            for j in 0usize..4 { acc[j] = fma(value, b[inner * bs0 + col + j], acc[j]); }
+            let p = thread + i * 128;
+            if comptime!(as0 == 1) {
+                left[(p / 16) * stride + p % 16] = a[(tile_row + p % 16) * as0 + (split * 512 + stage * 32 + p / 16) * as1];
+            } else {
+                left[(p % 32) * stride + p / 32] = a[(tile_row + p / 32) * as0 + (split * 512 + stage * 32 + p % 32) * as1];
+            }
+            right[p] = b[(split * 512 + stage * 32 + p / 16) * bs0 + p % 16];
         }
+        sync_ruda();
+        for group in 0usize..4 {
+            #[unroll]
+            for i in 0usize..4 {
+                let inner = group * 8 + i * 2 + parity;
+                let value = left[inner * stride + local_row];
+                #[unroll]
+                for j in 0usize..4 { acc[j] = fma(value, right[inner * 16 + col + j], acc[j]); }
+            }
+        }
+        sync_ruda();
     }
     #[unroll]
     for j in 0usize..4 {
