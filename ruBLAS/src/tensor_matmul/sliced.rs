@@ -52,26 +52,28 @@ pub fn matmul_bf16_serial_k3<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>,
     let k = a.meta.shape()[1];
     let block = k.div_ceil(3*64)*64;
     let partial = empty_device_contiguous_dtype(a.client.clone(),a.device.clone(),Shape::from([3,512,3584]),DType::F32);
-    for part in 0..3 {
-        let start = part*block;
-        let len = (k-start).min(block);
-        let mut left = a.clone();
-        left.meta.shape_mut()[1] = len;
-        left.handle.offset_start = Some(a.handle.offset_start.unwrap_or(0)+(start*a.meta.strides()[1]*2) as u64);
-        let mut right = b.clone();
-        right.meta.shape_mut()[0] = len;
-        right.handle.offset_start = Some(b.handle.offset_start.unwrap_or(0)+(start*b.meta.strides()[0]*2) as u64);
-        let mut output = partial.clone();
-        output.meta.remove(0);
-        output.handle.offset_start = Some(partial.handle.offset_start.unwrap_or(0)+(part*512*3584*4) as u64);
-        if super::matmul_bf16_training(&left, &right, &output) { continue; }
-        match launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
-            left.clone(),right.clone(),output.clone(),F32MathMode::Strict) {
-            Ok(()) => {},
-            Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_) | MatmulSetupError::Vectorization(_)) => {
-                launch_matmul_with_precision(&Strategy::Auto,left,right,output,F32MathMode::Strict)?;
-            },
-            Err(error) => return Err(error),
+    if !super::training_gemm::serial_k3(&a, &b, &partial) {
+        for part in 0..3 {
+            let start = part*block;
+            let len = (k-start).min(block);
+            let mut left = a.clone();
+            left.meta.shape_mut()[1] = len;
+            left.handle.offset_start = Some(a.handle.offset_start.unwrap_or(0)+(start*a.meta.strides()[1]*2) as u64);
+            let mut right = b.clone();
+            right.meta.shape_mut()[0] = len;
+            right.handle.offset_start = Some(b.handle.offset_start.unwrap_or(0)+(start*b.meta.strides()[0]*2) as u64);
+            let mut output = partial.clone();
+            output.meta.remove(0);
+            output.handle.offset_start = Some(partial.handle.offset_start.unwrap_or(0)+(part*512*3584*4) as u64);
+            if super::matmul_bf16_training(&left, &right, &output) { continue; }
+            match launch_matmul_with_precision(&Strategy::DoubleAsyncCyclicCmma(Default::default()),
+                left.clone(),right.clone(),output.clone(),F32MathMode::Strict) {
+                Ok(()) => {},
+                Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_) | MatmulSetupError::Vectorization(_)) => {
+                    launch_matmul_with_precision(&Strategy::Auto,left,right,output,F32MathMode::Strict)?;
+                },
+                Err(error) => return Err(error),
+            }
         }
     }
     serial_reduce::launch::<R>(&a.client,RudaCount::Static((512*3584/128) as u32,1,1),RudaDim::new_1d(128),

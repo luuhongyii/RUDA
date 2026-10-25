@@ -4,8 +4,18 @@ use ruda_kernel::dsl::{cmma::MmaDefinition, ir::MatrixIdent, prelude::*};
 use crate::dense_attention::flash_exp2;
 
 #[ruda]
-fn dot_tile<F: Float>(a: &Array<F>, b: &Array<F>, tile: &mut SharedMemory<f32>,
-    a_row: usize, b_row: usize, offset: usize) {
+fn stage<F: Float>(input: &Array<F>, tile: &mut SharedMemory<F>, row: usize, #[comptime] rows: usize) {
+    let thread = UNIT_POS as usize;
+    for block in 0usize..rows / 4 {
+        #[unroll]
+        for i in 0usize..4 {
+            tile[(block * 4 + i) * 136 + thread] = input[(row + block * 4 + i) * 128 + thread];
+        }
+    }
+}
+
+#[ruda]
+fn dot_tile<F: Float>(a: &SharedMemory<F>, b: &SharedMemory<F>, tile: &mut SharedMemory<f32>, offset: usize) {
     let lane = UNIT_POS as usize % 32;
     let warp = UNIT_POS as usize / 32;
     let def = MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);
@@ -24,7 +34,7 @@ fn dot_tile<F: Float>(a: &Array<F>, b: &Array<F>, tile: &mut SharedMemory<f32>,
                 #[unroll]
                 for j in 0usize..2 {
                     let (r, c) = def.position_of_nth(lane as u32, (i * 2 + j) as u32, MatrixIdent::A);
-                    value[j] = a[(a_row + r as usize) * 128 + chunk * 16 + c as usize];
+                    value[j] = a[r as usize * 136 + chunk * 16 + c as usize];
                 }
                 ar[i] = value;
             }
@@ -34,7 +44,7 @@ fn dot_tile<F: Float>(a: &Array<F>, b: &Array<F>, tile: &mut SharedMemory<f32>,
                 #[unroll]
                 for j in 0usize..2 {
                     let (r, c) = def.position_of_nth(lane as u32, (i * 2 + j) as u32, MatrixIdent::B);
-                    value[j] = b[(b_row + warp * 16 + col * 8 + c as usize) * 128 + chunk * 16 + r as usize];
+                    value[j] = b[(warp * 16 + col * 8 + c as usize) * 136 + chunk * 16 + r as usize];
                 }
                 br[i] = value;
             }
@@ -54,7 +64,7 @@ fn dot_tile<F: Float>(a: &Array<F>, b: &Array<F>, tile: &mut SharedMemory<f32>,
 }
 
 #[ruda]
-fn contract_tile<F: Float>(weights: &SharedMemory<F>, input: &Array<F>, input_row: usize,
+fn contract_tile<F: Float>(weights: &SharedMemory<F>, input: &SharedMemory<F>,
     acc: &mut Array<Vector<f32, Const<2>>>) {
     let lane = UNIT_POS as usize % 32;
     let warp = UNIT_POS as usize / 32;
@@ -84,7 +94,7 @@ fn contract_tile<F: Float>(weights: &SharedMemory<F>, input: &Array<F>, input_ro
                 #[unroll]
                 for j in 0usize..2 {
                     let (r, c) = def.position_of_nth(lane as u32, (i * 2 + j) as u32, MatrixIdent::B);
-                    value[j] = input[(input_row + chunk * 16 + r as usize) * 128 + warp * 32 + col * 8 + c as usize];
+                    value[j] = input[(chunk * 16 + r as usize) * 136 + warp * 32 + col * 8 + c as usize];
                 }
                 br[i] = value;
             }
@@ -125,12 +135,21 @@ pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>
     let key = (batch * kv_heads as usize + head / (heads / kv_heads) as usize) * 512;
     let mut scores = SharedMemory::<f32>::new(2048usize);
     let mut ds = SharedMemory::<F>::new(1024usize);
+    let mut q_tile = SharedMemory::<F>::new(16usize * 136);
+    let mut g_tile = SharedMemory::<F>::new(16usize * 136);
+    let mut k_tile = SharedMemory::<F>::new(64usize * 136);
+    let mut v_tile = SharedMemory::<F>::new(64usize * 136);
+    stage(q, &mut q_tile, row, 16usize);
+    stage(grad, &mut g_tile, row, 16usize);
     let mut acc = Array::<Vector<f32, Const<2>>>::new(8usize);
     #[unroll]
     for i in 0usize..8 { acc[i] = Vector::new(0.0f32); }
     for block in 0usize..8 {
-        dot_tile(q, k, &mut scores, row, key + block * 64, 0usize);
-        dot_tile(grad, v, &mut scores, row, key + block * 64, 1024usize);
+        stage(k, &mut k_tile, key + block * 64, 64usize);
+        stage(v, &mut v_tile, key + block * 64, 64usize);
+        sync_ruda();
+        dot_tile(&q_tile, &k_tile, &mut scores, 0usize);
+        dot_tile(&g_tile, &v_tile, &mut scores, 1024usize);
         sync_ruda();
         #[unroll]
         for i in 0usize..8 {
@@ -146,7 +165,7 @@ pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>
             ds[at] = F::cast_from(value);
         }
         sync_ruda();
-        contract_tile(&ds, k, key + block * 64, &mut acc);
+        contract_tile(&ds, &k_tile, &mut acc);
         sync_ruda();
     }
     let def = MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);
@@ -191,6 +210,12 @@ fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arr
     let mut scores = SharedMemory::<f32>::new(2048usize);
     let mut ds = SharedMemory::<F>::new(1024usize);
     let mut probability = SharedMemory::<F>::new(1024usize);
+    let mut k_tile = SharedMemory::<F>::new(16usize * 136);
+    let mut v_tile = SharedMemory::<F>::new(16usize * 136);
+    let mut q_tile = SharedMemory::<F>::new(64usize * 136);
+    let mut g_tile = SharedMemory::<F>::new(64usize * 136);
+    stage(k, &mut k_tile, key, 16usize);
+    stage(v, &mut v_tile, key, 16usize);
     let mut sum_k = Array::<Vector<f32, Const<2>>>::new(8usize);
     let mut sum_v = Array::<Vector<f32, Const<2>>>::new(8usize);
     #[unroll]
@@ -206,8 +231,11 @@ fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arr
         #[unroll]
         for i in 0usize..8 { acc_k[i] = Vector::new(0.0f32); acc_v[i] = Vector::new(0.0f32); }
         for block in 0usize..8 {
-            dot_tile(k, q, &mut scores, key, query + block * 64, 0usize);
-            dot_tile(v, grad, &mut scores, key, query + block * 64, 1024usize);
+            stage(q, &mut q_tile, query + block * 64, 64usize);
+            stage(grad, &mut g_tile, query + block * 64, 64usize);
+            sync_ruda();
+            dot_tile(&k_tile, &q_tile, &mut scores, 0usize);
+            dot_tile(&v_tile, &g_tile, &mut scores, 1024usize);
             sync_ruda();
             #[unroll]
             for i in 0usize..8 {
@@ -225,8 +253,8 @@ fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arr
                 probability[at] = F::cast_from(p);
             }
             sync_ruda();
-            contract_tile(&ds, q, query + block * 64, &mut acc_k);
-            contract_tile(&probability, grad, query + block * 64, &mut acc_v);
+            contract_tile(&ds, &q_tile, &mut acc_k);
+            contract_tile(&probability, &g_tile, &mut acc_v);
             sync_ruda();
         }
         #[unroll]

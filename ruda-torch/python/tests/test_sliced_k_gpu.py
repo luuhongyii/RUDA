@@ -98,3 +98,17 @@ def test_bf16_frozen_linear_input_gradient_serial_writeback(inner,offset):
     assert torch.isfinite(actual).all()
     assert (aa-bb).norm()/bb.norm() < 1e-4
     torch.testing.assert_close(actual,expected,rtol=.01,atol=.01)
+
+
+@pytest.mark.parametrize('inner', [3584, 18944])
+@pytest.mark.parametrize('transposed', [False, True])
+def test_batched_serial_partitions_keep_short_tail_and_bf16_writebacks(inner, transposed):
+    block = ((inner + 191) // 192) * 64
+    a = torch.zeros(512, inner, dtype=torch.bfloat16)
+    weight = torch.zeros(3584, inner, dtype=torch.bfloat16)
+    for index, value in [(block - 1, 256), (2 * block - 1, 1), (inner - 1, -256)]:
+        a[:, index] = 1
+        weight[:, index] = value
+    b = weight.t() if transposed else weight.t().contiguous()
+    actual = (a.to('ruda') @ b.to('ruda')).cpu()
+    torch.testing.assert_close(actual, torch.zeros_like(actual), rtol=0, atol=0)

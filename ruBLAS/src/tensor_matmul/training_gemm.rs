@@ -40,25 +40,50 @@ pub fn matmul_bf16_training<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, ou
             m: 16, n: 16, k: 16,
         })
     { return false; }
-    super::training_tile_tune::matmul(a.clone(), b.clone(), out.clone());
+    super::training_tile_tune::matmul(a.clone(), b.clone(), out.clone(), k);
+    true
+}
+
+pub(super) fn serial_k3<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, partial: &RudaTensor<R>) -> bool {
+    let (m, k, n) = (a.meta.shape()[0], a.meta.shape()[1], b.meta.shape()[1]);
+    let nt = b.meta.strides()[0] == 1;
+    let lda = a.meta.strides()[0];
+    let ldb = if nt { b.meta.strides()[1] } else { b.meta.strides()[0] };
+    if R::name(&a.client) != "cuda" || a.meta.strides()[1] != 1 || lda < k || lda % 8 != 0
+        || (!nt && b.meta.strides()[1] != 1) || ldb < (if nt { k } else { n }) || ldb % 8 != 0
+        || a.handle.offset_start.unwrap_or(0) % 16 != 0 || b.handle.offset_start.unwrap_or(0) % 16 != 0
+        || (m - 1).checked_mul(lda).and_then(|v| v.checked_add(k)).is_none_or(|v| v > u32::MAX as usize)
+        || (if nt { n - 1 } else { k - 1 }).checked_mul(ldb)
+            .and_then(|v| v.checked_add(if nt { k } else { n })).is_none_or(|v| v > u32::MAX as usize)
+        || !a.client.features().copy_async || !a.client.features().matmul.cmma.contains(&MmaConfig {
+            a_type: DType::BF16.into(), b_type: DType::BF16.into(), cd_type: DType::F32.into(), m: 16, n: 16, k: 16,
+        })
+    { return false; }
+    let block = k.div_ceil(3 * 64) * 64;
+    let mut left = a.clone(); left.meta.shape_mut()[1] = block; left.meta.insert(0, 3, block);
+    let mut right = b.clone(); right.meta.shape_mut()[0] = block;
+    right.meta.insert(0, 3, block * b.meta.strides()[0]);
+    super::training_tile_tune::matmul(left, right, partial.clone(), k - 2 * block);
     true
 }
 
 #[allow(unsafe_code)]
 pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>,
-    bm: usize, bn: usize, bk: usize, asynchronous: bool) -> Result<RudaTensor<R>, String> {
+    last_k: usize, bm: usize, bn: usize, bk: usize, asynchronous: bool) -> Result<RudaTensor<R>, String> {
     let d = a.meta.num_dims() - 2;
     let (m, k, n) = (a.meta.shape()[d], a.meta.shape()[d+1], b.meta.shape()[d+1]);
     if m % bm != 0 || (m == 512 && bm == 32) { return Err("training M tile does not match the row geometry".into()); }
-    if k % bk != 0 { return Err("training K tile does not divide the reduction".into()); }
+    if k % bk != 0 || last_k == 0 || last_k > k || last_k % bk != 0 {
+        return Err("training K tile does not divide the reduction".into());
+    }
     let nt = b.meta.strides()[d] == 1;
     let lda = a.meta.strides()[d];
     let ldb = if nt { b.meta.strides()[d+1] } else { b.meta.strides()[d] };
     let batch = if d == 0 { 1 } else { a.meta.shape()[0] };
     let a_batch = if d == 0 { 0 } else { a.meta.strides()[0] };
     let b_batch = if d == 0 { 0 } else { b.meta.strides()[0] };
-    let a_span = (batch - 1) * a_batch + (m - 1) * lda + k;
-    let b_span = (batch - 1) * b_batch + if nt { (n - 1) * ldb + k } else { (k - 1) * ldb + n };
+    let a_span = (batch - 1) * a_batch + (m - 1) * lda + last_k;
+    let b_span = (batch - 1) * b_batch + if nt { (n - 1) * ldb + last_k } else { (last_k - 1) * ldb + n };
     let mut left = a.clone();
     let mut right = b.clone();
     if d == 1 { left.meta.remove(0); right.meta.remove(0); }
@@ -66,7 +91,7 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
     unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d((bm * 2) as u32),
         left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, nt,
-        m, a_batch, b_batch, bm, bn, bk, asynchronous,
+        m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous,
         DType::BF16.into(), out.dtype.into()); }
     Ok(out)
 }
@@ -75,7 +100,8 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
 fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<O>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] nt: bool,
-    #[comptime] m: usize, #[comptime] a_batch: usize, #[comptime] b_batch: usize,
+    #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
+    #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
     #[define(F)] _input: StorageType, #[define(O)] _output: StorageType) {
     let thread = UNIT_POS as usize;
@@ -103,11 +129,13 @@ fn tiled<F: Float, O: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F,
         load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
         loaded.commit_copy_async();
     }
-    for block in 0usize..k / bk {
+    let mut blocks = k / bk;
+    if comptime!(last_k != k) { if RUDA_POS_Y as usize == batch - 1 { blocks = last_k / bk; } }
+    for block in 0usize..blocks {
         let bank = block % banks;
         if comptime!(asynchronous) {
             loaded.arrive_and_wait();
-            if block + 1 < k / bk {
+            if block + 1 < blocks {
                 load_stage(a, b, &mut sa, &mut sb, row, col, block + 1, 1 - bank, lda, ldb, nt, a_batch, b_batch, bm, bn, bk, asynchronous);
                 loaded.commit_copy_async();
             }
