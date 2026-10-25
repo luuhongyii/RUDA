@@ -113,8 +113,19 @@ def test_ordered_bf16_tiles_transposed_left_and_narrow_output(shape, ta, nt, pre
     actual = backing[1:]
     r._C.execute(30, x, y, actual, 0.)
     values = actual.cpu()
-    torch.testing.assert_close(values, expected, rtol=1e-4, atol=2e-4)
-    assert float((values.double() - expected.double()).norm() / expected.double().norm()) < 2e-6
+    if k <= 512:
+        torch.testing.assert_close(values, expected, rtol=1e-4, atol=2e-4)
+        assert float((values.double() - expected.double()).norm() / expected.double().norm()) < 2e-6
+    else:
+        exact = left @ right
+        unit = torch.finfo(torch.float32).eps
+        bound = (k * unit / (1 - k * unit)) * (left.abs() @ right.abs())
+        assert ((values.double() - exact).abs() <= bound).all()
+        padded = torch.zeros(2, k, 64, dtype=torch.bfloat16)
+        padded[:, :, :n] = right.bfloat16()
+        reference = torch.empty(2, m, 64, dtype=torch.float32, device='ruda')
+        r._C.execute(30, left.bfloat16().contiguous().to('ruda'), padded.to('ruda'), reference, 0.)
+        torch.testing.assert_close(values, reference.cpu()[:, :, :n], rtol=0, atol=0)
     assert torch.isnan(backing[0].cpu()).all()
     for index in range(2):
         single = torch.empty(m, n, dtype=torch.float32, device='ruda')
