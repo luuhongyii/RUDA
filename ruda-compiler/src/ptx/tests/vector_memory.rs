@@ -45,10 +45,11 @@ fn packed_vector_memory_preserves_alignment_fallback_and_bounds() {
                         assert!(result.source.contains(if kind == FloatKind::F32 { "ld.global.f32" } else { "ld.global.b16" }));
                         if mode == ExecutionMode::Checked { assert!(result.source.contains("setp.ge.")); }
                         if shared {
-                            for memory in ["shared", "local"] {
-                                assert!(result.source.contains(&format!("ld.{memory}.{vector}{suffix}")));
-                                assert!(result.source.contains(&format!("st.{memory}.{vector}{suffix}")));
-                            }
+                            assert!(result.source.contains(&format!("ld.shared.{vector}{suffix}")));
+                            assert!(result.source.contains(&format!("st.shared.{vector}{suffix}")));
+                            assert!(!result.source.contains("ld.local.v"));
+                            assert!(!result.source.contains("st.local.v"));
+                            assert_eq!(result.source.matches("setp.ne.u64").count(), 2);
                         }
                         export(&result);
                     }
@@ -56,4 +57,27 @@ fn packed_vector_memory_preserves_alignment_fallback_and_bounds() {
             }
         }
     }
+}
+
+#[test]
+fn underaligned_shared_vectors_keep_the_scalar_fallback() {
+    let mut k = kernel("underaligned_shared_vectors");
+    let ty = Type::from(FloatKind::BF16).with_vector_size(8);
+    let input = buffer(&mut k, ty, Visibility::Read);
+    let output = buffer(&mut k, ty, Visibility::ReadWrite);
+    let index = Variable::builtin(Builtin::UnitPos, UIntKind::U32.into());
+    let value = *k.body.create_local(ty);
+    let memory = *k.body.create_shared_array(ty, 64, Some(2));
+    load(&mut k.body, input, index, value);
+    store(&mut k.body, memory, index, value);
+    k.body.register(Instruction::no_out(Synchronization::SyncRuda));
+    let result = *k.body.create_local(ty);
+    load(&mut k.body, memory, index, result);
+    store(&mut k.body, output, index, result);
+    let source = compile(k, ExecutionMode::Unchecked, UIntKind::U32).unwrap().source;
+    assert!(source.contains("ld.shared.v4.b32"));
+    assert!(source.contains("st.shared.v4.b32"));
+    assert!(source.contains("ld.shared.b16"));
+    assert!(source.contains("st.shared.b16"));
+    assert_eq!(source.matches("setp.ne.u64").count(), 4);
 }
