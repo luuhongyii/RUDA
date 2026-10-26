@@ -8539,7 +8539,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-model-macros"
-version = "0.21.1"
+version = "0.21.2"
 dependencies = [
  "ruda-model-codegen",
  "syn 2.0.119",
