@@ -7853,7 +7853,7 @@ dependencies = [
 
 [[package]]
 name = "ruDNN"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "derive-new",
@@ -7874,7 +7874,7 @@ dependencies = [
 
 [[package]]
 name = "ruDNN-host"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "gemm",
@@ -7888,7 +7888,7 @@ dependencies = [
 
 [[package]]
 name = "ruFFT-host"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "half",
@@ -7901,7 +7901,7 @@ dependencies = [
 
 [[package]]
 name = "ruPRIM"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "half",
  "num-traits",
@@ -7917,7 +7917,7 @@ dependencies = [
 
 [[package]]
 name = "ruPRIM-host"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "aligned-vec",
  "bytemuck",
@@ -7931,7 +7931,7 @@ dependencies = [
 
 [[package]]
 name = "ruRAND"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "half",
  "num-traits",
@@ -7945,7 +7945,7 @@ dependencies = [
 
 [[package]]
 name = "ruRAND-host"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "half",
  "ruda-core",
@@ -7953,7 +7953,7 @@ dependencies = [
 
 [[package]]
 name = "ruSPARSE"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "ruda-core",
  "ruda-driver-cuda",
@@ -7963,7 +7963,7 @@ dependencies = [
 
 [[package]]
 name = "ruTENSOR"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "half",
  "rublas",
@@ -7974,7 +7974,7 @@ dependencies = [
 
 [[package]]
 name = "rublas"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "half",
@@ -7991,7 +7991,7 @@ dependencies = [
 
 [[package]]
 name = "rublas-host"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "gemm",
@@ -8202,7 +8202,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-cann"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "libloading 0.8.9",
  "ruda-compiler",
@@ -8212,7 +8212,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-cpu"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "derive-new",
@@ -8234,7 +8234,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-cuda"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "cudarc",
@@ -8255,7 +8255,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-hip"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "derive-new",
@@ -8275,7 +8275,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-metal"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "block2",
  "bytemuck",
@@ -8292,7 +8292,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-driver-wgpu"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "ash",
  "async-channel",
@@ -8329,7 +8329,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-fft"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "half",
  "num-complex",
@@ -8441,7 +8441,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-llm"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -8660,7 +8660,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-solver"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "half",
  "ruCCL",
@@ -8765,7 +8765,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-tensor-capture"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "ruda-core",
  "ruda-tensor",
@@ -8808,7 +8808,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-tensor-dispatch"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "ruda-autodiff",
  "ruda-core",
@@ -8953,7 +8953,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-test-runtime"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "ruda-driver-cpu",
  "ruda-driver-cuda",
@@ -8964,7 +8964,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-test-utils"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "bytemuck",
  "half",
@@ -9034,7 +9034,7 @@ dependencies = [
 
 [[package]]
 name = "ruintegrate"
-version = "0.1.103"
+version = "0.1.104"
 dependencies = [
  "ruda-solver",
 ]
