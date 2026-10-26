@@ -60,6 +60,27 @@ def test_flash_precision_rejects_unsupported_calls():
 
 
 @pytest.mark.parametrize('causal', [False, True])
+@pytest.mark.parametrize('offset', [1, 3, 7, 8])
+def test_flash_precision_storage_offsets(causal, offset):
+    torch.manual_seed(261026)
+    values = []
+    for heads in (4, 2, 2, 4):
+        count = heads * 512 * 128
+        flat = torch.randn(count + offset, dtype=torch.bfloat16).to('ruda')
+        value = flat[offset:].view(1, heads, 512, 128).detach()
+        assert value.storage_offset() == offset
+        values.append(value)
+    qkv = [x.requires_grad_() for x in values[:3]]
+    aligned = [x.detach().clone().requires_grad_() for x in qkv]
+    actual = r.scaled_dot_product_attention(*qkv, is_causal=causal, enable_gqa=True, precision='flash')
+    expected = r.scaled_dot_product_attention(*aligned, is_causal=causal, enable_gqa=True, precision='flash')
+    actual.backward(values[3])
+    expected.backward(values[3].clone())
+    for a, b in zip([actual, *[x.grad for x in qkv]], [expected, *[x.grad for x in aligned]]):
+        assert torch.equal(a.cpu().view(torch.int16), b.cpu().view(torch.int16))
+
+
+@pytest.mark.parametrize('causal', [False, True])
 @pytest.mark.parametrize('batch,heads,kv_heads', [(1, 7, 1), (2, 6, 2)])
 def test_flash_grouped_gradients_preserve_per_head_rounding(causal, batch, heads, kv_heads):
     torch.manual_seed(261028)

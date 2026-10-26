@@ -4,12 +4,22 @@ use ruda_kernel::dsl::{cmma::MmaDefinition, ir::MatrixIdent, prelude::*};
 use crate::dense_attention::flash_exp2;
 
 #[ruda]
-pub(super) fn stage<F: Float>(input: &Array<F>, tile: &mut SharedMemory<F>, row: usize, #[comptime] rows: usize) {
+pub(super) fn stage<F: Float>(input: &Array<F>, tile: &mut SharedMemory<F>, row: usize,
+    #[comptime] rows: usize, #[comptime] vectorized: bool) {
     let thread = UNIT_POS as usize;
-    for block in 0usize..rows / 4 {
-        #[unroll]
-        for i in 0usize..4 {
-            tile[(block * 4 + i) * 136 + thread] = input[(row + block * 4 + i) * 128 + thread];
+    if comptime!(vectorized) {
+        let source = input.to_slice().into_vectorized().with_vector_size::<Const<8>>();
+        let mut target = tile.to_slice_mut().into_vectorized().with_vector_size::<Const<8>>();
+        for block in 0usize..rows / 8 {
+            let r = block * 8 + thread / 16;
+            target[r * 17 + thread % 16] = source[(row + r) * 16 + thread % 16];
+        }
+    } else {
+        for block in 0usize..rows / 4 {
+            #[unroll]
+            for i in 0usize..4 {
+                tile[(block * 4 + i) * 136 + thread] = input[(row + block * 4 + i) * 128 + thread];
+            }
         }
     }
 }
@@ -87,9 +97,9 @@ pub fn contraction<F: Float>(grad: &Array<F>, stats: &Array<f32>, delta: &mut Ar
 }
 
 #[ruda(launch_unchecked)]
-pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
+pub fn query_vectorized<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, dq: &mut Array<F>, heads: u32, kv_heads: u32,
-    scale: f32, #[comptime] causal: bool, #[define(F)] _dtype: StorageType) {
+    scale: f32, #[comptime] causal: bool, #[comptime] vectorized: bool, #[define(F)] _dtype: StorageType) {
     let row = RUDA_POS_X as usize * 16;
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
@@ -103,14 +113,14 @@ pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>
     let mut g_tile = SharedMemory::<F>::new_aligned(16usize * 136, 16usize);
     let mut k_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
     let mut v_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
-    stage(q, &mut q_tile, row, 16usize);
-    stage(grad, &mut g_tile, row, 16usize);
+    stage(q, &mut q_tile, row, 16usize, vectorized);
+    stage(grad, &mut g_tile, row, 16usize, vectorized);
     let mut acc = Array::<Vector<f32, Const<2>>>::new(8usize);
     #[unroll]
     for i in 0usize..8 { acc[i] = Vector::new(0.0f32); }
     for block in 0usize..8 {
-        stage(k, &mut k_tile, key + block * 64, 64usize);
-        stage(v, &mut v_tile, key + block * 64, 64usize);
+        stage(k, &mut k_tile, key + block * 64, 64usize, vectorized);
+        stage(v, &mut v_tile, key + block * 64, 64usize, vectorized);
         sync_ruda();
         dot_tile(&q_tile, &k_tile, &mut scores, 0usize);
         dot_tile(&g_tile, &v_tile, &mut scores, 1024usize);
@@ -147,23 +157,23 @@ pub fn query<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>
 }
 
 #[ruda(launch_unchecked)]
-pub fn key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
+pub fn key_value_vectorized<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, dk: &mut Array<F>, dv: &mut Array<F>,
-    heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[define(F)] _dtype: StorageType) {
-    key_value_impl(q, k, v, grad, stats, delta, dk, dv, heads, kv_heads, scale, causal, false);
+    heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[comptime] vectorized: bool, #[define(F)] _dtype: StorageType) {
+    key_value_impl(q, k, v, grad, stats, delta, dk, dv, heads, kv_heads, scale, causal, false, vectorized);
 }
 
 #[ruda(launch_unchecked)]
-pub fn key_value_parallel<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
+pub fn key_value_parallel_vectorized<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, dk: &mut Array<F>, dv: &mut Array<F>,
-    heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[define(F)] _dtype: StorageType) {
-    key_value_impl(q, k, v, grad, stats, delta, dk, dv, heads, kv_heads, scale, causal, true);
+    heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[comptime] vectorized: bool, #[define(F)] _dtype: StorageType) {
+    key_value_impl(q, k, v, grad, stats, delta, dk, dv, heads, kv_heads, scale, causal, true, vectorized);
 }
 
 #[ruda]
 fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, dk: &mut Array<F>, dv: &mut Array<F>,
-    heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[comptime] split_heads: bool) {
+    heads: u32, kv_heads: u32, scale: f32, #[comptime] causal: bool, #[comptime] split_heads: bool, #[comptime] vectorized: bool) {
     let key = RUDA_POS_X as usize * 16;
     let thread = UNIT_POS as usize;
     let lane = thread % 32;
@@ -178,8 +188,8 @@ fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arr
     let mut v_tile = SharedMemory::<F>::new_aligned(16usize * 136, 16usize);
     let mut q_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
     let mut g_tile = SharedMemory::<F>::new_aligned(64usize * 136, 16usize);
-    stage(k, &mut k_tile, key, 16usize);
-    stage(v, &mut v_tile, key, 16usize);
+    stage(k, &mut k_tile, key, 16usize, vectorized);
+    stage(v, &mut v_tile, key, 16usize, vectorized);
     let mut sum_k = Array::<Vector<f32, Const<2>>>::new(8usize);
     let mut sum_v = Array::<Vector<f32, Const<2>>>::new(8usize);
     #[unroll]
@@ -195,8 +205,8 @@ fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arr
         #[unroll]
         for i in 0usize..8 { acc_k[i] = Vector::new(0.0f32); acc_v[i] = Vector::new(0.0f32); }
         for block in 0usize..8 {
-            stage(q, &mut q_tile, query + block * 64, 64usize);
-            stage(grad, &mut g_tile, query + block * 64, 64usize);
+            stage(q, &mut q_tile, query + block * 64, 64usize, vectorized);
+            stage(grad, &mut g_tile, query + block * 64, 64usize, vectorized);
             sync_ruda();
             dot_tile(&k_tile, &q_tile, &mut scores, 0usize);
             dot_tile(&v_tile, &g_tile, &mut scores, 1024usize);
