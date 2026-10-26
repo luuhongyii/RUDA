@@ -3,6 +3,28 @@ use ruda_kernel::dsl::{cmma::MmaDefinition, prelude::*};
 use crate::dense_attention::flash_exp2;
 use super::register_backward::{dot_pair, stage};
 
+#[ruda]
+fn masked_operands_finite<F: Float>(q: &SharedMemory<F>, k: &SharedMemory<F>,
+    grad: &SharedMemory<F>, workspace: &mut SharedMemory<F>) -> bool {
+    let thread = UNIT_POS as usize;
+    let mut finite = true;
+    for chunk in 0usize..32 {
+        let pos = chunk*256+thread;
+        let at = pos/128*136+pos%128;
+        finite = finite && f32::abs(f32::cast_from(q[at])) < f32::INFINITY
+            && f32::abs(f32::cast_from(grad[at])) < f32::INFINITY
+            && f32::abs(f32::cast_from(k[at])) < f32::INFINITY
+            && f32::abs(f32::cast_from(k[at+64*136])) < f32::INFINITY;
+    }
+    let warp_finite = plane_all(finite);
+    if thread%32 == 0 { workspace[thread/32] = F::cast_from(u32::cast_from(warp_finite)); }
+    sync_ruda();
+    let mut all_finite = true;
+    #[unroll]
+    for warp in 0usize..8 { all_finite = all_finite && workspace[warp] != F::new(0.0); }
+    all_finite
+}
+
 #[ruda(launch_unchecked)]
 pub fn fused_key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, partial_q: &mut Array<f32>,
@@ -34,6 +56,18 @@ pub fn fused_key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad:
         stage(q,&mut q_tile,query+block*64,64usize,vectorized);
         stage(grad,&mut g_tile,query+block*64,64usize,vectorized);
         sync_ruda();
+        let mut skip = false;
+        if comptime!(causal) {
+            if block*64+63 < key%512 {
+                skip = masked_operands_finite(&q_tile,&k_tile,&g_tile,&mut ds_tile);
+                sync_ruda();
+            }
+        }
+        if skip {
+            for chunk in 0usize..32 {
+                partial_q[(key%512/128)*q.len()+(query+block*64)*128+chunk*256+UNIT_POS as usize] = 0.0f32;
+            }
+        } else {
         #[unroll]
         for chunk in 0usize..4 {
             let products = dot_pair(&k_tile,&q_tile,&v_tile,&g_tile,chunk);
@@ -86,6 +120,7 @@ pub fn fused_key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad:
                 let col = warp/4*64+j*8+lane%4*2+e%2;
                 partial_q[(key%512/128)*q.len()+row*128+col] = acc[e];
             }
+        }
         }
         sync_ruda();
     }

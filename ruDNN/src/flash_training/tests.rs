@@ -217,3 +217,47 @@ fn fused_backward_partials_cover_every_query_once_per_key_tile() {
         }
     }
 }
+
+#[test]
+fn masked_backward_finite_scan_covers_every_operand_without_padding() {
+    let mut q = vec![0usize;64*136];
+    let mut k = vec![0usize;128*136];
+    for thread in 0usize..256 {
+        for chunk in 0..32 {
+            let pos = chunk*256+thread;
+            let at = pos/128*136+pos%128;
+            q[at] += 1;
+            k[at] += 1;
+            k[at+64*136] += 1;
+        }
+    }
+    for counts in [q,k] {
+        for (at,count) in counts.into_iter().enumerate() {
+            assert_eq!(count,usize::from(at%136<128));
+        }
+    }
+    for value in [f32::NAN,f32::INFINITY,f32::NEG_INFINITY] {
+        assert!(!(value.abs()<f32::INFINITY));
+    }
+    for value in [0.0f32,-0.0,f32::MAX,f32::MIN,f32::MIN_POSITIVE] {
+        assert!(value.abs()<f32::INFINITY);
+    }
+}
+
+#[test]
+fn masked_backward_prunes_only_fully_masked_blocks_and_writes_all_partials() {
+    for key_block in 0usize..4 {
+        for query_block in 0..8 {
+            let masked = query_block*64+63 < key_block*128;
+            assert_eq!(masked,(query_block*64..query_block*64+64)
+                .all(|q|(key_block*128..key_block*128+128).all(|k|k>q)));
+            if masked {
+                let mut written = vec![0usize;64*128];
+                for thread in 0usize..256 {
+                    for chunk in 0..32 { written[chunk*256+thread] += 1; }
+                }
+                assert!(written.into_iter().all(|n|n==1));
+            }
+        }
+    }
+}
