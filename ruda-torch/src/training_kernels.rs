@@ -6,9 +6,9 @@ use ruda_kernel::dsl::prelude::*;
 fn cuda_rsqrt(value: f32) -> f32 { value.inverse_sqrt() }
 
 #[ruda(launch)]
-pub fn rms_cuda_3584<F: Float + RudaElement, W: Float + RudaElement>(
+pub fn rms_cuda_vector4<F: Float + RudaElement, W: Float + RudaElement>(
     x: &Tensor<F>, weight: &Tensor<W>, y: &mut Tensor<F>, rstd: &mut Tensor<f32>,
-    epsilon: f32, #[comptime] weighted: bool,
+    epsilon: f32, #[comptime] weighted: bool, #[comptime] width: usize,
 ) {
     let thread = UNIT_POS as usize;
     let lane = thread%32;
@@ -19,10 +19,10 @@ pub fn rms_cuda_3584<F: Float + RudaElement, W: Float + RudaElement>(
     #[unroll]
     for j in 0usize..4 { local[j] = 0.0; }
     #[unroll]
-    for i in 0usize..28 {
+    for i in 0usize..(width/128) {
         #[unroll]
         for j in 0usize..4 {
-            let value = f32::cast_from(x[row*3584+i*128+lane*4+j]);
+            let value = f32::cast_from(x[row*width+i*128+lane*4+j]);
             local[j] += value*value;
         }
     }
@@ -34,17 +34,17 @@ pub fn rms_cuda_3584<F: Float + RudaElement, W: Float + RudaElement>(
         if lane < offset { sums[thread] = sums[thread]+sums[thread+offset]; }
         sync_ruda();
     }
-    let inv = cuda_rsqrt(sums[warp*32]*(1.0f32/3584.0f32)+epsilon);
+    let inv = cuda_rsqrt(sums[warp*32]*(1.0f32/width as f32)+epsilon);
     if lane == 0 { rstd[row] = inv; }
     #[unroll]
-    for i in 0usize..28 {
+    for i in 0usize..(width/128) {
         #[unroll]
         for j in 0usize..4 {
             let col = i*128+lane*4+j;
-            let normalized = F::cast_from(f32::cast_from(x[row*3584+col])*inv);
+            let normalized = F::cast_from(f32::cast_from(x[row*width+col])*inv);
             let mut value = f32::cast_from(normalized);
             if comptime!(weighted) { value *= f32::cast_from(weight[col]); }
-            y[row*3584+col] = F::cast_from(value);
+            y[row*width+col] = F::cast_from(value);
         }
     }
 }
