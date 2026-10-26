@@ -5,7 +5,7 @@ mod tests;
 
 #[ruda]
 fn shared_index(row: usize, chunk: usize, #[comptime] chunks: usize) -> usize {
-    row * chunks + (chunk ^ (row % comptime!(chunks.min(8))))
+    row * chunks + (chunk ^ ((row / comptime!(8usize.div_ceil(chunks))) % comptime!(chunks.min(8))))
 }
 
 #[ruda(launch_unchecked)]

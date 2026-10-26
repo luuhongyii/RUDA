@@ -62,6 +62,9 @@ use ruda_kernel_macros::{comptime_type, ruda, intrinsic};
 use ruda_core::ir::{CoopMma, ManagedVariable, Scope, StorageType, VectorSize};
 pub use ir::{MatrixIdent, MatrixLayout};
 
+#[cfg(test)]
+mod vector_tests;
+
 /// A matrix shared by a subgroup.
 #[derive(Clone, Copy)]
 pub struct Plane;
@@ -796,10 +799,12 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
         registers_b: &Array<Vector<B, NB>>,
         registers_c: &mut Vector<CD, NC>,
     ) {
-        intrinsic!(|scope| {
+        let value_c = *registers_c;
+        let result: Vector<CD, NC> = intrinsic!(|scope| {
             let registers_a = *registers_a.expand;
             let registers_b = *registers_b.expand;
-            let registers_c = *registers_c.expand;
+            let registers_c = *value_c.expand;
+            let output = scope.create_local(Vector::<CD, NC>::as_type(scope));
             let matrix = ruda_core::ir::Matrix {
                 ident: MatrixIdent::A,
                 m: self.m,
@@ -816,9 +821,11 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                     registers_b,
                     registers_c,
                 },
-                registers_c,
+                *output,
             ));
-        })
+            output.into()
+        });
+        *registers_c = result;
     }
 
     #[allow(unused)]
@@ -828,10 +835,14 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
         registers_b: &Vector<B, NB>,
         registers_c: &mut Vector<CD, NC>,
     ) {
-        intrinsic!(|scope| {
-            let registers_a = *registers_a.expand;
-            let registers_b = *registers_b.expand;
-            let registers_c = *registers_c.expand;
+        let value_a = *registers_a;
+        let value_b = *registers_b;
+        let value_c = *registers_c;
+        let result: Vector<CD, NC> = intrinsic!(|scope| {
+            let registers_a = *value_a.expand;
+            let registers_b = *value_b.expand;
+            let registers_c = *value_c.expand;
+            let output = scope.create_local(Vector::<CD, NC>::as_type(scope));
             let matrix = ruda_core::ir::Matrix {
                 ident: MatrixIdent::A,
                 m: self.m,
@@ -848,9 +859,11 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                     registers_b,
                     registers_c,
                 },
-                registers_c,
+                *output,
             ));
-        })
+            output.into()
+        });
+        *registers_c = result;
     }
 
     /// Execute a low level block scaled `mma` operation with manually managed registers. Register
