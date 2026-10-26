@@ -172,7 +172,7 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                     let parallel = group > 1 && group <= c.properties().hardware.max_ruda_count.1 as usize;
                     let wide = c.properties().hardware.max_shared_memory_size as usize >= (128+128+64+64)*136*2;
                     let fused = c.properties().hardware.max_shared_memory_size as usize >= (384*136+128*72)*2
-                        && (parallel || group == 1);
+                        && q.len <= u32::MAX as usize/4 && (parallel || group == 1);
                     if fused {
                         let partial_q = View::packed(c.empty(q.len.checked_mul(16).expect("Flash query partial allocation overflow")),
                             vec![4, q.len], 0);
