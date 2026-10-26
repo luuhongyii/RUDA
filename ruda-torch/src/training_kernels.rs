@@ -322,7 +322,7 @@ pub fn silu_mul_forward<F: Float + RudaElement>(
     let pos = ABSOLUTE_POS as usize;
     if pos < y.len() {
         let x = f32::cast_from(gate[pos]);
-        let denominator = if comptime!(cuda) { super::loss::cuda_exp(-x, 1.0f32) }
+        let denominator = if comptime!(cuda) { crate::loss::cuda_exp(-x, 1.0f32) }
             else { 1.0f32 + (-x).exp() };
         let activation = F::cast_from(x / denominator);
         y[pos] = F::cast_from(f32::cast_from(activation) * f32::cast_from(up[pos]));
@@ -337,7 +337,7 @@ pub fn silu_mul_backward<F: Float + RudaElement>(
     let pos = ABSOLUTE_POS as usize;
     if pos < gate.len() {
         let x = f32::cast_from(gate[pos]);
-        let denominator = if comptime!(cuda) { super::loss::cuda_exp(-x, 1.0f32) }
+        let denominator = if comptime!(cuda) { crate::loss::cuda_exp(-x, 1.0f32) }
             else { 1.0f32 + (-x).exp() };
         let sigmoid = 1.0f32 / denominator;
         let grad = f32::cast_from(dy[pos]);
