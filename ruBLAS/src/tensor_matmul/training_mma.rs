@@ -27,12 +27,12 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
     let mut epilogue = SharedMemory::<f32>::new_aligned(bm / warp_m * 512usize, 32usize);
     let loaded = Barrier::shared(RUDA_DIM, UNIT_POS == 0);
     let def = cmma::MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);
-    let mut acc = Sequence::<Array<Vector<f32, Const<2>>>>::new();
+    let mut acc = Sequence::<Vector<f32, Const<4>>>::new();
     #[unroll]
     for _ in 0usize..(warp_m / 16 * (bn / 16)) {
-        let mut fragment = Array::<Vector<f32, Const<2>>>::new(2usize);
-        fragment[0] = Vector::new(0.0f32);
-        fragment[1] = Vector::new(0.0f32);
+        let mut fragment = Vector::<f32, Const<4>>::empty();
+        #[unroll]
+        for i in 0usize..4 { fragment[i] = 0.0f32; }
         acc.push(fragment);
     }
     let mut a_rows = Sequence::<usize>::new();
@@ -92,7 +92,7 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
             for i in 0usize..(warp_m / 16) {
                 #[unroll]
                 for j in 0usize..(bn / 16) {
-                    def.execute_inplace(&ar[i], &br[j], acc.index_mut(i * (bn / 16) + j));
+                    def.execute_vector_inplace(&ar[i], &br[j], acc.index_mut(i * (bn / 16) + j));
                 }
             }
         }
@@ -106,10 +106,10 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
             for part in 0usize..2 {
                 #[unroll]
                 for r in 0usize..2 {
-                    let value = acc[i * (bn / 16) + j * 2 + part][r];
+                    let value = acc[i * (bn / 16) + j * 2 + part];
                     #[unroll]
                     for c in 0usize..2 {
-                        epilogue[warp * 256 + (lane / 4 + r * 8) * 16 + part * 8 + lane % 4 * 2 + c] = value[c];
+                        epilogue[warp * 256 + (lane / 4 + r * 8) * 16 + part * 8 + lane % 4 * 2 + c] = value[r * 2 + c];
                     }
                 }
             }

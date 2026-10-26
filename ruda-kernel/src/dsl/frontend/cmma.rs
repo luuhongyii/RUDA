@@ -764,6 +764,38 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
         })
     }
 
+    #[allow(unused)]
+    pub fn execute_vector_inplace<NA: Size, NB: Size, NC: Size>(
+        &self,
+        registers_a: &Array<Vector<A, NA>>,
+        registers_b: &Array<Vector<B, NB>>,
+        registers_c: &mut Vector<CD, NC>,
+    ) {
+        intrinsic!(|scope| {
+            let registers_a = *registers_a.expand;
+            let registers_b = *registers_b.expand;
+            let registers_c = *registers_c.expand;
+            let matrix = ruda_core::ir::Matrix {
+                ident: MatrixIdent::A,
+                m: self.m,
+                n: self.n,
+                k: self.k,
+                storage: self.a_type,
+                layout: MatrixLayout::ColMajor,
+                scope: ir::MatrixScope::Plane,
+            };
+            scope.register(Instruction::new(
+                CoopMma::ExecuteManual {
+                    matrix,
+                    registers_a,
+                    registers_b,
+                    registers_c,
+                },
+                registers_c,
+            ));
+        })
+    }
+
     /// Execute a low level block scaled `mma` operation with manually managed registers. Register
     /// layout and index mapping can be retrieved from the [`MmaDefinition`]
     #[allow(unused)]
