@@ -34,7 +34,7 @@ fn unsigned_power_of_two_division_and_remainders_are_exact_integer_operations() 
             }
         }
         for divisor in [0, 3, 7, u64::MAX] {
-            let mut k = kernel("unsigned_non_power2_unchanged");
+            let mut k = kernel("unsigned_non_power2");
             let input = buffer(&mut k, ty, Visibility::Read);
             let output = buffer(&mut k, ty, Visibility::ReadWrite);
             let lhs = *k.body.create_local(ty);
@@ -44,7 +44,15 @@ fn unsigned_power_of_two_division_and_remainders_are_exact_integer_operations() 
                 lhs, rhs: ty.constant(ConstantValue::UInt(divisor)),
             }), result));
             store(&mut k.body, output, 0u32.into(), result);
-            assert!(compile(k, ExecutionMode::Unchecked, UIntKind::U32).unwrap().source.contains("div.u"));
+            let source = compile(k, ExecutionMode::Unchecked, UIntKind::U32).unwrap().source;
+            if divisor == 0 {
+                assert!(source.contains(&format!("div.{name}")));
+            } else {
+                assert!(!source.contains("div.u"));
+                assert!(source.contains(&format!("mul.hi.{name}")));
+                assert!(source.contains(&format!("setp.ge.{name}")));
+            }
+            assert!(!source.contains("cvt.f"));
         }
     }
 }

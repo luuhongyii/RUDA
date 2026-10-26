@@ -195,6 +195,12 @@ fn manual_half_matrix_transfers_keep_aligned_register_words_packed() {
                 }, registers));
             }
             let c = *k.body.create_local_array(Type::from(FloatKind::F32).with_vector_size(4), 1);
+            for registers in [a, b, c] {
+                let address = *k.body.create_local(UIntKind::U64.into());
+                k.body.register(Instruction::new(Operator::NativeAddress(BinaryOperator {
+                    lhs: registers, rhs: 0u32.into(),
+                }), address));
+            }
             let matrix = Matrix { ident: MatrixIdent::A, m: 16, n: 8, k: 16,
                 storage: kind.into(), layout: MatrixLayout::ColMajor, scope: MatrixScope::Plane };
             k.body.register(Instruction::new(CoopMma::ExecuteManual {
@@ -224,6 +230,12 @@ fn manual_mma_vector_accumulator_is_not_addressable_local_storage() {
         let ty = Type::from(kind).with_vector_size(2);
         let a = *k.body.create_local_array(ty, 4);
         let b = *k.body.create_local_array(ty, 2);
+        for registers in [a, b] {
+            let address = *k.body.create_local(UIntKind::U64.into());
+            k.body.register(Instruction::new(Operator::NativeAddress(BinaryOperator {
+                lhs: registers, rhs: 0u32.into(),
+            }), address));
+        }
         let c = *k.body.create_local(Type::from(FloatKind::F32).with_vector_size(4));
         k.body.register(Instruction::new(Operator::Cast(UnaryOperator { input: 0f32.into() }), c));
         let matrix = Matrix { ident: MatrixIdent::A, m: 16, n: 8, k: 16,

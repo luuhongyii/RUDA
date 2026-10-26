@@ -92,10 +92,6 @@ pub enum BarrierOps<D: Dialect> {
         barrier: Variable<D>,
         level: BarrierLevel,
     },
-    CommitCopyGroup,
-    WaitCopyGroup {
-        max_pending: u32,
-    },
 }
 
 impl<D: Dialect> BarrierOps<D> {
@@ -117,7 +113,6 @@ impl<D: Dialect> BarrierOps<D> {
             BarrierOps::CopyAsync { .. } => 0,
             BarrierOps::CommitCopyGroup | BarrierOps::WaitCopyGroup { .. } => 0,
             BarrierOps::ArriveCopyAsync { barrier } => barrier.id().unwrap(),
-            BarrierOps::CommitCopyGroup | BarrierOps::WaitCopyGroup { .. } => 0,
         }
     }
 }
