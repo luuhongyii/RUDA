@@ -314,7 +314,7 @@ features = [ "mutex", "spin_mutex", "mutex", "spin_mutex", "portable_atomic",]
 [target."cfg(not(target_os = \"none\"))".dependencies.web-time]
 version = "1.1.0"
 
-[target."cfg(target_family = \"wasm\")".dependencies.wasm-bindgen-futures]
+[target.'cfg(target_family = "wasm")'.dependencies.wasm-bindgen-futures]
 version = "0.4.45"
 
 [target."cfg(target_has_atomic = \"ptr\")".dependencies.bytes]
