@@ -73,6 +73,16 @@ pub(super) fn serial_k3<R: Runtime>(a: &RudaTensor<R>, b: &RudaTensor<R>, partia
 #[allow(unsafe_code)]
 pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>,
     last_k: usize, bm: usize, bn: usize, bk: usize, asynchronous: bool, warp_m: usize, manual: bool, stages: usize, prefetch: bool) -> Result<RudaTensor<R>, String> {
+    launch_tile_warp_grid(a, b, out, last_k, bm, bn, bk, asynchronous, warp_m, 2, manual, stages, prefetch)
+}
+
+#[allow(unsafe_code)]
+pub(super) fn launch_tile_warp_grid<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>,
+    last_k: usize, bm: usize, bn: usize, bk: usize, asynchronous: bool, warp_m: usize, warp_cols: usize,
+    manual: bool, stages: usize, prefetch: bool) -> Result<RudaTensor<R>, String> {
+    if !matches!(warp_cols, 2 | 4) || (!manual && warp_cols != 2) || bn % (warp_cols * 16) != 0 {
+        return Err("training warp columns do not divide the block columns".into());
+    }
     if manual && asynchronous && !matches!(stages, 2 | 3) {
         return Err("manual training pipeline requires two or three stages".into());
     }
@@ -89,7 +99,7 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     if !matches!(warp_m, 32 | 64) || bm % warp_m != 0 {
         return Err("training warp tile does not divide the block rows".into());
     }
-    let threads = bm / warp_m * 64;
+    let threads = bm / warp_m * warp_cols * 32;
     if bm * bk % (threads * 8) != 0 || bn * bk % (threads * 8) != 0 {
         return Err("training tile does not divide the cooperative load".into());
     }
@@ -122,10 +132,10 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
     right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
     if manual {
-        unsafe { super::training_mma::tiled_prefetched::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
+        unsafe { super::training_mma::tiled_warp_grid::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
             left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, ta, nt,
             m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m,
-            stages, prefetch, DType::BF16.into(), out.dtype.into(), output_vector_size(&out)); }
+            stages, prefetch, warp_cols, DType::BF16.into(), out.dtype.into(), output_vector_size(&out)); }
     } else {
         unsafe { tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
             left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, ta, nt,

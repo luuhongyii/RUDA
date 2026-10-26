@@ -1,10 +1,60 @@
-use crate::tensor_matmul::training_gemm::launch_tile;
+use crate::tensor_matmul::training_gemm::{launch_tile, launch_tile_warp_grid};
 use half::bf16;
 use ruda_core::tensor::{DType, Metadata, Shape, data::TensorData};
 use ruda_kernel::tensor::{RudaTensor, transfer::from_data, readback::into_data_sync, permutation::swap_dims};
 use ruda_test_runtime::TestRuntime;
 
 type Tensor = RudaTensor<TestRuntime>;
+
+#[test]
+fn manual_training_warp_grid_covers_each_output_once() {
+    for bm in [32usize, 64, 128, 256] {
+        for bn in [64usize, 128, 256] {
+            for warp_m in [32usize, 64] {
+                if bm % warp_m != 0 { continue; }
+                for warp_cols in [2usize, 4] {
+                    let warp_n = bn / warp_cols;
+                    let warps = bm / warp_m * warp_cols;
+                    let mut counts = vec![0usize; bm * bn];
+                    for warp in 0..warps {
+                        let wm = warp / warp_cols * warp_m;
+                        let wn = warp % warp_cols * warp_n;
+                        for i in 0..warp_m / 16 {
+                            for j in 0..warp_n / 8 {
+                                for lane in 0..32 {
+                                    for r in 0..2 {
+                                        for c in 0..2 {
+                                            let row = wm + i * 16 + lane / 4 + r * 8;
+                                            let col = wn + j * 8 + lane % 4 * 2 + c;
+                                            assert!(row < bm && col < bn);
+                                            counts[row * bn + col] += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    assert!(counts.iter().all(|&count| count == 1));
+                    for bk in [32usize, 64] {
+                        let threads = warps * 32;
+                        if bm * bk % (threads * 8) != 0 || bn * bk % (threads * 8) != 0 { continue; }
+                        for elements in [bm * bk / 8, bn * bk / 8] {
+                            let mut copied = vec![0usize; elements];
+                            let copies = elements / threads;
+                            let per_group = copies.div_ceil(bk / 16);
+                            for group in 0..bk / 16 {
+                                for i in (group * per_group).min(copies)..((group + 1) * per_group).min(copies) {
+                                    for thread in 0..threads { copied[thread + i * threads] += 1; }
+                                }
+                            }
+                            assert!(copied.iter().all(|&count| count == 1));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[test]
 fn manual_training_epilogue_swizzle_preserves_coordinates_and_bank_transactions() {
@@ -196,19 +246,35 @@ fn read(tensor: Tensor) -> Vec<f32> {
 #[test]
 #[ignore = "requires an actual CUDA device and RUDA_REQUIRE_GPU=1"]
 fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
+    let cases = check_tiles(&[
+        (32, 32, 32, false, 32, 1, 2),
+        (128, 128, 32, true, 32, 2, 2), (128, 128, 32, true, 32, 3, 2),
+        (128, 32, 64, true, 32, 2, 2), (128, 32, 64, true, 32, 3, 2),
+        (128, 128, 64, true, 64, 2, 2), (128, 128, 64, true, 64, 3, 2),
+        (128, 256, 64, true, 32, 2, 2), (128, 256, 64, true, 32, 3, 2),
+    ], &[1, 2, 4, 7]);
+    assert_eq!(cases, 576);
+}
+
+#[test]
+#[ignore = "requires an actual CUDA device and RUDA_REQUIRE_GPU=1"]
+fn manual_training_warp_grids_match_wmma_for_layouts_pipeline_tails_and_offsets() {
+    let cases = check_tiles(&[
+        (64, 256, 32, true, 32, 2, 4), (64, 256, 64, true, 32, 3, 4),
+        (128, 256, 32, true, 64, 3, 4), (128, 256, 64, true, 64, 2, 4),
+        (128, 128, 64, true, 32, 2, 2), (128, 128, 64, true, 64, 2, 2),
+    ], &[1, 4, 7]);
+    assert_eq!(cases, 288);
+}
+
+fn check_tiles(tiles: &[(usize, usize, usize, bool, usize, usize, usize)], block_counts: &[usize]) -> usize {
     assert!(std::any::type_name::<TestRuntime>().contains("CudaRuntime"));
     assert_eq!(std::env::var("RUDA_REQUIRE_GPU").as_deref(), Ok("1"));
     let mut cases = 0;
-    for (bm, bn, bk, asynchronous, warp_m, stages) in [
-        (32, 32, 32, false, 32, 1),
-        (128, 128, 32, true, 32, 2), (128, 128, 32, true, 32, 3),
-        (128, 32, 64, true, 32, 2), (128, 32, 64, true, 32, 3),
-        (128, 128, 64, true, 64, 2), (128, 128, 64, true, 64, 3),
-        (128, 256, 64, true, 32, 2), (128, 256, 64, true, 32, 3),
-    ] {
+    for &(bm, bn, bk, asynchronous, warp_m, stages, warp_cols) in tiles {
         for ta in [false, true] {
             for nt in [false, true] {
-                for blocks in [1, 2, 4, 7] {
+                for &blocks in block_counts {
                     let (batch, m, k, n) = (2usize, bm, bk * blocks, bn * 2);
                     let last_k = if blocks == 1 { k } else { k - bk };
                     let pad = if blocks % 2 == 0 { 8 } else { 0 };
@@ -228,14 +294,14 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
                         let offset = if blocks == 4 { 3 } else { 0 };
                         let (out, storage) = output(batch, m, n, dtype, offset);
                         let (reference, _) = output(batch, m, n, dtype, 0);
-                        let actual = read(launch_tile(a.clone(), b.clone(), out, last_k,
-                            bm, bn, bk, asynchronous, warp_m, true, stages, prefetch).unwrap());
+                        let actual = read(launch_tile_warp_grid(a.clone(), b.clone(), out, last_k,
+                            bm, bn, bk, asynchronous, warp_m, warp_cols, true, stages, prefetch).unwrap());
                         let expected = read(launch_tile(a.clone(), b.clone(), reference, last_k,
                             32, 32, 32, false, 32, false, 1, false).unwrap());
                         assert_eq!(actual.len(), expected.len());
                         let mismatch = actual.iter().zip(&expected).position(|(a, b)| a.to_bits() != b.to_bits());
                         assert_eq!(mismatch, None,
-                            "tile={bm}x{bn}x{bk}, stages={stages}, prefetch={prefetch}, ta={ta}, nt={nt}, blocks={blocks}, dtype={dtype:?}");
+                            "tile={bm}x{bn}x{bk}, warp_cols={warp_cols}, stages={stages}, prefetch={prefetch}, ta={ta}, nt={nt}, blocks={blocks}, dtype={dtype:?}");
                         let whole = read(storage);
                         assert!(whole[..offset].iter().all(|v| *v == -7.0));
                         assert!(whole[offset + actual.len()..].iter().all(|v| *v == -7.0));
@@ -258,5 +324,5 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
             }
         }
     }
-    assert_eq!(cases, 576);
+    cases
 }

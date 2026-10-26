@@ -14,13 +14,13 @@ fn epilogue_index(row: usize, col: usize) -> usize {
 }
 
 #[ruda(launch_unchecked)]
-pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
+pub(super) fn tiled_warp_grid<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<Vector<O, OS>>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
     #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
-    #[comptime] warp_m: usize, #[comptime] stages: usize, #[comptime] prefetch: bool,
+    #[comptime] warp_m: usize, #[comptime] stages: usize, #[comptime] prefetch: bool, #[comptime] warp_cols: usize,
     #[define(F)] _input: StorageType, #[define(O)] _output: StorageType,
     #[define(OS)] _output_vector_size: usize) {
     let thread = UNIT_POS as usize;
@@ -29,18 +29,20 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
     let output_width = out.vector_size().comptime();
     let row = RUDA_POS_X as usize % (m / bm) * bm;
     let col = RUDA_POS_X as usize / (m / bm) * bn;
-    let wm = warp / 2 * warp_m;
-    let wn = warp % 2 * (bn / 2);
+    let wm = warp / warp_cols * warp_m;
+    let warp_n = comptime!(bn / warp_cols);
+    let wn = warp % warp_cols * warp_n;
+    let threads = comptime!(bm / warp_m * warp_cols * 32);
     let banks = comptime!(if asynchronous { stages } else { 1usize });
     let a_stage = comptime!(bm * bk / 8);
     let b_stage = comptime!(bn * bk / 8);
     let mut sa = SharedMemory::<Vector<F, Const<8>>>::new_aligned(a_stage * banks, 32usize);
     let mut sb = SharedMemory::<Vector<F, Const<8>>>::new_aligned(b_stage * banks, 32usize);
-    let mut epilogue = SharedMemory::<f32>::new_aligned(bm / warp_m * 512usize, 32usize);
+    let mut epilogue = SharedMemory::<f32>::new_aligned(threads / 32 * 256usize, 32usize);
     let def = cmma::MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);
     let mut acc = Sequence::<Vector<f32, Const<4>>>::new();
     #[unroll]
-    for _ in 0usize..(warp_m / 16 * (bn / 16)) {
+    for _ in 0usize..(warp_m / 16 * (warp_n / 8)) {
         let mut fragment = Vector::<f32, Const<4>>::empty();
         #[unroll]
         for i in 0usize..4 { fragment[i] = 0.0f32; }
@@ -58,7 +60,7 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
         }
     }
     #[unroll]
-    for j in 0usize..(bn / 16) {
+    for j in 0usize..(warp_n / 8) {
         if comptime!(nt) {
             b_rows.push(shared_index(wn + j * 8 + lane % 8, lane % 16 / 8, bk / 8));
         } else {
@@ -70,7 +72,7 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
         #[unroll]
         for stage in 0usize..(banks - 1) {
             if stage < blocks {
-                load_stage(a, b, &mut sa, &mut sb, row, col, stage, stage, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m, 0usize, 1usize);
+                load_stage(a, b, &mut sa, &mut sb, row, col, stage, stage, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, threads, 0usize, 1usize);
             }
             commit_copy_group();
         }
@@ -81,7 +83,7 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
             wait_copy_group(comptime!((banks - 2) as u32));
             sync_ruda();
         } else {
-            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m, 0usize, 1usize);
+            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, threads, 0usize, 1usize);
             sync_ruda();
         }
         let mut prefetched_a = Sequence::<Vector<F, Const<8>>>::new();
@@ -92,7 +94,7 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
                 prefetched_a.push(load_fragment_a(&sa, bank * a_stage + a_rows[i], bank, wm, lane, i, 0usize, bm, bk, ta));
             }
             #[unroll]
-            for j in 0usize..(bn / 16) {
+            for j in 0usize..(warp_n / 8) {
                 prefetched_b.push(load_fragment_b(&sb, bank * b_stage + b_rows[j], bank, wn, lane, j, 0usize, bn, bk, nt));
             }
         }
@@ -101,7 +103,7 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
             if comptime!(asynchronous) {
                 if block + banks - 1 < blocks {
                     let next_bank = (bank + banks - 1) % banks;
-                    load_stage(a, b, &mut sa, &mut sb, row, col, block + banks - 1, next_bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m, half, bk / 16);
+                    load_stage(a, b, &mut sa, &mut sb, row, col, block + banks - 1, next_bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, threads, half, bk / 16);
                 }
             }
             if comptime!(prefetch) {
@@ -111,16 +113,16 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
                         prefetched_a.push(load_fragment_a(&sa, bank * a_stage + a_rows[i], bank, wm, lane, i, half + 1, bm, bk, ta));
                     }
                     #[unroll]
-                    for j in 0usize..(bn / 16) {
+                    for j in 0usize..(warp_n / 8) {
                         prefetched_b.push(load_fragment_b(&sb, bank * b_stage + b_rows[j], bank, wn, lane, j, half + 1, bn, bk, nt));
                     }
                 }
                 #[unroll]
-                for j in 0usize..(bn / 16) {
+                for j in 0usize..(warp_n / 8) {
                     #[unroll]
                     for i in 0usize..(warp_m / 16) {
                         def.execute_vectors_inplace(&prefetched_a[half * (warp_m / 16) + i],
-                            &prefetched_b[half * (bn / 16) + j], acc.index_mut(i * (bn / 16) + j));
+                            &prefetched_b[half * (warp_n / 8) + j], acc.index_mut(i * (warp_n / 8) + j));
                     }
                 }
             } else {
@@ -130,11 +132,11 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
                     ar.push(load_fragment_a(&sa, bank * a_stage + a_rows[i], bank, wm, lane, i, half, bm, bk, ta));
                 }
                 #[unroll]
-                for j in 0usize..(bn / 16) {
+                for j in 0usize..(warp_n / 8) {
                     let br = load_fragment_b(&sb, bank * b_stage + b_rows[j], bank, wn, lane, j, half, bn, bk, nt);
                     #[unroll]
                     for i in 0usize..(warp_m / 16) {
-                        def.execute_vectors_inplace(&ar[i], &br, acc.index_mut(i * (bn / 16) + j));
+                        def.execute_vectors_inplace(&ar[i], &br, acc.index_mut(i * (warp_n / 8) + j));
                     }
                 }
             }
@@ -151,12 +153,12 @@ pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F,
     #[unroll]
     for i in 0usize..(warp_m / 16) {
         #[unroll]
-        for j in 0usize..(bn / 32) {
+        for j in 0usize..(warp_n / 16) {
             #[unroll]
             for part in 0usize..2 {
                 #[unroll]
                 for r in 0usize..2 {
-                    let value = acc[i * (bn / 16) + j * 2 + part];
+                    let value = acc[i * (warp_n / 8) + j * 2 + part];
                     let mut pair = Vector::<f32, Const<2>>::empty();
                     #[unroll]
                     for c in 0usize..2 { pair[c] = value[r * 2 + c]; }
@@ -227,8 +229,7 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
-    #[comptime] warp_m: usize, #[comptime] copy_group: usize, #[comptime] copy_groups: usize) {
-    let threads = comptime!(bm / warp_m * 64);
+    #[comptime] threads: usize, #[comptime] copy_group: usize, #[comptime] copy_groups: usize) {
     let a_copies = comptime!(bm * bk / (threads * 8));
     let a_per_group = comptime!(a_copies.div_ceil(copy_groups));
     #[unroll]

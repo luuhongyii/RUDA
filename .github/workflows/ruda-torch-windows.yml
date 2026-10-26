@@ -194,6 +194,7 @@ jobs:
           target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_compact_offsets_match_full_fragment_addresses
           target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_vector_load_offsets_preserve_coordinates
           target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_fragment_prefetch_preserves_k_order
+          target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_warp_grid_covers_each_output_once
           cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
       - name: Save Linux native library
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

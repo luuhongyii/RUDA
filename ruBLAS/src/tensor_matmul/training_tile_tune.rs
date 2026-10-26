@@ -43,7 +43,7 @@ fn inputs<R: Runtime>(_: &TileKey,
 }
 
 pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>, last_k: usize) {
-    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v24");
+    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v25");
     let client = a.client.clone();
     let id = RudaTuneId::new(&client, &a.device);
     let candidates = TUNER.init_for_device(&id, || {
@@ -101,6 +101,16 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
                 set = set.with(Tunable::new(&format!("{name}_s{stages}_prefetch{prefetch}"),
                     move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
                         super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 32, true, stages, prefetch)
+                    }));
+            }
+        }
+        for (m, n, k, warp_m) in [(64, 256, 32, 32), (64, 256, 64, 32),
+                                  (128, 256, 32, 64), (128, 256, 64, 64)] {
+            for (stages, prefetch) in [(2, false), (3, false), (2, true), (3, true)] {
+                set = set.with(Tunable::new(&format!("mma_wc4_wm{warp_m}_{m}x{n}x{k}_s{stages}_prefetch{prefetch}"),
+                    move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
+                        super::training_gemm::launch_tile_warp_grid(a, b, out, last_k,
+                            m, n, k, true, warp_m, 4, true, stages, prefetch)
                     }));
             }
         }
