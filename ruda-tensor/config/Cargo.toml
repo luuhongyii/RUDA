@@ -1,6 +1,6 @@
 [package]
 name = "ruda-tensor-config"
-version = "0.21.8"
+version = "0.21.9"
 edition = "2024"
 authors = ["Dilshod Tadjibaev (@antimora)"]
 description = "Shared tensor-stack autodiff and fusion configuration for Ruda."
@@ -24,7 +24,7 @@ tracing = ["ruda-core/tracing"]
 
 [dependencies.ruda-core]
 path = "../../ruda-core"
-version = "0.1.10"
+version = "0.1.11"
 default-features = false
 
 [dependencies.serde]

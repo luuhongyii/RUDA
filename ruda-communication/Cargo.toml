@@ -1,7 +1,7 @@
 [package]
 edition = "2024"
 name = "ruda-communication"
-version = "0.21.70"
+version = "0.21.71"
 authors = [ "Guilhem Ané (@Cielbird)", "Nathaniel Simard (@nathanielsimard)",]
 build = false
 autolib = false
@@ -102,19 +102,19 @@ features = [ "default", "fmt", "env-filter",]
 
 [dependencies.ruda-core]
 path = "../ruda-core"
-version = "0.1.10"
+version = "0.1.11"
 default-features = false
 features = [ "std", "serde", "shared-bytes", "tensor-data", "id", "id-tests-std",]
 
 [dependencies.ruda-tensor-config]
 path = "../ruda-tensor/config"
-version = "0.21.8"
+version = "0.21.9"
 default-features = false
 features = [ "std",]
 
 [dependencies.ruda-tensor]
 path = "../ruda-tensor"
-version = "0.21.73"
+version = "0.21.74"
 default-features = false
 features = [ "api-std",]
 optional = true
