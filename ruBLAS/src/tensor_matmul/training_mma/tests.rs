@@ -6,6 +6,52 @@ use ruda_test_runtime::TestRuntime;
 
 type Tensor = RudaTensor<TestRuntime>;
 
+#[test]
+fn manual_training_epilogue_swizzle_preserves_coordinates_and_bank_transactions() {
+    let index = |row: usize, col: usize| row * 16 + (col ^ ((row / 2 % 2) * 12));
+    let mut shared = [usize::MAX; 256];
+    for part in 0..2 {
+        for r in 0..2 {
+            for half_warp in 0..2 {
+                let mut banks = [0usize; 32];
+                for lane in half_warp * 16..(half_warp + 1) * 16 {
+                    let (row, col) = (lane / 4 + r * 8, part * 8 + lane % 4 * 2);
+                    let start = index(row, col);
+                    assert_eq!(start % 2, 0);
+                    for c in 0..2 {
+                        assert_eq!(index(row, col + c), start + c);
+                        assert_eq!(shared[start + c], usize::MAX);
+                        shared[start + c] = row * 16 + col + c;
+                        banks[(start + c) % 32] += 1;
+                    }
+                }
+                assert_eq!(banks, [1; 32]);
+            }
+        }
+    }
+    for width in [1, 4, 8] {
+        let vector = width.min(4);
+        let lanes = 32 / vector;
+        for t in 0..8 / width {
+            for group in 0..width / vector {
+                for transaction in 0..32 / lanes {
+                    let mut banks = [0usize; 32];
+                    for lane in transaction * lanes..(transaction + 1) * lanes {
+                        let logical = (lane + t * 32) * width + group * vector;
+                        let start = index(logical / 16, logical % 16);
+                        assert_eq!(start % vector, 0);
+                        for v in 0..vector {
+                            assert_eq!(shared[start + v], logical + v);
+                            banks[(start + v) % 32] += 1;
+                        }
+                    }
+                    assert_eq!(banks, [1; 32]);
+                }
+            }
+        }
+    }
+}
+
 fn values(count: usize, seed: usize) -> Vec<bf16> {
     (0..count).map(|i| {
         let bits = ((i * 17 + seed) % 128) | (((i * 7 + seed) % 12 + 119) << 7)

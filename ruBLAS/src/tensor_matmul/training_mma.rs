@@ -8,8 +8,13 @@ fn shared_index(row: usize, chunk: usize, #[comptime] chunks: usize) -> usize {
     row * chunks + (chunk ^ ((row / comptime!(8usize.div_ceil(chunks))) % comptime!(chunks.min(8))))
 }
 
+#[ruda]
+fn epilogue_index(row: usize, col: usize) -> usize {
+    row * 16 + (col ^ ((row / 2 % 2) * 12))
+}
+
 #[ruda(launch_unchecked)]
-pub(super) fn tiled_pipelined<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
+pub(super) fn tiled_swizzled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<Vector<O, OS>>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
@@ -113,6 +118,8 @@ pub(super) fn tiled_pipelined<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, 
         wait_copy_group(0u32);
         sync_ruda();
     }
+    let mut pairs = epilogue.to_slice_mut().into_vectorized().with_vector_size::<Const<2>>();
+    let quads = epilogue.to_slice().into_vectorized().with_vector_size::<Const<4>>();
     #[unroll]
     for i in 0usize..(warp_m / 16) {
         #[unroll]
@@ -122,10 +129,10 @@ pub(super) fn tiled_pipelined<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, 
                 #[unroll]
                 for r in 0usize..2 {
                     let value = acc[i * (bn / 16) + j * 2 + part];
+                    let mut pair = Vector::<f32, Const<2>>::empty();
                     #[unroll]
-                    for c in 0usize..2 {
-                        epilogue[warp * 256 + (lane / 4 + r * 8) * 16 + part * 8 + lane % 4 * 2 + c] = value[r * 2 + c];
-                    }
+                    for c in 0usize..2 { pair[c] = value[r * 2 + c]; }
+                    pairs[(warp * 256 + epilogue_index(lane / 4 + r * 8, part * 8 + lane % 4 * 2)) / 2] = pair;
                 }
             }
             sync_plane();
@@ -133,8 +140,19 @@ pub(super) fn tiled_pipelined<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, 
             for t in 0usize..(8 / output_width) {
                 let pos = (lane + t * 32) * output_width;
                 let mut values = Vector::<O, OS>::empty();
-                #[unroll]
-                for v in 0usize..output_width { values[v] = O::cast_from(epilogue[warp * 256 + pos + v]); }
+                if comptime!(output_width >= 4) {
+                    #[unroll]
+                    for group in 0usize..(output_width / 4) {
+                        let value = quads[(warp * 256 + epilogue_index(pos / 16, pos % 16 + group * 4)) / 4];
+                        #[unroll]
+                        for v in 0usize..4 { values[group * 4 + v] = O::cast_from(value[v]); }
+                    }
+                } else {
+                    #[unroll]
+                    for v in 0usize..output_width {
+                        values[v] = O::cast_from(epilogue[warp * 256 + epilogue_index(pos / 16, pos % 16 + v)]);
+                    }
+                }
                 out[((RUDA_POS_Y as usize * m + row + wm + i * 16 + pos / 16) * n + col + wn + j * 16 + pos % 16) / output_width] = values;
             }
             sync_plane();
