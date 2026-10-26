@@ -77,7 +77,8 @@ def cross_entropy(logits, targets, *, ignore_index=-100, reduction='mean'):
         raise ValueError('ignore_index must fit int64')
     if reduction not in ('none', 'sum', 'mean'):
         raise ValueError('invalid loss reduction')
-    forward = _forward if torch.compiler.is_compiling() else _CrossEntropy.apply
+    forward = (_CrossEntropy.apply if not torch.compiler.is_compiling()
+               and torch.is_grad_enabled() and logits.requires_grad else _forward)
     losses, _ = forward(logits.resolve_neg().contiguous(),
                         targets.resolve_neg().to(torch.int64).contiguous(), ignore_index)
     if reduction == 'none':

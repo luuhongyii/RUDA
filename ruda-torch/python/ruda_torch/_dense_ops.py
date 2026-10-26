@@ -142,5 +142,6 @@ class _DenseAttention(torch.autograd.Function):
 
 
 def eager_forward(q,k,v,mask,score_shape,mask_kind,causal,scale,p,flash=False):
-    operation=forward if torch.compiler.is_compiling() else _DenseAttention.apply
+    operation=(_DenseAttention.apply if not torch.compiler.is_compiling() and torch.is_grad_enabled()
+               and any(t.requires_grad for t in (q,k,v,mask)) else forward)
     return operation(q,k,v,mask,score_shape,mask_kind,causal,scale,p,flash)
