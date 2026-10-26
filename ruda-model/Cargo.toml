@@ -168,7 +168,7 @@ features = ["frontend"]
 
 [dependencies.ruda-tensor-config]
 path = "../ruda-tensor/config"
-version = "0.21.9"
+version = "0.21.10"
 default-features = false
 
 [dependencies.ruda-io]
