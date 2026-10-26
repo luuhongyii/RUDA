@@ -2,6 +2,7 @@
 #define NOMINMAX
 #endif
 #include <ATen/EmptyTensor.h>
+#include <atomic>
 #include <ATen/SparseCsrTensorImpl.h>
 #include <ATen/quantized/QTensorImpl.h>
 #include <ATen/native/quantized/AffineQuantizer.h>
@@ -786,6 +787,8 @@ void record_tensor_stream(at::Tensor& value, c10::Stream stream) {
   stream_command(12,stream.id(),reinterpret_cast<uintptr_t>(arg.desc.allocation));
 }
 TORCH_LIBRARY_IMPL(ruda, PrivateUse1, m) {
+  m.impl("dense_attention_forward",dense_attention_forward_op);
+  m.impl("dense_attention_backward",dense_attention_backward_op);
   m.impl("lora_epilogue_forward",lora_epilogue_forward);
   m.impl("lora_epilogue_backward",lora_epilogue_backward);
   m.impl("lora_rank16_residual",lora_rank16_residual);

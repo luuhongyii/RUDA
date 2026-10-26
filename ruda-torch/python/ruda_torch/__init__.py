@@ -379,6 +379,7 @@ from . import _fused_training_ops
 from .fused_cross_entropy import cross_entropy
 from .rotary import apply_rotary_pos_emb
 from .lora_epilogue import lora_epilogue
+from . import _dense_ops
 if hasattr(_C, 'initialize_fused_autograd_dispatch'):
     _C.initialize_fused_autograd_dispatch()
 

@@ -29,7 +29,7 @@ void initialize_fused_autograd_dispatch() {
   for (const char* name : {"lora_epilogue_forward", "lora_epilogue_backward", "lora_rank16_residual",
        "training_rms_forward", "training_rms_backward", "training_layer_forward", "training_layer_backward",
        "training_silu_forward", "training_silu_backward", "rotary_qk_forward", "rotary_qk_backward",
-       "cross_entropy_forward", "cross_entropy_backward"}) {
+       "cross_entropy_forward", "cross_entropy_backward", "dense_attention_forward", "dense_attention_backward"}) {
     const auto op = c10::Dispatcher::singleton().findSchemaOrThrow((std::string("ruda::") + name).c_str(), "");
     auto original = op.getComputedKernelForDispatchKey(c10::DispatchKey::AutogradPrivateUse1);
     library->impl(name, torch::CppFunction::makeFromBoxedFunctor(

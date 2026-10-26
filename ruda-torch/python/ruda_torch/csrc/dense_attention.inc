@@ -56,3 +56,80 @@ void indexed_dense_attention_call(uint32_t op,const std::vector<at::Tensor>& ten
     double scale,double p,uint64_t seed,uint64_t counter,bool need_mask,int64_t global_heads,int64_t head_start) {
   dense_attention_dispatch(op,tensors,mask_kind,score_shape,causal,scale,p,seed,counter,need_mask,true,global_heads,head_start);
 }
+
+std::atomic<bool> dense_dispatch_ready{false}, dense_flash_ready{false};
+void initialize_dense_dispatch(bool flash) {
+  if(!dense_dispatch_ready.load(std::memory_order_acquire)) {
+    pybind11::gil_scoped_acquire gil;
+    if(!dense_dispatch_ready.load(std::memory_order_relaxed)) {
+      pybind11::module_::import("ruda_torch.attention").attr("_initialize_dense")();
+      dense_dispatch_ready.store(true,std::memory_order_release);
+    }
+  }
+  if(flash && !dense_flash_ready.load(std::memory_order_acquire)) {
+    pybind11::gil_scoped_acquire gil;
+    if(!dense_flash_ready.load(std::memory_order_relaxed)) {
+      pybind11::module_::import("ruda_torch._dense_ops").attr("_columns")(true);
+      dense_flash_ready.store(true,std::memory_order_release);
+    }
+  }
+}
+
+std::vector<int64_t> dense_score_shape(c10::SymIntArrayRef shape) {
+  std::vector<int64_t> result;result.reserve(shape.size());
+  for(const auto& dim:shape) result.push_back(dim.expect_int());
+  return result;
+}
+
+std::pair<uint64_t,uint64_t> dense_rng_words(const at::Tensor& state) {
+  auto original = [&] {
+    pybind11::gil_scoped_acquire gil;
+    return pybind11::module_::import("ruda_torch._dense_ops").attr("rng_words")(state)
+        .cast<std::pair<uint64_t,uint64_t>>();
+  };
+  if(!state.device().is_cpu() || state.scalar_type()!=at::kLong || state.dim()!=1 || state.size(0)!=4)
+    return original();
+  const auto* data=state.const_data_ptr<int64_t>();
+  uint64_t words[4];
+  for(int64_t i=0;i<4;++i) {
+    const auto word=data[i*state.stride(0)];
+    if(word<0 || uint64_t(word)>0xffffffffULL) return original();
+    words[i]=uint64_t(word);
+  }
+  return {words[0]|(words[1]<<32),words[2]|(words[3]<<32)};
+}
+
+std::tuple<at::Tensor,at::Tensor,at::Tensor> dense_attention_forward_op(
+    const at::Tensor& q,const at::Tensor& k,const at::Tensor& v,const at::Tensor& mask,
+    c10::SymIntArrayRef score_shape,c10::SymInt mask_kind,bool causal,double scale,double p,bool flash) {
+  initialize_dense_dispatch(flash);
+  TORCH_CHECK(q.dim()>=3 && v.dim()>0,"invalid dense attention dimensions");
+  TORCH_CHECK(mask_kind.expect_int()>=0 && mask_kind.expect_int()<=2,"invalid dense attention command");
+  auto shape=q.sizes().vec();shape.back()=v.size(-1);
+  auto out=at::empty(shape,q.options());
+  auto stats=at::empty({q.size(0)*q.size(1)*q.size(2),flash?130:2},q.options().dtype(at::kFloat));
+  auto score=dense_score_shape(score_shape);
+  at::Tensor state;
+  if(p>0 && p<1) {
+    pybind11::gil_scoped_acquire gil;
+    auto count=pybind11::module_::import("math").attr("prod")(score);
+    state=pybind11::module_::import("ruda_torch._dense_ops").attr("_rng_state")(count,p).cast<at::Tensor>();
+  } else state=at::zeros({4},at::TensorOptions().device(at::kCPU).dtype(at::kLong));
+  auto [seed,counter]=dense_rng_words(state);
+  dense_attention_call(0,{q,k,v,mask,out,stats},mask_kind.expect_int(),score,causal,scale,p,seed,counter,false);
+  return {out,stats,state};
+}
+
+std::tuple<at::Tensor,at::Tensor,at::Tensor,at::Tensor> dense_attention_backward_op(
+    const at::Tensor& q,const at::Tensor& k,const at::Tensor& v,const at::Tensor& mask,
+    const at::Tensor& grad,const at::Tensor& stats,const at::Tensor& rng,c10::SymIntArrayRef score_shape,
+    c10::SymInt mask_kind,bool causal,double scale,double p,bool need_mask) {
+  initialize_dense_dispatch(false);
+  TORCH_CHECK(mask_kind.expect_int()>=0 && mask_kind.expect_int()<=2,"invalid dense attention command");
+  auto dq=at::empty_like(q),dk=at::empty_like(k),dv=at::empty_like(v);
+  auto dm=need_mask?at::empty_like(mask):at::empty({1},q.options().dtype(at::kFloat));
+  auto [seed,counter]=dense_rng_words(rng);
+  dense_attention_call(1,{q,k,v,mask,grad.contiguous(),stats,dq,dk,dv,dm},mask_kind.expect_int(),
+      dense_score_shape(score_shape),causal,scale,p,seed,counter,need_mask);
+  return {dq,dk,dv,dm};
+}
