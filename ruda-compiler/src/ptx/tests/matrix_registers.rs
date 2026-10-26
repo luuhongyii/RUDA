@@ -82,7 +82,8 @@ fn indexed_compound_assign_updates_borrowed_and_unborrowed_vector_components() {
             *k.body.reference_read(*reference).unwrap()
         } else { *c };
         store(&mut k.body, output, 0u32.into(), value);
-        let compiled = compile(k, ExecutionMode::Unchecked, UIntKind::U32).unwrap();
+        let options = PtxCompilationOptions { target: Some(PtxTarget { version: (8, 0), sm: 80 }) };
+        let compiled = PtxCompiler.compile(k, &options, ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap();
         assert!(!compiled.source.contains("ld.local."), "mode={mode}\n{}", compiled.source);
         assert!(!compiled.source.contains("st.local."), "mode={mode}\n{}", compiled.source);
         export(&compiled);
