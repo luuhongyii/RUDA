@@ -31,6 +31,11 @@ def test_dense_native_dispatch_matches_original_body(dtype,policy):
     kind=2 if policy=='mask' else 0
     p=.25 if policy=='dropout' else 1. if policy=='all_dropped' else 0.
     args=(q,k,v,mask,shape,kind,policy=='causal',.125,p)
+    if policy=='empty':
+        for forward in (ops.forward,ops.forward._init_fn):
+            with pytest.raises(RuntimeError,match='dense attention requires contiguous storage'):
+                forward(*args)
+        return
     r.manual_seed(271)
     actual=ops.forward(*args)
     r.manual_seed(271)
