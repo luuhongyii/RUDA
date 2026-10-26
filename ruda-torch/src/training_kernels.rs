@@ -72,8 +72,6 @@ pub fn rms_cuda_dx_vector4<F: Float + RudaElement, W: Float + RudaElement>(
     let row = if comptime!(width==8192) { RUDA_POS_X as usize } else { RUDA_POS_X as usize*4+warp };
     let stride = comptime!(if width==8192 { 2048usize } else { 128usize });
     let column = if comptime!(width==8192) { thread*4 } else { lane*4 };
-    let mut values = Array::<f32>::new(width/stride*4);
-    let mut gradients = Array::<f32>::new(width/stride*4);
     let mut local = Array::<f32>::new(4usize);
     #[unroll]
     for j in 0usize..4 { local[j] = 0.0; }
@@ -86,8 +84,6 @@ pub fn rms_cuda_dx_vector4<F: Float + RudaElement, W: Float + RudaElement>(
             let mut grad = f32::cast_from(dy[row*width+col]);
             if comptime!(weighted) { grad *= f32::cast_from(weight[col]); }
             grad = f32::cast_from(F::cast_from(grad));
-            values[i*4+j] = value;
-            gradients[i*4+j] = grad;
             local[j] += grad*value;
         }
     }
@@ -116,7 +112,11 @@ pub fn rms_cuda_dx_vector4<F: Float + RudaElement, W: Float + RudaElement>(
         #[unroll]
         for j in 0usize..4 {
             let col = i*stride+column+j;
-            dx[row*width+col] = F::cast_from(gradients[i*4+j]*inv+square_grad*(2.0f32*values[i*4+j]));
+            let value = f32::cast_from(x[row*width+col]);
+            let mut grad = f32::cast_from(dy[row*width+col]);
+            if comptime!(weighted) { grad *= f32::cast_from(weight[col]); }
+            grad = f32::cast_from(F::cast_from(grad));
+            dx[row*width+col] = F::cast_from(grad*inv+square_grad*(2.0f32*value));
         }
     }
 }
