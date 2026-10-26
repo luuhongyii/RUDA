@@ -2,7 +2,7 @@
 fn vector_stage_covers_rows_without_padding_or_unaligned_access() {
     for rows in [16usize, 64, 128] {
         for row_base in [0usize, 16, 64, 512, 3584] {
-            let mut seen = alloc::vec![false; rows * 136];
+            let mut seen = vec![false; rows * 136];
             for block in 0..rows / 8 {
                 for thread in 0..128 {
                     let row = block * 8 + thread / 16;
@@ -42,7 +42,7 @@ fn adjacent_accumulators_match_bf16_mma_a_fragment_coordinates() {
 
 #[test]
 fn register_rows_preserve_softmax_order_and_output_ownership() {
-    let mut output = alloc::vec![0usize; 128 * 128];
+    let mut output = vec![0usize; 128 * 128];
     let mut stats = [0usize; 128];
     for thread in 0usize..128 {
         let (warp, lane) = (thread / 32, thread % 32);
