@@ -611,6 +611,31 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
     }
 
     #[allow(unused_variables)]
+    pub fn load_matrix_vector<E: RudaPrimitive, NO: Size>(
+        &self,
+        row: &Slice<E>,
+        #[comptime] num_matrices: usize,
+        #[comptime] transpose: bool,
+    ) -> Vector<E::Scalar, NO> {
+        intrinsic!(|scope| {
+            let slice_vector_size = row.vector_size;
+            let (buffer, offset) = row.__to_raw_parts();
+            let out = scope.create_local(Vector::<E::Scalar, NO>::as_type(scope));
+            scope.register(Instruction::new(
+                CoopMma::LoadMatrix {
+                    buffer,
+                    offset,
+                    vector_size: slice_vector_size,
+                    factor: num_matrices,
+                    transpose,
+                },
+                *out,
+            ));
+            out.into()
+        })
+    }
+
+    #[allow(unused_variables)]
     pub fn load_matrix_inplace<E: Scalar, N: Size>(
         &self,
         row: &Slice<E>,
@@ -769,6 +794,38 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
         &self,
         registers_a: &Array<Vector<A, NA>>,
         registers_b: &Array<Vector<B, NB>>,
+        registers_c: &mut Vector<CD, NC>,
+    ) {
+        intrinsic!(|scope| {
+            let registers_a = *registers_a.expand;
+            let registers_b = *registers_b.expand;
+            let registers_c = *registers_c.expand;
+            let matrix = ruda_core::ir::Matrix {
+                ident: MatrixIdent::A,
+                m: self.m,
+                n: self.n,
+                k: self.k,
+                storage: self.a_type,
+                layout: MatrixLayout::ColMajor,
+                scope: ir::MatrixScope::Plane,
+            };
+            scope.register(Instruction::new(
+                CoopMma::ExecuteManual {
+                    matrix,
+                    registers_a,
+                    registers_b,
+                    registers_c,
+                },
+                registers_c,
+            ));
+        })
+    }
+
+    #[allow(unused)]
+    pub fn execute_vectors_inplace<NA: Size, NB: Size, NC: Size>(
+        &self,
+        registers_a: &Vector<A, NA>,
+        registers_b: &Vector<B, NB>,
         registers_c: &mut Vector<CD, NC>,
     ) {
         intrinsic!(|scope| {

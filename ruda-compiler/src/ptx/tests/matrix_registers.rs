@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn manual_mma_vector_operands_do_not_use_addressable_local_storage() {
+    for kind in [FloatKind::F16, FloatKind::BF16] {
+        for transpose in [false, true] {
+            let mut k = kernel(&format!("register_operands_{kind:?}_{transpose}"));
+            let ty = Type::from(kind);
+            let shared = *k.body.create_shared_array(ty.with_vector_size(8), 32, Some(16));
+            let a = *k.body.create_local(ty.with_vector_size(8));
+            let b = *k.body.create_local(ty.with_vector_size(4));
+            let c = *k.body.create_local(Type::from(FloatKind::F32).with_vector_size(4));
+            k.body.register(Instruction::new(Operator::Cast(UnaryOperator { input: 0f32.into() }), c));
+            let matrix = Matrix { ident: MatrixIdent::A, m: 16, n: 8, k: 16,
+                storage: kind.into(), layout: MatrixLayout::ColMajor, scope: MatrixScope::Plane };
+            for offset in [0u32, 16] {
+                for (registers, factor) in [(a, 4), (b, 2)] {
+                    k.body.register(Instruction::new(CoopMma::LoadMatrix {
+                        buffer: shared, offset: offset.into(), vector_size: Some(8), factor, transpose,
+                    }, registers));
+                }
+                k.body.register(Synchronization::SyncRuda);
+                k.body.register(Instruction::new(CoopMma::ExecuteManual {
+                    matrix, registers_a: a, registers_b: b, registers_c: c,
+                }, c));
+            }
+            let result = PtxCompiler.compile(k, &options(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap();
+            assert_eq!(result.source.matches("mma.sync.aligned.m16n8k16").count(), 2);
+            assert_eq!(result.source.matches("ldmatrix.sync.aligned.m8n8.x4").count(), 2);
+            assert_eq!(result.source.matches("ldmatrix.sync.aligned.m8n8.x2").count(), 2);
+            assert!(!result.source.contains("ld.local."));
+            assert!(!result.source.contains("st.local."));
+            assert!(!result.source.contains(".local .align"));
+            export(&result);
+        }
+    }
+}
+
+#[test]
 fn manual_half_matrix_transfers_keep_aligned_register_words_packed() {
     for kind in [FloatKind::F16, FloatKind::BF16] {
         for width in [1, 2, 4, 8] {

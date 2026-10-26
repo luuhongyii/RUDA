@@ -76,23 +76,23 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
         }
         #[unroll]
         for half in 0usize..(bk / 16) {
-            let mut ar = Sequence::<Array<Vector<F, Const<2>>>>::new();
-            let mut br = Sequence::<Array<Vector<F, Const<2>>>>::new();
+            let mut ar = Sequence::<Vector<F, Const<8>>>::new();
+            let mut br = Sequence::<Vector<F, Const<4>>>::new();
             #[unroll]
             for i in 0usize..(warp_m / 16) {
                 let offset = bank * a_stage + a_rows[half * (warp_m / 16) + i];
-                ar.push(def.load_matrix::<_, Const<2>>(&sa.slice(offset, offset + 1), cmma::MatrixIdent::A, 4usize, ta));
+                ar.push(def.load_matrix_vector::<_, Const<8>>(&sa.slice(offset, offset + 1), 4usize, ta));
             }
             #[unroll]
             for j in 0usize..(bn / 16) {
                 let offset = bank * b_stage + b_rows[half * (bn / 16) + j];
-                br.push(def.load_matrix::<_, Const<2>>(&sb.slice(offset, offset + 1), cmma::MatrixIdent::B, 2usize, !nt));
+                br.push(def.load_matrix_vector::<_, Const<4>>(&sb.slice(offset, offset + 1), 2usize, !nt));
             }
             #[unroll]
             for i in 0usize..(warp_m / 16) {
                 #[unroll]
                 for j in 0usize..(bn / 16) {
-                    def.execute_vector_inplace(&ar[i], &br[j], acc.index_mut(i * (bn / 16) + j));
+                    def.execute_vectors_inplace(&ar[i], &br[j], acc.index_mut(i * (bn / 16) + j));
                 }
             }
         }
