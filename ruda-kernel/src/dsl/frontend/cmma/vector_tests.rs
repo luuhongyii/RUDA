@@ -1,5 +1,6 @@
 use crate::dsl::prelude::*;
 use alloc::vec;
+use half::f16;
 use ruda_core::ir::{CoopMma, FloatKind, Operation, PointerOp, Type, UIntKind};
 
 #[ruda]
@@ -42,13 +43,19 @@ fn manual_mma_vector_intrinsics_read_values_and_write_through_accumulator_refere
                 Some((i, instruction.out.unwrap()))
             } else { None }
         }).expect("manual MMA instruction");
+        let mut pointers = vec![c_pointer];
+        for instruction in &scope.instructions[..position] {
+            if let Operation::Copy(input) = instruction.operation {
+                if pointers.contains(&input) { pointers.push(instruction.out.unwrap()); }
+            }
+        }
         let mut values = vec![result];
         let mut writeback = false;
         for instruction in &scope.instructions[position + 1..] {
             match instruction.operation {
                 Operation::Copy(input) if values.contains(&input) => values.push(instruction.out.unwrap()),
                 Operation::Pointer(PointerOp::Store { pointer, value, .. })
-                    if pointer == c_pointer && values.contains(&value) => writeback = true,
+                    if pointers.contains(&pointer) && values.contains(&value) => writeback = true,
                 _ => {}
             }
         }
