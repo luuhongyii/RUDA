@@ -46,8 +46,10 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
         if rows > 0 {
             if hf_rounding && x.dtype==2 && (128..=8192).contains(&width) && width%128==0
                 && rows>=16 && rows%4==0 && super::matmul::cuda_bf16_precision() {
+                let wide = width==8192;
                 unsafe { k::rms_cuda_vector4::launch::<F,W,CudaRuntime>(
-                    &c,RudaCount::Static(u32::try_from(rows/4).expect("norm grid overflow"),1,1),RudaDim::new_1d(128),
+                    &c,RudaCount::Static(u32::try_from(if wide { rows } else { rows/4 }).expect("norm grid overflow"),1,1),
+                    RudaDim::new_1d(if wide { 512 } else { 128 }),
                     x.arg(),w.arg(),v[2].arg(),v[3].arg(),s[0],weighted,width); }
             } else if cached {
                 unsafe { k::rms_forward_cached::launch::<F, W, CudaRuntime>(

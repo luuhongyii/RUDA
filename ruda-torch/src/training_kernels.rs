@@ -13,34 +13,47 @@ pub fn rms_cuda_vector4<F: Float + RudaElement, W: Float + RudaElement>(
     let thread = UNIT_POS as usize;
     let lane = thread%32;
     let warp = thread/32;
-    let row = RUDA_POS_X as usize*4+warp;
+    let row = if comptime!(width==8192) { RUDA_POS_X as usize } else { RUDA_POS_X as usize*4+warp };
+    let stride = comptime!(if width==8192 { 2048usize } else { 128usize });
+    let column = if comptime!(width==8192) { thread*4 } else { lane*4 };
     let mut local = Array::<f32>::new(4usize);
-    let mut sums = SharedMemory::<f32>::new(128usize);
+    let mut sums = SharedMemory::<f32>::new(comptime!(if width==8192 { 512usize } else { 128usize }));
     #[unroll]
     for j in 0usize..4 { local[j] = 0.0; }
     #[unroll]
-    for i in 0usize..(width/128) {
+    for i in 0usize..(width/stride) {
         #[unroll]
         for j in 0usize..4 {
-            let value = f32::cast_from(x[row*width+i*128+lane*4+j]);
+            let value = f32::cast_from(x[row*width+i*stride+column+j]);
             local[j] += value*value;
         }
     }
     sums[thread] = ((local[0]+local[1])+local[2])+local[3];
     sync_ruda();
+    if comptime!(width==8192) {
+        #[unroll]
+        for stage in 0usize..4 {
+            let offset = 256usize>>stage;
+            if thread < offset { sums[thread] = sums[thread]+sums[thread+offset]; }
+            sync_ruda();
+        }
+    }
     #[unroll]
     for stage in 0usize..5 {
         let offset = 16usize>>stage;
-        if lane < offset { sums[thread] = sums[thread]+sums[thread+offset]; }
+        if lane < offset && (comptime!(width!=8192) || thread < 32) {
+            sums[thread] = sums[thread]+sums[thread+offset];
+        }
         sync_ruda();
     }
-    let inv = cuda_rsqrt(sums[warp*32]*(1.0f32/width as f32)+epsilon);
-    if lane == 0 { rstd[row] = inv; }
+    let index = if comptime!(width==8192) { 0usize } else { warp*32 };
+    let inv = cuda_rsqrt(sums[index]*(1.0f32/width as f32)+epsilon);
+    if lane == 0 && (comptime!(width!=8192) || thread==0) { rstd[row] = inv; }
     #[unroll]
-    for i in 0usize..(width/128) {
+    for i in 0usize..(width/stride) {
         #[unroll]
         for j in 0usize..4 {
-            let col = i*128+lane*4+j;
+            let col = i*stride+column+j;
             let normalized = F::cast_from(f32::cast_from(x[row*width+col])*inv);
             let mut value = f32::cast_from(normalized);
             if comptime!(weighted) { value *= f32::cast_from(weight[col]); }
