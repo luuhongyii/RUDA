@@ -5,6 +5,7 @@ fn indexed_compound_assign_updates_borrowed_and_unborrowed_vector_components() {
     use ruda_kernel::dsl::prelude::{Const, NativeExpand, Vector, mul_assign_array_op};
     for mode in 0..3 {
         let mut k = kernel(&format!("compound_vector_component_{mode}"));
+        k.ruda_dim = RudaDim::new_1d(1);
         k.body.register_type::<usize>(UIntKind::U32.into());
         let ty = Type::from(FloatKind::F32).with_vector_size(4);
         let output = buffer(&mut k, ty, Visibility::ReadWrite);
@@ -29,8 +30,8 @@ fn indexed_compound_assign_updates_borrowed_and_unborrowed_vector_components() {
         } else { *c };
         store(&mut k.body, output, 0u32.into(), value);
         let compiled = compile(k, ExecutionMode::Unchecked, UIntKind::U32).unwrap();
-        assert!(!compiled.source.contains("ld.local."));
-        assert!(!compiled.source.contains("st.local."));
+        assert!(!compiled.source.contains("ld.local."), "mode={mode}\n{}", compiled.source);
+        assert!(!compiled.source.contains("st.local."), "mode={mode}\n{}", compiled.source);
         export(&compiled);
     }
 }

@@ -2,8 +2,8 @@ use super::*;
 use ruda_core::{ir::*, launch::RudaDim};
 
 #[test]
-fn typed_local_arrays_only_promote_whole_constant_nonescaping_elements() {
-    for case in 0..5 {
+fn typed_local_arrays_promote_constant_nonescaping_whole_elements_and_components() {
+    for case in 0..9 {
         let mut scope = Scope::root(false);
         let ty = Type::from(FloatKind::F32).with_vector_size(4);
         let array = *scope.create_local_array(ty, 2);
@@ -15,6 +15,10 @@ fn typed_local_arrays_only_promote_whole_constant_nonescaping_elements() {
         if case == 1 { pointer.index = Variable::builtin(Builtin::UnitPos, UIntKind::U32.into()); }
         if case == 2 { pointer.ty.pointee = FloatKind::F32.into(); }
         if case == 4 { pointer.index = 2u32.into(); }
+        if case == 5 { pointer.ty.pointee = FloatKind::F32.into(); pointer.index = 8u32.into(); }
+        if case == 6 { pointer.ty.pointee = UIntKind::U32.into(); }
+        if case == 7 { pointer.unroll_factor = 2; }
+        if case == 8 { pointer.ty.pointee = FloatKind::F32.into(); pointer.index = 5u32.into(); }
         let value = *scope.create_local(pointer.ty.pointee);
         scope.register(Instruction::new(Operator::Cast(UnaryOperator { input: 3f32.into() }), value));
         scope.register(Instruction::new(TypedMemory::Store { pointer, value }, array));
@@ -38,6 +42,6 @@ fn typed_local_arrays_only_promote_whole_constant_nonescaping_elements() {
                     if matches!(memory.pointer().base.kind, VariableKind::LocalArray { .. }))
             })
         });
-        assert_eq!(local_memory, case != 0, "case={case}");
+        assert_eq!(local_memory, !matches!(case, 0 | 2 | 8), "case={case}");
     }
 }
