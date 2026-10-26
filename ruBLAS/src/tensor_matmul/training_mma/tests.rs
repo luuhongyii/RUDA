@@ -43,9 +43,11 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
     assert!(std::any::type_name::<TestRuntime>().contains("CudaRuntime"));
     assert_eq!(std::env::var("RUDA_REQUIRE_GPU").as_deref(), Ok("1"));
     let mut cases = 0;
-    for (bm, bn, bk, asynchronous, warp_m) in [
-        (32, 32, 32, false, 32), (128, 128, 32, true, 32),
-        (128, 128, 64, true, 64), (128, 256, 64, true, 32),
+    for (bm, bn, bk, asynchronous, warp_m, stages) in [
+        (32, 32, 32, false, 32, 1),
+        (128, 128, 32, true, 32, 2), (128, 128, 32, true, 32, 3),
+        (128, 128, 64, true, 64, 2), (128, 128, 64, true, 64, 3),
+        (128, 256, 64, true, 32, 2), (128, 256, 64, true, 32, 3),
     ] {
         for ta in [false, true] {
             for nt in [false, true] {
@@ -70,13 +72,13 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
                         let (out, storage) = output(batch, m, n, dtype, offset);
                         let (reference, _) = output(batch, m, n, dtype, 0);
                         let actual = read(launch_tile(a.clone(), b.clone(), out, last_k,
-                            bm, bn, bk, asynchronous, warp_m, true).unwrap());
+                            bm, bn, bk, asynchronous, warp_m, true, stages).unwrap());
                         let expected = read(launch_tile(a.clone(), b.clone(), reference, last_k,
-                            32, 32, 32, false, 32, false).unwrap());
+                            32, 32, 32, false, 32, false, 1).unwrap());
                         assert_eq!(actual.len(), expected.len());
                         let mismatch = actual.iter().zip(&expected).position(|(a, b)| a.to_bits() != b.to_bits());
                         assert_eq!(mismatch, None,
-                            "tile={bm}x{bn}x{bk}, ta={ta}, nt={nt}, blocks={blocks}, dtype={dtype:?}");
+                            "tile={bm}x{bn}x{bk}, stages={stages}, ta={ta}, nt={nt}, blocks={blocks}, dtype={dtype:?}");
                         let whole = read(storage);
                         assert!(whole[..offset].iter().all(|v| *v == -7.0));
                         assert!(whole[offset + actual.len()..].iter().all(|v| *v == -7.0));
@@ -99,5 +101,5 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
             }
         }
     }
-    assert_eq!(cases, 128);
+    assert_eq!(cases, 224);
 }

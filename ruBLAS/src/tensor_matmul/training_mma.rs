@@ -15,7 +15,7 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
     #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
-    #[comptime] warp_m: usize,
+    #[comptime] warp_m: usize, #[comptime] stages: usize,
     #[define(F)] _input: StorageType, #[define(O)] _output: StorageType,
     #[define(OS)] _output_vector_size: usize) {
     let thread = UNIT_POS as usize;
@@ -26,7 +26,7 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
     let col = RUDA_POS_X as usize / (m / bm) * bn;
     let wm = warp / 2 * warp_m;
     let wn = warp % 2 * (bn / 2);
-    let banks = comptime!(if asynchronous { 3usize } else { 1usize });
+    let banks = comptime!(if asynchronous { stages } else { 1usize });
     let a_stage = comptime!(bm * bk / 8);
     let b_stage = comptime!(bn * bk / 8);
     let mut sa = SharedMemory::<Vector<F, Const<8>>>::new_aligned(a_stage * banks, 32usize);
@@ -68,11 +68,12 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
     }
     let blocks = k / bk - usize::cast_from(RUDA_POS_Y as usize == batch - 1) * ((k - last_k) / bk);
     if comptime!(asynchronous) {
-        load_stage(a, b, &mut sa, &mut sb, row, col, 0usize, 0usize, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
-        loaded[0].commit_copy_async();
-        if blocks > 1 {
-            load_stage(a, b, &mut sa, &mut sb, row, col, 1usize, 1usize, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
-            loaded[1].commit_copy_async();
+        #[unroll]
+        for stage in 0usize..(banks - 1) {
+            if stage < blocks {
+                load_stage(a, b, &mut sa, &mut sb, row, col, stage, stage, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
+                loaded[stage].commit_copy_async();
+            }
         }
     }
     for block in 0usize..blocks {
@@ -80,13 +81,13 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
         if comptime!(asynchronous) {
             if bank == 0 { loaded[0].arrive_and_wait(); }
             else if bank == 1 { loaded[1].arrive_and_wait(); }
-            else { loaded[2].arrive_and_wait(); }
-            if block + 2 < blocks {
-                let next_bank = (bank + 2) % banks;
-                load_stage(a, b, &mut sa, &mut sb, row, col, block + 2, next_bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
+            else if comptime!(banks == 3) { loaded[2].arrive_and_wait(); }
+            if block + banks - 1 < blocks {
+                let next_bank = (bank + banks - 1) % banks;
+                load_stage(a, b, &mut sa, &mut sb, row, col, block + banks - 1, next_bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
                 if next_bank == 0 { loaded[0].commit_copy_async(); }
                 else if next_bank == 1 { loaded[1].commit_copy_async(); }
-                else { loaded[2].commit_copy_async(); }
+                else if comptime!(banks == 3) { loaded[2].commit_copy_async(); }
             }
         } else {
             load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
