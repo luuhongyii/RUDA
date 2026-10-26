@@ -168,16 +168,17 @@ fn gate<F: Float + RudaElement>(op: u32, v: &[View], s: &[f32]) -> usize {
     same(&v[0], &v[1]); same(&v[0], &v[2]);
     if v[0].len == 0 { return 0; }
     let c = client();
+    let cuda = v[0].dtype == 2 && super::matmul::cuda_bf16_precision();
     if op == 2 {
         unsafe { k::silu_mul_forward::launch::<F, CudaRuntime>(&c, count(v[0].len), RudaDim::new_1d(128),
-            v[0].arg(), v[1].arg(), v[2].arg()); }
+            v[0].arg(), v[1].arg(), v[2].arg(), cuda); }
     } else {
         let dx = flag(s[0]); let du = flag(s[1]);
         if !dx && !du { return 0; }
         if dx { same(&v[0], &v[3]); }
         if du { same(&v[0], &v[4]); }
         unsafe { k::silu_mul_backward::launch::<F, CudaRuntime>(&c, count(v[0].len), RudaDim::new_1d(128),
-            v[0].arg(), v[1].arg(), v[2].arg(), v[3].arg(), v[4].arg(), dx, du); }
+            v[0].arg(), v[1].arg(), v[2].arg(), v[3].arg(), v[4].arg(), dx, du, cuda); }
     }
     finish_dispatch(&c); 1
 }

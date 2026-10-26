@@ -147,7 +147,7 @@ fn check(c:&ComputeClient<CudaRuntime>,value:&View,message:&str) {
 fn cuda_exp2(value: f32) -> f32 { f32::powf(2.0f32, value) }
 
 #[ruda]
-fn cuda_exp(value: f32, add: f32) -> f32 {
+pub(crate) fn cuda_exp(value: f32, add: f32) -> f32 {
     let mut fraction = fma(value, f32::reinterpret(0x3bbb989du32), 0.5f32);
     if !(fraction > 0.0f32) { fraction = 0.0f32; }
     if fraction > 1.0f32 { fraction = 1.0f32; }

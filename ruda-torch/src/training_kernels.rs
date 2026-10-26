@@ -317,11 +317,14 @@ pub fn rms_dw_merge<W: Float + RudaElement>(partial: &Tensor<f32>, dw: &mut Tens
 #[ruda(launch)]
 pub fn silu_mul_forward<F: Float + RudaElement>(
     gate: &Tensor<F>, up: &Tensor<F>, y: &mut Tensor<F>,
+    #[comptime] cuda: bool,
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < y.len() {
         let x = f32::cast_from(gate[pos]);
-        let activation = F::cast_from(x / (1.0f32 + (-x).exp()));
+        let denominator = if comptime!(cuda) { super::loss::cuda_exp(-x, 1.0f32) }
+            else { 1.0f32 + (-x).exp() };
+        let activation = F::cast_from(x / denominator);
         y[pos] = F::cast_from(f32::cast_from(activation) * f32::cast_from(up[pos]));
     }
 }
@@ -329,18 +332,21 @@ pub fn silu_mul_forward<F: Float + RudaElement>(
 #[ruda(launch)]
 pub fn silu_mul_backward<F: Float + RudaElement>(
     gate: &Tensor<F>, up: &Tensor<F>, dy: &Tensor<F>, dg: &mut Tensor<F>, du: &mut Tensor<F>,
-    #[comptime] need_gate: bool, #[comptime] need_up: bool,
+    #[comptime] need_gate: bool, #[comptime] need_up: bool, #[comptime] cuda: bool,
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < gate.len() {
         let x = f32::cast_from(gate[pos]);
-        let denominator = 1.0f32 + (-x).exp();
+        let denominator = if comptime!(cuda) { super::loss::cuda_exp(-x, 1.0f32) }
+            else { 1.0f32 + (-x).exp() };
         let sigmoid = 1.0f32 / denominator;
         let grad = f32::cast_from(dy[pos]);
         if comptime!(need_gate) {
             // Preserve the mul-backward storage rounding before SiLU backward.
             let intermediate = F::cast_from(grad * f32::cast_from(up[pos]));
-            dg[pos] = F::cast_from(f32::cast_from(intermediate) * sigmoid * (1.0f32 + x * (1.0f32 - sigmoid)));
+            let derivative = if comptime!(cuda) { fma(x, 1.0f32 - sigmoid, 1.0f32) }
+                else { 1.0f32 + x * (1.0f32 - sigmoid) };
+            dg[pos] = F::cast_from(f32::cast_from(intermediate) * sigmoid * derivative);
         }
         if comptime!(need_up) {
             let activation = F::cast_from(x / denominator);
