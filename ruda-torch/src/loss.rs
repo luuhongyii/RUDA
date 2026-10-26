@@ -143,6 +143,132 @@ fn check(c:&ComputeClient<CudaRuntime>,value:&View,message:&str) {
     assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()),0,"{message}");
 }
 
+#[ruda(fast_math = FastMath::ReducedPrecision.into())]
+fn cuda_exp2(value: f32) -> f32 { f32::powf(2.0f32, value) }
+
+#[ruda]
+fn cuda_exp(value: f32, add: f32) -> f32 {
+    let mut fraction = fma(value, f32::reinterpret(0x3bbb989du32), 0.5f32);
+    if !(fraction > 0.0f32) { fraction = 0.0f32; }
+    if fraction > 1.0f32 { fraction = 1.0f32; }
+    let integer = u32::cast_from(f64::cast_from(fraction) * 252.0f64);
+    let encoded = 12582913.0f32 + f32::cast_from(integer);
+    let exponent = encoded - 12583039.0f32;
+    let reduced = fma(value, f32::reinterpret(0x3fb8aa3bu32), -exponent);
+    let reduced = fma(value, f32::reinterpret(0x32a57060u32), reduced);
+    let scale = f32::reinterpret(u32::reinterpret(encoded) << 23u32);
+    fma(cuda_exp2(reduced), scale, add)
+}
+
+#[ruda]
+fn cuda_log(value: f32) -> f32 {
+    let mut normalized = value;
+    let mut offset = 0.0f32;
+    if value < f32::reinterpret(0x00800000u32) {
+        normalized *= 8388608.0f32;
+        offset = -23.0f32;
+    }
+    let bits = u32::reinterpret(normalized);
+    let adjustment = (bits - 1059760811u32) & 0xff800000u32;
+    let mantissa = f32::reinterpret(bits - adjustment);
+    let exponent = fma(f32::cast_from(i32::reinterpret(adjustment)), f32::reinterpret(0x34000000u32), offset);
+    let t = mantissa - 1.0f32;
+    let mut p = fma(f32::reinterpret(0xbe055027u32), t, f32::reinterpret(0x3e1039f6u32));
+    p = fma(p, t, f32::reinterpret(0xbdf8cdccu32));
+    p = fma(p, t, f32::reinterpret(0x3e0f2955u32));
+    p = fma(p, t, f32::reinterpret(0xbe2ad8b9u32));
+    p = fma(p, t, f32::reinterpret(0x3e4ced0bu32));
+    p = fma(p, t, f32::reinterpret(0xbe7fff22u32));
+    p = fma(p, t, f32::reinterpret(0x3eaaaa78u32));
+    p = fma(p, t, -0.5f32);
+    let polynomial = fma(t * p, t, t);
+    let mut result = fma(exponent, f32::reinterpret(0x3f317218u32), polynomial);
+    if bits >= 0x7f800000u32 {
+        result = fma(normalized, f32::new(f32::INFINITY), f32::new(f32::INFINITY));
+    }
+    if normalized == 0.0f32 { result = f32::new(f32::NEG_INFINITY); }
+    result
+}
+
+#[ruda]
+fn cross_entropy_block_reduce(value: f32, #[comptime] maximum: bool) -> f32 {
+    let thread = UNIT_POS as usize;
+    let mut total = value;
+    #[unroll]
+    for stage in 0usize..5 {
+        let other = plane_shuffle_down(total, (16usize >> stage) as u32);
+        if comptime!(maximum) { total = f32::max(total, other); }
+        else { total += other; }
+    }
+    let mut partial = SharedMemory::<f32>::new(32usize);
+    if thread % 32 == 0 { partial[thread / 32] = total; }
+    sync_ruda();
+    if thread < 32 {
+        total = partial[thread];
+        #[unroll]
+        for stage in 0usize..5 {
+            let other = plane_shuffle_down(total, (16usize >> stage) as u32);
+            if comptime!(maximum) { total = f32::max(total, other); }
+            else { total += other; }
+        }
+    }
+    if thread == 0 { partial[0] = total; }
+    sync_ruda();
+    partial[0]
+}
+
+#[ruda(launch)]
+fn cross_entropy_cuda(
+    x: &Tensor<bf16>, targets: &Tensor<i64>, losses: &mut Tensor<f32>,
+    stats: &mut Tensor<f32>, invalid: &mut Tensor<Atomic<u32>>, ignore: i64,
+) {
+    let row = RUDA_POS_X as usize;
+    let thread = UNIT_POS as usize;
+    let target = targets[row];
+    let width = x.shape(1);
+    let vector_end = width / 4096 * 4096;
+    let mut maximum = f32::new(f32::MIN);
+    let mut log_sum = 0.0f32;
+    if target != ignore {
+        let mut col = thread * 4;
+        while col < vector_end {
+            #[unroll]
+            for j in 0usize..4 { maximum = f32::max(maximum, f32::cast_from(x[row * width + col + j])); }
+            col += 4096;
+        }
+        col = vector_end + thread;
+        while col < width {
+            maximum = f32::max(maximum, f32::cast_from(x[row * width + col]));
+            col += 1024;
+        }
+        maximum = cross_entropy_block_reduce(maximum, true);
+        let mut sum = 0.0f32;
+        col = thread * 4;
+        while col < vector_end {
+            #[unroll]
+            for j in 0usize..4 { sum = cuda_exp(f32::cast_from(x[row * width + col + j]) - maximum, sum); }
+            col += 4096;
+        }
+        col = vector_end + thread;
+        while col < width {
+            sum = cuda_exp(f32::cast_from(x[row * width + col]) - maximum, sum);
+            col += 1024;
+        }
+        let total = cross_entropy_block_reduce(sum, false);
+        if thread == 0 { log_sum = cuda_log(total); }
+    }
+    if thread == 0 {
+        let mut loss = 0.0f32;
+        if target != ignore {
+            if target < 0i64 || target >= i64::cast_from(width) { invalid[0].store(1u32); }
+            else { loss = (maximum - f32::cast_from(x[row * width + usize::cast_from(target)])) + log_sum; }
+        } else { maximum = 0.0f32; }
+        stats[row * 2] = maximum;
+        stats[row * 2 + 1] = log_sum;
+        losses[row] = loss;
+    }
+}
+
 #[ruda(launch)]
 fn cross_entropy_tiles<S: Float + RudaElement>(
     x: &Tensor<S>, targets: &Tensor<i64>, partial: &mut Tensor<f32>, ignore: i64,
@@ -236,7 +362,7 @@ fn cross_entropy_finish<S: Float + RudaElement>(
 #[ruda(launch)]
 fn cross_entropy_backward<S: Float + RudaElement>(
     x: &Tensor<S>, targets: &Tensor<i64>, stats: &Tensor<f32>,
-    grad: &Tensor<f32>, dx: &mut Tensor<S>, ignore: i64,
+    grad: &Tensor<f32>, dx: &mut Tensor<S>, ignore: i64, #[comptime] cuda: bool,
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < x.len() {
@@ -246,7 +372,8 @@ fn cross_entropy_backward<S: Float + RudaElement>(
         let mut value = 0.0f32;
         if target != ignore {
             let log_probability = (f32::cast_from(x[pos]) - stats[row * 2]) - stats[row * 2 + 1];
-            value = log_probability.exp();
+            if comptime!(cuda) { value = cuda_exp(log_probability, 0.0f32); }
+            else { value = log_probability.exp(); }
             if i64::cast_from(pos % width) == target { value -= 1.0f32; }
             value *= grad[address(grad, row)];
         }
@@ -276,7 +403,16 @@ pub(super) fn dispatch_fused_cross_entropy(op: u32, xs: &[View], ints: &[i64]) {
     if op == 651 { assert_eq!(xs[4].shape, x.shape); assert_eq!(xs[4].dtype, x.dtype); }
     if rows == 0 { return; }
     let c = client(); let dim = RudaDim::new_1d(128);
-    if op == 650 {
+    let cuda = x.dtype == 2 && width >= 32768 && width % 4 == 0 && super::matmul::cuda_bf16_precision();
+    if op == 650 && cuda {
+        let invalid = status(&c);
+        unsafe {
+            cross_entropy_cuda::launch::<CudaRuntime>(&c,
+                RudaCount::Static(u32::try_from(rows).expect("loss grid overflow"),1,1),RudaDim::new_1d(1024),
+                x.arg(),target.arg(),losses.arg(),stats.arg(),invalid.arg(),ints[0]);
+        }
+        check(&c, &invalid, "cross entropy target is out of bounds");
+    } else if op == 650 {
         let tiles = width.div_ceil(1024);
         let elements = rows.checked_mul(tiles).and_then(|n| n.checked_mul(2)).expect("loss partial overflow");
         let partial = View::packed(c.empty(elements.checked_mul(4).expect("loss allocation overflow")), vec![rows, tiles, 2], 0);
@@ -293,7 +429,7 @@ pub(super) fn dispatch_fused_cross_entropy(op: u32, xs: &[View], ints: &[i64]) {
     } else {
         macro_rules! run { ($s:ty) => { unsafe {
             cross_entropy_backward::launch::<$s,CudaRuntime>(&c,grid(x.len),dim,
-                x.arg(),target.arg(),stats.arg(),losses.arg(),xs[4].arg(),ints[0]);
+                x.arg(),target.arg(),stats.arg(),losses.arg(),xs[4].arg(),ints[0],cuda);
         } }; }
         match x.dtype { 0=>run!(f32), 1=>run!(f16), 2=>run!(bf16), _=>unreachable!() }
     }
