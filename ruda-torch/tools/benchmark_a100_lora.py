@@ -88,7 +88,8 @@ def main(args):
     status('load_model', revision=revision, model=model_dir)
     model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16,
         attn_implementation='eager' if r else 'sdpa', low_cpu_mem_usage=True, local_files_only=True)
-    assert model.config.model_type == 'qwen2' and model.config.attention_dropout == 0
+    assert model.config.model_type in ('qwen2', 'qwen3', 'llama', 'mistral')
+    assert model.config.attention_dropout == 0
     base_parameters = sum(parameter.numel() for parameter in model.parameters())
     torch.manual_seed(20261024)
     ft.inject_lora(model, target_modules='all-linear', rank=16, alpha=16., adapter_dtype=torch.float32)
@@ -137,6 +138,7 @@ def main(args):
                     synchronize()
                     snapshot = {name: p.grad.detach().cpu() for name, p in model.named_parameters()
                                 if p.requires_grad and p.grad is not None}
+                    assert len(snapshot) == sum(p.requires_grad for p in model.parameters())
                     assert snapshot and all(torch.isfinite(value).all() for value in snapshot.values())
                     torch.save(snapshot, args.output / (args.backend + '_first_gradients.pt'))
                     status('first_step_gradients_saved', loss=float(loss.detach().cpu()))
@@ -161,6 +163,8 @@ def main(args):
         versions={name: version(name) for name in ('transformers', 'accelerate', 'safetensors')},
         seed=20261024, base_dtype='bfloat16', adapter_dtype='float32', lora_rank=16, lora_alpha=16.,
         base_parameters=base_parameters,
+        model_type=model.config.model_type, model_config=model.config.to_dict(),
+        trainable_tensors=sum(p.requires_grad for p in model.parameters()),
         lora_targets='all-linear including output head', trainable_parameters=trainable_parameters,
         initial_adapter_sha256=initial.hexdigest(), data=inputs['provenance'],
         batch_size=1, sequence_length=512, supervised_tokens_per_step=511, warmup_steps=args.warmup,
