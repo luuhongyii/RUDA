@@ -24,7 +24,7 @@ fn output(batch: usize, m: usize, n: usize, dtype: DType, offset: usize) -> (Ten
     };
     let storage: Tensor = from_data(data, &Default::default());
     let mut view = storage.clone();
-    view.meta = Metadata::new([batch, m, n], vec![m * n, n, 1]);
+    *view.meta = Metadata::new([batch, m, n], vec![m * n, n, 1]);
     view.handle.offset_start = Some((offset * dtype.size()) as u64);
     (view, storage)
 }

@@ -186,7 +186,7 @@ jobs:
           test "$(find target/ptx-vector-memory -maxdepth 1 -name 'unsigned_power2_*.ptx' | wc -l)" -eq 288
           cargo test --release --locked -p ruda-driver-cuda --features direct-ptx --test graph-update --no-run --message-format=json > target/graph-update-build.jsonl
           python -c "import json, shutil; rows=[json.loads(line) for line in open('target/graph-update-build.jsonl')]; binaries=[row['executable'] for row in rows if row.get('reason')=='compiler-artifact' and row.get('target',{}).get('name')=='graph-update' and row.get('executable')]; assert len(binaries)==1, binaries; shutil.copyfile(binaries[0], 'target/release/ruda_graph_update_test')"
-            cargo test --release --locked -p rublas --lib --features tensor-matmul,ruda-test-runtime/cuda --no-run --message-format=json,json-render-diagnostics > target/training-mma-build.jsonl
+          cargo test --release --locked -p rublas --lib --features tensor-matmul,ruda-test-runtime/cuda --no-run --message-format=json,json-render-diagnostics > target/training-mma-build.jsonl
           python -c "import json, shutil; rows=[json.loads(line) for line in open('target/training-mma-build.jsonl')]; binaries=[row['executable'] for row in rows if row.get('reason')=='compiler-artifact' and row.get('target',{}).get('name')=='rublas' and row.get('executable')]; assert len(binaries)==1, binaries; shutil.copyfile(binaries[0], 'target/release/ruda_training_mma_test')"
           cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
       - name: Save Linux native library
