@@ -379,6 +379,8 @@ from . import _fused_training_ops
 from .fused_cross_entropy import cross_entropy
 from .rotary import apply_rotary_pos_emb
 from .lora_epilogue import lora_epilogue
+if hasattr(_C, 'initialize_fused_autograd_dispatch'):
+    _C.initialize_fused_autograd_dispatch()
 
 # Optional router-weight extension. Existing base ABI 10/training API 4 remain
 # loadable without it; a router operation fails clearly instead of falling back.

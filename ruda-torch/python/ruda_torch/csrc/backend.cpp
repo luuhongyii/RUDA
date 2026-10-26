@@ -57,6 +57,7 @@
 #include <ATen/Context.h>
 #include <ATen/autocast_mode.h>
 #include <ATen/MemoryOverlap.h>
+#include <ATen/core/LegacyTypeDispatch.h>
 #include <ATen/native/Resize.h>
 #include <ATen/detail/PrivateUse1HooksInterface.h>
 #include <ATen/CPUGeneratorImpl.h>
@@ -779,6 +780,7 @@ at::Scalar scalar(const at::Tensor& value) {
 void unsupported(const c10::OperatorHandle& op, torch::jit::Stack*) {
   TORCH_CHECK_NOT_IMPLEMENTED(false, "RUDA GPU operator not implemented: ", op.schema().operator_name(), "; CPU fallback is disabled");
 }
+#include "fused_autograd_dispatch.inc"
 void record_tensor_stream(at::Tensor& value, c10::Stream stream) {
   check_stream(stream); Argument arg(value);
   stream_command(12,stream.id(),reinterpret_cast<uintptr_t>(arg.desc.allocation));
@@ -896,6 +898,7 @@ REGISTER_PRIVATEUSE1_DISPATCH(dequantize_tensor_per_channel_float_qparams_stub, 
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("initialize_fused_autograd_dispatch", initialize_fused_autograd_dispatch);
   m.def("initialize_arithmetic_dispatch", initialize_arithmetic_dispatch);
   m.def("initialize_matmul_dispatch", initialize_matmul_dispatch);
   #include "scientific_bridge_bindings.inc"
