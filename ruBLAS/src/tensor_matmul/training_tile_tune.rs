@@ -43,7 +43,7 @@ fn inputs<R: Runtime>(_: &TileKey,
 }
 
 pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>, last_k: usize) {
-    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v13");
+    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v14");
     let client = a.client.clone();
     let id = RudaTuneId::new(&client, &a.device);
     let candidates = TUNER.init_for_device(&id, || {
@@ -90,6 +90,16 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
                         super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 64, manual)
                     }));
             }
+        }
+        for (name, m, n, k) in [
+            ("mma_async_64x256x32", 64, 256, 32),
+            ("mma_async_128x256x32", 128, 256, 32),
+            ("mma_async_128x256x64", 128, 256, 64),
+        ] {
+            set = set.with(Tunable::new(name,
+                move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
+                    super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 32, true)
+                }));
         }
         set
     });

@@ -99,8 +99,11 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     let b_batch = if d == 0 { 0 } else { b.meta.strides()[0] };
     let a_stage = if ta { bk * (bm / 8 + 1) } else { bm * (bk / 8 + 1) };
     let b_stage = if nt { bn * (bk / 8 + 1) } else { bk * (bn / 8 + 1) };
-    let shared = (a_stage + b_stage) * (if asynchronous { 2 } else { 1 }) * 16
-        + threads / 32 * 256 * 4 + 32;
+    let shared = if manual {
+        (bm + bn) * bk * 2 * (if asynchronous { 3 } else { 1 }) + threads / 32 * 256 * 4 + 96
+    } else {
+        (a_stage + b_stage) * (if asynchronous { 2 } else { 1 }) * 16 + threads / 32 * 256 * 4 + 32
+    };
     if shared > a.client.properties().hardware.max_shared_memory_size
         || threads > a.client.properties().hardware.max_units_per_ruda as usize {
         return Err("training tile exceeds the device block resources".into());
