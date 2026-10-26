@@ -21,6 +21,10 @@ def cuda_silu_cases(tmp_path_factory):
     cases.append(dict(gate=torch.randn(3, 257, dtype=torch.bfloat16),
                       up=torch.randn(3, 257, dtype=torch.bfloat16),
                       dy=torch.randn(3, 257, dtype=torch.bfloat16)))
+    gate = torch.tensor([-2.078125, -2.09375, -2.109375], dtype=torch.bfloat16)
+    gate = gate[:, None].expand(3, 65536).contiguous()
+    cases.append(dict(gate=gate, up=torch.ones_like(gate),
+                      dy=encodings.expand_as(gate).contiguous()))
     torch.save(cases, directory/'inputs.pt')
     code = '''
 import sys,torch
@@ -44,7 +48,7 @@ def exact_except_nan_payload(actual, expected):
     assert torch.equal(actual[~nan].view(torch.int16), expected[~nan].view(torch.int16))
 
 
-@pytest.mark.parametrize('index', range(4))
+@pytest.mark.parametrize('index', range(5))
 @pytest.mark.parametrize('needs', [(True, True), (True, False), (False, True)])
 def test_silu_cuda_bf16_exact(cuda_silu_cases, index, needs, monkeypatch):
     monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', 'cuda')
