@@ -104,6 +104,32 @@ fn manual_training_compact_offsets_match_full_fragment_addresses() {
     }
 }
 
+#[test]
+fn manual_training_vector_load_offsets_preserve_coordinates() {
+    for tile in [32usize, 64, 128, 256] {
+        for bk in [32usize, 64, 128] {
+            for batch in [0usize, 1, 2] {
+                for batch_stride in [0usize, 1048576] {
+                    for stride in [1024usize, 1032, 2048] {
+                        for start in [0usize, 32, 512] {
+                            for block in [0usize, 1, 7] {
+                                for p in 0..tile * bk / 8 {
+                                    let old_row = (batch * batch_stride + (start + p / (bk / 8)) * stride + block * bk) / 8 + p % (bk / 8);
+                                    let new_row = batch * (batch_stride / 8) + (start + p / (bk / 8)) * (stride / 8) + block * (bk / 8) + p % (bk / 8);
+                                    let old_col = (batch * batch_stride + (block * bk + p / (tile / 8)) * stride + start) / 8 + p % (tile / 8);
+                                    let new_col = batch * (batch_stride / 8) + (block * bk + p / (tile / 8)) * (stride / 8) + start / 8 + p % (tile / 8);
+                                    assert_eq!(new_row, old_row);
+                                    assert_eq!(new_col, old_col);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn values(count: usize, seed: usize) -> Vec<bf16> {
     (0..count).map(|i| {
         let bits = ((i * 17 + seed) % 128) | (((i * 7 + seed) % 12 + 119) << 7)

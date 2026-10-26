@@ -192,6 +192,7 @@ jobs:
           chmod +x target/release/ruda_training_mma_test
           target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_epilogue_swizzle_preserves_coordinates_and_bank_transactions
           target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_compact_offsets_match_full_fragment_addresses
+          target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_vector_load_offsets_preserve_coordinates
           cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
       - name: Save Linux native library
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

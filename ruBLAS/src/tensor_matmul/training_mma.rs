@@ -14,7 +14,7 @@ fn epilogue_index(row: usize, col: usize) -> usize {
 }
 
 #[ruda(launch_unchecked)]
-pub(super) fn tiled_compact<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
+pub(super) fn tiled_vector_offsets<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<Vector<O, OS>>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
@@ -188,12 +188,12 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
     for i in comptime!((copy_group * a_per_group).min(a_copies))..comptime!(((copy_group + 1) * a_per_group).min(a_copies)) {
         let p = UNIT_POS as usize + i * threads;
         if comptime!(ta) {
-            let source = (RUDA_POS_Y as usize * a_batch + (block * bk + p / (bm / 8)) * lda + row) / 8 + p % (bm / 8);
+            let source = RUDA_POS_Y as usize * (a_batch / 8) + (block * bk + p / (bm / 8)) * (lda / 8) + row / 8 + p % (bm / 8);
             let target = bank * (bm * bk / 8) + shared_index(p / (bm / 8), p % (bm / 8), bm / 8);
             if comptime!(asynchronous) { copy_async(&a.slice(source, source + 1), &mut sa.slice_mut(target, target + 1), 8u32); }
             else { sa[target] = a[source]; }
         } else {
-            let source = (RUDA_POS_Y as usize * a_batch + (row + p / (bk / 8)) * lda + block * bk) / 8 + p % (bk / 8);
+            let source = RUDA_POS_Y as usize * (a_batch / 8) + (row + p / (bk / 8)) * (lda / 8) + block * (bk / 8) + p % (bk / 8);
             let target = bank * (bm * bk / 8) + shared_index(p / (bk / 8), p % (bk / 8), bk / 8);
             if comptime!(asynchronous) { copy_async(&a.slice(source, source + 1), &mut sa.slice_mut(target, target + 1), 8u32); }
             else { sa[target] = a[source]; }
@@ -205,12 +205,12 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
     for i in comptime!((copy_group * b_per_group).min(b_copies))..comptime!(((copy_group + 1) * b_per_group).min(b_copies)) {
         let p = UNIT_POS as usize + i * threads;
         if comptime!(nt) {
-            let source = (RUDA_POS_Y as usize * b_batch + (col + p / (bk / 8)) * ldb + block * bk) / 8 + p % (bk / 8);
+            let source = RUDA_POS_Y as usize * (b_batch / 8) + (col + p / (bk / 8)) * (ldb / 8) + block * (bk / 8) + p % (bk / 8);
             let target = bank * (bn * bk / 8) + shared_index(p / (bk / 8), p % (bk / 8), bk / 8);
             if comptime!(asynchronous) { copy_async(&b.slice(source, source + 1), &mut sb.slice_mut(target, target + 1), 8u32); }
             else { sb[target] = b[source]; }
         } else {
-            let source = (RUDA_POS_Y as usize * b_batch + (block * bk + p / (bn / 8)) * ldb + col) / 8 + p % (bn / 8);
+            let source = RUDA_POS_Y as usize * (b_batch / 8) + (block * bk + p / (bn / 8)) * (ldb / 8) + col / 8 + p % (bn / 8);
             let target = bank * (bn * bk / 8) + shared_index(p / (bn / 8), p % (bn / 8), bn / 8);
             if comptime!(asynchronous) { copy_async(&b.slice(source, source + 1), &mut sb.slice_mut(target, target + 1), 8u32); }
             else { sb[target] = b[source]; }
