@@ -210,6 +210,7 @@ jobs:
             target/ptx-vector-memory/unsigned_power2_*.ptx
             target/ptx-vector-memory/async_groups_*.ptx
             target/ptx-vector-memory/compound_vector_component_*.ptx
+            target/ptx-vector-memory/constant_register_mma_*.ptx
             target/ptx-flash-training/*.ptx
           compression-level: 6
           if-no-files-found: error

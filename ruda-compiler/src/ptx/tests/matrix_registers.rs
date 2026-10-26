@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn manual_mma_accepts_constant_vector_sources_without_local_memory() {
+    for (kind, accumulator) in [(FloatKind::F16, FloatKind::F16),
+        (FloatKind::F16, FloatKind::F32), (FloatKind::BF16, FloatKind::F32)] {
+        for initial in [0.0, 2.0] {
+            let mut k = kernel(&format!("constant_register_mma_{kind:?}_{accumulator:?}_{}", initial as u32));
+            k.ruda_dim = RudaDim::new_1d(32);
+            let constant = |kind, width, value| Variable::new(
+                VariableKind::Constant(ConstantValue::Float(value)), Type::from(kind).with_vector_size(width));
+            let ty = Type::from(accumulator).with_vector_size(4);
+            let output = buffer(&mut k, ty, Visibility::ReadWrite);
+            let result = *k.body.create_local(ty);
+            let matrix = Matrix { ident: MatrixIdent::A, m: 16, n: 8, k: 16,
+                storage: kind.into(), layout: MatrixLayout::ColMajor, scope: MatrixScope::Plane };
+            k.body.register(Instruction::new(CoopMma::ExecuteManual {
+                matrix, registers_a: constant(kind, 8, 1.5), registers_b: constant(kind, 4, -0.5),
+                registers_c: constant(accumulator, 4, initial),
+            }, result));
+            store(&mut k.body, output, Variable::builtin(Builtin::UnitPos, UIntKind::U32.into()), result);
+            let options = PtxCompilationOptions { target: Some(PtxTarget { version: (8, 0), sm: 80 }) };
+            let compiled = PtxCompiler.compile(k, &options, ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap();
+            assert!(compiled.source.contains("mma.sync.aligned.m16n8k16"));
+            assert!(!compiled.source.contains("ld.local."));
+            assert!(!compiled.source.contains("st.local."));
+            export(&compiled);
+        }
+    }
+}
+
+#[test]
+fn manual_mma_rejects_undersized_constant_sources_and_constant_destination() {
+    for operand in 0..4 {
+        let mut k = kernel("invalid_constant_register_mma");
+        let mut a = Variable::new(VariableKind::Constant(ConstantValue::Float(1.0)),
+            Type::from(FloatKind::BF16).with_vector_size(8));
+        let mut b = Variable::new(a.kind, a.ty.with_vector_size(4));
+        let mut c = Variable::new(a.kind, Type::from(FloatKind::F32).with_vector_size(4));
+        match operand { 0 => a.ty = a.ty.with_vector_size(7), 1 => b.ty = b.ty.with_vector_size(3),
+            2 => c.ty = c.ty.with_vector_size(3), _ => {} }
+        let out = if operand == 3 { c } else {
+            *k.body.create_local(Type::from(FloatKind::F32).with_vector_size(4))
+        };
+        let matrix = Matrix { ident: MatrixIdent::A, m: 16, n: 8, k: 16,
+            storage: FloatKind::BF16.into(), layout: MatrixLayout::ColMajor, scope: MatrixScope::Plane };
+        k.body.register(Instruction::new(CoopMma::ExecuteManual {
+            matrix, registers_a: a, registers_b: b, registers_c: c,
+        }, out));
+        let error = compile(k, ExecutionMode::Unchecked, UIntKind::U32).unwrap_err();
+        let expected = if operand == 3 { "destination cannot be constant" } else { "container is too small" };
+        assert!(format!("{error:?}").contains(expected), "{error:?}");
+    }
+}
+
+#[test]
 fn indexed_compound_assign_updates_borrowed_and_unborrowed_vector_components() {
     use ruda_kernel::dsl::prelude::{Const, NativeExpand, Vector, mul_assign_array_op};
     for mode in 0..3 {
