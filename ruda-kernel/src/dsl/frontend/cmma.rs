@@ -799,11 +799,10 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
         registers_b: &Array<Vector<B, NB>>,
         registers_c: &mut Vector<CD, NC>,
     ) {
-        let value_c = *registers_c;
-        let result: Vector<CD, NC> = intrinsic!(|scope| {
+        intrinsic!(|scope| {
+            let value_c = registers_c.clone().expand_deref(scope);
             let registers_a = *registers_a.expand;
             let registers_b = *registers_b.expand;
-            let registers_c = *value_c.expand;
             let output = scope.create_local(Vector::<CD, NC>::as_type(scope));
             let matrix = ruda_core::ir::Matrix {
                 ident: MatrixIdent::A,
@@ -819,13 +818,12 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                     matrix,
                     registers_a,
                     registers_b,
-                    registers_c,
+                    registers_c: *value_c.expand,
                 },
                 *output,
             ));
-            output.into()
+            registers_c.expand_deref_assign(scope, output.into());
         });
-        *registers_c = result;
     }
 
     #[allow(unused)]
@@ -835,13 +833,12 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
         registers_b: &Vector<B, NB>,
         registers_c: &mut Vector<CD, NC>,
     ) {
-        let value_a = *registers_a;
-        let value_b = *registers_b;
-        let value_c = *registers_c;
-        let result: Vector<CD, NC> = intrinsic!(|scope| {
+        intrinsic!(|scope| {
+            let value_a = registers_a.expand_deref(scope);
+            let value_b = registers_b.expand_deref(scope);
+            let value_c = registers_c.clone().expand_deref(scope);
             let registers_a = *value_a.expand;
             let registers_b = *value_b.expand;
-            let registers_c = *value_c.expand;
             let output = scope.create_local(Vector::<CD, NC>::as_type(scope));
             let matrix = ruda_core::ir::Matrix {
                 ident: MatrixIdent::A,
@@ -857,13 +854,12 @@ impl<A: Scalar, B: Scalar, CD: Scalar> MmaDefinition<A, B, CD> {
                     matrix,
                     registers_a,
                     registers_b,
-                    registers_c,
+                    registers_c: *value_c.expand,
                 },
                 *output,
             ));
-            output.into()
+            registers_c.expand_deref_assign(scope, output.into());
         });
-        *registers_c = result;
     }
 
     /// Execute a low level block scaled `mma` operation with manually managed registers. Register

@@ -4,13 +4,13 @@ use ruda_core::ir::{CoopMma, FloatKind, Operation, PointerOp, Type, UIntKind};
 
 #[ruda]
 fn vectors(a: &Vector<f16, Const<8>>, b: &Vector<f16, Const<4>>, c: &mut Vector<f32, Const<4>>) {
-    let definition = super::MmaDefinition::<f16, f16, f32>::new(16usize, 8usize, 16usize);
+    let definition = crate::dsl::cmma::MmaDefinition::<f16, f16, f32>::new(16usize, 8usize, 16usize);
     definition.execute_vectors_inplace(a, b, c);
 }
 
 #[ruda]
 fn arrays(a: &Array<Vector<f16, Const<2>>>, b: &Array<Vector<f16, Const<2>>>, c: &mut Vector<f32, Const<4>>) {
-    let definition = super::MmaDefinition::<f16, f16, f32>::new(16usize, 8usize, 16usize);
+    let definition = crate::dsl::cmma::MmaDefinition::<f16, f16, f32>::new(16usize, 8usize, 16usize);
     definition.execute_vector_inplace(a, b, c);
 }
 
