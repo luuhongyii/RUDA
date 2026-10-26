@@ -115,6 +115,8 @@ def test_matmul_dispatch_keeps_contextvar_routing(name, monkeypatch):
     class VendorRoute(Exception): pass
     def vendor_route(*args, **kwargs): raise VendorRoute
     monkeypatch.setattr(_vendor_blas, 'gemm', vendor_route)
+    class VendorName(str):
+        def __eq__(self, other): return other == 'nvidia'
     def invoke(mode):
         if mode == 'nvidia':
             with pytest.raises(VendorRoute): getattr(torch, name)(*args)
@@ -127,6 +129,7 @@ def test_matmul_dispatch_keeps_contextvar_routing(name, monkeypatch):
             native_context.run(invoke, 'ruda')
             invoke('nvidia')
         invoke('ruda')
+    with r.math_backend(VendorName('ruda')): invoke('nvidia')
     async def task(mode):
         with r.math_backend(mode):
             await asyncio.sleep(0)

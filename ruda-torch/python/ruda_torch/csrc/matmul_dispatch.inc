@@ -18,7 +18,7 @@ bool native_matmul_context() {
   PyObject* selected = nullptr;
   if (PyContextVar_Get(matmul_backend_context, nullptr, &selected) < 0) throw pybind11::error_already_set();
   auto backend = pybind11::reinterpret_steal<pybind11::object>(selected);
-  return selected && PyUnicode_Check(selected) && PyUnicode_CompareWithASCIIString(selected, "ruda") == 0;
+  return selected && PyUnicode_CheckExact(selected) && PyUnicode_CompareWithASCIIString(selected, "ruda") == 0;
 }
 
 bool native_matmul_operands(const at::Tensor& a, const at::Tensor& b, int64_t rank) {
