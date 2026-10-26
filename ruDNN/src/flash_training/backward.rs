@@ -204,7 +204,8 @@ fn key_value_impl<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Arr
         let mut acc_v = Array::<Vector<f32, Const<2>>>::new(8usize);
         #[unroll]
         for i in 0usize..8 { acc_k[i] = Vector::new(0.0f32); acc_v[i] = Vector::new(0.0f32); }
-        for block in 0usize..8 {
+        for step in 0usize..8 {
+            let block = 7usize-step;
             stage(q, &mut q_tile, query + block * 64, 64usize, vectorized);
             stage(grad, &mut g_tile, query + block * 64, 64usize, vectorized);
             sync_ruda();
