@@ -46,7 +46,7 @@ pub fn rms_cuda_vector4<F: Float + RudaElement, W: Float + RudaElement>(
         }
         sync_ruda();
     }
-    let index = if comptime!(width==8192) { 0usize } else { warp*32 };
+    let index = warp*comptime!(if width==8192 { 0usize } else { 32usize });
     let inv = cuda_rsqrt(sums[index]*(1.0f32/width as f32)+epsilon);
     if lane == 0 && (comptime!(width!=8192) || thread==0) { rstd[row] = inv; }
     #[unroll]
