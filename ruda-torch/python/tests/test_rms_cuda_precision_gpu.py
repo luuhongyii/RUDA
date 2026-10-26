@@ -43,9 +43,9 @@ def test_cuda_rms_reduction_and_bf16_boundaries(cuda_rms_cases,index,monkeypatch
     assert torch.equal(y.cpu().view(torch.int16),reference['y'].view(torch.int16))
     x.requires_grad_();output=r.rms_norm(x,w,eps=1e-6,round_normalized=True)
     output.backward(case['dy'].to('ruda'))
-    actual,expected=x.grad.cpu().double(),reference['dx'].double()
+    actual=x.grad.cpu()
     assert torch.isfinite(actual).all()
-    assert (actual-expected).norm()/expected.norm() < 1e-3
+    assert torch.equal(actual.view(torch.int16),reference['dx'].view(torch.int16))
 
 
 def test_cuda_rms_small_row_geometry_preserves_existing_path(monkeypatch):

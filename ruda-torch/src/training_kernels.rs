@@ -62,6 +62,66 @@ pub fn rms_cuda_vector4<F: Float + RudaElement, W: Float + RudaElement>(
 }
 
 #[ruda(launch)]
+pub fn rms_cuda_dx_vector4<F: Float + RudaElement, W: Float + RudaElement>(
+    x: &Tensor<F>, weight: &Tensor<W>, dy: &Tensor<F>, rstd: &Tensor<f32>, dx: &mut Tensor<F>,
+    #[comptime] weighted: bool, #[comptime] width: usize,
+) {
+    let thread = UNIT_POS as usize;
+    let lane = thread%32;
+    let warp = thread/32;
+    let row = if comptime!(width==8192) { RUDA_POS_X as usize } else { RUDA_POS_X as usize*4+warp };
+    let stride = comptime!(if width==8192 { 2048usize } else { 128usize });
+    let column = if comptime!(width==8192) { thread*4 } else { lane*4 };
+    let mut values = Array::<f32>::new(width/stride*4);
+    let mut gradients = Array::<f32>::new(width/stride*4);
+    let mut local = Array::<f32>::new(4usize);
+    #[unroll]
+    for j in 0usize..4 { local[j] = 0.0; }
+    #[unroll]
+    for i in 0usize..(width/stride) {
+        #[unroll]
+        for j in 0usize..4 {
+            let col = i*stride+column+j;
+            let value = f32::cast_from(x[row*width+col]);
+            let mut grad = f32::cast_from(dy[row*width+col]);
+            if comptime!(weighted) { grad *= f32::cast_from(weight[col]); }
+            grad = f32::cast_from(F::cast_from(grad));
+            values[i*4+j] = value;
+            gradients[i*4+j] = grad;
+            local[j] += grad*value;
+        }
+    }
+    let mut total = ((local[0]+local[1])+local[2])+local[3];
+    #[unroll]
+    for stage in 0usize..5 { total += plane_shuffle_down(total,(16usize>>stage) as u32); }
+    if comptime!(width==8192) {
+        let mut sums = SharedMemory::<f32>::new(16usize);
+        if lane == 0 { sums[warp] = total; }
+        sync_ruda();
+        #[unroll]
+        for stage in 0usize..4 {
+            let offset = 8usize>>stage;
+            if thread < offset { sums[thread] = sums[thread]+sums[thread+offset]; }
+            sync_ruda();
+        }
+        total = sums[0];
+    } else {
+        total = plane_shuffle(total,0u32);
+    }
+    let inv = rstd[row];
+    let variance_grad = (-0.5f32*total)*((inv*inv)*inv);
+    let square_grad = variance_grad*(1.0f32/width as f32);
+    #[unroll]
+    for i in 0usize..(width/stride) {
+        #[unroll]
+        for j in 0usize..4 {
+            let col = i*stride+column+j;
+            dx[row*width+col] = F::cast_from(gradients[i*4+j]*inv+square_grad*(2.0f32*values[i*4+j]));
+        }
+    }
+}
+
+#[ruda(launch)]
 pub fn rms_forward_cached<F: Float + RudaElement, W: Float + RudaElement>(
     x: &Tensor<F>, weight: &Tensor<W>, y: &mut Tensor<F>, rstd: &mut Tensor<f32>,
     epsilon: f32, #[comptime] weighted: bool, #[comptime] hf_rounding: bool,
