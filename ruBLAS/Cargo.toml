@@ -75,6 +75,6 @@ required-features = ["kernel-ir", "cpu-reference"]
 
 [dependencies.ruda-core]
 path = "../ruda-core"
-version = "0.1.10"
+version = "0.1.11"
 default-features = false
 optional = true
