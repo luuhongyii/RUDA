@@ -71,9 +71,9 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,globa
     v = value.expand(*batch,kv_heads,s,dv).contiguous().reshape(b,kv_heads,s,dv)
     shape = (*batch,heads,l,s)
     with precision_context(query):
-        from ._dense_ops import forward,indexed_forward
+        from ._dense_ops import eager_forward,indexed_forward
         if tensor_group is None and global_heads is None and head_start is None and rng_state is None:
-            result = forward(q,k,v,mask,list(shape),kind,causal,scale,p,precision=='flash')[0]
+            result = eager_forward(q,k,v,mask,list(shape),kind,causal,scale,p,precision=='flash')[0]
         else:
             from ._parallel_rng import head_partition
             global_heads,head_start,groups=head_partition(heads,tensor_group,global_heads,head_start)

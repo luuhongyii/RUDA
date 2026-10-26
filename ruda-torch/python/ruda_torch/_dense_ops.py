@@ -126,3 +126,21 @@ def _gradient(ctx,grad,_stats,_rng):
 
 forward.register_autograd(_gradient,setup_context=_context)
 indexed_forward.register_autograd(_gradient,setup_context=_context)
+
+
+class _DenseAttention(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,q,k,v,mask,score_shape,mask_kind,causal,scale,p,flash):
+        inputs=q,k,v,mask,score_shape,mask_kind,causal,scale,p,flash
+        output=forward(*inputs)
+        _context(ctx,inputs,output)
+        return output
+
+    @staticmethod
+    def backward(ctx,grad,stats,rng):
+        return _gradient(ctx,grad,stats,rng)
+
+
+def eager_forward(q,k,v,mask,score_shape,mask_kind,causal,scale,p,flash=False):
+    operation=forward if torch.compiler.is_compiling() else _DenseAttention.apply
+    return operation(q,k,v,mask,score_shape,mask_kind,causal,scale,p,flash)
