@@ -21,7 +21,14 @@ pub unsafe extern "C" fn ruda_torch_stream(op:u32,stream:u64,object:u64,flags:u3
         let value=match op {
             0=>current(),
             1=>interop::command(device,if flags==0 {StreamCommand::Create} else {StreamCommand::CreatePriority(flags as i32)}).expect("stream creation failed"),
-            2=>{interop::command(device,StreamCommand::Validate(stream)).expect("invalid stream");CURRENT.replace(stream)},
+            2=>{
+                let previous=current();
+                if stream!=previous {
+                    interop::command(device,StreamCommand::Validate(stream)).expect("invalid stream");
+                    CURRENT.set(stream);
+                }
+                previous
+            },
             3=>interop::command(device,StreamCommand::Query(stream)).expect("stream query failed"),
             4=>interop::command(device,StreamCommand::Synchronize(stream)).expect("stream synchronize failed"),
             5=>{assert!(flags<=1);interop::command(device,StreamCommand::Record {stream,event:object,timing:flags==1}).expect("event record failed")},

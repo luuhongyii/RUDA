@@ -1,6 +1,9 @@
 #[path = "../src/compiler_backend.rs"]
 mod compiler_backend;
 
+#[path = "../src/execution/metadata_cache.rs"]
+mod metadata_cache;
+
 #[test]
 fn scalar_copy_layout_preserves_rank_validation() {
     use ruda_driver_cuda::CudaRuntime;

@@ -374,10 +374,13 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
                         },
                     ))
                 }
-                gpu::BarrierOps::CommitCopyGroup => instructions.push(Instruction::Barrier(
-                    super::barrier::BarrierOps::CommitCopyGroup)),
+                gpu::BarrierOps::CommitCopyGroup => {
+                    self.flags.inst_async_copy = true;
+                    instructions.push(Instruction::Barrier(super::barrier::BarrierOps::CommitCopyGroup));
+                }
                 gpu::BarrierOps::WaitCopyGroup { max_pending } => {
                     assert!(max_pending <= 7);
+                    self.flags.inst_async_copy = true;
                     instructions.push(Instruction::Barrier(super::barrier::BarrierOps::WaitCopyGroup { max_pending }));
                 }
                 gpu::BarrierOps::ExpectTx {

@@ -9,8 +9,9 @@ impl Emitter {
         }
         let length = match variable.kind {
             VariableKind::LocalArray { length, unroll_factor, .. } => length.checked_mul(unroll_factor),
-            VariableKind::LocalMut { .. } | VariableKind::LocalConst { .. } | VariableKind::Versioned { .. } => Some(1),
-            _ => return Err(unsupported("manual matrix registers must be local vectors or arrays")),
+            VariableKind::LocalMut { .. } | VariableKind::LocalConst { .. } | VariableKind::Versioned { .. }
+                | VariableKind::Constant(_) => Some(1),
+            _ => return Err(unsupported(format!("manual matrix registers must be local vectors, arrays or constants: {variable:?}"))),
         };
         let bytes = length.and_then(|length| length.checked_mul(variable.ty.vector_size())).and_then(|length| length.checked_mul(ty.bytes()))
             .ok_or_else(|| invalid("manual matrix register capacity overflow"))?;
@@ -30,7 +31,9 @@ impl Emitter {
         if matches!(variable.kind, VariableKind::LocalArray { .. }) && array_values.is_none() {
             let (base, space) = self.memory_base(variable, false)?;
             for (index, register) in registers.iter().enumerate() {
-                if ty.half() {
+                if ty.half() && variable.ty.vector_size() >= 2 {
+                    self.line(format!("ld.{space}.b32 {register}, [{base}+{}];", index * 4));
+                } else if ty.half() {
                     let low = self.reg(ty);
                     let high = self.reg(ty);
                     self.line(format!("ld.{space}.b16 {low}, [{base}+{}];", index * 4));
@@ -61,6 +64,9 @@ impl Emitter {
     }
 
     pub(super) fn matrix_write_registers(&mut self, variable: Variable, registers: &[String]) -> Result<()> {
+        if matches!(variable.kind, VariableKind::Constant(_)) {
+            return Err(invalid("manual matrix register destination cannot be constant"));
+        }
         let ty = self.matrix_register_capacity(variable, registers.len())?;
         if let Some(destinations) = self.packed_array_registers(variable)? {
             for (destination, source) in destinations.iter().zip(registers) {
@@ -72,7 +78,9 @@ impl Emitter {
         if matches!(variable.kind, VariableKind::LocalArray { .. }) && array_values.is_none() {
             let (base, space) = self.memory_base(variable, true)?;
             for (index, register) in registers.iter().enumerate() {
-                if ty.half() {
+                if ty.half() && variable.ty.vector_size() >= 2 {
+                    self.line(format!("st.{space}.b32 [{base}+{}], {register};", index * 4));
+                } else if ty.half() {
                     let low = self.reg(ty);
                     let high = self.reg(ty);
                     self.line(format!("mov.b32 {{{low}, {high}}}, {register};"));

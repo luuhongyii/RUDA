@@ -41,6 +41,8 @@ mod vendor_bridge;
 mod kernels;
 mod strided_vector;
 mod training;
+mod rotary;
+mod lora_epilogue;
 mod router;
 mod nf4;
 mod sequence_training;
@@ -230,6 +232,15 @@ impl View {
         for (&size,&stride) in self.shape.iter().zip(&self.strides).rev() {
             if size>1 && stride!=span {return false;}
             span=span.checked_mul(size).expect("view stride overflow");
+        }
+        true
+    }
+    fn is_contiguous(&self) -> bool {
+        let mut stride = 1usize;
+        for (&size, &actual) in self.shape.iter().zip(&self.strides).rev() {
+            if size > 1 && stride != actual { return false; }
+            let Some(next) = stride.checked_mul(size) else { return false; };
+            stride = next;
         }
         true
     }
@@ -569,6 +580,43 @@ fn convert(a: &View, out: &View) {
     }
     if a.dtype >= 9 || out.dtype >= 9 { scientific::convert(a,out);finish_dispatch(&client());return; }
     let client = client();
+    let contiguous_input = a.is_contiguous();
+    let packed_rows = !contiguous_input
+        && a.shape.last().is_some_and(|size| *size > 0 && size % 4 == 0)
+        && a.strides.last() == Some(&1)
+        && a.shape.iter().zip(&a.strides).take(a.shape.len().saturating_sub(1))
+            .all(|(&size, &stride)| size <= 1 || stride % 4 == 0)
+        && a.shape.iter().zip(&a.strides).try_fold(1usize, |span, (&size, &stride)| {
+            size.saturating_sub(1).checked_mul(stride).and_then(|v| span.checked_add(v))
+        }).is_some_and(|span| span <= u32::MAX as usize);
+    if a.dtype <= 2 && out.dtype <= 2 && out.len % 4 == 0 && out.len <= u32::MAX as usize
+        && (contiguous_input || packed_rows) && out.is_contiguous()
+        && a.handle.offset_start.unwrap_or(0) % (4 * element_bytes(a.dtype)) as u64 == 0
+        && out.handle.offset_start.unwrap_or(0) % (4 * element_bytes(out.dtype)) as u64 == 0
+    {
+        macro_rules! packed {
+            ($i:ty, $o:ty) => { unsafe {
+                if contiguous_input {
+                    kernels::convert_contiguous::launch_unchecked::<$i, $o, CudaRuntime>(
+                        &client, RudaCount::Static(out.len.div_ceil(512) as u32, 1, 1), RudaDim::new_1d(128),
+                        primitives::tensor(a).into_array_arg(), primitives::tensor(out).into_array_arg());
+                } else {
+                    kernels::convert_rows::launch_unchecked::<$i, $o, CudaRuntime>(
+                        &client, RudaCount::Static(out.len.div_ceil(512) as u32, 1, 1), RudaDim::new_1d(128),
+                        a.arg(), primitives::tensor(out).into_array_arg());
+                }
+            } };
+        }
+        match (a.dtype, out.dtype) {
+            (0, 0) => packed!(f32, f32), (0, 1) => packed!(f32, f16), (0, 2) => packed!(f32, bf16),
+            (1, 0) => packed!(f16, f32), (1, 1) => packed!(f16, f16), (1, 2) => packed!(f16, bf16),
+            (2, 0) => packed!(bf16, f32), (2, 1) => packed!(bf16, f16), (2, 2) => packed!(bf16, bf16),
+            _ => unreachable!(),
+        }
+        finish_dispatch(&client);
+        LAUNCHES.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     let byte_work = a.dtype >= 3 && out.dtype >= 3;
     let vector = !byte_work && a.dtype != 3 && out.dtype != 3 && out.len >= 512
         && out.len % 4 == 0 && a.contiguous() && out.contiguous();

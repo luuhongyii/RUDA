@@ -1,7 +1,7 @@
 use ruda_kernel::dsl::prelude::*;
 
 #[ruda]
-fn offset<F: Numeric>(tensor: &Tensor<F>, position: usize) -> usize {
+fn offset<F: RudaPrimitive>(tensor: &Tensor<F>, position: usize) -> usize {
     let mut remaining = position;
     let mut offset = 0usize;
     let mut dim = tensor.rank();
@@ -68,6 +68,22 @@ pub fn convert<I: Numeric + RudaElement, O: Numeric + RudaElement>(a: &Tensor<I>
     if pos < out.len() {
         out[offset(out, pos)] = O::cast_from(a[offset(a, pos)]);
     }
+}
+
+#[ruda(launch_unchecked)]
+pub fn convert_contiguous<I: Float + RudaElement, O: Float + RudaElement>(
+    a: &Array<Vector<I, Const<4>>>, out: &mut Array<Vector<O, Const<4>>>,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() { out[pos] = Vector::cast_from(a[pos]); }
+}
+
+#[ruda(launch_unchecked)]
+pub fn convert_rows<I: Float + RudaElement, O: Float + RudaElement>(
+    a: &Tensor<Vector<I, Const<4>>>, out: &mut Array<Vector<O, Const<4>>>,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() { out[pos] = Vector::cast_from(a[offset(a, pos * 4) / 4]); }
 }
 
 #[ruda]

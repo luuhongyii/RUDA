@@ -22,6 +22,7 @@ def _native():
     return _C
 
 
+@torch.compiler.assume_constant_result
 def _f32(value: float, name: str, *, positive=False, nonnegative=False) -> float:
     if isinstance(value, (bool, torch.Tensor)):
         raise TypeError(f"{name} must be a Python number")
@@ -38,14 +39,24 @@ def _f32(value: float, name: str, *, positive=False, nonnegative=False) -> float
 def _tensor(x: torch.Tensor, name: str):
     if not isinstance(x, torch.Tensor) or x.device.type != 'ruda' or x.device.index not in (None, 0):
         raise ValueError(f"{name} must be a ruda:0 tensor; CPU fallback is disabled")
-    if x.dtype not in _DTYPES or x.layout != torch.strided or not x.is_contiguous() or x.is_conj() or x.is_neg():
+    if x.dtype not in _DTYPES or x.layout != torch.strided or not x.is_contiguous():
+        raise ValueError(f"{name} must be contiguous FP32/FP16/BF16 without unresolved view bits")
+    # The opaque native operator enforces the same view-bit check at runtime.
+    if not torch.compiler.is_compiling() and (x.is_conj() or x.is_neg()):
         raise ValueError(f"{name} must be contiguous FP32/FP16/BF16 without unresolved view bits")
 
 
 class _RMSNorm(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, weight, epsilon):
-        y, stats = _native().training_rms_forward(x, weight, epsilon)
+    def forward(ctx, x, weight, epsilon, round_normalized):
+        _native()
+        if round_normalized:
+            from . import _training_fusion_available
+            if not _training_fusion_available:
+                raise RuntimeError('HF RMSNorm fusion requires rebuilding both native libraries')
+        from ._fused_training_ops import rms_forward
+        y, stats = rms_forward(x, weight, epsilon, round_normalized)
+        ctx.round_normalized = round_normalized
         ctx.save_for_backward(x, weight, stats)
         ctx.set_materialize_grads(False)
         return y
@@ -55,28 +66,36 @@ class _RMSNorm(torch.autograd.Function):
         if torch.is_grad_enabled():
             raise RuntimeError("RUDA fused RMSNorm supports first-order gradients only; create_graph is unsupported")
         if dy is None:
-            return None, None, None
+            return None, None, None, None
         x, weight, stats = ctx.saved_tensors
-        dx, dw = _native().training_rms_backward(x, weight, dy.contiguous(), stats,
-            ctx.needs_input_grad[0], weight is not None and ctx.needs_input_grad[1])
-        return dx, dw, None
+        from ._fused_training_ops import rms_backward
+        dx, dw = rms_backward(x, weight, dy.contiguous(), stats,
+            ctx.needs_input_grad[0], weight is not None and ctx.needs_input_grad[1], ctx.round_normalized)
+        return dx, dw, None, None
 
 
-def rms_norm(x: torch.Tensor, weight: torch.Tensor | None = None, *, eps: float | None = None):
+def rms_norm(x: torch.Tensor, weight: torch.Tensor | None = None, *, eps: float | None = None,
+             round_normalized: bool = False):
     """Last-axis RMSNorm, input-dtype output, FP32 statistics and optional FP32 weight.
 
     Saves input, weight and one FP32 statistic per row, not normalized activations.
     Supports first-order backward only; this is not aten's mixed-dtype contract.
+    round_normalized preserves HF's cast-before-affine storage boundary and
+    its backward rounding; that mode requires matching input/weight dtypes.
     """
     _tensor(x, 'input')
+    if type(round_normalized) is not bool:
+        raise TypeError('round_normalized must be a boolean')
     if x.ndim == 0 or x.shape[-1] == 0:
         raise ValueError('RMSNorm requires a positive last dimension')
     if weight is not None:
         _tensor(weight, 'weight')
         if weight.shape != (x.shape[-1],) or weight.device != x.device or weight.dtype not in (x.dtype, torch.float32):
             raise ValueError('RMSNorm weight must match width/device and be input dtype or FP32')
+        if round_normalized and weight.dtype != x.dtype:
+            raise ValueError('HF RMSNorm fusion requires matching input/weight dtypes')
     epsilon = torch.finfo(x.dtype).eps if eps is None else _f32(eps, 'eps', positive=True)
-    return _RMSNorm.apply(x, weight, epsilon)
+    return _RMSNorm.apply(x, weight, epsilon, round_normalized)
 
 
 class RMSNorm(torch.nn.Module):
@@ -102,7 +121,9 @@ class RMSNorm(torch.nn.Module):
 class _LayerNorm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, bias, epsilon):
-        y, mean, rstd = _native().training_layer_forward(x, weight, bias, epsilon)
+        _native()
+        from ._fused_training_ops import layer_forward
+        y, mean, rstd = layer_forward(x, weight, bias, epsilon)
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.has_weight = weight is not None
         ctx.has_bias = bias is not None
@@ -116,7 +137,8 @@ class _LayerNorm(torch.autograd.Function):
         if dy is None:
             return None, None, None, None
         x, weight, bias, mean, rstd = ctx.saved_tensors
-        dx, dw, db = _native().training_layer_backward(
+        from ._fused_training_ops import layer_backward
+        dx, dw, db = layer_backward(
             x, weight if ctx.has_weight else None, bias if ctx.has_bias else None,
             dy.contiguous(), mean, rstd,
             ctx.needs_input_grad[0], ctx.has_weight and ctx.needs_input_grad[1],
@@ -168,7 +190,9 @@ class _SiluMul(torch.autograd.Function):
     def forward(ctx, gate, up):
         ctx.save_for_backward(gate, up)
         ctx.set_materialize_grads(False)
-        return _native().training_silu_forward(gate, up)
+        _native()
+        from ._fused_training_ops import silu_forward
+        return silu_forward(gate, up)
 
     @staticmethod
     def backward(ctx, dy):
@@ -177,7 +201,8 @@ class _SiluMul(torch.autograd.Function):
         if dy is None:
             return None, None
         gate, up = ctx.saved_tensors
-        return _native().training_silu_backward(gate, up, dy.contiguous(), *ctx.needs_input_grad)
+        from ._fused_training_ops import silu_backward
+        return silu_backward(gate, up, dy.contiguous(), *ctx.needs_input_grad)
 
 
 def silu_mul(gate: torch.Tensor, up: torch.Tensor):
@@ -364,8 +389,8 @@ class AdamW(torch.optim.Optimizer):
     def _step_fused(self, active, inverse, loss, global_grad_norm=None):
         """Two native calls: read-only analysis, then one batched update command.
 
-        This is not one multi-tensor GPU kernel: each parameter still launches
-        its own update. Gradients remain scaled and unchanged, so callers must
+        Updates use bounded, dtype-grouped multi-tensor kernels.
+        Gradients remain scaled and unchanged, so callers must
         zero them before accumulating the NEXT step. FP32-unscale rounding is
         deliberately not the same as API 1's FP16/BF16 gradient writeback.
         """

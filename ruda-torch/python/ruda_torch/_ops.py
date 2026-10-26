@@ -194,6 +194,11 @@ def bmm(a, b):
     _C.execute(30, a, b, out, 0.0)
     return out
 
+_cpp_matmul_dispatch = hasattr(_C, 'initialize_matmul_dispatch')
+if _cpp_matmul_dispatch:
+    from .math_backend import _backend as _matmul_backend_context
+    _C.initialize_matmul_dispatch(_matmul_backend_context, mm, bmm, addmm)
+
 def _dimension(dim, rank):
     if dim < -max(rank, 1) or dim >= max(rank, 1):
         raise IndexError("dimension out of range")
@@ -1026,6 +1031,10 @@ def _cumulative(op, a, dim, *, dtype=None):
     return cumulative(a, dim, dtype=dtype, product=op == 101)
 
 
+_cpp_arithmetic_dispatch = hasattr(_C, 'initialize_arithmetic_dispatch')
+_cpp_arithmetic_ops = frozenset(('add.Tensor', 'add_.Tensor', 'sub.Tensor', 'sub_.Tensor',
+                                 'mul.Tensor', 'mul_.Tensor', 'neg', 'neg_'))
+
 for name, function in {
     "fill_.Scalar": fill_, "zero_": lambda a: fill_(a, 0),
     "fill_.Tensor": fill_tensor_, "fill.Scalar": fill, "fill.Tensor": fill,
@@ -1153,7 +1162,9 @@ for name, function in {
     "bitwise_not": lambda a: bitwise(92, a),
     "bitwise_not_": lambda a: bitwise(92, a, inplace=True),
 }.items():
-    if name not in _native_eager_ops:
+    if _cpp_arithmetic_dispatch and name in _cpp_arithmetic_ops:
+        _C.initialize_arithmetic_dispatch(name, function)
+    elif name not in _native_eager_ops and not (_cpp_matmul_dispatch and name in ('mm', 'bmm', 'addmm')):
         _registry.impl(name, function)
 
 

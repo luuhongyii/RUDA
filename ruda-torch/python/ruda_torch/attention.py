@@ -38,7 +38,7 @@ def _initialize_dense(indexed=False):
     return _C
 
 
-def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,global_heads=None,head_start=None,rng_state=None):
+def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,global_heads=None,head_start=None,rng_state=None,precision='fp32'):
     batch = broadcast_shapes(query.shape[:-3],key.shape[:-3],value.shape[:-3])
     if gqa:
         heads,kv_heads = query.shape[-3],key.shape[-3]
@@ -72,7 +72,7 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,globa
     v = value.expand(*batch,kv_heads,s,dv).contiguous().reshape(b,kv_heads,s,dv)
     shape = (*batch,heads,l,s)
     with precision_context(query):
-        if (p==0 and not torch.is_grad_enabled() and not torch.compiler.is_compiling()
+        if (precision=='fp32' and p==0 and not torch.is_grad_enabled() and not torch.compiler.is_compiling()
                 and type(query) is torch.Tensor and tensor_group is None and global_heads is None
                 and head_start is None and rng_state is None):
             native=_initialize_dense()
@@ -80,17 +80,17 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,globa
                 return native.dense_attention_inference(q,k,v,mask,list(shape),kind,causal,scale).reshape(*batch,heads,l,dv)
         from ._dense_ops import forward,indexed_forward
         if tensor_group is None and global_heads is None and head_start is None and rng_state is None:
-            result = forward(q,k,v,mask,list(shape),kind,causal,scale,p)[0]
+            result = forward(q,k,v,mask,list(shape),kind,causal,scale,p,precision=='flash')[0]
         else:
             from ._parallel_rng import head_partition
             global_heads,head_start,groups=head_partition(heads,tensor_group,global_heads,head_start)
             if rng_state is None:rng_state=torch.empty(0,device='cpu',dtype=torch.int64)
-            result=indexed_forward(q,k,v,mask,list(shape),kind,causal,scale,p,global_heads,head_start,groups,rng_state)[0]
+            result=indexed_forward(q,k,v,mask,list(shape),kind,causal,scale,p,global_heads,head_start,groups,rng_state,precision=='flash')[0]
     return result.reshape(*batch,heads,l,dv)
 
 
 def scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,is_causal=False,
-                                 scale=None,enable_gqa=False,tensor_group=None,global_heads=None,head_start=None,rng_state=None):
+                                 scale=None,enable_gqa=False,tensor_group=None,global_heads=None,head_start=None,rng_state=None,precision='fp32'):
     """First-order MHA/GQA attention; tensor operations stay on the source device.
 
     RUDA uses plane-cooperative fused online softmax and recomputed backward,
@@ -99,6 +99,7 @@ def scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,i
     and obey torch.use_deterministic_algorithms. Eligible BF16/F16 zero-dropout
     prefill uses Tensor Cores; other shapes retain the online-softmax kernel.
     Boolean masks use True=allowed; floating masks are added before softmax.
+    precision='flash' opts into BF16 Flash storage/gradient boundaries for native 512x128, dropout-free unmasked/causal inputs.
     """
     if query.ndim<3 or key.ndim!=query.ndim or value.ndim!=query.ndim:
         raise ValueError('attention requires [...,heads,tokens,features] operands')
@@ -111,6 +112,12 @@ def scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,i
     if is_causal and attn_mask is not None:
         raise ValueError('supply either an attention mask or causal masking, not both')
     factor=query.shape[-1]**-.5 if scale is None else float(scale)
+    if precision not in ('fp32','flash'):
+        raise ValueError('attention precision must be fp32 or flash')
+    if precision=='flash' and (query.device.type!='ruda' or query.dtype!=torch.bfloat16
+            or query.shape[-2:]!=(512,128) or key.shape[-2:]!=(512,128)
+            or value.shape[-2:]!=(512,128) or attn_mask is not None or dropout_p!=0 or factor<=0):
+        raise ValueError('flash precision requires native BF16 512x128 attention, no explicit mask/dropout, and positive scale')
     if not math.isfinite(factor):
         raise ValueError('attention scale must be finite')
     if enable_gqa:
@@ -118,7 +125,7 @@ def scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,i
             raise ValueError('GQA query heads must divide the common KV head count')
     if query.device.type=='ruda' and query.dtype in (torch.float16,torch.bfloat16,torch.float32) and query.shape[-1]>0 and value.shape[-1]>0:
         return _fused_dense(query,key,value,attn_mask,dropout_p,is_causal,factor,enable_gqa,
-            tensor_group,global_heads,head_start,rng_state)
+            tensor_group,global_heads,head_start,rng_state,precision)
     if tensor_group is not None or global_heads is not None or head_start is not None or rng_state is not None:
         raise ValueError('globally indexed attention requires the RUDA native attention path')
     if enable_gqa:

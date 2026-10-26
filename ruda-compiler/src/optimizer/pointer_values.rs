@@ -3,7 +3,9 @@ use std::mem::take;
 use petgraph::visit::EdgeRef;
 use ruda_core::ir::{Instruction, Operation, PointerValueLowering, Variable};
 
-use super::{Optimizer, PhiInstruction, SharedLiveness, version::PhiEntry};
+use super::{AtomicCounter, Optimizer, PhiInstruction, SharedLiveness, version::PhiEntry};
+use super::analyses::liveness::Liveness;
+use super::passes::{DisaggregateArray, OptimizerPass};
 
 impl Optimizer {
     /// Lower optimized pointer SSA at a backend boundary using the existing logical storage ABI.
@@ -124,6 +126,13 @@ impl Optimizer {
         self.split_critical_edges();
         self.ssa_transform();
         self.apply_post_ssa_passes();
+        let arrays = AtomicCounter::new(0);
+        DisaggregateArray.apply_post_ssa(self, arrays.clone());
+        if arrays.get() > 0 {
+            self.invalidate_analysis::<Liveness>();
+            self.ssa_transform();
+            self.apply_post_ssa_passes();
+        }
         self.split_free();
         self.invalidate_analysis::<SharedLiveness>();
         self.analysis::<SharedLiveness>();

@@ -252,8 +252,8 @@ impl<T: RudaType> SequenceExpand<T> {
     }
 
     /// Expand method of [`index_mut`](Sequence::index_mut).
-    pub fn __expand_index_mut_method(&self, _scope: &mut Scope, index: usize) -> T::ExpandType {
-        self.values.borrow()[index].clone()
+    pub fn __expand_index_mut_method(&self, scope: &mut Scope, index: usize) -> T::ExpandType {
+        self.values.borrow()[index].clone().expand_reference(scope, true)
     }
 
     pub fn __expand_len_method(&self, _scope: &mut Scope) -> usize {

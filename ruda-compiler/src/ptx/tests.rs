@@ -12,9 +12,13 @@ mod half_precision;
 mod bitwise;
 mod native_memory;
 mod training_math;
+mod vector_memory;
+mod unsigned_power2;
 mod scaled;
 mod register_arrays;
 mod integer_division;
+mod matrix_registers;
+mod async_groups;
 
 fn options() -> PtxCompilationOptions {
     PtxCompilationOptions {

@@ -163,8 +163,8 @@ pub fn parse_define_macro(local: &Local) -> Option<(Ident, DefineKind, Expr)> {
 pub fn parse_macros(mac: Macro, context: &mut Context) -> syn::Result<Expression> {
     if mac.path.segments.last().is_some_and(|segment| segment.ident == "comptime") {
         let tokens = &mac.tokens;
-        Ok(Expression::Verbatim {
-            tokens: quote![{#tokens}],
+        Ok(Expression::AssertConstant {
+            inner: Box::new(Expression::Verbatim { tokens: quote![{#tokens}] }),
         })
     } else if [
         "panic",

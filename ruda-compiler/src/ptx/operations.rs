@@ -1,7 +1,7 @@
 use super::{Result, emit::Emitter, invalid, types::Scalar, unsupported};
 use ruda_core::ir::{
-    Arithmetic, BinaryOperator, Branch, Comparison, Instruction, Metadata, Operation, Operator,
-    Synchronization, Variable,
+    Arithmetic, BinaryOperator, Branch, Comparison, ConstantValue, Instruction, Metadata, Operation, Operator,
+    Synchronization, Variable, VariableKind,
 };
 
 impl Emitter {
@@ -222,6 +222,18 @@ impl Emitter {
             return Err(invalid(format!("{opcode} operand types differ: output {:?}, lhs {:?}, rhs {:?}", out.ty, op.lhs, op.rhs)));
         }
         let lhs = self.value(op.lhs)?;
+        if matches!(ty, Scalar::U32 | Scalar::U64) && matches!(opcode, "div" | "rem")
+            && let VariableKind::Constant(ConstantValue::UInt(divisor)) = op.rhs.kind
+            && divisor.is_power_of_two() && (ty == Scalar::U64 || divisor <= u32::MAX as u64)
+        {
+            let dst = self.destination(out)?;
+            if opcode == "div" {
+                self.line(format!("shr.{} {dst}, {lhs}, {};", ty.suffix(), divisor.trailing_zeros()));
+            } else {
+                self.line(format!("and.{} {dst}, {lhs}, {};", ty.bits(), divisor - 1));
+            }
+            return Ok(());
+        }
         let rhs = self.value(op.rhs)?;
         let dst = self.destination(out)?;
         if matches!(opcode, "div" | "rem") {

@@ -8,6 +8,7 @@ pub(crate) mod capture;
 pub(crate) mod io;
 pub(crate) mod storage;
 pub(crate) mod stream;
+mod metadata_cache;
 pub(crate) mod sync;
 
 mod nvrtc_program;

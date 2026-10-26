@@ -266,6 +266,12 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> eager_layer_norm(const at::Tensor& 
           value.scalar_type()!=a.scalar_type() || value.sizes()!=normalized_shape) return fallback();
     }
   }
+  if (training_native && normalized_shape.size()==1 && std::isfinite(eps) &&
+      eps>=std::numeric_limits<float>::min() && eps<=std::numeric_limits<float>::max()) {
+    auto [value,mean,inverse]=training_layer_forward(a,weight,bias,eps);
+    auto stat_shape=a.sizes().vec();stat_shape.back()=1;
+    return {value,mean.reshape(stat_shape),inverse.reshape(stat_shape)};
+  }
   const auto rows=a.numel()/width;
   const auto x=a.reshape({rows,width});
   const auto options=a.options().dtype(at::kFloat);
@@ -288,18 +294,11 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> eager_layer_norm(const at::Tensor& 
 }
 
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
-  m.impl("mm",eager_matmul<false>);
-  m.impl("bmm",eager_matmul<true>);
-  m.impl("addmm",eager_addmm);
   m.impl("silu",eager_silu);
   m.impl("gelu",eager_gelu);
-  m.impl("add.Tensor",[](const at::Tensor& a,const at::Tensor& b,const at::Scalar& alpha){return eager_tensor_arithmetic<0>(a,b,alpha);});
-  m.impl("sub.Tensor",[](const at::Tensor& a,const at::Tensor& b,const at::Scalar& alpha){return eager_tensor_arithmetic<1>(a,b,alpha);});
-  m.impl("mul.Tensor",[](const at::Tensor& a,const at::Tensor& b){return eager_tensor_arithmetic<2>(a,b);});
   m.impl("add.Scalar",[](const at::Tensor& a,const at::Scalar& b,const at::Scalar& alpha){return eager_scalar_arithmetic<0>(a,b,alpha);});
   m.impl("sub.Scalar",[](const at::Tensor& a,const at::Scalar& b,const at::Scalar& alpha){return eager_scalar_arithmetic<1>(a,b,alpha);});
   m.impl("mul.Scalar",[](const at::Tensor& a,const at::Scalar& b){return eager_scalar_arithmetic<2>(a,b);});
-  m.impl("neg",eager_neg);
   m.impl("cat",eager_cat);
   m.impl("pow.Tensor_Scalar",eager_power);
   m.impl("rsqrt",eager_rsqrt);

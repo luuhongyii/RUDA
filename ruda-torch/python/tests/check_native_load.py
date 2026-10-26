@@ -32,4 +32,14 @@ generator.manual_seed(42)
 generator.set_state(state)
 assert generator.initial_seed() == 1729
 assert torch.equal(generator.clone_state().get_state(), state)
+for name in ('_fused_training_ops', 'rotary', 'fused_cross_entropy', 'lora_epilogue', '_dense_ops'):
+    spec = importlib.util.spec_from_file_location('_schema_check_' + name, root / 'ruda_torch' / (name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+cpp.initialize_fused_autograd_dispatch()
+for name in ('training_rms', 'training_layer', 'training_silu', 'rotary_qk', 'cross_entropy', 'dense_attention'):
+    for direction in ('forward', 'backward'):
+        assert torch._C._dispatch_has_kernel_for_dispatch_key('ruda::' + name + '_' + direction, 'PrivateUse1')
+        assert torch._C._dispatch_has_kernel_for_dispatch_key('ruda::' + name + '_' + direction, 'AutogradPrivateUse1')
 print('C++ registrations, native factory exports and generator state passed; no GPU execution')

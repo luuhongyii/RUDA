@@ -5,7 +5,7 @@ impl Emitter {
         let ty = Scalar::of(scalar(vector).ty)?;
         let index_ty = Scalar::of(index.ty)?;
         if !index_ty.integer() || value.ty != scalar(vector).ty {
-            return Err(invalid("vector index requires an integer index and scalar element"));
+            return Err(invalid(format!("vector index requires an integer index and scalar element: vector={vector:?}, index={index:?}, value={value:?}, store={store}")));
         }
         let registers = if store { self.vector_destination(vector)? } else { self.vector_values(vector)? };
         let source_index = self.value(index)?;

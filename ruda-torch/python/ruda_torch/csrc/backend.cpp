@@ -2,6 +2,7 @@
 #define NOMINMAX
 #endif
 #include <ATen/EmptyTensor.h>
+#include <atomic>
 #include <ATen/SparseCsrTensorImpl.h>
 #include <ATen/quantized/QTensorImpl.h>
 #include <ATen/native/quantized/AffineQuantizer.h>
@@ -57,6 +58,7 @@
 #include <ATen/Context.h>
 #include <ATen/autocast_mode.h>
 #include <ATen/MemoryOverlap.h>
+#include <ATen/core/LegacyTypeDispatch.h>
 #include <ATen/native/Resize.h>
 #include <ATen/detail/PrivateUse1HooksInterface.h>
 #include <ATen/CPUGeneratorImpl.h>
@@ -598,6 +600,8 @@ void addmm(const at::Tensor& bias, const at::Tensor& a, const at::Tensor& b,
   check(addmm_native(&cv.desc, &av.desc, &bv.desc, &ov.desc, alpha, beta));
 }
 
+#include "matmul_dispatch.inc"
+
 void layer_norm(const at::Tensor& input, const std::optional<at::Tensor>& weight,
                 const std::optional<at::Tensor>& bias, at::Tensor out, at::Tensor mean,
                 at::Tensor rstd, double epsilon) {
@@ -746,6 +750,7 @@ at::Tensor& copy_(at::Tensor& dest, const at::Tensor& source, bool non_blocking)
 #include "foreach_ternary.inc"
 #include "foreach_reduce.inc"
 #include "eager_arithmetic.inc"
+#include "arithmetic_dispatch.inc"
 template <typename T>
 T read_scalar(const at::Tensor& value) {
   T result{};
@@ -778,11 +783,40 @@ at::Scalar scalar(const at::Tensor& value) {
 void unsupported(const c10::OperatorHandle& op, torch::jit::Stack*) {
   TORCH_CHECK_NOT_IMPLEMENTED(false, "RUDA GPU operator not implemented: ", op.schema().operator_name(), "; CPU fallback is disabled");
 }
+#include "fused_autograd_dispatch.inc"
 void record_tensor_stream(at::Tensor& value, c10::Stream stream) {
   check_stream(stream); Argument arg(value);
   stream_command(12,stream.id(),reinterpret_cast<uintptr_t>(arg.desc.allocation));
 }
+TORCH_LIBRARY_IMPL(ruda, PrivateUse1, m) {
+  m.impl("dense_attention_forward",dense_attention_forward_op);
+  m.impl("dense_attention_backward",dense_attention_backward_op);
+  m.impl("lora_epilogue_forward",lora_epilogue_forward);
+  m.impl("lora_epilogue_backward",lora_epilogue_backward);
+  m.impl("lora_rank16_residual",lora_rank16_residual);
+  m.impl("training_rms_forward",training_rms_forward_impl);
+  m.impl("training_rms_backward",training_rms_backward_op);
+  m.impl("training_layer_forward",training_layer_forward);
+  m.impl("training_layer_backward",training_layer_backward_op);
+  m.impl("training_silu_forward",training_silu_forward);
+  m.impl("training_silu_backward",training_silu_backward_op);
+  m.impl("rotary_qk_forward",rotary_qk_forward);
+  m.impl("rotary_qk_backward",rotary_qk_backward);
+  m.impl("cross_entropy_forward",cross_entropy_forward);
+  m.impl("cross_entropy_backward",cross_entropy_backward);
+}
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
+  m.impl("add.Tensor", native_add_sub_dispatch<0>);
+  m.impl("add_.Tensor", native_add_sub_inplace_dispatch<0>);
+  m.impl("sub.Tensor", native_add_sub_dispatch<1>);
+  m.impl("sub_.Tensor", native_add_sub_inplace_dispatch<1>);
+  m.impl("mul.Tensor", native_mul_dispatch);
+  m.impl("mul_.Tensor", native_mul_inplace_dispatch);
+  m.impl("neg", native_neg_dispatch);
+  m.impl("neg_", native_neg_inplace_dispatch);
+  m.impl("mm", native_mm_dispatch);
+  m.impl("bmm", native_bmm_dispatch);
+  m.impl("addmm", native_addmm_dispatch);
   m.impl("addr", TORCH_FN(at::native::addr));
   m.impl("addr.out", TORCH_FN(at::native::addr_out));
   m.impl("topk",topk_tensor);
@@ -872,6 +906,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.attr("native_eager_ops")=pybind11::make_tuple("add.Tensor","add.Scalar","sub.Tensor","sub.Scalar","mul.Tensor","mul.Scalar","neg","cat","pow.Tensor_Scalar","rsqrt","mean.dim","mm","bmm","addmm","silu","gelu","native_layer_norm");
   m.def("initialize_eager_arithmetic",[](bool ready){eager_arithmetic_ready=ready;});
   m.def("initialize_eager_cat",[](bool ready){eager_cat_ready=ready;});
+  m.def("initialize_fused_autograd_dispatch", initialize_fused_autograd_dispatch);
+  m.def("initialize_arithmetic_dispatch", initialize_arithmetic_dispatch);
+  m.def("initialize_matmul_dispatch", initialize_matmul_dispatch);
   #include "scientific_bridge_bindings.inc"
   #include "blas_bridge_bindings.inc"
   #include "linalg_bridge_bindings.inc"
@@ -1024,6 +1061,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   });
   m.def("training_rms_forward", training_rms_forward);
   m.def("training_rms_backward", training_rms_backward);
+  m.attr("training_fusion_api_version") = 3;
+  m.def("training_hf_rms_forward", training_hf_rms_forward);
+  m.def("training_hf_rms_backward", training_hf_rms_backward);
   m.def("training_layer_forward", training_layer_forward);
   m.def("training_layer_backward", training_layer_backward);
   m.def("training_silu_forward", training_silu_forward);

@@ -9,6 +9,9 @@ mod numeric;
 mod typemap;
 mod uint;
 
+#[cfg(test)]
+mod mutable_const_tests;
+
 pub use atomic::*;
 pub use base::*;
 pub use bool::*;

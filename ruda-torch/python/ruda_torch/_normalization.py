@@ -87,8 +87,21 @@ def _layer_shape(a, normalized_shape, weight, bias=None):
     return shape, rows, math.prod(shape), (*a.shape[:-len(shape)], *((1,) * len(shape)))
 
 
+def _training_norm(a, shape, *parameters):
+    from . import _training_available
+    return (_training_available and len(shape) == 1 and shape[0] > 0
+            and a.dtype in (torch.float32, torch.float16, torch.bfloat16)
+            and all(v is None or v.is_contiguous() and not v.is_neg() and not v.is_conj()
+                    for v in (a, *parameters)))
+
+
 def layer_norm(a, normalized_shape, weight, bias, eps, *, out0=None, out1=None, out2=None):
     shape, rows, width, stat_shape = _layer_shape(a, normalized_shape, weight, bias)
+    if (_training_norm(a, shape, weight, bias) and math.isfinite(eps)
+            and torch.finfo(torch.float32).tiny <= eps <= torch.finfo(torch.float32).max):
+        value, mean, inv = _C.training_layer_forward(a, weight, bias, eps)
+        return _write((value, mean.reshape(stat_shape), inv.reshape(stat_shape)),
+                      (out0, out1, out2), (a, weight, bias))
     x = a.resolve_neg().reshape(rows, width)
     vectorized = a.dtype != torch.float64 and width <= 2**24 and width % 4 == 0 and all(
         v is None or not v.is_contiguous() or v.data_ptr() % (4 * v.element_size()) == 0 for v in (x, weight, bias))
@@ -103,6 +116,10 @@ def layer_backward(grad, a, normalized_shape, mean, rstd, weight, bias, output_m
     if output_mask[1] and weight is None or output_mask[2] and bias is None:
         raise RuntimeError('requested gradient for an undefined affine parameter')
     mu, inv = (_saved(v, a, rows, _acc(a)) for v in (mean, rstd))
+    if _training_norm(a, shape, weight, bias):
+        values = _C.training_layer_backward(a, weight, bias, grad.resolve_neg().contiguous(),
+                                            mu, inv, *output_mask)
+        return _write(values, (out0, out1, out2), (a, grad, weight, bias, mean, rstd))
     dx, dw, db = _back(a.resolve_neg().reshape(rows, width), grad.resolve_neg().reshape(rows, width), mu, inv, weight, output_mask, 0, width)
     values = (None if dx is None else dx.reshape(a.shape), None if dw is None else dw.to(weight.dtype).reshape(shape), None if db is None else db.to(bias.dtype).reshape(shape))
     return _write(values, (out0, out1, out2), (a, grad, weight, bias, mean, rstd))
@@ -111,6 +128,10 @@ def layer_backward(grad, a, normalized_shape, mean, rstd, weight, bias, output_m
 def rms_norm(a, normalized_shape, weight, eps):
     shape, rows, width, stat_shape = _layer_shape(a, normalized_shape, weight)
     epsilon = torch.finfo(_acc(a)).eps if eps is None else float(eps)
+    if (_training_norm(a, shape, weight) and math.isfinite(epsilon)
+            and torch.finfo(torch.float32).tiny <= epsilon <= torch.finfo(torch.float32).max):
+        value, inv = _C.training_rms_forward(a, weight, epsilon)
+        return value, inv.reshape(stat_shape)
     x = a.resolve_neg().reshape(rows, width)
     mean, _, inv = _stats(x, epsilon, 3)
     value = _affine(x, mean, inv, weight, None, 3)
@@ -136,6 +157,8 @@ def rms_backward(grad, a, normalized_shape, rstd, weight, output_mask):
     if len(output_mask) != 2 or output_mask[1] and weight is None:
         raise RuntimeError('invalid RMS normalization gradient mask')
     inv = _saved(rstd, a, rows, _acc(a))
+    if _training_norm(a, shape, weight):
+        return _C.training_rms_backward(a, weight, grad.resolve_neg().contiguous(), inv, *output_mask)
     mean = torch.zeros_like(inv)
     dx, dw, _ = _back(a.resolve_neg().reshape(rows, width), grad.resolve_neg().reshape(rows, width), mean, inv, weight, (*output_mask, False), 3, width)
     return None if dx is None else dx.reshape(a.shape), None if dw is None else dw.to(weight.dtype).reshape(shape)

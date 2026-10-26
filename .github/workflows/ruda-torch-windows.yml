@@ -177,11 +177,56 @@ jobs:
           restore-keys: |
             torch-linux-release-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
             torch-linux-release-rust-1.97.1-
+      - name: Compile and validate native attention PTX
+        run: |
+          RUDA_PTX_TEST_OUTPUT="$GITHUB_WORKSPACE/target/ptx-vector-memory" cargo test --release --locked -p ruda-compiler --no-default-features --features ptx ptx::tests
+          cargo test --release --locked -p ruDNN --test flash-training-layout --features tensor-paged-attention,ruda-test-runtime/cuda
+          RUDA_FLASH_PTX_OUTPUT="$GITHUB_WORKSPACE/target/ptx-flash-training" cargo test --release --locked -p ruDNN --test flash-training-ptx --features tensor-paged-attention,ruda-test-runtime/cuda
+      - name: Save attention PTX for early GPU validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ruda-attention-ptx-${{ github.sha }}
+          path: |
+            target/ptx-vector-memory/compound_vector_component_*.ptx
+            target/ptx-vector-memory/constant_register_mma_*.ptx
+            target/ptx-flash-training/*.ptx
+          if-no-files-found: error
+          retention-days: 14
       - name: Build native library and compile CUDA attention tests without execution
         run: |
           cargo build --release --locked -p ruda-torch-native
           cargo check --release --locked -p ruDNN --lib --tests --features tensor-paged-attention,ruda-test-runtime/cuda
+          test "$(find target/ptx-vector-memory -maxdepth 1 -name 'packed_vector_memory_*.ptx' | wc -l)" -eq 48
+          test "$(find target/ptx-vector-memory -maxdepth 1 -name 'unsigned_power2_*.ptx' | wc -l)" -eq 288
+          test "$(find target/ptx-vector-memory -maxdepth 1 -name 'async_groups_*.ptx' | wc -l)" -eq 8
+          cargo test --release --locked -p ruda-driver-cuda --features direct-ptx --test graph-update --no-run --message-format=json > target/graph-update-build.jsonl
+          python -c "import json, shutil; rows=[json.loads(line) for line in open('target/graph-update-build.jsonl')]; binaries=[row['executable'] for row in rows if row.get('reason')=='compiler-artifact' and row.get('target',{}).get('name')=='graph-update' and row.get('executable')]; assert len(binaries)==1, binaries; shutil.copyfile(binaries[0], 'target/release/ruda_graph_update_test')"
+          cargo test --release --locked -p rublas --lib --features tensor-matmul,ruda-test-runtime/cuda --no-run --message-format=json,json-render-diagnostics > target/training-mma-build.jsonl
+          python -c "import json, shutil; rows=[json.loads(line) for line in open('target/training-mma-build.jsonl')]; binaries=[row['executable'] for row in rows if row.get('reason')=='compiler-artifact' and row.get('target',{}).get('name')=='rublas' and row.get('executable')]; assert len(binaries)==1, binaries; shutil.copyfile(binaries[0], 'target/release/ruda_training_mma_test')"
+          chmod +x target/release/ruda_training_mma_test
+          target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_epilogue_swizzle_preserves_coordinates_and_bank_transactions
+          target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_compact_offsets_match_full_fragment_addresses
+          target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_vector_load_offsets_preserve_coordinates
+          target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_fragment_prefetch_preserves_k_order
+          target/release/ruda_training_mma_test --exact tensor_matmul::training_mma::tests::manual_training_warp_grid_covers_each_output_once
           cp target/release/libruda_torch_native.so ruda-torch/python/ruda_torch/
+      - name: Save Linux native library
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ruda-torch-native-linux-x86_64-abi10-${{ github.sha }}
+          path: |
+            target/release/libruda_torch_native.so
+            target/release/ruda_graph_update_test
+            target/release/ruda_training_mma_test
+            target/ptx-vector-memory/packed_vector_memory_*.ptx
+            target/ptx-vector-memory/unsigned_power2_*.ptx
+            target/ptx-vector-memory/async_groups_*.ptx
+            target/ptx-vector-memory/compound_vector_component_*.ptx
+            target/ptx-vector-memory/constant_register_mma_*.ptx
+            target/ptx-flash-training/*.ptx
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 14
       - name: Save Linux build cache
         if: always() && steps.linux-cache.outcome == 'success'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830

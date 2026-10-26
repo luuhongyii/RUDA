@@ -108,7 +108,7 @@ impl fmt::Display for PtxKernel {
 pub struct PtxCompiler;
 
 impl PtxCompiler {
-    pub const CACHE_VERSION: u32 = 54;
+    pub const CACHE_VERSION: u32 = 56;
 }
 
 impl Compiler for PtxCompiler {

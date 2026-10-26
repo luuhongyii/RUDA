@@ -3,6 +3,15 @@ import torch
 from torch.autograd.function import once_differentiable
 
 
+def _columns(flash):
+    if flash:
+        from . import _native
+        version=getattr(_native,'ruda_torch_flash_precision_api_version',None)
+        if version is None or version()!=1:
+            raise RuntimeError('Flash precision requires rebuilding the RUDA native library')
+    return 130 if flash else 2
+
+
 def _rng_state(scores,p):
     from ._varlen_ops import reserve
     words=reserve((scores+3)//4) if 0<p<1 else [0,0,0,0]
@@ -19,34 +28,34 @@ def rng_words(state):
 
 @torch.library.custom_op('ruda::dense_attention_forward',mutates_args=(),tags=(torch.Tag.nondeterministic_seeded,))
 def forward(q:torch.Tensor,k:torch.Tensor,v:torch.Tensor,mask:torch.Tensor,score_shape:list[int],
-            mask_kind:int,causal:bool,scale:float,p:float)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
+            mask_kind:int,causal:bool,scale:float,p:float,flash:bool=False)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
     from .attention import _initialize_dense
     out=q.new_empty((*q.shape[:-1],v.shape[-1]))
-    stats=torch.empty((q.shape[0]*q.shape[1]*q.shape[2],2),device=q.device,dtype=torch.float32)
+    stats=torch.empty((q.shape[0]*q.shape[1]*q.shape[2],_columns(flash)),device=q.device,dtype=torch.float32)
     state=_rng_state(math.prod(score_shape),p);seed,counter=rng_words(state)
     _initialize_dense().dense_attention(0,[q,k,v,mask,out,stats],mask_kind,score_shape,causal,scale,p,seed,counter,False)
     return out,stats,state
 
 
 @forward.register_fake
-def _forward_fake(q,k,v,mask,score_shape,mask_kind,causal,scale,p):
+def _forward_fake(q,k,v,mask,score_shape,mask_kind,causal,scale,p,flash=False):
     return (q.new_empty((*q.shape[:-1],v.shape[-1])),
-            torch.empty((q.shape[0]*q.shape[1]*q.shape[2],2),device=q.device,dtype=torch.float32),
+            torch.empty((q.shape[0]*q.shape[1]*q.shape[2],130 if flash else 2),device=q.device,dtype=torch.float32),
             torch.empty(4,device='cpu',dtype=torch.int64))
 
 
 @torch.library.custom_op('ruda::indexed_dense_attention_forward',mutates_args=(),tags=(torch.Tag.nondeterministic_seeded,),
-    schema='(Tensor q, Tensor k, Tensor v, Tensor mask, SymInt[] score_shape, SymInt mask_kind, bool causal, float scale, float p, SymInt global_heads, SymInt head_start, str[] rng_groups, Tensor requested_rng) -> (Tensor, Tensor, Tensor)')
+    schema='(Tensor q, Tensor k, Tensor v, Tensor mask, SymInt[] score_shape, SymInt mask_kind, bool causal, float scale, float p, SymInt global_heads, SymInt head_start, str[] rng_groups, Tensor requested_rng, bool flash=False) -> (Tensor, Tensor, Tensor)')
 def indexed_forward(q:torch.Tensor,k:torch.Tensor,v:torch.Tensor,mask:torch.Tensor,score_shape:list[int],
             mask_kind:int,causal:bool,scale:float,p:float,global_heads:int,head_start:int,
-            rng_groups:list[str],requested_rng:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
+            rng_groups:list[str],requested_rng:torch.Tensor,flash:bool=False)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
     from .attention import _initialize_dense
     from ._parallel_rng import attention_state
     native=_initialize_dense(True)
     if global_heads<q.shape[1] or not 0<=head_start<=global_heads-q.shape[1]:
         raise ValueError('dense query heads lie outside the global head interval')
     out=q.new_empty((*q.shape[:-1],v.shape[-1]))
-    stats=torch.empty((q.shape[0]*q.shape[1]*q.shape[2],2),device=q.device,dtype=torch.float32)
+    stats=torch.empty((q.shape[0]*q.shape[1]*q.shape[2],_columns(flash)),device=q.device,dtype=torch.float32)
     state=attention_state((q.shape[0],global_heads,q.shape[2],k.shape[2]),p,rng_groups,requested_rng)
     seed,counter=rng_words(state)
     native.indexed_dense_attention(0,[q,k,v,mask,out,stats],mask_kind,score_shape,causal,scale,p,
@@ -55,8 +64,8 @@ def indexed_forward(q:torch.Tensor,k:torch.Tensor,v:torch.Tensor,mask:torch.Tens
 
 
 @indexed_forward.register_fake
-def _indexed_forward_fake(q,k,v,mask,score_shape,mask_kind,causal,scale,p,global_heads,head_start,rng_groups,requested_rng):
-    return _forward_fake(q,k,v,mask,score_shape,mask_kind,causal,scale,p)
+def _indexed_forward_fake(q,k,v,mask,score_shape,mask_kind,causal,scale,p,global_heads,head_start,rng_groups,requested_rng,flash=False):
+    return _forward_fake(q,k,v,mask,score_shape,mask_kind,causal,scale,p,flash)
 
 
 @torch.library.custom_op('ruda::dense_attention_backward',mutates_args=())
@@ -100,7 +109,7 @@ def _context(ctx,inputs,output):
     _,stats,rng=output
     ctx.save_for_backward(q,k,v,mask,stats,rng)
     ctx.policy=score_shape,mask_kind,causal,scale,p
-    ctx.partition=inputs[9:11] if len(inputs)==13 else ()
+    ctx.partition=inputs[9:11] if len(inputs)>=13 else ()
     ctx.argument_count=len(inputs)
     ctx.mark_non_differentiable(stats,rng);ctx.set_materialize_grads(False)
 

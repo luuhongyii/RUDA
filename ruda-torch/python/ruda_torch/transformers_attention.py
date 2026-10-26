@@ -6,7 +6,8 @@ from .attention import scaled_dot_product_attention
 from .block_attention import block_scaled_dot_product_attention
 
 
-def register_transformers_attention(name='ruda_block',*,query_block_size=128,key_block_size=256):
+def register_transformers_attention(name='ruda_block',*,query_block_size=128,key_block_size=256,
+                                    implementation='block'):
     """Register attention AND the standard HF padding/causal-mask adapter.
 
     Select the returned name through Transformers' attn_implementation option.
@@ -16,6 +17,8 @@ def register_transformers_attention(name='ruda_block',*,query_block_size=128,key
     """
     from transformers.modeling_utils import AttentionInterface,ALL_ATTENTION_FUNCTIONS
     from transformers.masking_utils import AttentionMaskInterface,ALL_MASK_ATTENTION_FUNCTIONS
+    if implementation not in ('block', 'native'):
+        raise ValueError('attention implementation must be block or native')
     if not isinstance(name,str) or not name.startswith('ruda_'):
         raise ValueError('use a distinct ruda_ attention registration name')
     if any(type(n) is not int or n<=0 for n in (query_block_size,key_block_size)):
@@ -50,6 +53,22 @@ def register_transformers_attention(name='ruda_block',*,query_block_size=128,key
             window=(requested_window-1,0)
         from ._parallel_rng import module_partition
         partition=module_partition(module,query.shape[1]) if query.device.type=='ruda' else {}
+        if (implementation == 'native' and window is None and kwargs.get('softcap') is None
+                and (not causal or query.shape[-2] == key.shape[-2])):
+            if query.device.type == 'ruda':
+                precision = ('flash' if query.dtype == torch.bfloat16 and dropout == 0
+                    and (scaling is None or scaling > 0)
+                    and attention_mask is None and query.shape[-2:] == (512,128)
+                    and key.shape[-2:] == (512,128) and value.shape[-2:] == (512,128) else 'fp32')
+                output = scaled_dot_product_attention(query, key, value, attn_mask=attention_mask,
+                    dropout_p=dropout, is_causal=causal, scale=scaling,
+                    enable_gqa=query.shape[1] != key.shape[1], precision=precision, **partition)
+            else:
+                from torch.nn.functional import scaled_dot_product_attention as torch_attention
+                output = torch_attention(query, key, value, attn_mask=attention_mask,
+                    dropout_p=dropout, is_causal=causal, scale=scaling,
+                    enable_gqa=query.shape[1] != key.shape[1])
+            return output.transpose(1, 2).contiguous(), None
         offset=key.shape[-2]-query.shape[-2]
         if (query.device.type=='ruda' and query.dtype in (torch.float16,torch.bfloat16,torch.float32)
                 and not torch.is_grad_enabled() and dropout==0 and window is None

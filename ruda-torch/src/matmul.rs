@@ -26,6 +26,14 @@ fn policy() -> Policy {
     }
 }
 
+pub(super) fn cuda_bf16_precision() -> bool {
+    match std::env::var("RUDA_TORCH_BF16_PRECISION").as_deref() {
+        Ok("cuda") => true,
+        Ok("fp32") | Err(std::env::VarError::NotPresent) => false,
+        _ => panic!("RUDA_TORCH_BF16_PRECISION must be fp32 or cuda"),
+    }
+}
+
 fn validate(op: u32, a: &View, b: &View, out: &View) {
     assert!(op == 7 || op == 30);
     assert!(a.dtype <= 2 && a.dtype == b.dtype, "matmul inputs must have matching floating dtypes");
@@ -53,6 +61,30 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
         scalar(op, a, b, out);
         return;
     }
+    if op==7 && a.dtype==2 && matches!(out.dtype,0|2) && matches!(a.shape[0],31|32) && a.shape[1]==152064
+        && b.shape[..]==[152064,3584] && a.strides[..]==[152064,1] && b.strides[..]==[3584,1]
+        && out.strides[..]==[3584,1] && a.handle.offset_start.unwrap_or(0)%16==0
+        && b.handle.offset_start.unwrap_or(0)%16==0 && cuda_bf16_precision()
+    {
+        rublas::tensor_matmul::matmul_bf16_head_parallel_k6(primitives::tensor(a),primitives::tensor(b),primitives::tensor(out))
+            .unwrap_or_else(|error|panic!("RUDA parallel LM-head gradient failed: {error}"));
+        finish_dispatch(&client());
+        RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);
+        LAUNCHES.fetch_add(2,Ordering::Relaxed);
+        return;
+    }
+    if op==7 && a.dtype==2 && out.dtype==2 && a.shape[0]==512 && matches!(a.shape[1],3584|18944)
+        && b.shape[..]==[a.shape[1],3584]
+        && a.strides[1]==1 && (b.strides[0]==1 || b.strides[1]==1) && out.strides[..]==[3584,1]
+        && cuda_bf16_precision()
+    {
+        rublas::tensor_matmul::matmul_bf16_serial_k3(primitives::tensor(a),primitives::tensor(b),primitives::tensor(out))
+            .unwrap_or_else(|error|panic!("RUDA serial-K3 projection failed: {error}"));
+        finish_dispatch(&client());
+        RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);
+        LAUNCHES.fetch_add(4,Ordering::Relaxed);
+        return;
+    }
     if op == 7 && a.shape[0] == 1 && matches!(a.dtype, 1 | 2) {
         match rublas::tensor_matmul::launch_gemv_low_precision(
             primitives::tensor(a), primitives::tensor(b), primitives::tensor(out)) {
@@ -65,14 +97,6 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
             Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_)
                 | MatmulSetupError::Vectorization(_)) => {}
             Err(error) => panic!("RUDA ruBLAS GEMV failed: {error}"),
-        }
-    }
-    if matches!(a.dtype,1|2) && a.shape[a.shape.len()-2]>1 {
-        match rublas::tensor_matmul::launch_matmul_pipelined_counted(primitives::tensor(a),primitives::tensor(b),
-            primitives::tensor(out),F32MathMode::Strict) {
-            Ok(count)=>{finish_dispatch(&client());RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);LAUNCHES.fetch_add(count as u64,Ordering::Relaxed);return;}
-            Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_) | MatmulSetupError::Vectorization(_))=>{}
-            Err(error)=>panic!("RUDA pipelined GEMM failed: {error}"),
         }
     }
     let output = primitives::tensor(out);
@@ -144,15 +168,28 @@ pub(super) fn addmm(bias: &View, a: &View, b: &View, out: &View, alpha: f32, bet
         return;
     }
     if super::qwen_graph::fused_addmm(bias,a,b,out,alpha,beta) {return;}
+    let client = client();
+    if a.dtype==2 && alpha==1.0 && beta==1.0 && a.shape[..]==[512,3584] && b.shape[..]==[3584,512]
+        && a.strides[1]==1 && b.strides[0]==1 && out.strides[..]==[512,1]
+        && policy()!=Policy::Scalar && cuda_bf16_precision()
+    {
+        rublas::tensor_matmul::matmul_bf16_sliced_k2_bias(primitives::tensor(a),primitives::tensor(b),
+            primitives::tensor(bias),primitives::tensor(out))
+            .unwrap_or_else(|error|panic!("RUDA sliced-K2 bias projection failed: {error}"));
+        finish_dispatch(&client);
+        RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);
+        LAUNCHES.fetch_add(4,Ordering::Relaxed);
+        ADDMM_EPILOGUES.fetch_add(1,Ordering::Relaxed);
+        return;
+    }
     if matches!(a.dtype,1|2) && a.shape[0]>1 && policy()!=Policy::Scalar {
         match rublas::tensor_matmul::launch_addmm_pipelined_counted(primitives::tensor(bias),primitives::tensor(a),
             primitives::tensor(b),primitives::tensor(out),alpha,beta,F32MathMode::Strict) {
-            Ok(count)=>{finish_dispatch(&client());RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);LAUNCHES.fetch_add(count as u64,Ordering::Relaxed);return;}
+            Ok(count)=>{finish_dispatch(&client);RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);LAUNCHES.fetch_add(count as u64,Ordering::Relaxed);return;}
             Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_) | MatmulSetupError::Vectorization(_))=>{}
             Err(error)=>panic!("RUDA pipelined addmm failed: {error}"),
         }
     }
-    let client = client();
     // F32 can use its own output for accumulation. For low precision, only
     // M*N values are held in F32; inputs/weights/bias are never promoted.
     let scratch = if out.dtype != 0 {

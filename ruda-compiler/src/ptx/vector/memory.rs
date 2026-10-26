@@ -58,6 +58,19 @@ impl Emitter {
         if index_ty == Scalar::U32 { self.line(format!("mul.wide.u32 {address}, {index_reg}, {stride};")); }
         else { self.line(format!("mul.lo.u64 {address}, {index_reg}, {stride};")); }
         self.line(format!("add.u64 {address}, {base}, {address};"));
+        let element_bytes = array.ty.vector_size().checked_mul(ty.bytes()).unwrap_or(0);
+        let alignment = match array.kind {
+            VariableKind::SharedArray { alignment, .. } => alignment.unwrap_or(element_bytes),
+            VariableKind::ConstantArray { .. } => element_bytes.checked_next_power_of_two().unwrap_or(0),
+            _ => 0,
+        };
+        let aligned = alignment >= stride && alignment % stride == 0;
+        if !matches!(array.kind, VariableKind::LocalArray { .. })
+            && self.packed_vector_memory(space, ty, &registers, &address, store, aligned)
+        {
+            self.line(format!("{end}:"));
+            return Ok(());
+        }
         let vectorized = space == "global" && width.is_power_of_two()
             && ((ty.half() && width >= 2) || (ty.bytes() >= 4 && width >= 2));
         if vectorized {
@@ -102,5 +115,49 @@ impl Emitter {
         }
         self.line(format!("{end}:"));
         Ok(())
+    }
+
+    fn packed_vector_memory(&mut self, space: &str, ty: Scalar, registers: &[String], address: &str, store: bool, aligned: bool) -> bool {
+        let half = matches!(ty, Scalar::F16 | Scalar::BF16);
+        let width = registers.len();
+        if !(half && matches!(width, 2 | 4 | 8) || ty == Scalar::F32 && matches!(width, 2 | 4)) {
+            return false;
+        }
+        let alignment = width * ty.bytes();
+        let fallback = if aligned { None } else { Some((self.label(), self.label())) };
+        if let Some((scalar_path, _)) = &fallback {
+            let low = self.reg(Scalar::U64);
+            let unaligned = self.reg(Scalar::Pred);
+            self.line(format!("and.b64 {low}, {address}, {};", alignment - 1));
+            self.line(format!("setp.ne.u64 {unaligned}, {low}, 0;"));
+            self.line(format!("@{unaligned} bra {scalar_path};"));
+        }
+        let packed = if half { (0..width / 2).map(|_| self.reg_b32()).collect::<Vec<_>>() } else { registers.to_vec() };
+        if half && store {
+            for (i, value) in packed.iter().enumerate() {
+                self.line(format!("mov.b32 {value}, {{{}, {}}};", registers[i * 2], registers[i * 2 + 1]));
+            }
+        }
+        let suffix = if half { "b32" } else { "f32" };
+        let vector = if packed.len() == 1 { String::new() } else { format!("v{}.", packed.len()) };
+        let values = if packed.len() == 1 { packed[0].clone() } else { format!("{{{}}}", packed.join(", ")) };
+        if store { self.line(format!("st.{space}.{vector}{suffix} [{address}], {values};")); }
+        else { self.line(format!("ld.{space}.{vector}{suffix} {values}, [{address}];")); }
+        if half && !store {
+            for (i, value) in packed.iter().enumerate() {
+                self.line(format!("mov.b32 {{{}, {}}}, {value};", registers[i * 2], registers[i * 2 + 1]));
+            }
+        }
+        if let Some((scalar_path, done)) = fallback {
+            self.line(format!("bra {done};"));
+            self.line(format!("{scalar_path}:"));
+            for (lane, register) in registers.iter().enumerate() {
+                let element_address = format!("{address}+{}", lane * ty.bytes());
+                if store { self.store_memory_scalar(space, ty, register, &element_address); }
+                else { self.load_memory_scalar(space, ty, register, &element_address); }
+            }
+            self.line(format!("{done}:"));
+        }
+        true
     }
 }

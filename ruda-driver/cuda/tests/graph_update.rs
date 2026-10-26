@@ -48,6 +48,28 @@ fn graph_update_scalars_without_execution() {
         assert_eq!(&values[n..],vec![777.0;8]);
     }
 }
+
+#[test]
+fn graph_scalar_update_does_not_modify_eager_metadata() {
+    let c = client();
+    let x = c.create_from_slice(f32::as_bytes(&[2.0; 33]));
+    let y = c.empty(33 * 4);
+    unsafe {
+        affine::launch::<CudaRuntime>(&c, grid(33), RudaDim::new_1d(64),
+            ArrayArg::from_raw_parts(x.clone(), 33), ArrayArg::from_raw_parts(y.clone(), 33), 3.0, 1.0);
+    }
+    assert_eq!(read(&c, &y), vec![7.0; 33]);
+    let mut graph = unsafe { CudaGraph::build(&c, vec![node(&c, &x, &y, 33, 3.0, 1.0)]) }.unwrap();
+    unsafe { graph.update_and_replay(0, node(&c, &x, &y, 33, 5.0, 2.0)) }.unwrap();
+    assert_eq!(read(&c, &y), vec![12.0; 33]);
+    unsafe {
+        affine::launch::<CudaRuntime>(&c, grid(33), RudaDim::new_1d(64),
+            ArrayArg::from_raw_parts(x.clone(), 33), ArrayArg::from_raw_parts(y.clone(), 33), 3.0, 1.0);
+    }
+    assert_eq!(read(&c, &y), vec![7.0; 33]);
+    graph.replay().unwrap();
+    assert_eq!(read(&c, &y), vec![12.0; 33]);
+}
 #[test]
 fn graph_update_inflight_launches_keep_old_scalars() {
     let c=client();let n=4097;let y=c.create_from_slice(f32::as_bytes(&vec![0.0;n]));

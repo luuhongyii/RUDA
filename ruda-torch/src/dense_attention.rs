@@ -12,6 +12,9 @@ pub extern "C" fn ruda_torch_indexed_dense_attention_api_version() -> u32 { 1 }
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_attention_dropout_api_version() -> u32 { 1 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_flash_precision_api_version() -> u32 { 1 }
+
 pub(super) fn validate_dropout(vs: &[View], ints: &[i64], p: f32) -> u64 {
     assert_eq!(vs.len(),2);assert_eq!(ints.len(),7);assert!((0.0..=1.0).contains(&p));
     let output=&vs[1];packed(output);assert!(output.dtype<=2);assert_eq!(vs[0].dtype,output.dtype);
@@ -113,22 +116,39 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
         assert_eq!(mask.dtype, 0);
         if mask_kind != 0 { assert_eq!(mask.len, scores); }
         let stats = &xs[5]; packed(stats);
-        assert_eq!(stats.dtype,0); assert_eq!(stats.len, rows*2);
+        assert_eq!(stats.dtype,0);
+        let flash = stats.len != rows * 2;
+        if flash {
+            assert_eq!(stats.len,rows.checked_mul(130).expect("Flash statistics size overflow"));
+            assert!(q.dtype == 2 && l == 512 && s == 512 && d == 128 && dv == 128
+                && dropout_p == 0.0 && mask_kind == 0 && !need_mask && scale > 0.0,
+                "unsupported Flash precision attention configuration");
+        }
         let output = &xs[4]; packed(output);
         assert_eq!(output.dtype,q.dtype); assert_eq!(output.shape,vec![b,h,l,dv]);
+        let flash_vectorized = [q,k,v,output].iter().all(|x| x.handle.offset_start.unwrap_or(0) % 16 == 0);
         let c = client();
         let qt = primitives::tensor(q); let kt = primitives::tensor(k); let vt = primitives::tensor(v);
         let mt = primitives::tensor(mask); let ot = primitives::tensor(output); let st = primitives::tensor(stats);
         let grid = RudaCount::Static(u32::try_from(rows).expect("attention grid overflow"),1,1);
         let dim = RudaDim::new_1d(32);
         if op == 0 {
-            if dropout_p==0.0 {
+            if flash && rows != 0 {
+                unsafe { rudnn::flash_training::forward_registers::launch_unchecked::<CudaRuntime>(&c,
+                    RudaCount::Static((rows/128) as u32,1,1),RudaDim::new_1d(128),
+                    qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),ot.into_array_arg(),st.into_array_arg(),
+                    h as u32,kh as u32,scale,causal,flash_vectorized,DType::BF16.into()); }
+                LAUNCHES.fetch_add(1,Ordering::Relaxed);
+                finish_dispatch(&c);
+                return;
+            }
+            if !flash && dropout_p==0.0 {
                 if let Some(prepared)=super::attention_prefill::prepare(&c,q,k,v,output,mask,stats,mask_kind,causal,scale) {
                     let (task,count,args,origin)=prepared.into_parts();origin.launch(task,count,args);
                     LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);return;
                 }
             }
-            if l == 1 && s >= 256 && mask_kind == 0 && !causal && dropout_p == 0.0 && rows > 0 && rows <= 256 {
+            if !flash && l == 1 && s >= 256 && mask_kind == 0 && !causal && dropout_p == 0.0 && rows > 0 && rows <= 256 {
                 let splits = 16usize;
                 let partial_values = View::packed(c.empty(rows * splits * dv * 4), vec![rows * splits, dv], 0);
                 let partial_stats = View::packed(c.empty(rows * splits * 2 * 4), vec![rows * splits, 2], 0);
@@ -182,6 +202,133 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
             let dqt = primitives::tensor(&xs[6]);
             let dkt = primitives::tensor(&xs[7]); let dvt = primitives::tensor(&xs[8]);
             let dmt = primitives::tensor(dm);
+            if dropout_p == 0.0 && !need_mask && l == 512 && s == 512 && d == 128 && dv == 128 && rows != 0 {
+                let contraction = View::packed(c.empty(rows.checked_mul(4).expect("attention contraction overflow")), vec![rows], 0);
+                let ct = primitives::tensor(&contraction);
+                let dtype = match q.dtype {0=>DType::F32,1=>DType::F16,2=>DType::BF16,_=>unreachable!()};
+                if flash {
+                    let group = h / kh;
+                    let parallel = group > 1 && group <= c.properties().hardware.max_ruda_count.1 as usize;
+                    let wide = c.properties().hardware.max_shared_memory_size as usize >= (128+128+64+64)*136*2;
+                    let fused = c.properties().hardware.max_shared_memory_size as usize >= (384*136+128*72)*2
+                        && q.len <= u32::MAX as usize/4 && (parallel || group == 1);
+                    if fused {
+                        let partial_q = View::packed(c.empty(q.len.checked_mul(16).expect("Flash query partial allocation overflow")),
+                            vec![4, q.len], 0);
+                        let partial_k = parallel.then(|| View::packed(c.empty(k.len.checked_mul(group)
+                            .and_then(|n| n.checked_mul(2)).expect("Flash grouped gradient allocation overflow")), vec![group, k.len], 2));
+                        let partial_v = parallel.then(|| View::packed(c.empty(v.len.checked_mul(group)
+                            .and_then(|n| n.checked_mul(2)).expect("Flash grouped gradient allocation overflow")), vec![group, v.len], 2));
+                        let pqt = primitives::tensor(&partial_q);
+                        let pkt = partial_k.as_ref().map_or_else(|| dkt.clone(), primitives::tensor);
+                        let pvt = partial_v.as_ref().map_or_else(|| dvt.clone(), primitives::tensor);
+                        unsafe {
+                            if dm.len != 0 {
+                                kernel::zero::launch::<CudaRuntime>(&c,
+                                    RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
+                            }
+                            rudnn::flash_training::backward::contraction::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static((rows/4) as u32,1,1),RudaDim::new_1d(128),
+                                ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dtype.into());
+                            rudnn::flash_training::fused_backward::fused_key_value::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static((k.len/128/128) as u32,group as u32,1),RudaDim::new_1d(256),
+                                qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),ot.into_array_arg(),
+                                st.into_array_arg(),ct.into_array_arg(),pqt.clone().into_array_arg(),
+                                pkt.clone().into_array_arg(),pvt.clone().into_array_arg(),
+                                h as u32,kh as u32,scale,causal,flash_vectorized,dtype.into());
+                            rudnn::flash_training::fused_backward::reduce_query::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static(q.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
+                                pqt.into_array_arg(),dqt.into_array_arg(),scale,dtype.into());
+                            if parallel {
+                                rudnn::flash_training::backward::reduce_heads::launch_unchecked::<CudaRuntime>(&c,
+                                    RudaCount::Static(k.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
+                                    pkt.into_array_arg(),pvt.into_array_arg(),dkt.into_array_arg(),dvt.into_array_arg(),group,dtype.into());
+                            }
+                        }
+                        LAUNCHES.fetch_add(3 + u64::from(dm.len != 0) + u64::from(parallel),Ordering::Relaxed);
+                        finish_dispatch(&c);
+                        return;
+                    }
+                    unsafe {
+                        if dm.len != 0 {
+                            kernel::zero::launch::<CudaRuntime>(&c,
+                                RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
+                        }
+                        rudnn::flash_training::backward::contraction::launch_unchecked::<CudaRuntime>(&c,
+                            RudaCount::Static((rows / 4) as u32,1,1),RudaDim::new_1d(128),
+                            ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dtype.into());
+                        if wide {
+                            rudnn::flash_training::register_backward::query_registers::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static((rows / 128) as u32,1,1),RudaDim::new_1d(256),
+                                qt.clone().into_array_arg(),kt.clone().into_array_arg(),vt.clone().into_array_arg(),
+                                ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dqt.into_array_arg(),
+                                h as u32,kh as u32,scale,causal,flash_vectorized,dtype.into());
+                        } else {
+                            rudnn::flash_training::backward::query_vectorized::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static((rows / 16) as u32,1,1),RudaDim::new_1d(128),
+                                qt.clone().into_array_arg(),kt.clone().into_array_arg(),vt.clone().into_array_arg(),
+                                ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dqt.into_array_arg(),
+                                h as u32,kh as u32,scale,causal,flash_vectorized,dtype.into());
+                        }
+                        if parallel {
+                            let len = k.len.checked_mul(group).expect("Flash grouped gradient size overflow");
+                            let bytes = len.checked_mul(2).expect("Flash grouped gradient allocation overflow");
+                            let pk = View::packed(c.empty(bytes), vec![group, k.len], 2);
+                            let pv = View::packed(c.empty(bytes), vec![group, v.len], 2);
+                            let pkt = primitives::tensor(&pk); let pvt = primitives::tensor(&pv);
+                            if wide {
+                                rudnn::flash_training::register_backward::key_value_registers::launch_unchecked::<CudaRuntime>(&c,
+                                    RudaCount::Static((k.len / 128 / 128) as u32, group as u32, 1), RudaDim::new_1d(256),
+                                    qt.into_array_arg(), kt.into_array_arg(), vt.into_array_arg(), ot.into_array_arg(),
+                                    st.into_array_arg(), ct.into_array_arg(), pkt.clone().into_array_arg(), pvt.clone().into_array_arg(),
+                                    h as u32, kh as u32, scale, causal, flash_vectorized, dtype.into());
+                            } else {
+                                rudnn::flash_training::backward::key_value_parallel_vectorized::launch_unchecked::<CudaRuntime>(&c,
+                                    RudaCount::Static((k.len / 128 / 16) as u32, group as u32, 1), RudaDim::new_1d(128),
+                                    qt.into_array_arg(), kt.into_array_arg(), vt.into_array_arg(), ot.into_array_arg(),
+                                    st.into_array_arg(), ct.into_array_arg(), pkt.clone().into_array_arg(), pvt.clone().into_array_arg(),
+                                    h as u32, kh as u32, scale, causal, flash_vectorized, dtype.into());
+                            }
+                            rudnn::flash_training::backward::reduce_heads::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static(k.len.div_ceil(128) as u32, 1, 1), RudaDim::new_1d(128),
+                                pkt.into_array_arg(), pvt.into_array_arg(), dkt.into_array_arg(), dvt.into_array_arg(), group, dtype.into());
+                        } else if wide && group == 1 {
+                            rudnn::flash_training::register_backward::key_value_registers::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static((k.len / 128 / 128) as u32,1,1),RudaDim::new_1d(256),
+                                qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),ot.into_array_arg(),
+                                st.into_array_arg(),ct.into_array_arg(),dkt.into_array_arg(),dvt.into_array_arg(),
+                                h as u32,kh as u32,scale,causal,flash_vectorized,dtype.into());
+                        } else {
+                            rudnn::flash_training::backward::key_value_vectorized::launch_unchecked::<CudaRuntime>(&c,
+                            RudaCount::Static((k.len / 128 / 16) as u32,1,1),RudaDim::new_1d(128),
+                            qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),ot.into_array_arg(),
+                            st.into_array_arg(),ct.into_array_arg(),dkt.into_array_arg(),dvt.into_array_arg(),
+                            h as u32,kh as u32,scale,causal,flash_vectorized,dtype.into());
+                        }
+                    }
+                    LAUNCHES.fetch_add(3 + u64::from(dm.len != 0) + u64::from(parallel),Ordering::Relaxed);
+                    finish_dispatch(&c);
+                    return;
+                }
+                unsafe {
+                    if dm.len != 0 {
+                        kernel::zero::launch::<CudaRuntime>(&c,
+                            RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
+                    }
+                    kernel::backward_query_cached::launch::<CudaRuntime>(&c,grid,RudaDim::new_1d(128),
+                        qt.clone().into_array_arg(),kt.clone().into_array_arg(),vt.clone().into_array_arg(),mt.clone().into_tensor_arg(),
+                        ot.clone().into_array_arg(),st.clone().into_array_arg(),dqt.into_array_arg(),ct.clone().into_array_arg(),
+                        h as u32,kh as u32,scale,causal,mask_kind,flash,dtype.into());
+                    kernel::backward_kv_owned::launch::<CudaRuntime>(&c,
+                        RudaCount::Static((k.len / 128) as u32,1,1),RudaDim::new_1d(128),
+                        qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),mt.into_tensor_arg(),
+                        ot.into_array_arg(),st.into_array_arg(),ct.into_array_arg(),dkt.into_array_arg(),dvt.into_array_arg(),
+                        h as u32,kh as u32,scale,causal,mask_kind,flash,dtype.into());
+                }
+                LAUNCHES.fetch_add(2 + u64::from(dm.len != 0),Ordering::Relaxed);
+                finish_dispatch(&c);
+                return;
+            }
             let wk = View::packed(c.empty(k.len.max(1)*4),k.shape.clone(),0);
             let wv = View::packed(c.empty(v.len.max(1)*4),v.shape.clone(),0);
             let wkt = primitives::tensor(&wk); let wvt = primitives::tensor(&wv);

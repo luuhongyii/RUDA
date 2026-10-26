@@ -169,6 +169,13 @@ impl<S: DeviceService + 'static> ChannelDeviceHandle<S> {
         let mut slot = Some(move || sender.send(task()).unwrap());
         // Send the erased shim to the device thread.
         self.send::<_, SEND_FLUSH>(create_shim(&mut slot))?;
+        for _ in 0..1024 {
+            match recv.try_recv() {
+                Ok(value) => return Ok(value),
+                Err(oneshot::TryRecvError::Disconnected) => return Err(CallError),
+                Err(oneshot::TryRecvError::Empty) => core::hint::spin_loop(),
+            }
+        }
         recv.recv().map_err(|_| CallError)
     }
 
@@ -642,7 +649,7 @@ mod custom_channel {
         sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering},
         time::Duration,
     };
-    use std::{sync::{Arc, Mutex}, thread::JoinHandle, vec::Vec};
+    use std::{sync::{Arc, Mutex, OnceLock}, thread::{JoinHandle, Thread}, vec::Vec};
 
     /// Maximum number of [`Task`] that can be queued.
     pub const CHANNEL_MAX_TASK: usize = 32;
@@ -651,12 +658,8 @@ mod custom_channel {
     /// Gives a hot window to absorb back-to-back submits without any syscall.
     const SPIN_BUDGET_SERVER: u32 = 8192;
     /// Number of `thread::yield_now` calls after the spin budget is exhausted,
-    /// before the server drops to sleeping.
+    /// before the server parks until work is published.
     const YIELD_BUDGET_SERVER: u32 = 64;
-    /// Sleep duration once both the spin and yield budgets are exhausted.
-    /// Bounds the wake-up latency from a fully idle state.
-    const SLEEP_STEP_SERVER: Duration = Duration::from_micros(150);
-
     /// The client has the buffer to fill plus we add a factor of two to account for the double
     /// buffering approach.
     const CLIENT_BUDGET_FACTOR: u32 = CHANNEL_MAX_TASK as u32 * 2u32;
@@ -711,6 +714,7 @@ mod custom_channel {
                     super::shutdown_services();
                 })
                 .unwrap();
+            state.wakeup.set(thread.thread().clone()).expect("runner wake handle initialized once");
             *state.thread.lock().unwrap() = Some(thread);
 
             Self { state }
@@ -736,7 +740,7 @@ mod custom_channel {
                 }
 
                 self.state.init_task_at(index, func);
-                self.state.enqueued_count.fetch_add(1, Ordering::SeqCst);
+                self.state.publish(1);
                 return Ok(());
             }
         }
@@ -770,9 +774,7 @@ mod custom_channel {
             }
 
             let actual_added = index_end - index_start;
-            self.state
-                .enqueued_count
-                .fetch_add(actual_added as u32, Ordering::SeqCst);
+            self.state.publish(actual_added as u32);
         }
 
         pub fn is_shutdown(&self) -> bool {
@@ -790,6 +792,7 @@ mod custom_channel {
             }
             self.flush_inner();
             self.state.stopping.store(true, Ordering::Release);
+            self.state.wake();
             if let Err(error) = handle.join() {
                 std::panic::resume_unwind(error);
             }
@@ -817,10 +820,23 @@ mod custom_channel {
         runner_id: RunnerId,
         submissions: AtomicUsize,
         stopping: AtomicBool,
+        wakeup: OnceLock<Thread>,
         thread: Mutex<Option<JoinHandle<()>>>,
     }
 
     impl State {
+        fn wake(&self) {
+            if let Some(thread) = self.wakeup.get() { thread.unpark(); }
+        }
+
+        fn publish(&self, count: u32) {
+            if self.enqueued_count.fetch_add(count, Ordering::SeqCst) + count == CHANNEL_MAX_TASK as u32 {
+                // Publish all task writes before waking. The park token also
+                // covers a notification racing with the runner's idle check.
+                self.wake();
+            }
+        }
+
         fn begin_submission(&self) -> Result<Submission<'_>, CallError> {
             self.submissions.fetch_update(Ordering::Acquire, Ordering::Relaxed,
                 |count| (count & CLOSED == 0).then(|| count + 1))
@@ -883,6 +899,7 @@ mod custom_channel {
                 runner_id,
                 submissions: AtomicUsize::new(0),
                 stopping: AtomicBool::new(false),
+                wakeup: OnceLock::new(),
                 thread: Mutex::new(None),
             });
 
@@ -927,7 +944,7 @@ mod custom_channel {
                 } else if idle_count < SPIN_BUDGET_SERVER + YIELD_BUDGET_SERVER {
                     std::thread::yield_now();
                 } else {
-                    std::thread::sleep(SLEEP_STEP_SERVER);
+                    std::thread::park();
                 }
                 idle_count = idle_count.saturating_add(1);
             }
@@ -969,6 +986,10 @@ mod custom_channel {
 mod shutdown_tests;
 
 #[cfg(test)]
+#[path = "channel_wake_tests.rs"]
+mod wake_tests;
+
+#[cfg(test)]
 mod tests {
     use crate::device::handle::channel::custom_channel::CHANNEL_MAX_TASK;
 
@@ -991,6 +1012,26 @@ mod tests {
         fn utilities(&self) -> ServerUtilitiesHandle {
             Arc::new(())
         }
+    }
+
+    #[test]
+    fn test_blocking_reply_after_hot_wait_preserves_stack_borrows() {
+        let handle = ChannelDeviceHandle::<MockService>::new(DeviceId { type_id: 0, index_id: 12 });
+        let mut borrowed = [0usize; 4];
+        let result = handle.submit_blocking(|state| {
+            std::thread::sleep(Duration::from_millis(2));
+            borrowed.fill(17);
+            state.counter = borrowed.iter().sum();
+            state.counter
+        });
+        assert_eq!(result.unwrap(), 68);
+        assert_eq!(borrowed, [17; 4]);
+        let failure: Result<(), _> = handle.submit_blocking(|_| {
+            std::thread::sleep(Duration::from_millis(2));
+            panic!("delayed task failure");
+        });
+        assert!(failure.is_err());
+        assert_eq!(handle.submit_blocking(|state| state.counter).unwrap(), 68);
     }
 
     #[test]

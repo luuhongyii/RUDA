@@ -241,6 +241,28 @@ pub trait DerefExpand<T: RudaType + ?Sized> {
 #[doc(hidden)]
 pub struct ValueSnapshot<T>(pub T);
 
+#[doc(hidden)]
+pub struct PrimitiveRuntime<T>(pub T);
+
+impl<T: RudaPrimitive + Into<ConstantValue>> PrimitiveRuntime<T> {
+    pub fn primitive_runtime(self, scope: &mut Scope) -> NativeExpand<T> {
+        NativeExpand::from_lit(scope, self.0)
+    }
+}
+
+#[doc(hidden)]
+pub trait PrimitiveRuntimeFallback {
+    type Value;
+    fn primitive_runtime(self, scope: &mut Scope) -> Self::Value;
+}
+
+impl<T: Clone> PrimitiveRuntimeFallback for &PrimitiveRuntime<T> {
+    type Value = T;
+    fn primitive_runtime(self, _scope: &mut Scope) -> T {
+        self.0.clone()
+    }
+}
+
 impl<T: IntoMut> ValueSnapshot<T> {
     pub fn snapshot(self, scope: &mut Scope) -> T {
         self.0.expand_reference_value(scope)

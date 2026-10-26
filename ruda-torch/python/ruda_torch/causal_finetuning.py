@@ -59,6 +59,13 @@ def chunked_lm_cross_entropy(hidden, head, labels, *, token_chunk_size=32,
             from .parallel_loss import vocab_parallel_cross_entropy
             return vocab_parallel_cross_entropy(logits,target,head.group,ignore_index=ignore_index,
                                                  label_smoothing=label_smoothing,reduction='sum')
+        if (logits.device.type == 'ruda' and not label_smoothing
+                and logits.dtype in (torch.float32, torch.float16, torch.bfloat16)):
+            from . import _training_fusion_available
+            if _training_fusion_available:
+                from .fused_cross_entropy import cross_entropy
+                with precision_context(logits):
+                    return cross_entropy(logits, target, ignore_index=ignore_index, reduction='sum')
         with precision_context(logits):
             logp = F.log_softmax(logits.to(dtype), -1)
             valid = target != ignore_index

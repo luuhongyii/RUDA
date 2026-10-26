@@ -31,6 +31,52 @@ fn empty_allocates_memory() {
 }
 
 #[test_log::test]
+fn empty_with_resource_preserves_layout_and_handle_lifetime() {
+    let client = test_client(&DummyDevice);
+    for size in [0, 1, 3, 4, 31, 32, 33, 4097] {
+        let (handle, resource) = client.try_empty_with_resource(size).unwrap();
+        assert_eq!(handle.size_in_used(), size as u64);
+        assert_eq!(handle.service, client.service_id());
+        assert_eq!(handle.stream, client.execution_stream());
+        resource.resource().write()[..size].fill(73);
+        let lookup = client.get_resource(handle.clone()).unwrap();
+        assert_eq!(&lookup.resource().read()[..size], &vec![73; size]);
+        drop(resource);
+        drop(lookup);
+        assert_eq!(client.read_one(handle).unwrap().to_vec(), vec![73; size]);
+        let handle = client.try_empty(size).unwrap();
+        assert_eq!(client.read_one(handle).unwrap().len(), size);
+    }
+}
+
+#[test_log::test]
+fn empty_with_resource_retains_storage_after_handle_drop() {
+    let client = test_client(&DummyDevice);
+    let (handle, resource) = client.try_empty_with_resource(4097).unwrap();
+    resource.resource().write()[..4097].fill(29);
+    drop(handle);
+    for _ in 0..64 {
+        let (other, scratch) = client.try_empty_with_resource(4097).unwrap();
+        scratch.resource().write()[..4097].fill(91);
+        drop(other);
+        assert_eq!(&resource.resource().read()[..4097], &vec![29; 4097]);
+    }
+}
+
+#[test_log::test]
+fn empty_with_resource_uses_selected_stream() {
+    let stream = ruda_core::stream_id::StreamId::unique();
+    stream.executes(|| {
+        let client = test_client(&DummyDevice).fixed_execution_queue();
+        let (handle, resource) = client.try_empty_with_resource(33).unwrap();
+        assert_eq!(handle.stream, stream);
+        resource.resource().write()[..33].fill(17);
+        drop(resource);
+        assert_eq!(client.read_one(handle).unwrap().to_vec(), vec![17; 33]);
+    });
+}
+
+#[test_log::test]
 fn execute_elementwise_addition() {
     let client = test_client(&DummyDevice);
     let lhs = client.create_from_slice(&[0, 1, 2]);

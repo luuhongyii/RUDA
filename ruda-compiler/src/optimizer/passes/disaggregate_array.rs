@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
 use ruda_core::ir::{
-    Id, Instruction, Operation, Operator, Type, UnaryOperator, Variable, VariableKind,
+    Id, IndexOperator, Instruction, Operation, Operator, Type, TypedMemory, UnaryOperator, Variable,
+    VariableKind, VectorInitOperator,
 };
 
 use crate::optimizer::{AtomicCounter, Optimizer, analyses::writes::Writes};
 
 use super::OptimizerPass;
+
+#[cfg(test)]
+mod tests;
 
 /// Split arrays with only constant indices into a set of local intermediates. This allows the
 /// compiler to reorder them and optimize memory layout, along with enabling more inlining and
@@ -97,8 +101,18 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
                     }
                 }
                 Operation::TypedMemory(memory) => {
-                    if let VariableKind::LocalArray { id, .. } = memory.pointer().base.kind {
-                        track_consts.insert(id, false);
+                    let pointer = memory.pointer();
+                    if let VariableKind::LocalArray { id, length, unroll_factor } = pointer.base.kind {
+                        arrays.insert(id, Array { id, length: length * unroll_factor, item: pointer.base.ty });
+                        let width = pointer.base.ty.vector_size();
+                        let full_element = pointer.ty.pointee == pointer.base.ty;
+                        let component = width > 1 && !pointer.base.ty.is_atomic()
+                            && pointer.ty.pointee == pointer.base.ty.with_vector_size(1);
+                        let constant_element = (full_element || component)
+                            && pointer.unroll_factor == 1 && unroll_factor == 1
+                            && pointer.index.as_const().and_then(|v| v.try_as_usize())
+                                .is_some_and(|index| index < length * if component { width } else { 1 });
+                        *track_consts.entry(id).or_insert(constant_element) &= constant_element;
                     }
                 }
                 Operation::Operator(Operator::NativeAddress(address)) => {
@@ -122,7 +136,9 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
                                 item,
                             },
                         );
-                        let is_const = index.index.as_const().is_some();
+                        let is_const = index.index.as_const().and_then(|v| v.try_as_usize())
+                            .is_some_and(|i| i < (length * unroll_factor) as usize)
+                            && (index.vector_size == 0 || index.vector_size == item.vector_size());
                         *track_consts.entry(id).or_insert(is_const) &= is_const;
                     }
                 }
@@ -144,11 +160,23 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
                                 item,
                             },
                         );
-                        let is_const = assign.index.as_const().is_some();
+                        let is_const = assign.index.as_const().and_then(|v| v.try_as_usize())
+                            .is_some_and(|i| i < (length * unroll_factor) as usize)
+                            && (assign.vector_size == 0 || assign.vector_size == item.vector_size());
                         *track_consts.entry(id).or_insert(is_const) &= is_const;
                     }
                 }
-                _ => {}
+                _ => {
+                    let mut instruction = op.clone();
+                    opt.visit_operation(&mut instruction.operation, &mut instruction.out, |_, value| {
+                        if let VariableKind::LocalArray { id, .. } = value.kind {
+                            track_consts.insert(id, false);
+                        }
+                    });
+                    if let Some(Variable { kind: VariableKind::LocalArray { id, .. }, .. }) = instruction.out {
+                        track_consts.insert(id, false);
+                    }
+                }
             }
         }
     }
@@ -163,8 +191,48 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
 fn replace_const_arrays(opt: &mut Optimizer, arr_id: Id, vars: &[Variable]) {
     for block in opt.node_ids() {
         let ops = opt.program[block].ops.clone();
-        for op in ops.borrow_mut().values_mut() {
+        let old = ops.take();
+        for (_, mut op) in old {
             match &mut op.operation.clone() {
+                Operation::TypedMemory(TypedMemory::Load(pointer))
+                    if matches!(pointer.base.kind, VariableKind::LocalArray { id, .. } if id == arr_id) => {
+                        let index = pointer.index.as_const().unwrap().as_usize();
+                        if pointer.ty.pointee == pointer.base.ty {
+                            op.operation = Operation::Copy(vars[index]);
+                        } else {
+                            let width = pointer.base.ty.vector_size();
+                            op.operation = Operator::Index(IndexOperator {
+                                list: vars[index / width], index: ((index % width) as u32).into(),
+                                vector_size: 0, unroll_factor: 1,
+                            }).into();
+                        }
+                    }
+                Operation::TypedMemory(TypedMemory::Store { pointer, value })
+                    if matches!(pointer.base.kind, VariableKind::LocalArray { id, .. } if id == arr_id) => {
+                        let index = pointer.index.as_const().unwrap().as_usize();
+                        if pointer.ty.pointee == pointer.base.ty {
+                            op = Instruction::new(Operation::Copy(*value), vars[index]);
+                        } else {
+                            let width = pointer.base.ty.vector_size();
+                            let vector = vars[index / width];
+                            let mut inputs = Vec::with_capacity(width);
+                            for component in 0..width {
+                                if component == index % width {
+                                    inputs.push(*value);
+                                } else {
+                                    let scalar = *opt.root_scope.create_local_restricted(pointer.ty.pointee);
+                                    let id = opt.local_variable_id(&scalar).unwrap();
+                                    opt.program.variables.insert(id, scalar.ty);
+                                    ops.borrow_mut().push(Instruction::new(Operator::Index(IndexOperator {
+                                        list: vector, index: (component as u32).into(), vector_size: 0, unroll_factor: 1,
+                                    }), scalar));
+                                    inputs.push(scalar);
+                                }
+                            }
+                            op = Instruction::new(Operator::InitVector(VectorInitOperator { inputs }), vector);
+                        }
+                        opt.invalidate_analysis::<Writes>();
+                    }
                 Operation::Operator(Operator::Index(index) | Operator::UncheckedIndex(index)) => {
                     if let VariableKind::LocalArray { id, .. } = index.list.kind
                         && id == arr_id
@@ -181,12 +249,13 @@ fn replace_const_arrays(opt: &mut Optimizer, arr_id: Id, vars: &[Variable]) {
                     {
                         let const_index = assign.index.as_const().unwrap().as_i64() as usize;
                         let out = vars[const_index];
-                        *op = Instruction::new(Operation::Copy(assign.value), out);
+                        op = Instruction::new(Operation::Copy(assign.value), out);
                         opt.invalidate_analysis::<Writes>();
                     }
                 }
                 _ => {}
             }
+            ops.borrow_mut().push(op);
         }
     }
 }

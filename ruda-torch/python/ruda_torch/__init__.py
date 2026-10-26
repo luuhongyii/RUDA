@@ -365,7 +365,23 @@ if hasattr(_native, "ruda_torch_training_api_version") and hasattr(_C, "initiali
     _C.initialize_training(ctypes.cast(_native.ruda_torch_training, ctypes.c_void_p).value)
     _training_available = True
     _C.storage_mean_api = 1
+_training_fusion_available = False
+if _training_available and hasattr(_native, 'ruda_torch_training_fusion_api_version'):
+    _native.ruda_torch_training_fusion_api_version.restype = ctypes.c_uint32
+    _training_fusion_available = (_native.ruda_torch_training_fusion_api_version() == 3
+                                 and getattr(_C, 'training_fusion_api_version', 0) == 3)
+_lora_projection_available = False
+if _training_fusion_available and hasattr(_native, 'ruda_torch_lora_projection_api_version'):
+    _native.ruda_torch_lora_projection_api_version.restype = ctypes.c_uint32
+    _lora_projection_available = _native.ruda_torch_lora_projection_api_version() == 1
 from .training import LayerNorm, layer_norm, RMSNorm, rms_norm, silu_mul, AdamW, GradScaler
+from . import _fused_training_ops
+from .fused_cross_entropy import cross_entropy
+from .rotary import apply_rotary_pos_emb
+from .lora_epilogue import lora_epilogue
+from . import _dense_ops
+if hasattr(_C, 'initialize_fused_autograd_dispatch'):
+    _C.initialize_fused_autograd_dispatch()
 
 # Optional router-weight extension. Existing base ABI 10/training API 4 remain
 # loadable without it; a router operation fails clearly instead of falling back.
@@ -490,6 +506,7 @@ from .causal_finetuning import (chunked_lm_cross_entropy, SFTCollator, CausalLMF
                                SFTTrainer, load_hf_model, load_hf_nf4_model, activation_checkpoint_modules)
 from .transformers_training import (prepare_causal_lm, enable_transformers_moe,
     HfRouterAuxiliaryLoss, hf_router_load_balancing_loss)
+from .transformers_fused import enable_transformers_fused
 from .distributed_training import ReplicaGroup
 if torch.distributed.is_available():
     from .process_group import ProcessGroupRuCCL, register_ruccl_backend

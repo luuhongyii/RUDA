@@ -31,8 +31,7 @@ pub(super) fn allocate(bytes: usize) -> (Allocation, u64) {
             let span = physical.div_ceil(ALIGNMENT) * ALIGNMENT;
             if slot.as_ref().is_none_or(|slab| slab.stream != stream || slab.next + span > capacity) {
                 let c = client();
-                let handle = c.empty(capacity);
-                let resource = c.get_resource(handle.clone()).expect("RUDA CUDA slab allocation failed");
+                let (handle, resource) = c.try_empty_with_resource(capacity).expect("RUDA CUDA slab allocation failed");
                 *slot = Some(Slab { handle, address: resource.resource().ptr,
                     pin: resource.resource().address_pin(), next: 0, stream });
             }
@@ -47,8 +46,7 @@ pub(super) fn allocate(bytes: usize) -> (Allocation, u64) {
         });
     }
     let c = client();
-    let handle = c.empty(physical);
-    let resource = c.get_resource(handle.clone()).expect("RUDA CUDA allocation failed");
+    let (handle, resource) = c.try_empty_with_resource(physical).expect("RUDA CUDA allocation failed");
     if !async_dispatch_enabled() { sync(&c); }
     let address = resource.resource().ptr;
     (Allocation { handle, bytes, _pin: resource.resource().address_pin() }, address)

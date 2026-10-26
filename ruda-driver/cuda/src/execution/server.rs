@@ -862,14 +862,14 @@ impl CudaServer {
             let mut handle = Option::None;
             if info.dynamic_metadata_offset < info.data.len() {
                 let dyn_meta = &bytemuck::cast_slice(&info.data[info.dynamic_metadata_offset..]);
-                handle = Some(command.create_with_data(dyn_meta)?);
+                handle = Some(command.create_with_data(dyn_meta, graph.is_some())?);
             }
 
             (Some(info.data.as_ptr() as *mut c_void), handle)
         } else {
             let mut handle = Option::None;
             if !bindings.info.data.is_empty() {
-                handle = Some(command.create_with_data(bytemuck::cast_slice(&bindings.info.data))?);
+                handle = Some(command.create_with_data(bytemuck::cast_slice(&bindings.info.data), graph.is_some())?);
             }
             (None, handle)
         };
