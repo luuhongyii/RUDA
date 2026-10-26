@@ -25,7 +25,7 @@ fusion = ["std", "dep:ruda-fusion", "ruda-tensor-device?/fusion", "ruda-tensor-w
 autotune = ["ruda-tensor-device?/autotune", "ruda-tensor-wgpu?/autotune", "ruda-tensor-rocm?/autotune"]
 
 [dependencies]
-ruda-runtime = { version = "0.1.30", path = "../../ruda-runtime", default-features = false, features = ["runtime"], optional = true }
+ruda-runtime = { version = "0.1.31", path = "../../ruda-runtime", default-features = false, features = ["runtime"], optional = true }
 ruda-kernel = { version = "0.1.47", path = "../../ruda-kernel", default-features = false, features = ["library"], optional = true }
 ruda-tensor = { version = "0.21.73", path = "..", default-features = false }
 ruda-core = { version = "0.1.11", path = "../../ruda-core", default-features = false, features = ["ir"] }
