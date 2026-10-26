@@ -84,15 +84,18 @@ fn contract_tile<F: Float>(weights: &SharedMemory<F>, input: &SharedMemory<F>,
 #[ruda(launch_unchecked)]
 pub fn contraction<F: Float>(grad: &Array<F>, stats: &Array<f32>, delta: &mut Array<f32>,
     #[define(F)] _dtype: StorageType) {
-    let lane = UNIT_POS as usize % 32;
-    let row = RUDA_POS_X as usize * 4 + UNIT_POS as usize / 32;
-    let mut sum = 0.0f32;
+    let lane = UNIT_POS as usize % 8;
+    let row = RUDA_POS_X as usize * 16 + UNIT_POS as usize / 8;
+    let first = row * 128 + lane * 8;
+    let mut sum = f32::cast_from(grad[first]) * stats[delta.len() * 2 + first];
     #[unroll]
-    for i in 0usize..4 {
-        let at = row * 128 + lane + i * 32;
-        sum += f32::cast_from(grad[at]) * stats[delta.len() * 2 + at];
+    for i in 1usize..16 {
+        let at = first + i / 8 * 64 + i % 8;
+        sum = fma(f32::cast_from(grad[at]), stats[delta.len() * 2 + at], sum);
     }
-    sum = plane_sum(sum);
+    sum += plane_shuffle_xor(sum, 4u32);
+    sum += plane_shuffle_xor(sum, 2u32);
+    sum += plane_shuffle_xor(sum, 1u32);
     if lane == 0 { delta[row] = sum; }
 }
 
