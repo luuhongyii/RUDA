@@ -147,7 +147,7 @@ features = ["kernel-ir", "quantization-kernels"]
 
 [dependencies.rublas]
 path = "../ruBLAS"
-version = "0.1.104"
+version = "0.1.105"
 default-features = false
 optional = true
 features = ["kernel-ir", "std"]
