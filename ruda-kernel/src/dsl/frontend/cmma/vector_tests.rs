@@ -16,6 +16,22 @@ fn arrays(a: &Array<Vector<f16, Const<2>>>, b: &Array<Vector<f16, Const<2>>>, c:
 }
 
 #[test]
+fn manual_mma_vector_sequence_index_mut_keeps_the_accumulator_addressable() {
+    let mut scope = Scope::root(false);
+    let c = scope.create_local(Type::from(FloatKind::F32).with_vector_size(4));
+    let mut sequence = Sequence::<Vector<f32, Const<4>>>::__expand_new(&mut scope);
+    sequence.__expand_push_method(&mut scope, c.clone().into());
+    let reference = sequence.__expand_index_mut_method(&mut scope, 0);
+    assert!(scope.reference_storage(*c).is_some());
+    let pointer = scope.reference_pointer(*reference.expand).expect("mutable sequence element reference");
+    let a = scope.create_local(Type::from(FloatKind::F16).with_vector_size(8));
+    let b = scope.create_local(Type::from(FloatKind::F16).with_vector_size(4));
+    scope.register_type::<usize>(UIntKind::U32.into());
+    vectors::expand(&mut scope, a.into(), b.into(), reference);
+    assert_mma_writeback(&scope, pointer);
+}
+
+#[test]
 fn manual_mma_vector_intrinsics_read_values_and_write_through_accumulator_reference() {
     for vector_operands in [false, true] {
         let mut scope = Scope::root(false);
@@ -35,6 +51,11 @@ fn manual_mma_vector_intrinsics_read_values_and_write_through_accumulator_refere
             let b = scope.create_local_array(half.with_vector_size(2), 2);
             arrays::expand(&mut scope, a.into(), b.into(), c_reference.into());
         }
+        assert_mma_writeback(&scope, c_pointer);
+    }
+}
+
+fn assert_mma_writeback(scope: &Scope, pointer: ruda_core::ir::Variable) {
         let (position, result) = scope.instructions.iter().enumerate().find_map(|(i, instruction)| {
             if let Operation::CoopMma(CoopMma::ExecuteManual { registers_a, registers_b, registers_c, .. }) = instruction.operation {
                 for value in [registers_a, registers_b, registers_c] {
@@ -43,7 +64,7 @@ fn manual_mma_vector_intrinsics_read_values_and_write_through_accumulator_refere
                 Some((i, instruction.out.unwrap()))
             } else { None }
         }).expect("manual MMA instruction");
-        let mut pointers = vec![c_pointer];
+        let mut pointers = vec![pointer];
         for instruction in &scope.instructions[..position] {
             if let Operation::Copy(input) = instruction.operation {
                 if pointers.contains(&input) { pointers.push(instruction.out.unwrap()); }
@@ -60,5 +81,4 @@ fn manual_mma_vector_intrinsics_read_values_and_write_through_accumulator_refere
             }
         }
         assert!(writeback, "MMA result must update the caller's accumulator, not a discarded proxy");
-    }
 }

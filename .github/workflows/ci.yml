@@ -51,6 +51,7 @@ jobs:
           - name: Native libraries and CUDA compiler checks
             key: native-cuda
             command: |
+              cargo check --locked -p rublas --lib --tests --features tensor-matmul,ruda-test-runtime/cuda
               python3 tools/gpu_validation/paged_attention_host.py --output "$RUNNER_TEMP/paged-attention-host"
               cargo test --locked --release -p ruDNN --lib --features tensor-paged-attention,ruda-test-runtime/cuda --no-run
               cargo build --locked --release -p ruda-torch-native
