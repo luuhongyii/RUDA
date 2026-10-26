@@ -7863,6 +7863,7 @@ dependencies = [
  "pretty_assertions",
  "ruPRIM",
  "rublas",
+ "ruda-compiler",
  "ruda-core",
  "ruda-driver-cann",
  "ruda-kernel",

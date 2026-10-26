@@ -279,9 +279,26 @@ pub fn array_assign_binary_op_expand<
     let index: ManagedVariable = index.into();
     let value: ManagedVariable = value.into();
 
+    if !array.is_array()
+        && (scope.reference_target(*array).is_some()
+            || scope.reference_storage(*array).is_some())
+    {
+        let reference = if scope.reference_target(*array).is_some() {
+            array
+        } else {
+            scope.reference_borrow(array, true).expect("addressable indexed value")
+        };
+        let component = scope.reference_component(*reference, *index, true)
+            .expect("writable vector component");
+        let input = scope.reference_read(*component).expect("readable vector component");
+        let output = binary_expand(scope, input, value, func);
+        scope.reference_write(*component, *output).expect("writable vector component");
+        return;
+    }
+
     let array_item = match array.kind {
         // In that case, the array is a vector.
-        VariableKind::LocalMut { .. } => array.ty.with_vector_size(0),
+        VariableKind::LocalMut { .. } | VariableKind::LocalConst { .. } => array.ty.with_vector_size(0),
         _ => array.ty,
     };
     let array_value = scope.create_local(array_item);

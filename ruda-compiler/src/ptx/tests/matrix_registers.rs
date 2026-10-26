@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn indexed_compound_assign_updates_borrowed_and_unborrowed_vector_components() {
+    use ruda_kernel::dsl::prelude::{Const, NativeExpand, Vector, mul_assign_array_op};
+    for mode in 0..3 {
+        let mut k = kernel(&format!("compound_vector_component_{mode}"));
+        k.body.register_type::<usize>(UIntKind::U32.into());
+        let ty = Type::from(FloatKind::F32).with_vector_size(4);
+        let output = buffer(&mut k, ty, Visibility::ReadWrite);
+        let c = k.body.create_local(ty);
+        k.body.register(Instruction::new(Operator::Cast(UnaryOperator { input: 3f32.into() }), *c));
+        let reference = (mode != 0).then(|| k.body.reference_borrow(c.clone(), true).unwrap());
+        let operand = if mode == 1 { reference.clone().unwrap() } else { c.clone() };
+        let index = NativeExpand::from_lit(&k.body, 2u32);
+        mul_assign_array_op::expand(&mut k.body,
+            NativeExpand::<Vector<f32, Const<4>>>::new(operand), index, 4f32.into());
+        let scalar = Type::from(FloatKind::F32);
+        let product = k.body.instructions.iter().find(|instruction| {
+            matches!(instruction.operation, Operation::Arithmetic(Arithmetic::Mul(_)))
+        }).expect("component multiplication");
+        assert_eq!(product.out.unwrap().ty, scalar);
+        if mode != 0 {
+            assert!(k.body.instructions.iter().any(|instruction| matches!(instruction.operation,
+                Operation::Pointer(PointerOp::Store { value, .. }) if value == product.out.unwrap())));
+        }
+        let value = if let Some(reference) = reference {
+            *k.body.reference_read(*reference).unwrap()
+        } else { *c };
+        store(&mut k.body, output, 0u32.into(), value);
+        let compiled = compile(k, ExecutionMode::Unchecked, UIntKind::U32).unwrap();
+        assert!(!compiled.source.contains("ld.local."));
+        assert!(!compiled.source.contains("st.local."));
+        export(&compiled);
+    }
+}
+
+#[test]
 fn borrowed_manual_mma_vectors_stay_in_registers_across_async_barriers_and_loops() {
     for kind in [FloatKind::F16, FloatKind::BF16] {
         let mut k = kernel(&format!("borrowed_register_mma_{kind:?}"));
