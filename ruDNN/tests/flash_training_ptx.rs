@@ -108,3 +108,50 @@ fn fused_flash_backward_lowers_to_sm80_ptx() {
         for vectorized in [false, true] { compile_kernel("fused", causal, vectorized); }
     }
 }
+
+#[test]
+fn flash_backward_reductions_lower_to_sm80_ptx() {
+    for (name, group) in [("contraction",1usize),("query_reduce",1),
+        ("head_reduce",1),("head_reduce",2),("head_reduce",3),("head_reduce",7)] {
+        let mut kernel = KernelDefinition {
+            buffers: vec![], tensor_maps: vec![], scalars: vec![], ruda_dim: RudaDim::new_1d(128),
+            body: Scope::root(false), options: KernelOptions {
+                kernel_name: format!("flash_aux_{name}_{group}"), ..Default::default()
+            },
+        };
+        kernel.body.register_type::<usize>(UIntKind::U32.into());
+        let bf16 = Type::from(FloatKind::BF16);
+        let fp32 = Type::from(FloatKind::F32);
+        if name == "contraction" {
+            let grad = buffer(&mut kernel,bf16,Visibility::Read);
+            let stats = buffer(&mut kernel,fp32,Visibility::Read);
+            let out = buffer(&mut kernel,fp32,Visibility::ReadWrite);
+            rudnn::flash_training::backward::contraction::expand::<half::bf16>(&mut kernel.body,
+                grad.into(),stats.into(),out.into(),bf16.storage_type());
+        } else if name == "query_reduce" {
+            let input = buffer(&mut kernel,fp32,Visibility::Read);
+            let out = buffer(&mut kernel,bf16,Visibility::ReadWrite);
+            kernel.scalars.push(ScalarKernelArg { ty: fp32.storage_type(), count: 1 });
+            let scale = ManagedVariable::Plain(Variable::new(VariableKind::GlobalScalar(0),fp32));
+            rudnn::flash_training::fused_backward::reduce_query::expand::<half::bf16>(&mut kernel.body,
+                input.into(),out.into(),scale.into(),bf16.storage_type());
+        } else {
+            let pk = buffer(&mut kernel,bf16,Visibility::Read);
+            let pv = buffer(&mut kernel,bf16,Visibility::Read);
+            let dk = buffer(&mut kernel,bf16,Visibility::ReadWrite);
+            let dv = buffer(&mut kernel,bf16,Visibility::ReadWrite);
+            rudnn::flash_training::backward::reduce_heads::expand::<half::bf16>(&mut kernel.body,
+                pk.into(),pv.into(),dk.into(),dv.into(),group,bf16.storage_type());
+        }
+        let options = PtxCompilationOptions { target: Some(PtxTarget { version: (8,0), sm: 80 }) };
+        let compiled = PtxCompiler.compile(kernel,&options,ExecutionMode::Unchecked,UIntKind::U32.into()).unwrap();
+        assert!(!compiled.source.contains("ld.local."));
+        assert!(!compiled.source.contains("st.local."));
+        assert_eq!(compiled.shared_memory_bytes,0);
+        if let Some(directory) = std::env::var_os("RUDA_FLASH_PTX_OUTPUT") {
+            let path = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join(format!("{}.ptx",compiled.entrypoint)),compiled.source).unwrap();
+        }
+    }
+}

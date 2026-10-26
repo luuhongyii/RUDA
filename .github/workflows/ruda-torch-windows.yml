@@ -177,11 +177,23 @@ jobs:
           restore-keys: |
             torch-linux-release-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
             torch-linux-release-rust-1.97.1-
-      - name: Build native library and compile CUDA attention tests without execution
+      - name: Compile and validate native attention PTX
         run: |
           RUDA_PTX_TEST_OUTPUT="$GITHUB_WORKSPACE/target/ptx-vector-memory" cargo test --release --locked -p ruda-compiler --no-default-features --features ptx ptx::tests
           cargo test --release --locked -p ruDNN --test flash-training-layout --features tensor-paged-attention,ruda-test-runtime/cuda
           RUDA_FLASH_PTX_OUTPUT="$GITHUB_WORKSPACE/target/ptx-flash-training" cargo test --release --locked -p ruDNN --test flash-training-ptx --features tensor-paged-attention,ruda-test-runtime/cuda
+      - name: Save attention PTX for early GPU validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ruda-attention-ptx-${{ github.sha }}
+          path: |
+            target/ptx-vector-memory/compound_vector_component_*.ptx
+            target/ptx-vector-memory/constant_register_mma_*.ptx
+            target/ptx-flash-training/*.ptx
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build native library and compile CUDA attention tests without execution
+        run: |
           cargo build --release --locked -p ruda-torch-native
           cargo check --release --locked -p ruDNN --lib --tests --features tensor-paged-attention,ruda-test-runtime/cuda
           test "$(find target/ptx-vector-memory -maxdepth 1 -name 'packed_vector_memory_*.ptx' | wc -l)" -eq 48
