@@ -46,6 +46,7 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
     for (bm, bn, bk, asynchronous, warp_m, stages) in [
         (32, 32, 32, false, 32, 1),
         (128, 128, 32, true, 32, 2), (128, 128, 32, true, 32, 3),
+        (128, 32, 64, true, 32, 2), (128, 32, 64, true, 32, 3),
         (128, 128, 64, true, 64, 2), (128, 128, 64, true, 64, 3),
         (128, 256, 64, true, 32, 2), (128, 256, 64, true, 32, 3),
     ] {
@@ -101,5 +102,5 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
             }
         }
     }
-    assert_eq!(cases, 224);
+    assert_eq!(cases, 288);
 }

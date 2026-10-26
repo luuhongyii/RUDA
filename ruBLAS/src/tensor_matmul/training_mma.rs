@@ -68,7 +68,7 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
         #[unroll]
         for stage in 0usize..(banks - 1) {
             if stage < blocks {
-                load_stage(a, b, &mut sa, &mut sb, row, col, stage, stage, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
+                load_stage(a, b, &mut sa, &mut sb, row, col, stage, stage, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m, 0usize, 1usize);
             }
             commit_copy_group();
         }
@@ -78,19 +78,19 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
         if comptime!(asynchronous) {
             wait_copy_group(comptime!((banks - 2) as u32));
             sync_ruda();
-            if block + banks - 1 < blocks {
-                let next_bank = (bank + banks - 1) % banks;
-                load_stage(a, b, &mut sa, &mut sb, row, col, block + banks - 1, next_bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
-            }
-            commit_copy_group();
         } else {
-            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
+            load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m, 0usize, 1usize);
             sync_ruda();
         }
         #[unroll]
         for half in 0usize..(bk / 16) {
+            if comptime!(asynchronous) {
+                if block + banks - 1 < blocks {
+                    let next_bank = (bank + banks - 1) % banks;
+                    load_stage(a, b, &mut sa, &mut sb, row, col, block + banks - 1, next_bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m, half, bk / 16);
+                }
+            }
             let mut ar = Sequence::<Vector<F, Const<8>>>::new();
-            let mut br = Sequence::<Vector<F, Const<4>>>::new();
             #[unroll]
             for i in 0usize..(warp_m / 16) {
                 let offset = bank * a_stage + a_rows[half * (warp_m / 16) + i];
@@ -99,16 +99,14 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
             #[unroll]
             for j in 0usize..(bn / 16) {
                 let offset = bank * b_stage + b_rows[half * (bn / 16) + j];
-                br.push(def.load_matrix_vector::<_, Const<4>>(&sb.slice(offset, offset + 1), 2usize, !nt));
-            }
-            #[unroll]
-            for i in 0usize..(warp_m / 16) {
+                let br = def.load_matrix_vector::<_, Const<4>>(&sb.slice(offset, offset + 1), 2usize, !nt);
                 #[unroll]
-                for j in 0usize..(bn / 16) {
-                    def.execute_vectors_inplace(&ar[i], &br[j], acc.index_mut(i * (bn / 16) + j));
+                for i in 0usize..(warp_m / 16) {
+                    def.execute_vectors_inplace(&ar[i], &br, acc.index_mut(i * (bn / 16) + j));
                 }
             }
         }
+        if comptime!(asynchronous) { commit_copy_group(); }
         if comptime!(!asynchronous) { sync_ruda(); }
     }
     if comptime!(asynchronous) {
@@ -151,10 +149,12 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
-    #[comptime] warp_m: usize) {
+    #[comptime] warp_m: usize, #[comptime] copy_group: usize, #[comptime] copy_groups: usize) {
     let threads = comptime!(bm / warp_m * 64);
+    let a_copies = comptime!(bm * bk / (threads * 8));
+    let a_per_group = comptime!(a_copies.div_ceil(copy_groups));
     #[unroll]
-    for i in 0usize..(bm * bk / (threads * 8)) {
+    for i in comptime!((copy_group * a_per_group).min(a_copies))..comptime!(((copy_group + 1) * a_per_group).min(a_copies)) {
         let p = UNIT_POS as usize + i * threads;
         if comptime!(ta) {
             let source = (RUDA_POS_Y as usize * a_batch + (block * bk + p / (bm / 8)) * lda + row) / 8 + p % (bm / 8);
@@ -168,8 +168,10 @@ fn load_stage<F: Float>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Cons
             else { sa[target] = a[source]; }
         }
     }
+    let b_copies = comptime!(bn * bk / (threads * 8));
+    let b_per_group = comptime!(b_copies.div_ceil(copy_groups));
     #[unroll]
-    for i in 0usize..(bn * bk / (threads * 8)) {
+    for i in comptime!((copy_group * b_per_group).min(b_copies))..comptime!(((copy_group + 1) * b_per_group).min(b_copies)) {
         let p = UNIT_POS as usize + i * threads;
         if comptime!(nt) {
             let source = (RUDA_POS_Y as usize * b_batch + (col + p / (bk / 8)) * ldb + block * bk) / 8 + p % (bk / 8);
