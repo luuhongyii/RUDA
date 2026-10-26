@@ -40,7 +40,7 @@ for case in torch.load(directory / 'inputs.pt', weights_only=True):
     loss.backward(case['grad'].cuda())
     maximum = x.float().amax(-1)
     lp = torch.log_softmax(x.float(), -1)
-    logsum = -lp.gather(1, x.float().argmax(-1, keepdim=True)).flatten()
+    logsum = -lp.gather(1, x.float().argmax(-1, keepdim=True)).flatten() + 0.
     stats = torch.stack((maximum, logsum), dim=1)
     stats[target == -100] = 0
     results.append(dict(loss=loss.detach().cpu(), dx=x.grad.cpu(), stats=stats.cpu()))
