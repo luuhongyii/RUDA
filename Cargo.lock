@@ -8163,7 +8163,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-dataset"
-version = "0.21.17"
+version = "0.21.18"
 dependencies = [
  "chacha20",
  "csv",
