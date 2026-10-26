@@ -76,6 +76,10 @@ impl Emitter {
                 let address = self.barrier_address(barrier)?;
                 self.line(format!("cp.async.mbarrier.arrive.shared.b64 [{address}];"));
             }
+            BarrierOps::CommitCopyGroup => self.line("cp.async.commit_group;"),
+            BarrierOps::WaitCopyGroup { max_pending } => {
+                self.line(format!("cp.async.wait_group {max_pending};"));
+            }
             BarrierOps::CopyAsync { source, source_length, offset_source, offset_out, copy_length, checked } => {
                 self.async_copy(source, output.ok_or_else(|| invalid("async copy destination missing"))?,
                     source_length, offset_source, offset_out, copy_length, checked)?;

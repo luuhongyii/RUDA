@@ -103,7 +103,7 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     let a_stage = if ta { bk * (bm / 8 + 1) } else { bm * (bk / 8 + 1) };
     let b_stage = if nt { bn * (bk / 8 + 1) } else { bk * (bn / 8 + 1) };
     let shared = if manual {
-        (bm + bn) * bk * 2 * (if asynchronous { stages } else { 1 }) + threads / 32 * 256 * 4 + 96
+        (bm + bn) * bk * 2 * (if asynchronous { stages } else { 1 }) + threads / 32 * 256 * 4
     } else {
         (a_stage + b_stage) * (if asynchronous { 2 } else { 1 }) * 16 + threads / 32 * 256 * 4 + 32
     };

@@ -16,6 +16,7 @@ mod vector_memory;
 mod unsigned_power2;
 mod scaled;
 mod matrix_registers;
+mod async_groups;
 
 fn options() -> PtxCompilationOptions {
     PtxCompilationOptions {

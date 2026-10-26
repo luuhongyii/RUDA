@@ -578,6 +578,7 @@ impl Optimizer {
                 visit_read(self, transaction_count_update);
             }
             BarrierOps::CommitCopyAsync { barrier } => visit_read(self, barrier),
+            BarrierOps::CommitCopyGroup | BarrierOps::WaitCopyGroup { .. } => {}
             BarrierOps::ExpectTx {
                 barrier,
                 transaction_count_update,

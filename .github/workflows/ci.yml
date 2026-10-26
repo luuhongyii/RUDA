@@ -38,6 +38,7 @@ jobs:
               cargo test --locked -p ruda-kernel-macros --lib --features kernel-ir
               cargo test --locked -p ruda-kernel --lib mutable_const
               cargo test --locked -p ruda-kernel --lib manual_mma_vector
+              cargo test --locked -p ruda-kernel --lib async_copy_group
               cargo check --locked -p ruda --no-default-features --lib
               cargo check --locked -p ruda --no-default-features --features runtime,runtime-storage-bytes --lib
           - name: Unified facade backend compilation
@@ -106,6 +107,12 @@ jobs:
                 count=$((count + 1))
               done
               test "$count" -eq 6
+              count=0
+              for source in "$RUNNER_TEMP"/ptx/async_groups_*.ptx; do
+                "$RUNNER_TEMP/ptx-tools/nvidia/cuda_nvcc/bin/ptxas" --gpu-name sm_89 "$source" -o "${source%.ptx}.cubin"
+                count=$((count + 1))
+              done
+              test "$count" -eq 8
           - name: Optimizer CPU tests
             key: optim
             command: |

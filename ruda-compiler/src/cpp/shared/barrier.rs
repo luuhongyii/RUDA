@@ -90,6 +90,10 @@ pub enum BarrierOps<D: Dialect> {
         barrier: Variable<D>,
         level: BarrierLevel,
     },
+    CommitCopyGroup,
+    WaitCopyGroup {
+        max_pending: u32,
+    },
 }
 
 impl<D: Dialect> BarrierOps<D> {
@@ -110,6 +114,7 @@ impl<D: Dialect> BarrierOps<D> {
             BarrierOps::ExpectTx { barrier, .. } => barrier.id().unwrap(),
             BarrierOps::CopyAsync { .. } => 0,
             BarrierOps::ArriveCopyAsync { barrier } => barrier.id().unwrap(),
+            BarrierOps::CommitCopyGroup | BarrierOps::WaitCopyGroup { .. } => 0,
         }
     }
 }
@@ -292,6 +297,12 @@ __cp_async_shared_global<{copy_size}>({source} + {offset_source}, {destination} 
             }
             BarrierOps::ArriveCopyAsync { barrier } => {
                 writeln!(f, "__cp_async_arrive({barrier});")
+            }
+            BarrierOps::CommitCopyGroup => {
+                writeln!(f, "asm volatile (\"cp.async.commit_group;\" ::: \"memory\");")
+            }
+            BarrierOps::WaitCopyGroup { max_pending } => {
+                writeln!(f, "asm volatile (\"cp.async.wait_group {max_pending};\" ::: \"memory\");")
             }
             BarrierOps::ExpectTx {
                 barrier,

@@ -184,6 +184,7 @@ jobs:
           RUDA_PTX_TEST_OUTPUT="$GITHUB_WORKSPACE/target/ptx-vector-memory" cargo test --release --locked -p ruda-compiler --no-default-features --features ptx ptx::tests
           test "$(find target/ptx-vector-memory -maxdepth 1 -name 'packed_vector_memory_*.ptx' | wc -l)" -eq 48
           test "$(find target/ptx-vector-memory -maxdepth 1 -name 'unsigned_power2_*.ptx' | wc -l)" -eq 288
+          test "$(find target/ptx-vector-memory -maxdepth 1 -name 'async_groups_*.ptx' | wc -l)" -eq 8
           cargo test --release --locked -p ruda-driver-cuda --features direct-ptx --test graph-update --no-run --message-format=json > target/graph-update-build.jsonl
           python -c "import json, shutil; rows=[json.loads(line) for line in open('target/graph-update-build.jsonl')]; binaries=[row['executable'] for row in rows if row.get('reason')=='compiler-artifact' and row.get('target',{}).get('name')=='graph-update' and row.get('executable')]; assert len(binaries)==1, binaries; shutil.copyfile(binaries[0], 'target/release/ruda_graph_update_test')"
           cargo test --release --locked -p rublas --lib --features tensor-matmul,ruda-test-runtime/cuda --no-run --message-format=json,json-render-diagnostics > target/training-mma-build.jsonl
@@ -199,6 +200,7 @@ jobs:
             target/release/ruda_training_mma_test
             target/ptx-vector-memory/packed_vector_memory_*.ptx
             target/ptx-vector-memory/unsigned_power2_*.ptx
+            target/ptx-vector-memory/async_groups_*.ptx
           compression-level: 6
           if-no-files-found: error
           retention-days: 14

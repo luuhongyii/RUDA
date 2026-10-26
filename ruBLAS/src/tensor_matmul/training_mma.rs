@@ -1,4 +1,4 @@
-use ruda_kernel::{dsl as kernel_dsl, dsl::{cmma, prelude::{*, barrier::{Barrier, copy_async}}}};
+use ruda_kernel::{dsl as kernel_dsl, dsl::{cmma, prelude::{*, barrier::{copy_async, commit_copy_group, wait_copy_group}}}};
 
 #[cfg(test)]
 mod tests;
@@ -32,9 +32,6 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
     let mut sa = SharedMemory::<Vector<F, Const<8>>>::new_aligned(a_stage * banks, 32usize);
     let mut sb = SharedMemory::<Vector<F, Const<8>>>::new_aligned(b_stage * banks, 32usize);
     let mut epilogue = SharedMemory::<f32>::new_aligned(bm / warp_m * 512usize, 32usize);
-    let mut loaded = Sequence::<Shared<Barrier>>::new();
-    #[unroll]
-    for _ in 0usize..banks { loaded.push(Barrier::shared(RUDA_DIM, UNIT_POS == 0)); }
     let def = cmma::MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);
     let mut acc = Sequence::<Vector<f32, Const<4>>>::new();
     #[unroll]
@@ -72,23 +69,20 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
         for stage in 0usize..(banks - 1) {
             if stage < blocks {
                 load_stage(a, b, &mut sa, &mut sb, row, col, stage, stage, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
-                loaded[stage].commit_copy_async();
             }
+            commit_copy_group();
         }
     }
     for block in 0usize..blocks {
         let bank = block % banks;
         if comptime!(asynchronous) {
-            if bank == 0 { loaded[0].arrive_and_wait(); }
-            else if bank == 1 { loaded[1].arrive_and_wait(); }
-            else if comptime!(banks == 3) { loaded[2].arrive_and_wait(); }
+            wait_copy_group(comptime!((banks - 2) as u32));
+            sync_ruda();
             if block + banks - 1 < blocks {
                 let next_bank = (bank + banks - 1) % banks;
                 load_stage(a, b, &mut sa, &mut sb, row, col, block + banks - 1, next_bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
-                if next_bank == 0 { loaded[0].commit_copy_async(); }
-                else if next_bank == 1 { loaded[1].commit_copy_async(); }
-                else if comptime!(banks == 3) { loaded[2].commit_copy_async(); }
             }
+            commit_copy_group();
         } else {
             load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m);
             sync_ruda();
@@ -116,6 +110,10 @@ pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>
             }
         }
         if comptime!(!asynchronous) { sync_ruda(); }
+    }
+    if comptime!(asynchronous) {
+        wait_copy_group(0u32);
+        sync_ruda();
     }
     #[unroll]
     for i in 0usize..(warp_m / 16) {

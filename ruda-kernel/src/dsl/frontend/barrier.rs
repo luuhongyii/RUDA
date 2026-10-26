@@ -541,6 +541,38 @@ impl Barrier {
     }
 }
 
+#[ruda]
+pub fn commit_copy_group() {
+    intrinsic!(|scope| { scope.register(BarrierOps::CommitCopyGroup); })
+}
+
+#[ruda]
+pub fn wait_copy_group(#[comptime] max_pending: u32) {
+    intrinsic!(|scope| { scope.register(BarrierOps::WaitCopyGroup { max_pending }); })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ruda_core::ir::Operation;
+
+    #[test]
+    fn async_copy_group_frontend_preserves_empty_groups_and_immediate_wait() {
+        let mut scope = Scope::root(false);
+        commit_copy_group::expand(&mut scope);
+        commit_copy_group::expand(&mut scope);
+        wait_copy_group::expand(&mut scope, 1u32);
+        wait_copy_group::expand(&mut scope, 0u32);
+        assert_eq!(scope.instructions.iter().map(|inst| &inst.operation).collect::<alloc::vec::Vec<_>>(),
+            vec![&Operation::Barrier(BarrierOps::CommitCopyGroup),
+                &Operation::Barrier(BarrierOps::CommitCopyGroup),
+                &Operation::Barrier(BarrierOps::WaitCopyGroup { max_pending: 1 }),
+                &Operation::Barrier(BarrierOps::WaitCopyGroup { max_pending: 0 })]);
+        assert!(scope.instructions.iter().all(|inst| inst.out.is_none()));
+        assert!(scope.pop_errors().is_empty());
+    }
+}
+
 impl Deref for Shared<Barrier> {
     type Target = Barrier;
 
