@@ -87,7 +87,8 @@ std::pair<uint64_t,uint64_t> dense_rng_words(const at::Tensor& state) {
     return pybind11::module_::import("ruda_torch._dense_ops").attr("rng_words")(state)
         .cast<std::pair<uint64_t,uint64_t>>();
   };
-  if(!state.device().is_cpu() || state.scalar_type()!=at::kLong || state.dim()!=1 || state.size(0)!=4)
+  if(!state.device().is_cpu() || state.scalar_type()!=at::kLong || state.dim()!=1 || state.size(0)!=4
+      || state.is_neg() || state.is_conj())
     return original();
   const auto* data=state.const_data_ptr<int64_t>();
   uint64_t words[4];
@@ -104,7 +105,6 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> dense_attention_forward_op(
     c10::SymIntArrayRef score_shape,c10::SymInt mask_kind,bool causal,double scale,double p,bool flash) {
   initialize_dense_dispatch(flash);
   TORCH_CHECK(q.dim()>=3 && v.dim()>0,"invalid dense attention dimensions");
-  TORCH_CHECK(mask_kind.expect_int()>=0 && mask_kind.expect_int()<=2,"invalid dense attention command");
   auto shape=q.sizes().vec();shape.back()=v.size(-1);
   auto out=at::empty(shape,q.options());
   auto stats=at::empty({q.size(0)*q.size(1)*q.size(2),flash?130:2},q.options().dtype(at::kFloat));
@@ -116,6 +116,7 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> dense_attention_forward_op(
     state=pybind11::module_::import("ruda_torch._dense_ops").attr("_rng_state")(count,p).cast<at::Tensor>();
   } else state=at::zeros({4},at::TensorOptions().device(at::kCPU).dtype(at::kLong));
   auto [seed,counter]=dense_rng_words(state);
+  TORCH_CHECK(mask_kind.expect_int()>=0 && mask_kind.expect_int()<=2,"invalid dense attention command");
   dense_attention_call(0,{q,k,v,mask,out,stats},mask_kind.expect_int(),score,causal,scale,p,seed,counter,false);
   return {out,stats,state};
 }
@@ -125,10 +126,10 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor,at::Tensor> dense_attention_backward
     const at::Tensor& grad,const at::Tensor& stats,const at::Tensor& rng,c10::SymIntArrayRef score_shape,
     c10::SymInt mask_kind,bool causal,double scale,double p,bool need_mask) {
   initialize_dense_dispatch(false);
-  TORCH_CHECK(mask_kind.expect_int()>=0 && mask_kind.expect_int()<=2,"invalid dense attention command");
   auto dq=at::empty_like(q),dk=at::empty_like(k),dv=at::empty_like(v);
   auto dm=need_mask?at::empty_like(mask):at::empty({1},q.options().dtype(at::kFloat));
   auto [seed,counter]=dense_rng_words(rng);
+  TORCH_CHECK(mask_kind.expect_int()>=0 && mask_kind.expect_int()<=2,"invalid dense attention command");
   dense_attention_call(1,{q,k,v,mask,grad.contiguous(),stats,dq,dk,dv,dm},mask_kind.expect_int(),
       dense_score_shape(score_shape),causal,scale,p,seed,counter,need_mask);
   return {dq,dk,dv,dm};

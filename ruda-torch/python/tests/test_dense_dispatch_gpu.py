@@ -5,6 +5,15 @@ from ruda_torch import _dense_ops as ops
 from test_fused_dispatch_gpu import same
 
 
+def same_atomic_gradient(actual,expected):
+    assert actual.shape==expected.shape and actual.stride()==expected.stride()
+    assert actual.dtype==expected.dtype and actual.device==expected.device
+    a,b=actual.cpu(),expected.cpu()
+    torch.testing.assert_close(a,b,rtol=max(1e-5,torch.finfo(a.dtype).eps),atol=2e-6,equal_nan=True)
+    if b.numel() and b.double().norm():
+        assert (a.double()-b.double()).norm()/b.double().norm() <= .001
+
+
 def test_dense_dispatch_has_native_entrypoints():
     for direction in ('forward','backward'):
         assert torch._C._dispatch_has_kernel_for_dispatch_key('ruda::dense_attention_'+direction,'PrivateUse1')
@@ -29,7 +38,10 @@ def test_dense_native_dispatch_matches_original_body(dtype,policy):
     same(actual,expected)
     grad=torch.randn_like(actual[0])
     back=(q,k,v,mask,grad,actual[1],actual[2],shape,kind,policy=='causal',.125,p,kind==2)
-    same(ops.backward(*back),ops.backward._init_fn(*back))
+    gradients,reference=ops.backward(*back),ops.backward._init_fn(*back)
+    same(gradients[0],reference[0])
+    for actual,expected in zip(gradients[1:3],reference[1:3]):same_atomic_gradient(actual,expected)
+    (same_atomic_gradient if kind==2 else same)(gradients[3],reference[3])
 
 
 @pytest.mark.parametrize('causal',[False,True])
@@ -62,7 +74,8 @@ def test_dense_native_dispatch_fake_aot_and_stream():
     torch.library.opcheck(ops.forward,args,test_utils=('test_schema','test_faketensor','test_aot_dispatch_dynamic'))
 
 
-@pytest.mark.parametrize('invalid',[torch.zeros(3,dtype=torch.int64),torch.tensor([-1,0,0,0]),torch.tensor([2**32,0,0,0])])
+@pytest.mark.parametrize('invalid',[torch.zeros(3,dtype=torch.int64),torch.tensor([-1,0,0,0]),
+                                  torch.tensor([2**32,0,0,0]),torch._neg_view(torch.ones(4,dtype=torch.int64))])
 def test_dense_native_dispatch_preserves_rng_validation(invalid):
     q=torch.ones(1,1,1,1,device='ruda');mask=torch.zeros(1,device='ruda')
     stats=ops.forward(q,q,q,mask,[1,1,1,1],0,False,1.,0.)[1]
