@@ -743,6 +743,7 @@ at::Tensor& copy_(at::Tensor& dest, const at::Tensor& source, bool non_blocking)
 #include "fused_optim.inc"
 #include "foreach_unary.inc"
 #include "foreach_binary.inc"
+#include "arithmetic_dispatch.inc"
 #include "power.inc"
 #include "foreach_ternary.inc"
 #include "foreach_reduce.inc"
@@ -798,6 +799,14 @@ TORCH_LIBRARY_IMPL(ruda, PrivateUse1, m) {
   m.impl("cross_entropy_backward",cross_entropy_backward);
 }
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
+  m.impl("add.Tensor", native_add_sub_dispatch<0>);
+  m.impl("add_.Tensor", native_add_sub_inplace_dispatch<0>);
+  m.impl("sub.Tensor", native_add_sub_dispatch<1>);
+  m.impl("sub_.Tensor", native_add_sub_inplace_dispatch<1>);
+  m.impl("mul.Tensor", native_mul_dispatch);
+  m.impl("mul_.Tensor", native_mul_inplace_dispatch);
+  m.impl("neg", native_neg_dispatch);
+  m.impl("neg_", native_neg_inplace_dispatch);
   m.impl("mm", native_mm_dispatch);
   m.impl("bmm", native_bmm_dispatch);
   m.impl("addmm", native_addmm_dispatch);
@@ -887,6 +896,7 @@ REGISTER_PRIVATEUSE1_DISPATCH(dequantize_tensor_per_channel_float_qparams_stub, 
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("initialize_arithmetic_dispatch", initialize_arithmetic_dispatch);
   m.def("initialize_matmul_dispatch", initialize_matmul_dispatch);
   #include "scientific_bridge_bindings.inc"
   #include "blas_bridge_bindings.inc"

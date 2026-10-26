@@ -1024,6 +1024,10 @@ def _cumulative(op, a, dim, *, dtype=None):
     return cumulative(a, dim, dtype=dtype, product=op == 101)
 
 
+_cpp_arithmetic_dispatch = hasattr(_C, 'initialize_arithmetic_dispatch')
+_cpp_arithmetic_ops = frozenset(('add.Tensor', 'add_.Tensor', 'sub.Tensor', 'sub_.Tensor',
+                                 'mul.Tensor', 'mul_.Tensor', 'neg', 'neg_'))
+
 for name, function in {
     "fill_.Scalar": fill_, "zero_": lambda a: fill_(a, 0),
     "fill_.Tensor": fill_tensor_, "fill.Scalar": fill, "fill.Tensor": fill,
@@ -1151,7 +1155,9 @@ for name, function in {
     "bitwise_not": lambda a: bitwise(92, a),
     "bitwise_not_": lambda a: bitwise(92, a, inplace=True),
 }.items():
-    if not (_cpp_matmul_dispatch and name in ('mm', 'bmm', 'addmm')):
+    if _cpp_arithmetic_dispatch and name in _cpp_arithmetic_ops:
+        _C.initialize_arithmetic_dispatch(name, function)
+    elif not (_cpp_matmul_dispatch and name in ('mm', 'bmm', 'addmm')):
         _registry.impl(name, function)
 
 
