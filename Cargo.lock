@@ -8719,7 +8719,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-store-safetensors-tests"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "float-cmp",
  "ruda-autodiff",
