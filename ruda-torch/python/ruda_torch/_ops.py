@@ -187,6 +187,11 @@ def bmm(a, b):
     _C.execute(30, a, b, out, 0.0)
     return out
 
+_cpp_matmul_dispatch = hasattr(_C, 'initialize_matmul_dispatch')
+if _cpp_matmul_dispatch:
+    from .math_backend import _backend as _matmul_backend_context
+    _C.initialize_matmul_dispatch(_matmul_backend_context, mm, bmm, addmm)
+
 def _dimension(dim, rank):
     if dim < -max(rank, 1) or dim >= max(rank, 1):
         raise IndexError("dimension out of range")
@@ -1146,7 +1151,8 @@ for name, function in {
     "bitwise_not": lambda a: bitwise(92, a),
     "bitwise_not_": lambda a: bitwise(92, a, inplace=True),
 }.items():
-    _registry.impl(name, function)
+    if not (_cpp_matmul_dispatch and name in ('mm', 'bmm', 'addmm')):
+        _registry.impl(name, function)
 
 
 for name, op in (("eq", 78), ("ne", 79), ("lt", 80), ("le", 81), ("gt", 82), ("ge", 83)):

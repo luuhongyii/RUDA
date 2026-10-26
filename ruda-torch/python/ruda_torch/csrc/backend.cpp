@@ -597,6 +597,8 @@ void addmm(const at::Tensor& bias, const at::Tensor& a, const at::Tensor& b,
   check(addmm_native(&cv.desc, &av.desc, &bv.desc, &ov.desc, alpha, beta));
 }
 
+#include "matmul_dispatch.inc"
+
 void layer_norm(const at::Tensor& input, const std::optional<at::Tensor>& weight,
                 const std::optional<at::Tensor>& bias, at::Tensor out, at::Tensor mean,
                 at::Tensor rstd, double epsilon) {
@@ -796,6 +798,9 @@ TORCH_LIBRARY_IMPL(ruda, PrivateUse1, m) {
   m.impl("cross_entropy_backward",cross_entropy_backward);
 }
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
+  m.impl("mm", native_mm_dispatch);
+  m.impl("bmm", native_bmm_dispatch);
+  m.impl("addmm", native_addmm_dispatch);
   m.impl("addr", TORCH_FN(at::native::addr));
   m.impl("addr.out", TORCH_FN(at::native::addr_out));
   m.impl("topk",topk_tensor);
@@ -882,6 +887,7 @@ REGISTER_PRIVATEUSE1_DISPATCH(dequantize_tensor_per_channel_float_qparams_stub, 
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("initialize_matmul_dispatch", initialize_matmul_dispatch);
   #include "scientific_bridge_bindings.inc"
   #include "blas_bridge_bindings.inc"
   #include "linalg_bridge_bindings.inc"
