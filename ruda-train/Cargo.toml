@@ -21,10 +21,10 @@ path = "examples/mnist.rs"
 required-features = ["mnist"]
 
 [dependencies]
-ruda-model = { path = "../ruda-model", default-features = false, features = ["std", "dataset"] }
-ruda-optim = { path = "../ruda-optim", default-features = false, features = ["std"] }
-ruda-nn = { path = "../ruda-nn", optional = true, default-features = false, features = ["std"] }
-ruda-store = { path = "../ruda-store", optional = true, default-features = false, features = ["std", "pytorch"] }
+ruda-model = { version = "0.21.64", path = "../ruda-model", default-features = false, features = ["std", "dataset"] }
+ruda-optim = { version = "0.21.71", path = "../ruda-optim", default-features = false, features = ["std"] }
+ruda-nn = { version = "0.21.73", path = "../ruda-nn", optional = true, default-features = false, features = ["std"] }
+ruda-store = { version = "0.21.63", path = "../ruda-store", optional = true, default-features = false, features = ["std", "pytorch"] }
 dirs = { version = "=6.0.0", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.148"
@@ -37,8 +37,8 @@ log = { version = "=0.4.34", optional = true }
 ratatui = { version = "=0.30.2", optional = true }
 unicode-width = { version = "0.2", optional = true }
 derive-new = { version = "=0.7.0", optional = true }
-ruda-tensor-device = { path = "../ruda-tensor/device", optional = true, default-features = false, features = ["cuda"] }
-ruda-fusion = { path = "../ruda-fusion", optional = true, default-features = false, features = ["test-util"] }
+ruda-tensor-device = { version = "0.21.73", path = "../ruda-tensor/device", optional = true, default-features = false, features = ["cuda"] }
+ruda-fusion = { version = "0.21.72", path = "../ruda-fusion", optional = true, default-features = false, features = ["test-util"] }
 
 [dev-dependencies]
 ruda-tensor-host = { path = "../ruda-tensor/host" }
