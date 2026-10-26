@@ -80,11 +80,15 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
         let ops = opt.program[block].ops.clone();
         for op in ops.borrow().values() {
             match &op.operation {
-                Operation::CoopMma(ruda_core::ir::CoopMma::Elementwise { captures, .. }) => {
-                    for capture in captures {
-                        if let VariableKind::LocalArray { id, .. } = capture.kind {
+                Operation::CoopMma(_) => {
+                    let mut instruction = op.clone();
+                    opt.visit_operation(&mut instruction.operation, &mut instruction.out, |_, variable| {
+                        if let VariableKind::LocalArray { id, .. } = variable.kind {
                             track_consts.insert(id, false);
                         }
+                    });
+                    if let Some(Variable { kind: VariableKind::LocalArray { id, .. }, .. }) = instruction.out {
+                        track_consts.insert(id, false);
                     }
                 }
                 Operation::Pointer(ruda_core::ir::PointerOp::Address(pointer)) => {

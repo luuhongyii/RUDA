@@ -13,6 +13,8 @@ mod bitwise;
 mod native_memory;
 mod training_math;
 mod scaled;
+mod register_arrays;
+mod integer_division;
 
 fn options() -> PtxCompilationOptions {
     PtxCompilationOptions {
@@ -233,11 +235,14 @@ fn f32_exponential_emits_native_ptx() {
         local(0, ty),
     ));
     let result = compile(k, ExecutionMode::Checked, UIntKind::U32).unwrap();
-    assert!(result.source.contains("ld.const.u64"));
+    assert!(result.source.contains("ld.global.nc.u64"));
+    assert!(result.source.contains(".global .align 256 .u64"));
     assert!(result.source.contains("cvt.rn.f32.f64"));
     assert!(result.source.contains("setp.neu.f32"));
     assert!(result.source.contains("setp.gt.f32"));
     assert!(result.source.contains("setp.lt.f32"));
+    assert_eq!(result.source.matches("selp.f32").count(), 4);
+    assert!(!result.source.contains("bra "));
     assert!(!result.source.contains("ex2.approx"));
 }
 

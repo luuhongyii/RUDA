@@ -76,14 +76,17 @@ _METADATA = {torch.ops.aten.detach.default, torch.ops.aten.alias.default}
 
 
 def _native_metadata(node):
-    if node.op != 'call_function' or node.target not in _METADATA:
+    if node.op != 'call_function' or node.target not in _METADATA | _ALIASES.keys():
         return False
-    if len(node.args) != 1 or not isinstance(node.args[0], Node) or node.kwargs:
+    if not node.args or not isinstance(node.args[0], Node):
         return False
     source, result = node.args[0].meta.get('val'), node.meta.get('val')
-    return (isinstance(source, torch.Tensor) and isinstance(result, torch.Tensor)
-            and source.device.type == 'ruda' and source.device == result.device and source.dtype == result.dtype
-            and source.shape == result.shape and source.stride() == result.stride())
+    if not (isinstance(source,torch.Tensor) and isinstance(result,torch.Tensor)
+            and source.device.type=='ruda' and source.device==result.device and source.dtype==result.dtype):return False
+    if node.target in _METADATA:
+        return len(node.args)==1 and not node.kwargs and source.shape==result.shape and source.stride()==result.stride()
+    if node.target==torch.ops.aten.reshape.default and not source.is_contiguous():return False
+    return True
 
 
 def _layout_capable():
@@ -459,7 +462,7 @@ def _stream_id():
 def _build_graph(inputs, nodes, outputs, device=None):
     from ._graph import StaticGraph
     # AOTAutograd owns differentiation. No hand-written backward bridge is used.
-    return StaticGraph(inputs, nodes, outputs=outputs, reuse_workspace=True, device=device)
+    return StaticGraph(inputs, nodes, outputs=outputs, optimize=True, reuse_workspace=True, device=device)
 
 
 def _input_spec(value):
@@ -531,8 +534,10 @@ class NativeRegion(torch.nn.Module):
                 return self.reference(*args)
 
             stream = _stream_id()
+            bound = tuple(isinstance(t, torch.nn.Parameter) and self.phase == 'inference' for t in args)
             key = (stream, torch.is_inference_mode_enabled(),
-                   tuple((tuple(t.shape), tuple(t.stride()), t.dtype, t.device) for t in args))
+                   tuple((tuple(t.shape), tuple(t.stride()), t.dtype, t.device,
+                          t.data_ptr() if direct else None) for t,direct in zip(args,bound,strict=True)))
             entry = self._cache.get(key)
             with torch.no_grad():
                 if entry is None:
@@ -544,8 +549,8 @@ class NativeRegion(torch.nn.Module):
                         old_graph.close()
                         del self._cache[old_key]
                         self.state.add('native_cache_evictions')
-                    buffers = {name: torch.empty_like(t, memory_format=torch.contiguous_format)
-                               for name, t in zip(self.names, args, strict=True)}
+                    buffers = {name: t.detach() if direct else torch.empty_like(t, memory_format=torch.contiguous_format)
+                               for name,t,direct in zip(self.names,args,bound,strict=True)}
                     graph = _build_graph(buffers, self.nodes, self.outputs, self.device)
                     entry = graph, buffers
                     self._cache[key] = entry
@@ -554,8 +559,8 @@ class NativeRegion(torch.nn.Module):
                     self._cache.move_to_end(key)
                     self.state.add('native_cache_hits')
                 graph, buffers = entry
-                for buffer, value in zip(buffers.values(), args, strict=True):
-                    buffer.copy_(value)
+                for buffer,value,direct in zip(buffers.values(),args,bound,strict=True):
+                    if not direct:buffer.copy_(value)
                 result = graph.replay()
                 # Run/clone failures propagate: never execute the region twice.
                 owned = tuple(result[name].clone() for name in self.outputs)
@@ -617,6 +622,9 @@ def partition(gm, state, phase, options):
     Conservatively consecutive grouping avoids moving work across mutations or
     RNG calls. Runtime guards also check shape/layout/dtype, not just op names.
     """
+    if options.native!='off' and phase=='inference':
+        from ._compile_patterns import fuse_normalizations
+        gm=fuse_normalizations(gm)
     if options.native!='off' and _layout_capable():
         from ._compile_normalization import expand_normalizations
         gm=expand_normalizations(gm)

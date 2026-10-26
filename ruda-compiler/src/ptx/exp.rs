@@ -26,7 +26,7 @@ impl Emitter {
             .collect::<Vec<_>>()
             .join(", ");
         self.module_declarations += &format!(
-            ".const .align 8 .u64 {}[32] = {{ {values} }};\n",
+            ".global .align 256 .u64 {}[32] = {{ {values} }};\n",
             self.expf_table_symbol,
         );
         let base = self.reg(Scalar::U64);
@@ -63,30 +63,23 @@ impl Emitter {
     }
 
     pub(super) fn exponential_f32(&mut self, destination: &str, source: &str) {
-        let predicate = self.reg(Scalar::Pred);
-        let nan = self.label();
-        let overflow = self.label();
-        let underflow = self.label();
-        let end = self.label();
-        self.line(format!("setp.neu.f32 {predicate}, {source}, {source};"));
-        self.line(format!("@{predicate} bra {nan};"));
-        self.line(format!("setp.gt.f32 {predicate}, {source}, 0f42b17217;"));
-        self.line(format!("@{predicate} bra {overflow};"));
-        self.line(format!("setp.lt.f32 {predicate}, {source}, 0fc2cff1b4;"));
-        self.line(format!("@{predicate} bra {underflow};"));
-
-        self.exponential_finite_f32(destination, source, false);
-        self.line(format!("bra {end};"));
-
-        self.line(format!("{nan}:"));
-        self.line(format!("add.rn.f32 {destination}, {source}, {source};"));
-        self.line(format!("bra {end};"));
-        self.line(format!("{overflow}:"));
-        self.line(format!("mov.f32 {destination}, 0f7f800000;"));
-        self.line(format!("bra {end};"));
-        self.line(format!("{underflow}:"));
-        self.line(format!("mov.f32 {destination}, 0f00000000;"));
-        self.line(format!("{end}:"));
+        let nan = self.reg(Scalar::Pred);
+        let overflow = self.reg(Scalar::Pred);
+        let underflow = self.reg(Scalar::Pred);
+        let exceptional = self.reg(Scalar::Pred);
+        let nan_value = self.reg(Scalar::F32);
+        let finite_source = self.reg(Scalar::F32);
+        self.line(format!("setp.neu.f32 {nan}, {source}, {source};"));
+        self.line(format!("setp.gt.f32 {overflow}, {source}, 0f42b17217;"));
+        self.line(format!("setp.lt.f32 {underflow}, {source}, 0fc2cff1b4;"));
+        self.line(format!("add.rn.f32 {nan_value}, {source}, {source};"));
+        self.line(format!("or.pred {exceptional}, {overflow}, {underflow};"));
+        self.line(format!("or.pred {exceptional}, {exceptional}, {nan};"));
+        self.line(format!("selp.f32 {finite_source}, 0f00000000, {source}, {exceptional};"));
+        self.exponential_finite_f32(destination, &finite_source, false);
+        self.line(format!("selp.f32 {destination}, 0f00000000, {destination}, {underflow};"));
+        self.line(format!("selp.f32 {destination}, 0f7f800000, {destination}, {overflow};"));
+        self.line(format!("selp.f32 {destination}, {nan_value}, {destination}, {nan};"));
     }
 
     // Callers exclude non-finite values and bound x to [-104, 90].
@@ -113,7 +106,8 @@ impl Emitter {
         self.line(format!("and.b64 {offset}, {ki}, 31;"));
         self.line(format!("shl.b64 {offset}, {offset}, 3;"));
         self.line(format!("add.u64 {address}, {table}, {offset};"));
-        self.line(format!("ld.const.u64 {scale_bits}, [{address}];"));
+        let cache = if self.target.sm >= 35 { "nc" } else { "ca" };
+        self.line(format!("ld.global.{cache}.u64 {scale_bits}, [{address}];"));
         self.line(format!("shl.b64 {exponent_bits}, {ki}, 47;"));
         self.line(format!("add.u64 {scale_bits}, {scale_bits}, {exponent_bits};"));
         if halve {

@@ -224,8 +224,54 @@ impl Emitter {
         let lhs = self.value(op.lhs)?;
         let rhs = self.value(op.rhs)?;
         let dst = self.destination(out)?;
+        if matches!(opcode, "div" | "rem") {
+            if let Some(ruda_core::ir::ConstantValue::UInt(divisor)) = op.rhs.as_const() {
+                if self.unsigned_constant_division(ty, &dst, &lhs, divisor, opcode == "rem") {
+                    return Ok(());
+                }
+            }
+        }
         self.line(format!("{opcode}.{} {dst}, {lhs}, {rhs};", ty.suffix()));
         Ok(())
+    }
+
+    pub(super) fn unsigned_constant_division(
+        &mut self, ty: Scalar, destination: &str, source: &str, divisor: u64, remainder: bool,
+    ) -> bool {
+        let divisor = match ty {
+            Scalar::U32 => divisor as u32 as u64,
+            Scalar::U64 => divisor,
+            _ => return false,
+        };
+        if divisor == 0 { return false; }
+        let suffix = ty.suffix();
+        if divisor.is_power_of_two() {
+            if remainder {
+                self.line(format!("and.{} {destination}, {source}, {};", ty.bits(), divisor - 1));
+            } else {
+                self.line(format!("shr.{suffix} {destination}, {source}, {};", divisor.trailing_zeros()));
+            }
+            return true;
+        }
+        // floor(2^bits / divisor) underestimates the quotient by at most one.
+        // Its product cannot exceed source, so the correction cannot overflow.
+        let reciprocal = (1u128 << (ty.bytes() * 8)) / divisor as u128;
+        let quotient = self.reg(ty);
+        let residual = self.reg(ty);
+        let correction = self.reg(ty);
+        let predicate = self.reg(Scalar::Pred);
+        self.line(format!("mul.hi.{suffix} {quotient}, {source}, {reciprocal};"));
+        self.line(format!("mul.lo.{suffix} {residual}, {quotient}, {divisor};"));
+        self.line(format!("sub.{suffix} {residual}, {source}, {residual};"));
+        self.line(format!("setp.ge.{suffix} {predicate}, {residual}, {divisor};"));
+        if remainder {
+            self.line(format!("selp.{suffix} {correction}, {divisor}, 0, {predicate};"));
+            self.line(format!("sub.{suffix} {destination}, {residual}, {correction};"));
+        } else {
+            self.line(format!("selp.{suffix} {correction}, 1, 0, {predicate};"));
+            self.line(format!("add.{suffix} {destination}, {quotient}, {correction};"));
+        }
+        true
     }
 
     fn arithmetic(&mut self, op: Arithmetic, out: Variable) -> Result<()> {

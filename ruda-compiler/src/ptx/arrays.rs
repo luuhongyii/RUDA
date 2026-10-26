@@ -25,6 +25,7 @@ impl Emitter {
         let VariableKind::LocalArray { id, length, unroll_factor } = array.kind else {
             return Err(invalid("expected thread-local array"));
         };
+        if self.register_arrays.contains_key(&id) { return Err(invalid("register array address escapes")); }
         let ty = Scalar::of(array.ty.with_vector_size(1))?;
         self.half_target(ty)?;
         let stride = array.ty.vector_size().checked_mul(ty.bytes())

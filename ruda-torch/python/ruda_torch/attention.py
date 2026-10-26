@@ -5,6 +5,7 @@ import math
 import ctypes
 from threading import RLock
 import torch
+from ._broadcast import broadcast_shapes
 from ._architecture_ops import masked_softmax,positions,precision_context,work_dtype
 
 
@@ -38,18 +39,18 @@ def _initialize_dense(indexed=False):
 
 
 def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,global_heads=None,head_start=None,rng_state=None):
-    batch = torch.broadcast_shapes(query.shape[:-3],key.shape[:-3],value.shape[:-3])
+    batch = broadcast_shapes(query.shape[:-3],key.shape[:-3],value.shape[:-3])
     if gqa:
         heads,kv_heads = query.shape[-3],key.shape[-3]
     else:
-        heads = torch.broadcast_shapes((query.shape[-3],),(key.shape[-3],),(value.shape[-3],))[0]
+        heads = broadcast_shapes((query.shape[-3],),(key.shape[-3],),(value.shape[-3],))[0]
         kv_heads = heads
     l,s,d,dv = query.shape[-2],key.shape[-2],query.shape[-1],value.shape[-1]
     if heads==0 or kv_heads==0:
         raise ValueError('attention head counts must be positive')
     kind = 0
     if mask is None:
-        mask = torch.zeros(1,device=query.device,dtype=torch.float32)
+        mask = torch.zeros(0,device=query.device,dtype=torch.float32)
     else:
         if mask.device!=query.device:
             raise ValueError('attention mask must be on the input device')
@@ -60,7 +61,7 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,globa
         if kind==2:
             # Addition can broadcast singleton query/head/batch axes too, as
             # in the existing composition. K/V retain their GQA head mapping.
-            shape = torch.broadcast_shapes((*batch,heads,l,s),mask.shape)
+            shape = broadcast_shapes((*batch,heads,l,s),mask.shape)
             if shape[-1]!=s:
                 raise ValueError('attention mask expands the KV length incompatibly with value')
             batch,heads,l = shape[:-3],shape[-3],shape[-2]
@@ -71,6 +72,12 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,globa
     v = value.expand(*batch,kv_heads,s,dv).contiguous().reshape(b,kv_heads,s,dv)
     shape = (*batch,heads,l,s)
     with precision_context(query):
+        if (p==0 and not torch.is_grad_enabled() and not torch.compiler.is_compiling()
+                and type(query) is torch.Tensor and tensor_group is None and global_heads is None
+                and head_start is None and rng_state is None):
+            native=_initialize_dense()
+            if hasattr(native,'dense_attention_inference'):
+                return native.dense_attention_inference(q,k,v,mask,list(shape),kind,causal,scale).reshape(*batch,heads,l,dv)
         from ._dense_ops import forward,indexed_forward
         if tensor_group is None and global_heads is None and head_start is None and rng_state is None:
             result = forward(q,k,v,mask,list(shape),kind,causal,scale,p)[0]
@@ -89,7 +96,8 @@ def scaled_dot_product_attention(query,key,value,*,attn_mask=None,dropout_p=0.,i
     RUDA uses plane-cooperative fused online softmax and recomputed backward,
     without storing scores, probabilities or dropout masks. CPU/CUDA retain
     the differentiable composition. Atomic KV/mask gradients are nondeterministic
-    and obey torch.use_deterministic_algorithms. This is not a Tensor Core kernel.
+    and obey torch.use_deterministic_algorithms. Eligible BF16/F16 zero-dropout
+    prefill uses Tensor Cores; other shapes retain the online-softmax kernel.
     Boolean masks use True=allowed; floating masks are added before softmax.
     """
     if query.ndim<3 or key.ndim!=query.ndim or value.ndim!=query.ndim:

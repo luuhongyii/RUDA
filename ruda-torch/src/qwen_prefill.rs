@@ -3,8 +3,10 @@ use super::*;
 #[ruda(launch)]
 pub(super) fn flash<F: Float + RudaElement>(
     query: &Array<F>, keys: &Array<F>, values: &Array<F>, output: &mut Array<F>,
+    mask: &Tensor<f32>, stats: &mut Array<f32>,
     queries: u32, key_count: u32, heads: u32, kv_heads: u32, scale: f32,
     #[comptime] width: usize, #[comptime] query_block: usize, #[comptime] causal: bool,
+    #[comptime] mask_kind: u32,
 ) {
     let lane = UNIT_POS_X as usize;
     let warp = UNIT_POS_Y as usize;
@@ -95,6 +97,18 @@ pub(super) fn flash<F: Float + RudaElement>(
                 if position < queries as usize && key_base + column < key_count as usize {
                     if !comptime!(causal) || key_base + column <= position {
                         score = temporary[tbegin + row * temporary_stride + column] * scale;
+                        if comptime!(mask_kind != 0) {
+                            let mut remaining=(((batch * heads as usize + head) * queries as usize + position)
+                                * key_count as usize + key_base + column) as usize;
+                            let mut offset=0usize;let mut axis=mask.rank();
+                            while axis>0 {
+                                axis-=1;offset+=(remaining%mask.shape(axis))*mask.stride(axis);remaining/=mask.shape(axis);
+                            }
+                            let value=mask[offset];
+                            if comptime!(mask_kind == 1) {
+                                if value == 0.0f32 {score=f32::cast_from(f32::NEG_INFINITY);}
+                            } else {score+=value;}
+                        }
                     }
                 }
                 scores[j] = score; next = f32::max(next,score);
@@ -143,7 +157,14 @@ pub(super) fn flash<F: Float + RudaElement>(
         sync_ruda();
     }
     #[unroll] for group in 0usize..4 {
-        if lane % 8 == 0 { row_scale[warp * 16 + group * 4 + lane / 8] = denominator[group].read(); }
+        if lane % 8 == 0 {
+            let row=warp * 16 + group * 4 + lane / 8;
+            row_scale[row] = denominator[group].read();
+            if query_base + row < queries as usize {
+                let offset=((batch * heads as usize + head) * queries as usize + query_base + row)*2;
+                stats[offset]=maximum[group].read();stats[offset+1]=denominator[group].read();
+            }
+        }
     }
     sync_ruda();
     #[unroll] for j in 0usize..(width / 2) {
@@ -151,8 +172,9 @@ pub(super) fn flash<F: Float + RudaElement>(
         let row = index / width;
         let position = query_base + warp * 16 + row;
         if position < queries as usize {
-            output[((batch * heads as usize + head) * queries as usize + position) * width + index % width] =
-                F::cast_from(accumulator[j].read() / row_scale[warp * 16 + row]);
+            let mut value=accumulator[j].read();
+            if row_scale[warp * 16 + row] != 0.0f32 {value/=row_scale[warp * 16 + row];}
+            output[((batch * heads as usize + head) * queries as usize + position) * width + index % width] = F::cast_from(value);
         }
     }
 }

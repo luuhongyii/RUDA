@@ -18,6 +18,10 @@ pub(super) struct Emitter {
     pub native_atomic_pointers: std::collections::HashSet<String>,
     pub matrix_fragments: HashMap<Variable, Vec<String>>,
     pub local_arrays: HashMap<u32, Variable>,
+    pub register_arrays: HashMap<u32, Variable>,
+    pub array_registers: HashMap<u32, Vec<String>>,
+    pub packed_register_arrays: std::collections::HashSet<u32>,
+    pub packed_array_registers: HashMap<u32, Vec<String>>,
     pub constant_arrays: HashMap<u32, (Variable, Vec<Variable>)>,
     pub module_declarations: String,
     pub expf_table_symbol: String,
@@ -110,6 +114,7 @@ impl Emitter {
             Metadata::new(buffers.len() as u32, extended),
             address,
         );
+        let (register_arrays, packed_register_arrays) = super::register_arrays::eligible(&kernel.body);
         let mut emitter = Self {
             body: String::new(),
             prologue: String::new(),
@@ -120,6 +125,10 @@ impl Emitter {
             native_atomic_pointers: Default::default(),
             matrix_fragments: HashMap::new(),
             local_arrays: HashMap::new(),
+            register_arrays,
+            array_registers: HashMap::new(),
+            packed_register_arrays,
+            packed_array_registers: HashMap::new(),
             constant_arrays: HashMap::new(),
             module_declarations: String::new(),
             expf_table_symbol: format!("{name}__ruda_expf_table"),
@@ -457,7 +466,7 @@ impl Emitter {
             return Ok(length.to_string());
         }
         if let VariableKind::LocalArray { length, .. } | VariableKind::ConstantArray { length, .. } = var.kind {
-            self.memory_base(var, false)?;
+            if self.packed_array_registers(var)?.is_none() && self.array_registers(var)?.is_none() { self.memory_base(var, false)?; }
             return Ok(length.to_string());
         }
         let id = self.buffer(var)?.id;
@@ -492,6 +501,7 @@ impl Emitter {
         store: bool,
         checked: bool,
     ) -> Result<()> {
+        if self.register_array_memory(array, index, value, 1, store)? { return Ok(()); }
         let (base, space) = self.memory_base(array, store)?;
         let ty = Scalar::of(array.ty)?;
         if value.ty != array.ty {

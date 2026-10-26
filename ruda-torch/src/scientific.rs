@@ -97,9 +97,17 @@ fn real_convert(a: &View, out: &View) {
     if out.len == 0 { return; }
     assert_eq!(a.len, out.len);
     if a.dtype == out.dtype { copy_storage(a, out); return; }
+    let contiguous = [a,out].iter().all(|view| {
+        let mut span=1usize;
+        for (&size,&stride) in view.shape.iter().zip(&view.strides).rev() {
+            if size>1 && stride!=span {return false;}
+            span=span.checked_mul(size).expect("conversion stride overflow");
+        }
+        true
+    });
     macro_rules! run { ($i:ty, $o:ty) => {
         unsafe { cast_storage::launch::<$i, $o, CudaRuntime>(&client(), grid(out.len), RudaDim::new_1d(128),
-            a.arg(), out.arg(), out.dtype == 3); }
+            a.arg(), out.arg(), out.dtype == 3, contiguous); }
     }; }
     macro_rules! destination { ($i:ty) => { match out.dtype {
         0 => run!($i, f32), 1 => run!($i, f16), 2 => run!($i, bf16), 3 | 8 => run!($i, u8),
@@ -568,9 +576,13 @@ pub(super) fn address<T: Numeric>(x: &kernel_dsl::prelude::Tensor<T>, position: 
     offset
 }
 #[ruda(launch)]
-fn cast_storage<I: Numeric+RudaElement,O: Numeric+RudaElement>(a:&kernel_dsl::prelude::Tensor<I>,out:&mut kernel_dsl::prelude::Tensor<O>,#[comptime] boolean:bool) {
+fn cast_storage<I: Numeric+RudaElement,O: Numeric+RudaElement>(a:&kernel_dsl::prelude::Tensor<I>,out:&mut kernel_dsl::prelude::Tensor<O>,#[comptime] boolean:bool,#[comptime] contiguous:bool) {
     let p=ABSOLUTE_POS as usize;
-    if p<out.len() {let x=a[address(a,p)];let mut value=O::cast_from(x);if comptime!(boolean) {value=O::cast_from(x!=I::cast_from(0u32));}out[address(out,p)]=value;}
+    if p<out.len() {
+        let mut ai=p;let mut oi=p;
+        if !comptime!(contiguous) {ai=address(a,p);oi=address(out,p);}
+        let x=a[ai];let mut value=O::cast_from(x);if comptime!(boolean) {value=O::cast_from(x!=I::cast_from(0u32));}out[oi]=value;
+    }
 }
 #[ruda(launch)]
 fn negative_integer<I:Numeric+RudaElement>(a:&kernel_dsl::prelude::Tensor<I>,out:&mut kernel_dsl::prelude::Tensor<I>) {

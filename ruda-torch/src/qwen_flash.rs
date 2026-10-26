@@ -16,19 +16,9 @@ pub unsafe extern "C" fn ruda_torch_qwen2_flash(descriptors:*const Descriptor,co
         assert_eq!(o.shape,q.shape);assert!(!causal || q.shape[2]==k.shape[2]);
         assert_eq!(scale,((q.shape[3] as f64).sqrt().recip()) as f32);
         let c=client();let width=q.shape[3];
-        let stride=width+8;let temporary_stride=usize::max(stride,72);
-        let bytes=|rows:usize|(rows*stride+128*stride+rows*72)*2+rows*temporary_stride*4+rows*4;
-        let query_block=if q.shape[2]>=128 && c.properties().hardware.max_shared_memory_size>=bytes(128) {128} else {64};
-        let shared_bytes=bytes(query_block);
-        if width%16==0 && width<=128 && q.shape[2]>=64
-            && xs.iter().all(|x|x.len<=u32::MAX as usize)
-            && c.properties().hardware.max_shared_memory_size>=shared_bytes
-        {
-            macro_rules! run {($ty:ty)=>{unsafe {super::qwen_prefill::flash::launch::<$ty,CudaRuntime>(&c,
-                RudaCount::Static(q.shape[2].div_ceil(query_block) as u32,q.shape[1] as u32,q.shape[0] as u32),RudaDim::new_2d(32,(query_block/16) as u32),
-                primitives::tensor(q).into_array_arg(),primitives::tensor(k).into_array_arg(),primitives::tensor(v).into_array_arg(),
-                primitives::tensor(o).into_array_arg(),q.shape[2] as u32,k.shape[2] as u32,q.shape[1] as u32,k.shape[1] as u32,scale,width,query_block,causal)}};}
-            match q.dtype {1=>run!(f16),2=>run!(bf16),_=>unreachable!()}
+        let stats=View::packed(c.empty(q.shape[0]*q.shape[1]*q.shape[2]*8),vec![q.shape[0]*q.shape[1]*q.shape[2],2],0);
+        if let Some(prepared)=super::attention_prefill::prepare(&c,q,k,v,o,&stats,&stats,0,causal,scale) {
+            let (task,count,args,origin)=prepared.into_parts();origin.launch(task,count,args);
             LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);return;
         }
         let mut expanded=Vec::new();

@@ -99,6 +99,17 @@ def direct_backward(name, grad, x, args, *, out=None):
     return packet.default(*operands, **kw)
 
 
+@pytest.mark.parametrize('dtype', FLOATS)
+@pytest.mark.parametrize('name,args', [case for case in CASES if case[0] not in ('hardtanh', 'threshold')])
+def test_vector_activation_forward_backward(dtype, name, args):
+    values = torch.linspace(-8, 8, 1025).to(dtype)
+    gradient = torch.linspace(-1, 1, 1025).to(dtype)
+    x, g = values.to('ruda')[1:], gradient.to('ruda')[1:]
+    reference, reference_gradient = values[1:].cuda(), gradient[1:].cuda()
+    equal(invoke(name, x, args), invoke(name, reference, args))
+    equal(direct_backward(name, g, x, args), direct_backward(name, reference_gradient, reference, args))
+
+
 @pytest.mark.parametrize('name,args', CASES)
 @pytest.mark.parametrize('dtype', FLOATS)
 def test_activation_direct_backward(name, args, dtype):
@@ -244,6 +255,62 @@ def test_prelu_parameter_gradients_and_backward_contract(dtype):
                 torch.autograd.grad(direct.sum(), x)
     for a, b in zip(*results):
         equal(a, b)
+
+
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('name,args', [('silu', ()), ('gelu', ('none',)), ('gelu', ('tanh',))])
+def test_exact_activation_lookup_all_storage_bits(dtype, name, args):
+    import ruda_torch
+    bits = torch.arange(65536, dtype=torch.int32).to(torch.int16)
+    x = bits.view(dtype).to('ruda')
+    strided = bits.repeat_interleave(2).view(dtype).to('ruda')[::2]
+    expected = invoke(name, strided, args).cpu()
+    actual = invoke(name, x, args).cpu()
+    torch.testing.assert_close(actual.view(torch.int16), expected.view(torch.int16), rtol=0, atol=0)
+    before = ruda_torch.execution_stats()
+    warm = invoke(name, x, args)
+    after = ruda_torch.execution_stats()
+    assert after['kernel_launches'] - before['kernel_launches'] == 1
+    for key in ['host_to_device_bytes', 'device_to_host_bytes']:
+        assert after[key] == before[key]
+    torch.testing.assert_close(warm.cpu().view(torch.int16), expected.view(torch.int16), rtol=0, atol=0)
+    unaligned = torch.cat((bits[:1], bits)).view(dtype).to('ruda')[1:]
+    torch.testing.assert_close(invoke(name, unaligned, args).cpu().view(torch.int16), expected.view(torch.int16), rtol=0, atol=0)
+    invoke(name, x, args, inplace=True)
+    torch.testing.assert_close(x.cpu().view(torch.int16), expected.view(torch.int16), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+def test_activation_lookup_stream_switch_keeps_pending_tables(dtype):
+    import ruda_torch as r
+    cpu = torch.linspace(-8, 8, 65536).to(dtype)
+    first, second = r.Stream(), r.Stream()
+    with r.stream(first):
+        a = cpu.to('ruda')
+        first_value = F.silu(a)
+    with r.stream(second):
+        b = cpu.to('ruda')
+        second_value = F.gelu(b, approximate='tanh')
+    with r.stream(first):
+        repeated = F.silu(a)
+    r.synchronize()
+    strided = cpu.repeat_interleave(2).to('ruda')[::2]
+    silu = F.silu(strided).cpu().view(torch.int16)
+    gelu = F.gelu(strided, approximate='tanh').cpu().view(torch.int16)
+    for value, expected in [(first_value, silu), (repeated, silu), (second_value, gelu)]:
+        torch.testing.assert_close(value.cpu().view(torch.int16), expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('name,args', [('silu', ()), ('gelu', ('none',)), ('gelu', ('tanh',))])
+def test_activation_lookup_preserves_backward(dtype, name, args):
+    cpu = torch.linspace(-6, 6, 65536).to(dtype)
+    x = cpu.to('ruda').requires_grad_()
+    strided = cpu.repeat_interleave(2).to('ruda')[::2].requires_grad_()
+    grad = torch.linspace(-1, 1, 65536).to(dtype).to('ruda')
+    invoke(name, x, args).backward(grad)
+    invoke(name, strided, args).backward(grad)
+    torch.testing.assert_close(x.grad.cpu().view(torch.int16), strided.grad.cpu().view(torch.int16), rtol=0, atol=0)
 
 
 if __name__ == '__main__':

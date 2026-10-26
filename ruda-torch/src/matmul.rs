@@ -67,12 +67,10 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
             Err(error) => panic!("RUDA ruBLAS GEMV failed: {error}"),
         }
     }
-    if op==7 && matches!(a.dtype,1|2) && a.shape[0]>=64 && a.shape[1]>=128 && b.shape[1]>=128
-        && a.strides[1]==1 && a.strides[0]==a.shape[1] && b.strides[0]==1 && b.strides[1]==b.shape[0]
-        && out.strides[1]==1 && out.strides[0]==out.shape[1] {
-        match rublas::tensor_matmul::launch_matmul_pipelined(primitives::tensor(a),primitives::tensor(b),
+    if matches!(a.dtype,1|2) && a.shape[a.shape.len()-2]>1 {
+        match rublas::tensor_matmul::launch_matmul_pipelined_counted(primitives::tensor(a),primitives::tensor(b),
             primitives::tensor(out),F32MathMode::Strict) {
-            Ok(())=>{finish_dispatch(&client());RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);LAUNCHES.fetch_add(1,Ordering::Relaxed);return;}
+            Ok(count)=>{finish_dispatch(&client());RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);LAUNCHES.fetch_add(count as u64,Ordering::Relaxed);return;}
             Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_) | MatmulSetupError::Vectorization(_))=>{}
             Err(error)=>panic!("RUDA pipelined GEMM failed: {error}"),
         }
@@ -146,6 +144,14 @@ pub(super) fn addmm(bias: &View, a: &View, b: &View, out: &View, alpha: f32, bet
         return;
     }
     if super::qwen_graph::fused_addmm(bias,a,b,out,alpha,beta) {return;}
+    if matches!(a.dtype,1|2) && a.shape[0]>1 && policy()!=Policy::Scalar {
+        match rublas::tensor_matmul::launch_addmm_pipelined_counted(primitives::tensor(bias),primitives::tensor(a),
+            primitives::tensor(b),primitives::tensor(out),alpha,beta,F32MathMode::Strict) {
+            Ok(count)=>{finish_dispatch(&client());RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);LAUNCHES.fetch_add(count as u64,Ordering::Relaxed);return;}
+            Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_) | MatmulSetupError::Vectorization(_))=>{}
+            Err(error)=>panic!("RUDA pipelined addmm failed: {error}"),
+        }
+    }
     let client = client();
     // F32 can use its own output for accumulation. For low precision, only
     // M*N values are held in F32; inputs/weights/bias are never promoted.

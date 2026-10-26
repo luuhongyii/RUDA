@@ -172,7 +172,8 @@ def register(library):
                      'hardshrink': partial(shrink, op=275), 'softshrink': partial(shrink, op=276),
                      'mish': partial(_run, op=278), 'gelu': gelu, 'silu': silu,
                      'hardtanh': hardtanh, 'threshold': threshold}.items():
-        library.impl(name, fn)
+        if name not in getattr(_C, 'native_eager_ops', ()):
+            library.impl(name, fn)
         library.impl(name + '.out', fn)
         if name not in ('softplus', 'hardshrink', 'softshrink'):
             library.impl(name + '_', partial(fn, inplace=True))

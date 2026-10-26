@@ -51,6 +51,16 @@ void dense_attention_call(uint32_t op,const std::vector<at::Tensor>& tensors,
   dense_attention_dispatch(op,tensors,mask_kind,score_shape,causal,scale,p,seed,counter,need_mask,false,0,0);
 }
 
+at::Tensor dense_attention_inference(const at::Tensor& q,const at::Tensor& k,const at::Tensor& v,
+    const at::Tensor& mask,const std::vector<int64_t>& score_shape,uint32_t mask_kind,bool causal,double scale) {
+  TORCH_CHECK(!c10::GradMode::is_enabled(),"dense inference requires disabled autograd");
+  TORCH_CHECK(q.dim()==4 && k.dim()==4 && v.dim()==4,"dense inference requires canonical rank-four operands");
+  auto output=at::empty({q.size(0),q.size(1),q.size(2),v.size(3)},q.options());
+  auto stats=at::empty({q.size(0)*q.size(1)*q.size(2),2},q.options().dtype(at::kFloat));
+  dense_attention_call(0,{q,k,v,mask,output,stats},mask_kind,score_shape,causal,scale,0.,0,0,false);
+  return output;
+}
+
 void indexed_dense_attention_call(uint32_t op,const std::vector<at::Tensor>& tensors,
     uint32_t mask_kind,const std::vector<int64_t>& score_shape,bool causal,
     double scale,double p,uint64_t seed,uint64_t counter,bool need_mask,int64_t global_heads,int64_t head_start) {

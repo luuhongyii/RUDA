@@ -8,6 +8,24 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,a:&View,b:&View,out:&View)
     let rank=a.shape.len();
     let (m,k,n)=(a.shape[rank-2],a.shape[rank-1],b.shape[rank-1]);
     if k==0 {return None;}
+    let bind=|v:&View| {
+        let mut tensor=primitives::tensor(v);
+        tensor.client=c.clone();
+        tensor
+    };
+    let prepared=if rank==2 && m==1 {
+        rublas::tensor_matmul::prepare_gemv_low_precision(bind(a),bind(b),bind(out))
+    } else {
+        rublas::tensor_matmul::prepare_matmul_pipelined(bind(a),bind(b),bind(out),
+            rublas::tensor_matmul::F32MathMode::Strict)
+    };
+    match prepared {
+        Ok(kernel)=>return Some(kernel),
+        Err(rublas::kernel_ir::definition::MatmulSetupError::Unavailable(_)
+            |rublas::kernel_ir::definition::MatmulSetupError::InvalidConfig(_)
+            |rublas::kernel_ir::definition::MatmulSetupError::Vectorization(_))=>{},
+        Err(error)=>panic!("RUDA graph matmul preparation failed: {error}"),
+    }
     let batches=if rank==3 {a.shape[0]} else {1};
     let storage=ElemType::Float(if a.dtype==1 {FloatKind::F16} else {FloatKind::BF16}).into();
     let cfg=MmaConfig{a_type:storage,b_type:storage,cd_type:ElemType::Float(FloatKind::F32).into(),m:16,n:16,k:16};

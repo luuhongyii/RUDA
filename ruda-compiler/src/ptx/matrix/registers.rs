@@ -21,11 +21,13 @@ impl Emitter {
 
     pub(super) fn matrix_read_registers(&mut self, variable: Variable, count: usize) -> Result<Vec<String>> {
         let ty = self.matrix_register_capacity(variable, count)?;
+        if let Some(registers) = self.packed_array_registers(variable)? { return Ok(registers[..count].to_vec()); }
         let register_type = if matches!(ty, Scalar::F32 | Scalar::F64) && !Scalar::is_tf32(variable.ty) { ty } else { Scalar::U32 };
         let registers = (0..count).map(|_| if register_type == Scalar::U32 {
             self.reg_b32()
         } else { self.reg(register_type) }).collect::<Vec<_>>();
-        if matches!(variable.kind, VariableKind::LocalArray { .. }) {
+        let array_values = self.array_registers(variable)?;
+        if matches!(variable.kind, VariableKind::LocalArray { .. }) && array_values.is_none() {
             let (base, space) = self.memory_base(variable, false)?;
             for (index, register) in registers.iter().enumerate() {
                 if ty.half() {
@@ -47,7 +49,7 @@ impl Emitter {
                 } else { self.line(format!("ld.{space}.b32 {register}, [{base}+{}];", index * 4)); }
             }
         } else {
-            let values = self.vector_values(variable)?;
+            let values = if let Some(values) = array_values { values } else { self.vector_values(variable)? };
             for (index, register) in registers.iter().enumerate() {
                 if ty.half() { self.line(format!("mov.b32 {register}, {{{}, {}}};", values[index * 2], values[index * 2 + 1])); }
                 else if ty.fp8() || matches!(ty, Scalar::I8 | Scalar::U8) { self.matrix_pack_bytes(register, &values[index * 4..index * 4 + 4]); }
@@ -60,7 +62,14 @@ impl Emitter {
 
     pub(super) fn matrix_write_registers(&mut self, variable: Variable, registers: &[String]) -> Result<()> {
         let ty = self.matrix_register_capacity(variable, registers.len())?;
-        if matches!(variable.kind, VariableKind::LocalArray { .. }) {
+        if let Some(destinations) = self.packed_array_registers(variable)? {
+            for (destination, source) in destinations.iter().zip(registers) {
+                self.line(format!("mov.b32 {destination}, {source};"));
+            }
+            return Ok(());
+        }
+        let array_values = self.array_registers(variable)?;
+        if matches!(variable.kind, VariableKind::LocalArray { .. }) && array_values.is_none() {
             let (base, space) = self.memory_base(variable, true)?;
             for (index, register) in registers.iter().enumerate() {
                 if ty.half() {
@@ -80,7 +89,7 @@ impl Emitter {
                 } else { self.line(format!("st.{space}.b32 [{base}+{}], {register};", index * 4)); }
             }
         } else {
-            let values = self.vector_destination(variable)?;
+            let values = if let Some(values) = array_values { values } else { self.vector_destination(variable)? };
             for (index, register) in registers.iter().enumerate() {
                 if ty.half() { self.line(format!("mov.b32 {{{}, {}}}, {register};", values[index * 2], values[index * 2 + 1])); }
                 else if ty.fp8() || matches!(ty, Scalar::I8 | Scalar::U8) {

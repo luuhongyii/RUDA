@@ -25,24 +25,50 @@ use ruda_kernel::dsl::prelude::Tensor;
 #[ruda(fast_math = FastMath::ReducedPrecision.into())]
 fn rsqrt<F: Float>(x: F) -> F { x.inverse_sqrt() }
 
+#[ruda]
+fn real_value<S: Float + RudaElement, F: Float>(a: F, b: F, #[comptime] special: u32) -> S {
+    let mut result = S::cast_from(0u32);
+    if comptime!(special == 3) { result = S::cast_from(a.sqrt()); }
+    else if comptime!(special == 4) { result = S::cast_from(rsqrt::<F>(a)); }
+    else if comptime!(special == 5) { result = S::cast_from(F::new(1.0)/a); }
+    else if comptime!(special == 6) { result = S::cast_from(a*a); }
+    else if comptime!(special == 7) { result = S::cast_from(F::cast_from(S::cast_from(a*a))*a); }
+    else if comptime!(special == 8) { result = S::cast_from(1.0f64/f64::cast_from(S::cast_from(a*a))); }
+    else { result = S::cast_from(a.powf(b)); }
+    result
+}
+
 #[ruda(launch)]
 fn real<S: Float + RudaElement, F: Float>(
     base: &Tensor<S>, exponent: &Tensor<S>, output: &mut Tensor<S>, scalar: u64,
     #[comptime] mode: u32, #[comptime] special: u32, #[comptime] code: u32,
+    #[comptime] base_packed: bool, #[comptime] exponent_packed: bool, #[comptime] output_packed: bool,
 ) {
     let p = (RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize)*256usize + UNIT_POS as usize;
     if p < output.len() {
-        let a = F::cast_from(base[address(base,p)]); let mut b = crate::floating::from_bits::<F>(scalar,code);
-        if comptime!(mode == 0) { b = F::cast_from(exponent[address(exponent,p)]); }
-        let mut result = S::cast_from(0u32);
-        if comptime!(special == 3) { result = S::cast_from(a.sqrt()); }
-        else if comptime!(special == 4) { result = S::cast_from(rsqrt::<F>(a)); }
-        else if comptime!(special == 5) { result = S::cast_from(F::new(1.0)/a); }
-        else if comptime!(special == 6) { result = S::cast_from(a*a); }
-        else if comptime!(special == 7) { result = S::cast_from(F::cast_from(S::cast_from(a*a))*a); }
-        else if comptime!(special == 8) { result = S::cast_from(1.0f64/f64::cast_from(S::cast_from(a*a))); }
-        else { result = S::cast_from(a.powf(b)); }
-        output[address(output,p)] = result;
+        let mut i=p;let mut j=p;let mut destination=p;
+        if !comptime!(base_packed) {i=address(base,p);}
+        if comptime!(mode == 0 && !exponent_packed) {j=address(exponent,p);}
+        if !comptime!(output_packed) {destination=address(output,p);}
+        let a = F::cast_from(base[i]); let mut b = crate::floating::from_bits::<F>(scalar,code);
+        if comptime!(mode == 0) { b = F::cast_from(exponent[j]); }
+        output[destination] = real_value::<S,F>(a,b,special);
+    }
+}
+
+#[ruda(launch)]
+fn real_vector<S: Float + RudaElement, F: Float>(
+    base: &Array<Vector<S,Const<4>>>, exponent: &Array<Vector<S,Const<4>>>, output: &mut Array<Vector<S,Const<4>>>, scalar: u64,
+    #[comptime] mode: u32, #[comptime] special: u32, #[comptime] code: u32,
+) {
+    let p = (RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize)*256usize + UNIT_POS as usize;
+    if p < output.len() {
+        let a=base[p];let mut b=Vector::<F,Const<4>>::new(crate::floating::from_bits::<F>(scalar,code));
+        if comptime!(mode == 0) {b=Vector::cast_from(exponent[p]);}
+        let mut result=Vector::<S,Const<4>>::new(S::cast_from(0u32));
+        #[unroll]
+        for lane in 0usize..4 {result[lane]=real_value::<S,F>(F::cast_from(a[lane]),b[lane],special);}
+        output[p]=result;
     }
 }
 
@@ -165,7 +191,9 @@ pub(super) fn dispatch(xs:&[View],ints:&[i64]) {
     for input in &xs[..2] {assert_eq!(input.dtype,code);assert_eq!(input.shape,xs[2].shape);}
     let is_complex=matches!(code,10|11|14);assert!(mode!=2 || is_complex);assert!(mode==1 || special==0);
     if xs[2].len==0 {return;}
-    let c=client();let blocks=xs[2].len.div_ceil(256);let x=blocks.min(131072);
+    let base_packed=xs[0].contiguous();let exponent_packed=mode!=0 || xs[1].contiguous();let output_packed=xs[2].contiguous();
+    let vector=code<=2 && base_packed && exponent_packed && output_packed && xs[2].len>=1024 && xs[2].len%4==0;
+    let c=client();let blocks=(xs[2].len/if vector {4}else{1}).div_ceil(256);let x=blocks.min(131072);
     let grid=RudaCount::Static(x as u32,blocks.div_ceil(x) as u32,1);let block=RudaDim::new_1d(256);
     if is_complex {
         let parts:Vec<View>=xs.iter().flat_map(|value|[scientific::component(value,false),scientific::component(value,true)]).collect();
@@ -176,7 +204,11 @@ pub(super) fn dispatch(xs:&[View],ints:&[i64]) {
         match code {10=>run!(f32,f32),11=>run!(f64,f64),14=>run!(f16,f32),_=>unreachable!()}
     } else {
         macro_rules! floating {($s:ty,$f:ty)=>{unsafe{
-            real::launch::<$s,$f,CudaRuntime>(&c,grid,block,xs[0].arg(),xs[1].arg(),xs[2].arg(),ints[2] as u64,mode,special,if code==9{9}else{0});
+            if vector {
+                real_vector::launch::<$s,$f,CudaRuntime>(&c,grid,block,xs[0].array_arg(),xs[1].array_arg(),xs[2].array_arg(),ints[2] as u64,mode,special,if code==9{9}else{0});
+            } else {
+                real::launch::<$s,$f,CudaRuntime>(&c,grid,block,xs[0].arg(),xs[1].arg(),xs[2].arg(),ints[2] as u64,mode,special,if code==9{9}else{0},base_packed,exponent_packed,output_packed);
+            }
         }};}
         macro_rules! integer {($s:ty)=>{unsafe{
             integral::launch::<$s,CudaRuntime>(&c,grid,block,xs[0].arg(),xs[1].arg(),xs[2].arg(),ints[2] as u64,mode,special,code);

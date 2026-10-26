@@ -7,6 +7,13 @@ from . import _C
 from .math_backend import _nvidia
 
 _registry = torch.library.Library("aten", "IMPL", "PrivateUse1")
+_native_eager_ops = frozenset(getattr(_C, 'native_eager_ops', ()))
+if _native_eager_ops:
+    from . import _native
+    _arithmetic_version = getattr(_native, 'ruda_torch_arithmetic_api_version', None)
+    _C.initialize_eager_arithmetic(_arithmetic_version is not None and _arithmetic_version() >= 2)
+    if hasattr(_C, 'initialize_eager_cat'):
+        _C.initialize_eager_cat(_arithmetic_version is not None and _arithmetic_version() >= 3)
 _dtypes = (torch.float32, torch.float16, torch.bfloat16, torch.float64)
 _numeric_dtypes = _dtypes + (torch.complex64, torch.complex128)
 _wide_dtypes = (torch.float64, torch.complex64, torch.complex128)
@@ -1146,7 +1153,8 @@ for name, function in {
     "bitwise_not": lambda a: bitwise(92, a),
     "bitwise_not_": lambda a: bitwise(92, a, inplace=True),
 }.items():
-    _registry.impl(name, function)
+    if name not in _native_eager_ops:
+        _registry.impl(name, function)
 
 
 for name, op in (("eq", 78), ("ne", 79), ("lt", 80), ("le", 81), ("gt", 82), ("ge", 83)):

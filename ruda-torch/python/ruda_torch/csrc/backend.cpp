@@ -745,6 +745,7 @@ at::Tensor& copy_(at::Tensor& dest, const at::Tensor& source, bool non_blocking)
 #include "power.inc"
 #include "foreach_ternary.inc"
 #include "foreach_reduce.inc"
+#include "eager_arithmetic.inc"
 template <typename T>
 T read_scalar(const at::Tensor& value) {
   T result{};
@@ -868,6 +869,9 @@ REGISTER_PRIVATEUSE1_DISPATCH(dequantize_tensor_per_channel_float_qparams_stub, 
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.attr("native_eager_ops")=pybind11::make_tuple("add.Tensor","add.Scalar","sub.Tensor","sub.Scalar","mul.Tensor","mul.Scalar","neg","cat","pow.Tensor_Scalar","rsqrt","mean.dim","mm","bmm","addmm","silu","gelu","native_layer_norm");
+  m.def("initialize_eager_arithmetic",[](bool ready){eager_arithmetic_ready=ready;});
+  m.def("initialize_eager_cat",[](bool ready){eager_cat_ready=ready;});
   #include "scientific_bridge_bindings.inc"
   #include "blas_bridge_bindings.inc"
   #include "linalg_bridge_bindings.inc"

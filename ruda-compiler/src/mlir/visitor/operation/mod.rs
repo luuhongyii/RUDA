@@ -86,7 +86,7 @@ impl<'a> Visitor<'a> {
                             _ => None,
                         }
                     }
-                    BarrierOps::CopyAsync { .. } => None,
+                    BarrierOps::CopyAsync { .. } | BarrierOps::CommitCopyGroup | BarrierOps::WaitCopyGroup { .. } => None,
                 };
 
                 match barrier {
@@ -108,6 +108,8 @@ impl<'a> Visitor<'a> {
                     | BarrierOps::MemCopyAsyncCooperative { .. }
                     | BarrierOps::MemCopyAsyncTx { .. }
                     | BarrierOps::CopyAsync { .. }
+                    | BarrierOps::CommitCopyGroup
+                    | BarrierOps::WaitCopyGroup { .. }
                     | BarrierOps::TmaLoad { .. }
                     | BarrierOps::TmaLoadIm2col { .. } => {
                         // No-op: CPU execution is synchronous, so memory operations complete

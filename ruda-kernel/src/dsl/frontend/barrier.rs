@@ -18,6 +18,19 @@ use super::{
     TensorMap,
 };
 
+#[ruda]
+pub fn commit_copy_group() {
+    intrinsic!(|scope| { scope.register(BarrierOps::CommitCopyGroup); })
+}
+
+#[ruda]
+pub fn wait_copy_group(#[comptime] max_pending: u32) {
+    intrinsic!(|scope| {
+        assert!(max_pending <= 7);
+        scope.register(BarrierOps::WaitCopyGroup { max_pending });
+    })
+}
+
 /// A mechanism for awaiting on asynchronous data transfers
 /// Behavior is defined by its ``BarrierLevel``.
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -19,6 +19,11 @@ impl Emitter {
             return Err(unsupported("hardware async barriers require SM >= 80 and PTX >= 7.0"));
         }
         match operation {
+            BarrierOps::CommitCopyGroup => self.line("cp.async.commit_group;"),
+            BarrierOps::WaitCopyGroup { max_pending } => {
+                if max_pending > 7 { return Err(invalid("async copy group wait must be in 0..=7")); }
+                self.line(format!("cp.async.wait_group {max_pending};"));
+            }
             BarrierOps::Declare { barrier } => { self.barrier_address(barrier)?; }
             BarrierOps::Init { barrier, is_elected, arrival_count } => {
                 let address = self.barrier_address(barrier)?;

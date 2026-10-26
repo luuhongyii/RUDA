@@ -897,6 +897,7 @@ mod custom_channel {
         /// Main execution loop for the device thread.
         fn start(&mut self) {
             let mut idle_count: u32 = 0;
+            let client = DeviceClient { state: self.state.clone() };
             loop {
                 if self.ready_to_execute {
                     self.execute_tasks();
@@ -914,6 +915,11 @@ mod custom_channel {
 
                 if stopping {
                     break;
+                }
+
+                if queue_size > 0 && self.state.available_index.load(Ordering::Acquire) < CHANNEL_MAX_TASK as u32 {
+                    client.flush();
+                    continue;
                 }
 
                 if idle_count < SPIN_BUDGET_SERVER {
@@ -1088,6 +1094,20 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("Task was not flushed and processed in time");
         assert!(received);
+    }
+
+    #[test]
+    fn test_partial_buffer_makes_progress_without_caller_flush() {
+        let handle = ChannelDeviceHandle::<MockService>::new(DeviceId { type_id: 0, index_id: 91 });
+        let (tx, rx) = std::sync::mpsc::channel();
+        for expected in 1..=7 {
+            let tx = tx.clone();
+            handle.submit(move |state| {
+                state.counter += 1;
+                tx.send(state.counter).unwrap();
+            });
+            assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), expected);
+        }
     }
 
     #[test]

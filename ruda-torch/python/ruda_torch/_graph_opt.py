@@ -1,7 +1,7 @@
 """Pure graph/lifetime planning. Does not execute tensors or provide a CPU fallback.
 
 Validation runs BEFORE pruning so unused invalid operations are still errors.
-Only single-consumer SiLU on the LEFT of mul is fused. Public results never
+Single-consumer SiLU/mul and redundant internal copies are fused. Public results never
 share a workspace slot. All options are opt-in pending hardware validation.
 """
 from collections import Counter
@@ -73,6 +73,20 @@ def _fuse(nodes: tuple[GraphOp, ...], outputs: tuple[str, ...]):
     return result, tuple(n.output for n in nodes if n.output in removed)
 
 
+def _eliminate_copies(nodes, outputs):
+    public=set(outputs);aliases={};retained=[];removed=[]
+    def root(name):
+        while name in aliases:name=aliases[name]
+        return name
+    from dataclasses import replace
+    for node in nodes:
+        node=replace(node,left=root(node.left),right=root(node.right),third=root(node.third))
+        if node.kind=='copy' and node.output not in public:
+            aliases[node.output]=node.left;removed.append(node.output)
+        else:retained.append(node)
+    return tuple(retained),tuple(removed)
+
+
 def plan_storage(layout: Layout, *, reuse: bool = False) -> tuple[int, ...]:
     """One tensor per slot; only equal shape/dtype, whole-buffer reuse is allowed.
 
@@ -126,6 +140,8 @@ def prepare_plan(inputs: Mapping[str, TensorSpec], nodes: Sequence[GraphOp], out
     eliminated = fused = ()
     if optimize:
         nodes, eliminated = _prune(nodes, public_names)
+        nodes, copies = _eliminate_copies(nodes, public_names)
+        eliminated += copies
         nodes, fused = _fuse(nodes, public_names)
     layout = plan_layout(inputs, nodes, public_names,layout_api=layout_api,empty_api=empty_api,root_api=root_api)
     roots = plan_storage(layout, reuse=reuse_workspace)

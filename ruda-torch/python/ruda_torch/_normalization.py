@@ -407,7 +407,8 @@ def register(library):
                      'batch_norm_gather_stats': batch_gather, 'batch_norm_gather_stats_with_counts': batch_gather_counts,
                      'batch_norm_backward_reduce': batch_backward_reduce, 'batch_norm_backward_elemt': batch_backward_elemt,
                      '_native_batch_norm_legit_no_training': _no_training}.items():
-        library.impl(name, fn)
+        if name not in getattr(_C, 'native_eager_ops', ()):
+            library.impl(name, fn)
         library.impl(name + '.out', fn)
     for name in ('native_batch_norm', '_native_batch_norm_legit'):
         library.impl(name, batch_norm)

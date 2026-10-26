@@ -6,6 +6,7 @@ use ruda_kernel::dsl::prelude::*;
 use std::{cell::RefCell, ffi::CString, panic::AssertUnwindSafe, sync::{OnceLock, atomic::{AtomicU64, Ordering}}};
 
 mod abi;
+mod allocation;
 mod streams;
 mod graph_contract;
 mod graph_matmul;
@@ -38,6 +39,7 @@ mod linalg_bridge;
 mod fft_bridge;
 mod vendor_bridge;
 mod kernels;
+mod strided_vector;
 mod training;
 mod router;
 mod nf4;
@@ -141,6 +143,8 @@ mod qwen_kernels;
 mod qwen_graph;
 mod qwen_flash;
 mod qwen_prefill;
+mod attention_prefill;
+mod attention_mma;
 mod normalization_ops;
 mod pooling_ops;
 mod padding_ops;
@@ -217,8 +221,23 @@ fn element_bytes(dtype: u32) -> usize {
 }
 
 impl View {
+    fn vector_rows(&self, broadcast: bool) -> bool {
+        self.shape.last().is_some_and(|&size| size % 4 == 0)
+            && self.strides.last().is_some_and(|&stride| stride == 1 || broadcast && stride == 0)
+    }
+    fn contiguous(&self) -> bool {
+        let mut span=1usize;
+        for (&size,&stride) in self.shape.iter().zip(&self.strides).rev() {
+            if size>1 && stride!=span {return false;}
+            span=span.checked_mul(size).expect("view stride overflow");
+        }
+        true
+    }
     fn arg(&self) -> TensorArg<CudaRuntime> {
         unsafe { TensorArg::from_raw_parts(self.handle.clone(), self.strides.clone().into(), self.shape.clone().into()) }
+    }
+    fn array_arg(&self) -> ArrayArg<CudaRuntime> {
+        unsafe { ArrayArg::from_raw_parts(self.handle.clone(), self.len) }
     }
     fn byte_view(&self) -> Self {
         let bytes = element_bytes(self.dtype);
@@ -246,7 +265,11 @@ fn cuda_device() -> CudaDevice {
         Err(_) => panic!("RUDA_TORCH_CUDA_DEVICE must be valid Unicode"),
     }) }
 }
-fn client() -> ComputeClient<CudaRuntime> { let mut c=CudaRuntime::client(&cuda_device()); streams::bind(&mut c); c }
+fn client() -> ComputeClient<CudaRuntime> {
+    thread_local! { static CLIENT: ComputeClient<CudaRuntime> = CudaRuntime::client(&cuda_device()); }
+    let mut c=CLIENT.with(Clone::clone);
+    streams::bind(&mut c); c
+}
 fn sync(client: &ComputeClient<CudaRuntime>) { block_on(client.sync()).expect("RUDA CUDA synchronization failed"); }
 fn async_dispatch_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -291,16 +314,8 @@ pub unsafe extern "C" fn ruda_torch_cuda_device_index(index: *mut u32) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ruda_torch_alloc(bytes: usize, allocation: *mut *mut Allocation, ptr: *mut u64) -> i32 {
     checked(|| {
-        let client = client();
-        let handle = client.empty(bytes.max(4));
-        let resource = client.get_resource(handle.clone()).expect("RUDA CUDA allocation failed");
-        // get_resource runs on the owning device service and returns the
-        // stream-ordered allocation pointer. In opt-in async mode subsequent
-        // RUDA bindings/stream events protect its use; do not drain this queue
-        // for every freshly allocated PyTorch output tensor.
-        if !async_dispatch_enabled() { sync(&client); }
-        let pin = resource.resource().address_pin();
-        unsafe { *ptr = resource.resource().ptr; *allocation = Box::into_raw(Box::new(Allocation { handle, bytes, _pin: pin })); }
+        let (value, address) = self::allocation::allocate(bytes);
+        unsafe { *ptr = address; *allocation = Box::into_raw(Box::new(value)); }
     })
 }
 
@@ -555,11 +570,24 @@ fn convert(a: &View, out: &View) {
     if a.dtype >= 9 || out.dtype >= 9 { scientific::convert(a,out);finish_dispatch(&client());return; }
     let client = client();
     let byte_work = a.dtype >= 3 && out.dtype >= 3;
+    let vector = !byte_work && a.dtype != 3 && out.dtype != 3 && out.len >= 512
+        && out.len % 4 == 0 && a.contiguous() && out.contiguous();
+    if !vector && a.dtype <= 2 && out.dtype <= 2 && out.len >= 512 && out.len <= i32::MAX as usize
+        && a.vector_rows(true) && out.vector_rows(false) {
+        strided_vector::convert::launch::<CudaRuntime>(&client,
+            RudaCount::Static((out.len / 4).div_ceil(128) as u32, 1, 1), RudaDim::new_1d(128),
+            a.arg(), out.arg(), strided_vector::shape::<CudaRuntime>(&out.shape),
+            a.strides.last() == Some(&0), strided_vector::storage(a.dtype), strided_vector::storage(out.dtype));
+        finish_dispatch(&client);LAUNCHES.fetch_add(1, Ordering::Relaxed);return;
+    }
     let work = if byte_work { out.len.checked_mul(element_bytes(out.dtype)).expect("byte length overflow") } else { out.len };
     let count = u32::try_from(work.div_ceil(128)).expect("launch grid overflow");
     macro_rules! run {
-        ($i:ty, $o:ty) => { kernels::convert::launch::<$i, $o, CudaRuntime>(
-            &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128), a.arg(), out.arg()) };
+        ($i:ty, $o:ty) => { if vector {
+            kernels::convert_vector::launch::<$i, $o, CudaRuntime>(
+                &client, RudaCount::Static((out.len/4).div_ceil(128) as u32, 1, 1), RudaDim::new_1d(128), a.array_arg(), out.array_arg())
+        } else { kernels::convert::launch::<$i, $o, CudaRuntime>(
+            &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128), a.arg(), out.arg()) } };
     }
     if byte_work {
         unsafe {
@@ -658,6 +686,10 @@ pub unsafe extern "C" fn ruda_torch_execute(op: u32, a: *const Descriptor, b: *c
     checked(|| {
         let (a, b, out) = unsafe { (crate::abi::view(a), crate::abi::view(b), crate::abi::view(out)) };
         match op {
+            142 => {
+                assert!(scalar>=0.0 && scalar.fract()==0.0);
+                graph_index::cat(&a,&b,&out,scalar as usize);return;
+            }
             109..=111 => { inference::launch(op, &a, &b, &out, scalar); return; }
             0..=4 | 8..=29 | 35..=73 => { assert_eq!(a.shape, out.shape); assert_eq!(b.shape, out.shape); }
             78..=97 | 121..=128 => { assert_eq!(a.shape, out.shape); assert_eq!(b.shape, out.shape); }

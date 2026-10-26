@@ -17,6 +17,14 @@ fn check_indices<I: Int + RudaElement>(indices: &Tensor<I>, status: &mut Tensor<
 }
 
 #[ruda(launch)]
+fn check_single_index<I: Int + RudaElement>(indices: &Tensor<I>, status: &mut Tensor<u32>, rows: usize) {
+    if UNIT_POS == 0u32 {
+        let row = i64::cast_from(indices[0usize]);
+        status[0usize] = u32::cast_from(row < 0i64 || row >= i64::cast_from(rows));
+    }
+}
+
+#[ruda(launch)]
 fn gather<S: Numeric + RudaElement, I: Int + RudaElement>(
     weight: &Tensor<S>, weight_imaginary: &Tensor<S>, indices: &Tensor<I>,
     output: &mut Tensor<S>, output_imaginary: &mut Tensor<S>, #[comptime] complex: bool,
@@ -181,7 +189,6 @@ fn scratch(c: &ComputeClient<CudaRuntime>, length: usize, dtype: u32) -> View {
 }
 
 fn read_scalar(c: &ComputeClient<CudaRuntime>, value: &View) -> u32 {
-    sync(c);
     let bytes = c.read_one(value.handle.clone()).expect("embedding metadata readback failed");
     DOWNLOAD.fetch_add(4, Ordering::Relaxed); assert_eq!(bytes.len(), 4);
     u32::from_le_bytes(bytes[..4].try_into().unwrap())
@@ -194,10 +201,16 @@ pub(super) fn validate_indices(c: &ComputeClient<CudaRuntime>, indices: &View, r
         return;
     }
     let status = scratch(c, 1, 5);
-    unsafe { clear_status::launch::<CudaRuntime>(c, RudaCount::Static(1, 1, 1), RudaDim::new_1d(1), status.arg()); }
-    macro_rules! check { ($i:ty) => { unsafe { check_indices::launch::<$i, CudaRuntime>(c, grid(indices.len.div_ceil(256)), RudaDim::new_1d(256), indices.arg(), status.arg(), rows); }}; }
-    if indices.dtype == 4 { check!(i64); } else { check!(i32); }
-    LAUNCHES.fetch_add(2, Ordering::Relaxed);
+    if indices.len == 1 {
+        macro_rules! check { ($i:ty) => { unsafe { check_single_index::launch::<$i, CudaRuntime>(c, RudaCount::Static(1, 1, 1), RudaDim::new_1d(1), indices.arg(), status.arg(), rows); }}; }
+        if indices.dtype == 4 { check!(i64); } else { check!(i32); }
+        LAUNCHES.fetch_add(1, Ordering::Relaxed);
+    } else {
+        unsafe { clear_status::launch::<CudaRuntime>(c, RudaCount::Static(1, 1, 1), RudaDim::new_1d(1), status.arg()); }
+        macro_rules! check { ($i:ty) => { unsafe { check_indices::launch::<$i, CudaRuntime>(c, grid(indices.len.div_ceil(256)), RudaDim::new_1d(256), indices.arg(), status.arg(), rows); }}; }
+        if indices.dtype == 4 { check!(i64); } else { check!(i32); }
+        LAUNCHES.fetch_add(2, Ordering::Relaxed);
+    }
     assert_eq!(read_scalar(c, &status), 0, "RUDA index out of bounds");
 }
 

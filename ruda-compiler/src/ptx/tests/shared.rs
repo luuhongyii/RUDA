@@ -1,5 +1,25 @@
 use super::*;
 
+#[test]
+fn async_copy_groups_keep_commit_wait_and_block_order() {
+    let mut k=kernel("copy_groups");
+    k.body.register(BarrierOps::CommitCopyGroup);
+    k.body.register(BarrierOps::WaitCopyGroup { max_pending: 2 });
+    k.body.register(Synchronization::SyncRuda);
+    k.body.register(BarrierOps::WaitCopyGroup { max_pending: 0 });
+    let result=compile(k.clone(),ExecutionMode::Checked,UIntKind::U32).unwrap();
+    let commit=result.source.find("cp.async.commit_group;").unwrap();
+    let wait=result.source.find("cp.async.wait_group 2;").unwrap();
+    let sync=result.source.find("bar.sync 0;").unwrap();
+    let drain=result.source.find("cp.async.wait_group 0;").unwrap();
+    assert!(commit<wait && wait<sync && sync<drain);
+    let mut incompatible=options();incompatible.target.as_mut().unwrap().sm=75;
+    assert!(PtxCompiler.compile(k,&incompatible,ExecutionMode::Checked,UIntKind::U32.into()).is_err());
+    let mut invalid=kernel("invalid_copy_wait");
+    invalid.body.register(BarrierOps::WaitCopyGroup { max_pending: 8 });
+    assert!(compile(invalid,ExecutionMode::Checked,UIntKind::U32).is_err());
+}
+
 fn shared_kernel(address: UIntKind) -> KernelDefinition {
     let mut k = kernel(&format!("shared_{address:?}"));
     let ty: Type = UIntKind::U64.into();

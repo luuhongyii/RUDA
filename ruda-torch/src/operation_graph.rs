@@ -213,6 +213,10 @@ fn attention(c:&ComputeClient<CudaRuntime>,vs:&[View],scratch:&[View],kind:u32,i
     let ts:Vec<_>=vs.iter().map(|v|tensor(c,v)).collect();let q=&vs[0];
     let rows=vs[5].shape[0];let blocks=RudaCount::Static(rows as u32,1,1);let dim=RudaDim::new_1d(32);
     if kind<=1 {
+        if kind==0 && floats[1]==0.0 {
+            if let Some(prepared)=super::attention_prefill::prepare(c,&vs[0],&vs[1],&vs[2],&vs[4],&vs[3],&vs[5],
+                ints[0] as u32,ints[1]!=0,floats[0]) {return prepared;}
+        }
         let (h,l,d)=(q.shape[1],q.shape[2],q.shape[3]);let (kh,s,dv)=(vs[1].shape[1],vs[1].shape[2],vs[2].shape[3]);
         let (global_heads,head_start)=if ints.len()==5 {(ints[3],ints[4])}else {(h as i64,0)};
         let scores=(q.shape[0] as i64).checked_mul(global_heads).and_then(|n|n.checked_mul(l as i64))

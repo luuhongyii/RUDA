@@ -55,6 +55,14 @@ pub fn arange_scalar<O: Numeric + RudaElement, A: Numeric + RudaElement>(
 }
 
 #[ruda(launch)]
+pub fn convert_vector<I: Numeric + RudaElement, O: Numeric + RudaElement>(a: &Array<Vector<I,Const<4>>>, out: &mut Array<Vector<O,Const<4>>>) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        out[pos] = Vector::cast_from(a[pos]);
+    }
+}
+
+#[ruda(launch)]
 pub fn convert<I: Numeric + RudaElement, O: Numeric + RudaElement>(a: &Tensor<I>, out: &mut Tensor<O>) {
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() {

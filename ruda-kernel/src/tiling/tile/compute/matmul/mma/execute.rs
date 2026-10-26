@@ -32,12 +32,7 @@ pub fn mma_execute<L: Numeric, R: Numeric, A: Numeric>(
         config.tile_size.n() as usize,
         config.tile_size.k() as usize,
     );
-    let out_arr = def.execute(lhs, rhs, acc);
-    let num_vectors = def.vectors_per_lane(MatrixIdent::Accumulator);
-    #[unroll]
-    for i in 0..num_vectors {
-        acc[i] = out_arr[i];
-    }
+    def.execute_inplace(lhs, rhs, acc);
 }
 
 #[ruda]

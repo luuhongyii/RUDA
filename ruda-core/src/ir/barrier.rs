@@ -91,6 +91,10 @@ pub enum BarrierOps {
     CommitCopyAsync {
         barrier: Variable,
     },
+    CommitCopyGroup,
+    WaitCopyGroup {
+        max_pending: u32,
+    },
     ExpectTx {
         barrier: Variable,
         transaction_count_update: Variable,
@@ -216,6 +220,8 @@ impl Display for BarrierOps {
             }
             BarrierOps::Arrive { barrier } => write!(f, "arrive({barrier})"),
             BarrierOps::CommitCopyAsync { barrier } => write!(f, "commit_copy_async({barrier})"),
+            BarrierOps::CommitCopyGroup => write!(f, "commit_copy_group()"),
+            BarrierOps::WaitCopyGroup { max_pending } => write!(f, "wait_copy_group({max_pending})"),
             BarrierOps::ArriveTx {
                 barrier,
                 arrive_count_update,

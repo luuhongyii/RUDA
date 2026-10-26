@@ -85,6 +85,13 @@ impl Emitter {
 
     pub(super) fn matrix_index_op(&mut self, opcode: &str, a: &str, b: &str) -> String {
         let result = self.reg(Scalar::U32);
+        if matches!(opcode, "div.u32" | "rem.u32") {
+            if let Ok(divisor) = b.parse::<u64>() {
+                if self.unsigned_constant_division(Scalar::U32, &result, a, divisor, opcode == "rem.u32") {
+                    return result;
+                }
+            }
+        }
         self.line(format!("{opcode} {result}, {a}, {b};"));
         result
     }

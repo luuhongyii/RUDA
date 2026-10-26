@@ -122,12 +122,31 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
         let grid = RudaCount::Static(u32::try_from(rows).expect("attention grid overflow"),1,1);
         let dim = RudaDim::new_1d(32);
         if op == 0 {
+            if dropout_p==0.0 {
+                if let Some(prepared)=super::attention_prefill::prepare(&c,q,k,v,output,mask,stats,mask_kind,causal,scale) {
+                    let (task,count,args,origin)=prepared.into_parts();origin.launch(task,count,args);
+                    LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);return;
+                }
+            }
             if l == 1 && s >= 256 && mask_kind == 0 && !causal && dropout_p == 0.0 && rows > 0 && rows <= 256 {
                 let splits = 16usize;
                 let partial_values = View::packed(c.empty(rows * splits * dv * 4), vec![rows * splits, dv], 0);
                 let partial_stats = View::packed(c.empty(rows * splits * 2 * 4), vec![rows * splits, 2], 0);
                 let pt = primitives::tensor(&partial_values);
                 let pst = primitives::tensor(&partial_stats);
+                if s<=2048 && d<=256 && dv<=256 {
+                    unsafe {
+                        rudnn::dense_attention_split::partial_parallel::launch::<CudaRuntime>(&c,
+                            RudaCount::Static((rows*splits) as u32,1,1),RudaDim::new_1d(128),
+                            qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),
+                            pt.clone().into_array_arg(),pst.clone().into_array_arg(),
+                            h as u32,kh as u32,s as u32,scale,d,dv,splits,primitives::tensor(q).dtype.into());
+                        rudnn::dense_attention_split::merge_parallel::launch::<CudaRuntime>(&c,grid,dim,
+                            pt.into_array_arg(),pst.into_array_arg(),ot.into_array_arg(),st.into_array_arg(),
+                            dv,splits,primitives::tensor(q).dtype.into());
+                    }
+                    LAUNCHES.fetch_add(2,Ordering::Relaxed);finish_dispatch(&c);return;
+                }
                 unsafe {
                     rudnn::dense_attention_split::partial::launch::<CudaRuntime>(&c,
                         RudaCount::Static((rows * splits) as u32, 1, 1), dim,

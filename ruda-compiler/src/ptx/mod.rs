@@ -5,6 +5,7 @@ mod bitwise;
 mod barrier;
 mod atomic;
 mod arrays;
+mod register_arrays;
 mod memory_copy;
 mod memory_scalar;
 mod native_memory;
@@ -107,7 +108,7 @@ impl fmt::Display for PtxKernel {
 pub struct PtxCompiler;
 
 impl PtxCompiler {
-    pub const CACHE_VERSION: u32 = 48;
+    pub const CACHE_VERSION: u32 = 54;
 }
 
 impl Compiler for PtxCompiler {

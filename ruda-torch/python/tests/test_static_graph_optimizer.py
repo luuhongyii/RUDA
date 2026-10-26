@@ -55,7 +55,7 @@ def test_fusion_preserves_observable_intermediates(case):
 
 
 def test_fusion_does_not_move_after_dependency():
-    nodes=[Op.silu('a','x'),Op.copy('u2','u'),Op.mul('y','a','u2')]
+    nodes=[Op.silu('a','x'),Op.silu('u2','u'),Op.mul('y','a','u2')]
     p=m.prepare_plan(inputs(),nodes,optimize=True)
     assert [n.output for n in p.nodes]==['u2','y']
     assert p.layout.words[-3:]==(101,0,2)

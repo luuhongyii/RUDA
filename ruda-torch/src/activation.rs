@@ -4,11 +4,74 @@ use super::scientific::address;
 use ruda_kernel::dsl::prelude::Tensor;
 
 #[ruda(launch)]
-fn pointwise<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Tensor<S>,weight:&Tensor<S>,out:&mut Tensor<S>,p0:F,p1:F,p2:F,#[comptime] op:u32,#[comptime] flag:bool) {
+fn pointwise<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Tensor<S>,weight:&Tensor<S>,out:&mut Tensor<S>,p0:F,p1:F,p2:F,#[comptime] op:u32,#[comptime] flag:bool,#[comptime] contiguous:bool) {
     let p=ABSOLUTE_POS as usize;
     if p<out.len() {
-        let x=F::cast_from(a[address(a,p)]);let g=F::cast_from(grad[address(grad,p)]);
-        let w=F::cast_from(weight[address(weight,p)]);let z=F::new(0.0);let one=F::new(1.0);
+        let mut ai=p;let mut gi=p;let mut wi=p;let mut oi=p;
+        if !comptime!(contiguous) {ai=address(a,p);gi=address(grad,p);wi=address(weight,p);oi=address(out,p);}
+        out[oi]=S::cast_from(pointwise_value::<S,F>(F::cast_from(a[ai]),F::cast_from(grad[gi]),F::cast_from(weight[wi]),p0,p1,p2,op,flag));
+    }
+}
+
+#[ruda(launch)]
+fn pointwise_vector<S:Float+RudaElement,F:Float+RudaElement>(a:&Array<Vector<S,Const<4>>>,grad:&Array<Vector<S,Const<4>>>,weight:&Array<Vector<S,Const<4>>>,out:&mut Array<Vector<S,Const<4>>>,p0:F,p1:F,p2:F,#[comptime] op:u32,#[comptime] flag:bool) {
+    let p=ABSOLUTE_POS as usize;
+    if p<out.len() {
+        let x=a[p];let g=grad[p];let w=weight[p];
+        let mut result=Vector::<S,Const<4>>::new(S::cast_from(0.0f32));
+        #[unroll]
+        for lane in 0usize..4 {
+            result[lane]=S::cast_from(pointwise_value::<S,F>(F::cast_from(x[lane]),F::cast_from(g[lane]),F::cast_from(w[lane]),p0,p1,p2,op,flag));
+        }
+        out[p]=result;
+    }
+}
+
+#[ruda(launch)]
+fn initialize_lookup<S:Float+RudaElement>(table:&mut Array<S>,#[comptime] op:u32,#[comptime] flag:bool) {
+    let p=ABSOLUTE_POS as usize;
+    if p<table.len() {
+        let x=S::reinterpret(p as u16);
+        table[p]=S::cast_from(pointwise_value::<S,f32>(f32::cast_from(x),0.0f32,0.0f32,0.0f32,0.0f32,0.0f32,op,flag));
+    }
+}
+
+#[ruda(launch)]
+fn pointwise_lookup<S:Float+RudaElement>(a:&Array<Vector<S,Const<4>>>,table:&Array<S>,out:&mut Array<Vector<S,Const<4>>>) {
+    let p=ABSOLUTE_POS as usize;
+    if p<out.len() {
+        let x=a[p];let mut result=Vector::<S,Const<4>>::new(S::cast_from(0.0f32));
+        #[unroll]
+        for lane in 0usize..4 {result[lane]=table[u16::reinterpret(x[lane]) as usize];}
+        out[p]=result;
+    }
+}
+
+fn lookup(dtype:u32,op:u32,flag:bool,create:bool)->Option<Handle> {
+    thread_local! {
+        static TABLES:RefCell<(u64,Vec<(u32,u32,bool,Handle)>)>=const {RefCell::new((0,Vec::new()))};
+    }
+    TABLES.with(|tables| {
+        let mut tables=tables.borrow_mut();let stream=streams::current();
+        if tables.0!=stream {*tables=(stream,Vec::new());}
+        if let Some((_,_,_,handle))=tables.1.iter().find(|(d,o,f,_)|(*d,*o,*f)==(dtype,op,flag)) {
+            return Some(handle.clone());
+        }
+        if !create {return None;}
+        let c=client();let table=View::packed(c.empty(65536*2),vec![65536],dtype);
+        let grid=RudaCount::Static(512,1,1);let dim=RudaDim::new_1d(128);
+        unsafe {
+            if dtype==1 {initialize_lookup::launch::<f16,CudaRuntime>(&c,grid,dim,table.array_arg(),op,flag);}
+            else {initialize_lookup::launch::<bf16,CudaRuntime>(&c,grid,dim,table.array_arg(),op,flag);}
+        }
+        LAUNCHES.fetch_add(1,Ordering::Relaxed);
+        tables.1.push((dtype,op,flag,table.handle.clone()));Some(table.handle)
+    })
+}
+
+#[ruda]
+fn pointwise_value<S:Float+RudaElement,F:Float+RudaElement>(x:F,g:F,w:F,p0:F,p1:F,p2:F,#[comptime] op:u32,#[comptime] flag:bool)->F {
+        let z=F::new(0.0);let one=F::new(1.0);
         let mut y=x;
         if comptime!(op==265) {
             y=x*p1;if x<=z || x!=x {y=F::cast_from(crate::elementary::expm1(f64::cast_from(x*p2)))*(p0*p1);}
@@ -66,8 +129,7 @@ fn pointwise<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Tensor<
         else if comptime!(op==287) {y=w*g;if x>z {y=g;}}
         else if comptime!(op==288) {y=x*g;if x>z {y=z;}}
         else if comptime!(op==290) {y=g;if x<=p0 || x>=p1 {y=z;}}
-        out[address(out,p)]=S::cast_from(y);
-    }
+        y
 }
 
 #[ruda(launch)]
@@ -95,7 +157,30 @@ pub(super) fn dispatch(op:u32,xs:&[View],ints:&[i64],values:&[f64]) {
         match a.dtype {0=>run!(f32),1=>run!(f16),2=>run!(bf16),4=>run!(i64),5=>run!(i32),6=>run!(i16),7=>run!(i8),8=>run!(u8),9=>run!(f64),_=>panic!("unsupported activation dtype")}
     } else {
         assert_eq!(values.len(),3);assert_eq!(ints.len(),1);
-        macro_rules! run {($s:ty,$f:ty)=>{unsafe {pointwise::launch::<$s,$f,CudaRuntime>(&client(),work,dim,a.arg(),xs[1].arg(),xs[2].arg(),out.arg(),values[0] as $f,values[1] as $f,values[2] as $f,op,ints[0]!=0);}}}
+        let contiguous=xs.iter().all(|view| {
+            let mut span=1usize;
+            for (&size,&stride) in view.shape.iter().zip(&view.strides).rev() {
+                if size>1 && stride!=span {return false;}
+                span=span.checked_mul(size).expect("activation stride overflow");
+            }
+            true
+        });
+        let vector=contiguous && out.len>=512 && out.len%4==0;
+        let vector_work=RudaCount::Static(u32::try_from((out.len/4).div_ceil(128)).expect("activation grid overflow"),1,1);
+        if vector && matches!(a.dtype,1|2) && matches!(op,282|284) {
+            if let Some(handle)=lookup(a.dtype,op,op==282 && ints[0]!=0,out.len>=65536) {
+                let table=View::packed(handle,vec![65536],a.dtype);
+                unsafe {
+                    if a.dtype==1 {pointwise_lookup::launch::<f16,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),table.array_arg(),out.array_arg());}
+                    else {pointwise_lookup::launch::<bf16,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),table.array_arg(),out.array_arg());}
+                }
+                LAUNCHES.fetch_add(1,Ordering::Relaxed);return;
+            }
+        }
+        macro_rules! run {($s:ty,$f:ty)=>{unsafe {
+            if vector {pointwise_vector::launch::<$s,$f,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),xs[1].array_arg(),xs[2].array_arg(),out.array_arg(),values[0] as $f,values[1] as $f,values[2] as $f,op,ints[0]!=0);}
+            else {pointwise::launch::<$s,$f,CudaRuntime>(&client(),work,dim,a.arg(),xs[1].arg(),xs[2].arg(),out.arg(),values[0] as $f,values[1] as $f,values[2] as $f,op,ints[0]!=0,contiguous);}
+        }}}
         match a.dtype {0=>run!(f32,f32),1=>run!(f16,f32),2=>run!(bf16,f32),9=>run!(f64,f64),_=>panic!("activation requires real floating storage")}
     }
     LAUNCHES.fetch_add(1,Ordering::Relaxed);

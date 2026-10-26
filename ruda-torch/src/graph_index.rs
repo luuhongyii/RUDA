@@ -73,7 +73,38 @@ fn indexed_backward<E:Float+RudaElement,I:Int+RudaElement>(
     }
 }
 
+pub(super) fn cat(a:&View,b:&View,out:&View,axis:usize) {
+    let rank=a.shape.len();assert!(axis<rank);
+    assert_eq!(b.shape.len(),rank);assert_eq!(out.shape.len(),rank);
+    assert_eq!(a.dtype,b.dtype);assert_eq!(a.dtype,out.dtype);
+    for d in 0..rank {
+        if d==axis {assert_eq!(a.shape[d].checked_add(b.shape[d]).expect("cat shape overflow"),out.shape[d]);}
+        else {assert_eq!(a.shape[d],b.shape[d]);assert_eq!(a.shape[d],out.shape[d]);}
+    }
+    for value in [a,b,out] {scientific::indexable(value);}
+    let mut stride=1usize;
+    for (&size,&actual) in out.shape.iter().zip(&out.strides).rev() {
+        if size>1 {assert_eq!(actual,stride);}
+        stride=stride.checked_mul(size).expect("cat shape overflow");
+    }
+    if out.len==0 {return;}
+    let c=client();
+    macro_rules! run {($e:ty)=>{transform::prepare::<$e,CudaRuntime>(&c,grid(out.len),RudaDim::new_1d(128),a.arg(),b.arg(),out.arg(),142,axis,0)};}
+    let prepared=if let Some(prepared)=prepare_vector_cat(&c,a,b,out,axis) {prepared}
+        else {match out.dtype {0=>run!(f32),1=>run!(f16),2=>run!(bf16),_=>panic!("direct cat requires float storage")}};
+    let (task,count,args,origin)=prepared.into_parts();origin.launch(task,count,args);
+    LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);
+}
+
 fn grid(n:usize)->RudaCount {RudaCount::Static(u32::try_from(n.div_ceil(128)).expect("graph indexing grid overflow"),1,1)}
+
+fn prepare_vector_cat(c:&ComputeClient<CudaRuntime>,a:&View,b:&View,out:&View,axis:usize)->Option<PreparedKernel<CudaRuntime>> {
+    if out.dtype>2 || out.len<16384 || out.len>i32::MAX as usize || !out.contiguous()
+        || !a.vector_rows(true) || !b.vector_rows(true) || !out.vector_rows(false) {return None;}
+    Some(strided_vector::cat::prepare::<CudaRuntime>(c,grid(out.len/4),RudaDim::new_1d(128),
+        a.arg(),b.arg(),out.arg(),strided_vector::shape::<CudaRuntime>(&out.shape),axis,
+        a.strides.last()==Some(&0),b.strides.last()==Some(&0),strided_vector::storage(out.dtype)))
+}
 
 #[ruda]
 pub(super) fn broadcast_index<E:Numeric,O:Numeric>(input:&Tensor<E>,out:&Tensor<O>,position:usize)->usize {
@@ -230,6 +261,7 @@ impl IndexBuffers {
             let a=&tensors[n.a as usize];let b=&tensors[n.b as usize];let out=&tensors[inputs+index];
             let code=n.scalar as u32;let axis=if n.op==142 {code as usize} else {(code&7) as usize};
             let start=if n.op==142 {0} else {(code>>3) as usize};
+            if n.op==142 && let Some(prepared)=prepare_vector_cat(client,a,b,out,axis) {return Some(vec![prepared]);}
             macro_rules! run {($e:ty)=>{unsafe{transform::prepare::<$e,CudaRuntime>(client,grid(out.len),RudaDim::new_1d(128),a.arg(),b.arg(),out.arg(),n.op,axis,start)}};}
             return Some(vec![match a.dtype {0=>run!(f32),1=>run!(f16),2=>run!(bf16),3|8=>run!(u8),4=>run!(i64),5=>run!(i32),6=>run!(i16),7=>run!(i8),_=>unreachable!()}]);
         }
