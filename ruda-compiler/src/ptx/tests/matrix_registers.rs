@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn borrowed_manual_mma_vectors_stay_in_registers_across_async_barriers_and_loops() {
+    for kind in [FloatKind::F16, FloatKind::BF16] {
+        let mut k = kernel(&format!("borrowed_register_mma_{kind:?}"));
+        k.body.register_type::<usize>(UIntKind::U32.into());
+        let half = Type::from(kind);
+        let accumulator = Type::from(FloatKind::F32).with_vector_size(4);
+        let output = buffer(&mut k, accumulator, Visibility::ReadWrite);
+        let shared = *k.body.create_shared_array(half.with_vector_size(8), 32, Some(16));
+        let c = k.body.create_local(accumulator);
+        k.body.register(Instruction::new(Operator::Cast(UnaryOperator { input: 0f32.into() }), *c));
+        let c_reference = k.body.reference_borrow(c, true).unwrap();
+        let barrier = *k.body.create_shared(OpaqueType::Barrier(BarrierLevel::Ruda));
+        let elected = *k.body.create_local(Type::Scalar(ElemType::Bool.into()));
+        k.body.register(Instruction::new(Comparison::Equal(BinaryOperator {
+            lhs: Variable::builtin(Builtin::UnitPos, UIntKind::U32.into()), rhs: 0u32.into(),
+        }), elected));
+        k.body.register(BarrierOps::Init { barrier, is_elected: elected, arrival_count: 64u32.into() });
+        let mut body = k.body.child();
+        body.register(BarrierOps::CommitCopyAsync { barrier });
+        body.register(BarrierOps::ArriveAndWait { barrier });
+        let a = body.create_local(half.with_vector_size(8));
+        let b = body.create_local(half.with_vector_size(4));
+        for (registers, factor) in [(*a, 4), (*b, 2)] {
+            body.register(Instruction::new(CoopMma::LoadMatrix {
+                buffer: shared, offset: 0u32.into(), vector_size: Some(8), factor, transpose: false,
+            }, registers));
+        }
+        let a_reference = body.reference_borrow(a, false).unwrap();
+        let b_reference = body.reference_borrow(b, false).unwrap();
+        let registers_a = *body.reference_read(*a_reference).unwrap();
+        let registers_b = *body.reference_read(*b_reference).unwrap();
+        let registers_c = *body.reference_read(*c_reference).unwrap();
+        let result = *body.create_local(accumulator);
+        let matrix = Matrix { ident: MatrixIdent::A, m: 16, n: 8, k: 16,
+            storage: kind.into(), layout: MatrixLayout::ColMajor, scope: MatrixScope::Plane };
+        body.register(Instruction::new(CoopMma::ExecuteManual { matrix, registers_a, registers_b, registers_c }, result));
+        body.reference_write(*c_reference, result).unwrap();
+        let i = *k.body.create_local_restricted(UIntKind::U32.into());
+        k.body.register(Branch::RangeLoop(Box::new(RangeLoop {
+            i, start: 0u32.into(), end: 3u32.into(), step: None, inclusive: false, scope: body,
+        })));
+        let value = *k.body.reference_read(*c_reference).unwrap();
+        store(&mut k.body, output, 0u32.into(), value);
+        let compiled = PtxCompiler.compile(k, &options(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap();
+        assert!(compiled.source.contains("mma.sync.aligned.m16n8k16"));
+        assert!(compiled.source.contains("cp.async.mbarrier.arrive.shared.b64"));
+        assert!(!compiled.source.contains("ld.local."));
+        assert!(!compiled.source.contains("st.local."));
+        assert!(!compiled.source.contains(".local .align"));
+        export(&compiled);
+    }
+}
+
+#[test]
 fn manual_mma_vector_operands_do_not_use_addressable_local_storage() {
     for kind in [FloatKind::F16, FloatKind::BF16] {
         for transpose in [false, true] {

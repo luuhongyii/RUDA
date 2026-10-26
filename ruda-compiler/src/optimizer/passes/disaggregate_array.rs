@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
 use ruda_core::ir::{
-    Id, Instruction, Operation, Operator, Type, UnaryOperator, Variable, VariableKind,
+    Id, Instruction, Operation, Operator, Type, TypedMemory, UnaryOperator, Variable, VariableKind,
 };
 
 use crate::optimizer::{AtomicCounter, Optimizer, analyses::writes::Writes};
 
 use super::OptimizerPass;
+
+#[cfg(test)]
+mod tests;
 
 /// Split arrays with only constant indices into a set of local intermediates. This allows the
 /// compiler to reorder them and optimize memory layout, along with enabling more inlining and
@@ -93,8 +96,14 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
                     }
                 }
                 Operation::TypedMemory(memory) => {
-                    if let VariableKind::LocalArray { id, .. } = memory.pointer().base.kind {
-                        track_consts.insert(id, false);
+                    let pointer = memory.pointer();
+                    if let VariableKind::LocalArray { id, length, unroll_factor } = pointer.base.kind {
+                        arrays.insert(id, Array { id, length: length * unroll_factor, item: pointer.base.ty });
+                        let full_element = pointer.ty.pointee == pointer.base.ty
+                            && pointer.unroll_factor == 1 && unroll_factor == 1
+                            && pointer.index.as_const().and_then(|v| v.try_as_usize())
+                                .is_some_and(|index| index < length as usize);
+                        *track_consts.entry(id).or_insert(full_element) &= full_element;
                     }
                 }
                 Operation::Operator(Operator::NativeAddress(address)) => {
@@ -118,7 +127,9 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
                                 item,
                             },
                         );
-                        let is_const = index.index.as_const().is_some();
+                        let is_const = index.index.as_const().and_then(|v| v.try_as_usize())
+                            .is_some_and(|i| i < (length * unroll_factor) as usize)
+                            && (index.vector_size == 0 || index.vector_size == item.vector_size());
                         *track_consts.entry(id).or_insert(is_const) &= is_const;
                     }
                 }
@@ -140,11 +151,23 @@ fn find_const_arrays(opt: &mut Optimizer) -> Vec<Array> {
                                 item,
                             },
                         );
-                        let is_const = assign.index.as_const().is_some();
+                        let is_const = assign.index.as_const().and_then(|v| v.try_as_usize())
+                            .is_some_and(|i| i < (length * unroll_factor) as usize)
+                            && (assign.vector_size == 0 || assign.vector_size == item.vector_size());
                         *track_consts.entry(id).or_insert(is_const) &= is_const;
                     }
                 }
-                _ => {}
+                _ => {
+                    let mut instruction = op.clone();
+                    opt.visit_operation(&mut instruction.operation, &mut instruction.out, |_, value| {
+                        if let VariableKind::LocalArray { id, .. } = value.kind {
+                            track_consts.insert(id, false);
+                        }
+                    });
+                    if let Some(Variable { kind: VariableKind::LocalArray { id, .. }, .. }) = instruction.out {
+                        track_consts.insert(id, false);
+                    }
+                }
             }
         }
     }
@@ -161,6 +184,15 @@ fn replace_const_arrays(opt: &mut Optimizer, arr_id: Id, vars: &[Variable]) {
         let ops = opt.program[block].ops.clone();
         for op in ops.borrow_mut().values_mut() {
             match &mut op.operation.clone() {
+                Operation::TypedMemory(TypedMemory::Load(pointer))
+                    if matches!(pointer.base.kind, VariableKind::LocalArray { id, .. } if id == arr_id) => {
+                        op.operation = Operation::Copy(vars[pointer.index.as_const().unwrap().as_usize()]);
+                    }
+                Operation::TypedMemory(TypedMemory::Store { pointer, value })
+                    if matches!(pointer.base.kind, VariableKind::LocalArray { id, .. } if id == arr_id) => {
+                        *op = Instruction::new(Operation::Copy(*value), vars[pointer.index.as_const().unwrap().as_usize()]);
+                        opt.invalidate_analysis::<Writes>();
+                    }
                 Operation::Operator(Operator::Index(index) | Operator::UncheckedIndex(index)) => {
                     if let VariableKind::LocalArray { id, .. } = index.list.kind
                         && id == arr_id

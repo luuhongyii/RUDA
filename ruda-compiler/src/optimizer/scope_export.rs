@@ -38,7 +38,8 @@ pub fn lower_optimized_pointer_values(scope: &mut Scope, dim: RudaDim) -> Result
         return Ok(());
     }
     PointerValueLowering::new(scope)?;
-    let optimizer = Optimizer::new_pointer_values(scope.clone(), dim, vec![], vec![]);
+    let mut optimizer = Optimizer::new_pointer_values(scope.clone(), dim, vec![], vec![]);
+    optimizer.lower_pointer_values()?;
     *scope = optimizer.into_scope()?;
     scope.lower_pointer_values()
 }
