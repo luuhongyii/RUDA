@@ -30,6 +30,14 @@ pub fn rms_cuda_vector4<F: Float + RudaElement, W: Float + RudaElement>(
     }
     sums[thread] = ((local[0]+local[1])+local[2])+local[3];
     sync_ruda();
+    #[unroll]
+    for stage in 0usize..5 {
+        let offset = 16usize>>stage;
+        if lane < offset {
+            sums[thread] = sums[thread]+sums[thread+offset];
+        }
+        sync_ruda();
+    }
     if comptime!(width==8192) {
         #[unroll]
         for stage in 0usize..4 {
@@ -37,14 +45,6 @@ pub fn rms_cuda_vector4<F: Float + RudaElement, W: Float + RudaElement>(
             if thread < offset { sums[thread] = sums[thread]+sums[thread+offset]; }
             sync_ruda();
         }
-    }
-    #[unroll]
-    for stage in 0usize..5 {
-        let offset = 16usize>>stage;
-        if lane < offset && (comptime!(width!=8192) || thread < 32) {
-            sums[thread] = sums[thread]+sums[thread+offset];
-        }
-        sync_ruda();
     }
     let index = warp*comptime!(if width==8192 { 0usize } else { 32usize });
     let inv = cuda_rsqrt(sums[index]*(1.0f32/width as f32)+epsilon);
