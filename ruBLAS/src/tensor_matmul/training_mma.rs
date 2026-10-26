@@ -14,13 +14,13 @@ fn epilogue_index(row: usize, col: usize) -> usize {
 }
 
 #[ruda(launch_unchecked)]
-pub(super) fn tiled_vector_offsets<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
+pub(super) fn tiled_prefetched<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<Vector<O, OS>>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
     #[comptime] a_batch: usize, #[comptime] b_batch: usize,
     #[comptime] bm: usize, #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] asynchronous: bool,
-    #[comptime] warp_m: usize, #[comptime] stages: usize,
+    #[comptime] warp_m: usize, #[comptime] stages: usize, #[comptime] prefetch: bool,
     #[define(F)] _input: StorageType, #[define(O)] _output: StorageType,
     #[define(OS)] _output_vector_size: usize) {
     let thread = UNIT_POS as usize;
@@ -84,6 +84,18 @@ pub(super) fn tiled_vector_offsets<F: Float, O: Float, OS: Size>(a: &Array<Vecto
             load_stage(a, b, &mut sa, &mut sb, row, col, block, bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m, 0usize, 1usize);
             sync_ruda();
         }
+        let mut prefetched_a = Sequence::<Vector<F, Const<8>>>::new();
+        let mut prefetched_b = Sequence::<Vector<F, Const<4>>>::new();
+        if comptime!(prefetch) {
+            #[unroll]
+            for i in 0usize..(warp_m / 16) {
+                prefetched_a.push(load_fragment_a(&sa, bank * a_stage + a_rows[i], bank, wm, lane, i, 0usize, bm, bk, ta));
+            }
+            #[unroll]
+            for j in 0usize..(bn / 16) {
+                prefetched_b.push(load_fragment_b(&sb, bank * b_stage + b_rows[j], bank, wn, lane, j, 0usize, bn, bk, nt));
+            }
+        }
         #[unroll]
         for half in 0usize..(bk / 16) {
             if comptime!(asynchronous) {
@@ -92,35 +104,38 @@ pub(super) fn tiled_vector_offsets<F: Float, O: Float, OS: Size>(a: &Array<Vecto
                     load_stage(a, b, &mut sa, &mut sb, row, col, block + banks - 1, next_bank, lda, ldb, ta, nt, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m, half, bk / 16);
                 }
             }
-            let mut ar = Sequence::<Vector<F, Const<8>>>::new();
-            #[unroll]
-            for i in 0usize..(warp_m / 16) {
-                let base = bank * a_stage + a_rows[i];
-                let mut offset = base;
-                if comptime!(ta) {
-                    offset = base + half * 16 * (bm / 8);
-                } else if comptime!(bk.is_power_of_two()) {
-                    offset = base ^ (half * 2);
-                } else {
-                    offset = bank * a_stage + shared_index(wm + i * 16 + lane % 16, half * 2 + lane / 16, bk / 8);
+            if comptime!(prefetch) {
+                if comptime!(half + 1 < bk / 16) {
+                    #[unroll]
+                    for i in 0usize..(warp_m / 16) {
+                        prefetched_a.push(load_fragment_a(&sa, bank * a_stage + a_rows[i], bank, wm, lane, i, half + 1, bm, bk, ta));
+                    }
+                    #[unroll]
+                    for j in 0usize..(bn / 16) {
+                        prefetched_b.push(load_fragment_b(&sb, bank * b_stage + b_rows[j], bank, wn, lane, j, half + 1, bn, bk, nt));
+                    }
                 }
-                ar.push(def.load_matrix_vector::<_, Const<8>>(&sa.slice(offset, offset + 1), 4usize, ta));
-            }
-            #[unroll]
-            for j in 0usize..(bn / 16) {
-                let base = bank * b_stage + b_rows[j];
-                let mut offset = base;
-                if comptime!(!nt) {
-                    offset = base + half * 16 * (bn / 8);
-                } else if comptime!(bk.is_power_of_two()) {
-                    offset = base ^ (half * 2);
-                } else {
-                    offset = bank * b_stage + shared_index(wn + j * 8 + lane % 8, half * 2 + lane % 16 / 8, bk / 8);
+                #[unroll]
+                for j in 0usize..(bn / 16) {
+                    #[unroll]
+                    for i in 0usize..(warp_m / 16) {
+                        def.execute_vectors_inplace(&prefetched_a[half * (warp_m / 16) + i],
+                            &prefetched_b[half * (bn / 16) + j], acc.index_mut(i * (bn / 16) + j));
+                    }
                 }
-                let br = def.load_matrix_vector::<_, Const<4>>(&sb.slice(offset, offset + 1), 2usize, !nt);
+            } else {
+                let mut ar = Sequence::<Vector<F, Const<8>>>::new();
                 #[unroll]
                 for i in 0usize..(warp_m / 16) {
-                    def.execute_vectors_inplace(&ar[i], &br, acc.index_mut(i * (bn / 16) + j));
+                    ar.push(load_fragment_a(&sa, bank * a_stage + a_rows[i], bank, wm, lane, i, half, bm, bk, ta));
+                }
+                #[unroll]
+                for j in 0usize..(bn / 16) {
+                    let br = load_fragment_b(&sb, bank * b_stage + b_rows[j], bank, wn, lane, j, half, bn, bk, nt);
+                    #[unroll]
+                    for i in 0usize..(warp_m / 16) {
+                        def.execute_vectors_inplace(&ar[i], &br, acc.index_mut(i * (bn / 16) + j));
+                    }
                 }
             }
         }
@@ -171,6 +186,38 @@ pub(super) fn tiled_vector_offsets<F: Float, O: Float, OS: Size>(a: &Array<Vecto
             sync_plane();
         }
     }
+}
+
+#[ruda]
+fn load_fragment_a<F: Float>(shared: &SharedMemory<Vector<F, Const<8>>>, base: usize,
+    bank: usize, wm: usize, lane: usize, #[comptime] i: usize, #[comptime] half: usize,
+    #[comptime] bm: usize, #[comptime] bk: usize, #[comptime] ta: bool) -> Vector<F, Const<8>> {
+    let mut offset = base;
+    if comptime!(ta) {
+        offset = base + half * 16 * (bm / 8);
+    } else if comptime!(bk.is_power_of_two()) {
+        offset = base ^ (half * 2);
+    } else {
+        offset = bank * (bm * bk / 8) + shared_index(wm + i * 16 + lane % 16, half * 2 + lane / 16, bk / 8);
+    }
+    let def = cmma::MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);
+    def.load_matrix_vector::<_, Const<8>>(&shared.slice(offset, offset + 1), 4usize, ta)
+}
+
+#[ruda]
+fn load_fragment_b<F: Float>(shared: &SharedMemory<Vector<F, Const<8>>>, base: usize,
+    bank: usize, wn: usize, lane: usize, #[comptime] j: usize, #[comptime] half: usize,
+    #[comptime] bn: usize, #[comptime] bk: usize, #[comptime] nt: bool) -> Vector<F, Const<4>> {
+    let mut offset = base;
+    if comptime!(!nt) {
+        offset = base + half * 16 * (bn / 8);
+    } else if comptime!(bk.is_power_of_two()) {
+        offset = base ^ (half * 2);
+    } else {
+        offset = bank * (bn * bk / 8) + shared_index(wn + j * 8 + lane % 8, half * 2 + lane % 16 / 8, bk / 8);
+    }
+    let def = cmma::MmaDefinition::<F, F, f32>::new(16usize, 8usize, 16usize);
+    def.load_matrix_vector::<_, Const<4>>(&shared.slice(offset, offset + 1), 2usize, !nt)
 }
 
 #[ruda]

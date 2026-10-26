@@ -43,7 +43,7 @@ fn inputs<R: Runtime>(_: &TileKey,
 }
 
 pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTensor<R>, last_k: usize) {
-    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v23");
+    static TUNER: LocalTuner<TileKey, RudaTuneId> = LocalTuner::new("rublas::training_bf16::ordered_tiles::v24");
     let client = a.client.clone();
     let id = RudaTuneId::new(&client, &a.device);
     let candidates = TUNER.init_for_device(&id, || {
@@ -69,11 +69,11 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("async_64x128x32", 64, 128, 32, true),
             ("async_64x128x64", 64, 128, 64, true),
         ] {
-            for (manual, stages) in [(false, 2), (true, 2), (true, 3)] {
+            for (manual, stages, prefetch) in [(false, 2, false), (true, 2, false), (true, 3, false), (true, 2, true), (true, 3, true)] {
                 if !asynchronous && stages == 3 { continue; }
-                set = set.with(Tunable::new(&if manual { format!("mma_s{stages}_{name}") } else { name.into() },
+                set = set.with(Tunable::new(&if manual { format!("mma_s{stages}_prefetch{prefetch}_{name}") } else { name.into() },
                     move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
-                        super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, asynchronous, 32, manual, stages)
+                        super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, asynchronous, 32, manual, stages, prefetch)
                     }));
             }
         }
@@ -85,10 +85,10 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("async_wm64_256x64x32", 256, 64, 32),
             ("async_wm64_256x64x64", 256, 64, 64),
         ] {
-            for (manual, stages) in [(false, 2), (true, 2), (true, 3)] {
-                set = set.with(Tunable::new(&if manual { format!("mma_s{stages}_{name}") } else { name.into() },
+            for (manual, stages, prefetch) in [(false, 2, false), (true, 2, false), (true, 3, false), (true, 2, true), (true, 3, true)] {
+                set = set.with(Tunable::new(&if manual { format!("mma_s{stages}_prefetch{prefetch}_{name}") } else { name.into() },
                     move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
-                        super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 64, manual, stages)
+                        super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 64, manual, stages, prefetch)
                     }));
             }
         }
@@ -97,10 +97,10 @@ pub(super) fn matmul<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: RudaTe
             ("mma_async_128x256x32", 128, 256, 32),
             ("mma_async_128x256x64", 128, 256, 64),
         ] {
-            for stages in [2, 3] {
-                set = set.with(Tunable::new(&format!("{name}_s{stages}"),
+            for (stages, prefetch) in [(2, false), (3, false), (2, true), (3, true)] {
+                set = set.with(Tunable::new(&format!("{name}_s{stages}_prefetch{prefetch}"),
                     move |(a, b, out, last_k): (RudaTensor<R>, RudaTensor<R>, RudaTensor<R>, usize)| {
-                        super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 32, true, stages)
+                        super::training_gemm::launch_tile(a, b, out, last_k, m, n, k, true, 32, true, stages, prefetch)
                     }));
             }
         }

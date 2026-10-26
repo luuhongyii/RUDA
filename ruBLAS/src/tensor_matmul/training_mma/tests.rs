@@ -130,6 +130,38 @@ fn manual_training_vector_load_offsets_preserve_coordinates() {
     }
 }
 
+#[test]
+fn manual_training_fragment_prefetch_preserves_k_order() {
+    for bk in [32usize, 64, 96, 128] {
+        for warp_m in [32usize, 64] {
+            for bn in [32usize, 64, 128, 256] {
+                let (na, nb) = (warp_m / 16, bn / 16);
+                let mut left = (0..na).map(|i| (0, i)).collect::<Vec<_>>();
+                let mut right = (0..nb).map(|j| (0, j)).collect::<Vec<_>>();
+                let mut order = vec![Vec::new(); na * nb];
+                for half in 0..bk / 16 {
+                    if half + 1 < bk / 16 {
+                        left.extend((0..na).map(|i| (half + 1, i)));
+                        right.extend((0..nb).map(|j| (half + 1, j)));
+                    }
+                    assert!((1..=2).contains(&(left.len() / na - half)));
+                    assert!((1..=2).contains(&(right.len() / nb - half)));
+                    for j in 0..nb {
+                        for i in 0..na {
+                            assert_eq!(left[half * na + i], (half, i));
+                            assert_eq!(right[half * nb + j], (half, j));
+                            order[i * nb + j].push(half);
+                        }
+                    }
+                }
+                assert_eq!(left.len(), bk / 16 * na);
+                assert_eq!(right.len(), bk / 16 * nb);
+                for sequence in order { assert_eq!(sequence, (0..bk / 16).collect::<Vec<_>>()); }
+            }
+        }
+    }
+}
+
 fn values(count: usize, seed: usize) -> Vec<bf16> {
     (0..count).map(|i| {
         let bits = ((i * 17 + seed) % 128) | (((i * 7 + seed) % 12 + 119) << 7)
@@ -192,18 +224,18 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
                     b.meta.strides_mut()[0] = 0;
                     if ta { a = swap_dims(a, 1, 2); }
                     if nt { b = swap_dims(b, 1, 2); }
-                    for dtype in [DType::BF16, DType::F32] {
+                    for (dtype, prefetch) in [(DType::BF16, false), (DType::F32, false), (DType::BF16, true), (DType::F32, true)] {
                         let offset = if blocks == 4 { 3 } else { 0 };
                         let (out, storage) = output(batch, m, n, dtype, offset);
                         let (reference, _) = output(batch, m, n, dtype, 0);
                         let actual = read(launch_tile(a.clone(), b.clone(), out, last_k,
-                            bm, bn, bk, asynchronous, warp_m, true, stages).unwrap());
+                            bm, bn, bk, asynchronous, warp_m, true, stages, prefetch).unwrap());
                         let expected = read(launch_tile(a.clone(), b.clone(), reference, last_k,
-                            32, 32, 32, false, 32, false, 1).unwrap());
+                            32, 32, 32, false, 32, false, 1, false).unwrap());
                         assert_eq!(actual.len(), expected.len());
                         let mismatch = actual.iter().zip(&expected).position(|(a, b)| a.to_bits() != b.to_bits());
                         assert_eq!(mismatch, None,
-                            "tile={bm}x{bn}x{bk}, stages={stages}, ta={ta}, nt={nt}, blocks={blocks}, dtype={dtype:?}");
+                            "tile={bm}x{bn}x{bk}, stages={stages}, prefetch={prefetch}, ta={ta}, nt={nt}, blocks={blocks}, dtype={dtype:?}");
                         let whole = read(storage);
                         assert!(whole[..offset].iter().all(|v| *v == -7.0));
                         assert!(whole[offset + actual.len()..].iter().all(|v| *v == -7.0));
@@ -226,5 +258,5 @@ fn manual_training_tiles_match_wmma_for_layouts_pipeline_tails_and_offsets() {
             }
         }
     }
-    assert_eq!(cases, 288);
+    assert_eq!(cases, 576);
 }
