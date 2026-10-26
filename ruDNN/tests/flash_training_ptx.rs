@@ -5,7 +5,8 @@ use ruda_core::{
     kernel::{KernelArg, KernelDefinition, KernelOptions, ScalarKernelArg, Visibility},
     launch::{ExecutionMode, RudaDim},
 };
-use rudnn::flash_training::{forward_registers, register_backward::{key_value_registers, query_registers}};
+use rudnn::flash_training::{forward_registers, fused_backward::fused_key_value,
+    register_backward::{key_value_registers, query_registers}};
 
 fn buffer(kernel: &mut KernelDefinition, ty: Type, visibility: Visibility) -> ManagedVariable {
     let id = kernel.buffers.len() as u32;
@@ -51,6 +52,12 @@ fn compile_kernel(name: &str, causal: bool, vectorized: bool) {
             query_registers::expand::<half::bf16>(&mut kernel.body,
                 q.into(), k.into(), v.into(), grad.into(), stats.into(), delta.into(), out.into(),
                 heads.into(), kv_heads.into(), scale.into(), causal, vectorized, bf16.storage_type());
+        } else if name == "fused" {
+            let dv = buffer(&mut kernel, bf16, Visibility::ReadWrite);
+            let partial_q = buffer(&mut kernel, fp32, Visibility::ReadWrite);
+            fused_key_value::expand::<half::bf16>(&mut kernel.body,
+                q.into(), k.into(), v.into(), grad.into(), stats.into(), delta.into(), partial_q.into(),
+                out.into(), dv.into(), heads.into(), kv_heads.into(), scale.into(), causal, vectorized, bf16.storage_type());
         } else {
             let dv = buffer(&mut kernel, bf16, Visibility::ReadWrite);
             key_value_registers::expand::<half::bf16>(&mut kernel.body,
@@ -64,7 +71,9 @@ fn compile_kernel(name: &str, causal: bool, vectorized: bool) {
     assert!(compiled.source.contains("mma.sync.aligned.m16n8k16"));
     assert!(!compiled.source.contains("ld.local."));
     assert!(!compiled.source.contains("st.local."));
-    assert_eq!(compiled.shared_memory_bytes, if name == "forward" { 256 * 136 * 2 } else { 384 * 136 * 2 });
+    assert_eq!(compiled.shared_memory_bytes, match name {
+        "forward" => 256*136*2, "fused" => (384*136+128*72)*2, _ => 384*136*2,
+    });
     if let Some(directory) = std::env::var_os("RUDA_FLASH_PTX_OUTPUT") {
         let path = std::path::PathBuf::from(directory);
         std::fs::create_dir_all(&path).unwrap();
@@ -90,5 +99,12 @@ fn register_flash_query_backward_lowers_to_sm80_ptx() {
 fn register_flash_key_value_backward_lowers_to_sm80_ptx() {
     for causal in [false, true] {
         for vectorized in [false, true] { compile_kernel("key_value", causal, vectorized); }
+    }
+}
+
+#[test]
+fn fused_flash_backward_lowers_to_sm80_ptx() {
+    for causal in [false, true] {
+        for vectorized in [false, true] { compile_kernel("fused", causal, vectorized); }
     }
 }

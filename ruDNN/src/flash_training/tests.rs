@@ -167,3 +167,53 @@ fn backward_register_head_ownership_and_mma_order() {
     }
     assert_eq!(contraction,(0..32).map(|k|k*16).collect::<Vec<_>>());
 }
+
+#[test]
+fn fused_backward_transposed_derivative_matches_mma_a_coordinates() {
+    for warp in 0usize..8 {
+        for chunk in 0usize..8 {
+            let addresses: Vec<_> = (0..32).map(|lane|
+                (chunk*16+lane%8+lane/16*8)*72+warp%4*16+lane/8%2*8).collect();
+            for lane in 0..32 {
+                for element in 0..8 {
+                    let matrix = element/2;
+                    let at = addresses[matrix*8+lane%4*2+element%2]+lane/4;
+                    let q = warp%4*16+lane/4+element%4/2*8;
+                    let k = chunk*16+lane%4*2+element%2+element/4*8;
+                    assert_eq!((at/72,at%72),(k,q));
+                    assert!(at < 128*72);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fused_backward_partials_cover_every_query_once_per_key_tile() {
+    let mut counts = vec![0usize;4*512*128];
+    for key_block in 0usize..4 {
+        for query_block in 0..8 {
+            for thread in 0..256 {
+                let (warp,lane) = (thread/32,thread%32);
+                for j in 0..8 {
+                    for e in 0..4 {
+                        let row = query_block*64+warp%4*16+lane/4+e/2*8;
+                        let col = warp/4*64+j*8+lane%4*2+e%2;
+                        counts[key_block*512*128+row*128+col] += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(counts.into_iter().all(|n| n==1));
+    for (heads,kv_heads) in [(2usize,2usize),(28,4),(14,2),(6,2)] {
+        for batch in 0..2 {
+            for head in 0..heads {
+                let key = (batch*kv_heads+head/(heads/kv_heads))*512;
+                let query = (key/(512*kv_heads)*heads+(key/512%kv_heads)*(heads/kv_heads)
+                    +head%(heads/kv_heads))*512;
+                assert_eq!(query,(batch*heads+head)*512);
+            }
+        }
+    }
+}

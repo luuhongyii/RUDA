@@ -3,7 +3,7 @@ use ruda_kernel::dsl::{cmma::MmaDefinition, prelude::*};
 use crate::dense_attention::flash_exp2;
 
 #[ruda]
-fn stage<F: Float>(input: &Array<F>, tile: &mut SharedMemory<F>, row: usize,
+pub(super) fn stage<F: Float>(input: &Array<F>, tile: &mut SharedMemory<F>, row: usize,
     #[comptime] rows: usize, #[comptime] vectorized: bool) {
     let thread = UNIT_POS as usize;
     if comptime!(vectorized) {
@@ -22,7 +22,7 @@ fn stage<F: Float>(input: &Array<F>, tile: &mut SharedMemory<F>, row: usize,
 }
 
 #[ruda]
-fn dot_columns<F: Float>(a: &SharedMemory<F>, b: &SharedMemory<F>,
+pub(super) fn dot_columns<F: Float>(a: &SharedMemory<F>, b: &SharedMemory<F>,
     #[comptime] columns: usize) -> Sequence<Vector<f32,Const<4>>> {
     let lane = UNIT_POS as usize % 32;
     let warp = UNIT_POS as usize / 32;

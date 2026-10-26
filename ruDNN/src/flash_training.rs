@@ -1,6 +1,7 @@
 //! Native SM80 BF16 forward with warp MMA and Flash storage boundaries.
 pub mod backward;
 pub mod register_backward;
+pub mod fused_backward;
 #[cfg(test)]
 mod tests;
 use ruda_kernel::dsl as kernel_dsl;

@@ -171,6 +171,45 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                     let group = h / kh;
                     let parallel = group > 1 && group <= c.properties().hardware.max_ruda_count.1 as usize;
                     let wide = c.properties().hardware.max_shared_memory_size as usize >= (128+128+64+64)*136*2;
+                    let fused = c.properties().hardware.max_shared_memory_size as usize >= (384*136+128*72)*2
+                        && (parallel || group == 1);
+                    if fused {
+                        let partial_q = View::packed(c.empty(q.len.checked_mul(16).expect("Flash query partial allocation overflow")),
+                            vec![4, q.len], 0);
+                        let partial_k = parallel.then(|| View::packed(c.empty(k.len.checked_mul(group)
+                            .and_then(|n| n.checked_mul(2)).expect("Flash grouped gradient allocation overflow")), vec![group, k.len], 2));
+                        let partial_v = parallel.then(|| View::packed(c.empty(v.len.checked_mul(group)
+                            .and_then(|n| n.checked_mul(2)).expect("Flash grouped gradient allocation overflow")), vec![group, v.len], 2));
+                        let pqt = primitives::tensor(&partial_q);
+                        let pkt = partial_k.as_ref().map_or_else(|| dkt.clone(), primitives::tensor);
+                        let pvt = partial_v.as_ref().map_or_else(|| dvt.clone(), primitives::tensor);
+                        unsafe {
+                            if dm.len != 0 {
+                                kernel::zero::launch::<CudaRuntime>(&c,
+                                    RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
+                            }
+                            rudnn::flash_training::backward::contraction::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static((rows/4) as u32,1,1),RudaDim::new_1d(128),
+                                ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dtype.into());
+                            rudnn::flash_training::fused_backward::fused_key_value::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static((k.len/128/128) as u32,group as u32,1),RudaDim::new_1d(256),
+                                qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),ot.into_array_arg(),
+                                st.into_array_arg(),ct.into_array_arg(),pqt.clone().into_array_arg(),
+                                pkt.clone().into_array_arg(),pvt.clone().into_array_arg(),
+                                h as u32,kh as u32,scale,causal,flash_vectorized,dtype.into());
+                            rudnn::flash_training::fused_backward::reduce_query::launch_unchecked::<CudaRuntime>(&c,
+                                RudaCount::Static(q.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
+                                pqt.into_array_arg(),dqt.into_array_arg(),scale,dtype.into());
+                            if parallel {
+                                rudnn::flash_training::backward::reduce_heads::launch_unchecked::<CudaRuntime>(&c,
+                                    RudaCount::Static(k.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
+                                    pkt.into_array_arg(),pvt.into_array_arg(),dkt.into_array_arg(),dvt.into_array_arg(),group,dtype.into());
+                            }
+                        }
+                        LAUNCHES.fetch_add(3 + u64::from(dm.len != 0) + u64::from(parallel),Ordering::Relaxed);
+                        finish_dispatch(&c);
+                        return;
+                    }
                     unsafe {
                         if dm.len != 0 {
                             kernel::zero::launch::<CudaRuntime>(&c,
