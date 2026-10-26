@@ -14,7 +14,7 @@ fn epilogue_index(row: usize, col: usize) -> usize {
 }
 
 #[ruda(launch_unchecked)]
-pub(super) fn tiled_swizzled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
+pub(super) fn tiled_compact<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<Vector<O, OS>>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,
@@ -49,23 +49,20 @@ pub(super) fn tiled_swizzled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, C
     let mut a_rows = Sequence::<usize>::new();
     let mut b_rows = Sequence::<usize>::new();
     #[unroll]
-    for half in 0usize..(bk / 16) {
-        #[unroll]
-        for i in 0usize..(warp_m / 16) {
-            if comptime!(ta) {
-                a_rows.push(shared_index(half * 16 + lane % 8 + lane / 16 * 8,
-                    (wm + i * 16) / 8 + lane % 16 / 8, bm / 8));
-            } else {
-                a_rows.push(shared_index(wm + i * 16 + lane % 16, half * 2 + lane / 16, bk / 8));
-            }
+    for i in 0usize..(warp_m / 16) {
+        if comptime!(ta) {
+            a_rows.push(shared_index(lane % 8 + lane / 16 * 8,
+                (wm + i * 16) / 8 + lane % 16 / 8, bm / 8));
+        } else {
+            a_rows.push(shared_index(wm + i * 16 + lane % 16, lane / 16, bk / 8));
         }
-        #[unroll]
-        for j in 0usize..(bn / 16) {
-            if comptime!(nt) {
-                b_rows.push(shared_index(wn + j * 8 + lane % 8, half * 2 + lane % 16 / 8, bk / 8));
-            } else {
-                b_rows.push(shared_index(half * 16 + lane % 16, wn / 8 + j, bn / 8));
-            }
+    }
+    #[unroll]
+    for j in 0usize..(bn / 16) {
+        if comptime!(nt) {
+            b_rows.push(shared_index(wn + j * 8 + lane % 8, lane % 16 / 8, bk / 8));
+        } else {
+            b_rows.push(shared_index(lane % 16, wn / 8 + j, bn / 8));
         }
     }
     let blocks = k / bk - usize::cast_from(RUDA_POS_Y as usize == batch - 1) * ((k - last_k) / bk);
@@ -98,12 +95,28 @@ pub(super) fn tiled_swizzled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, C
             let mut ar = Sequence::<Vector<F, Const<8>>>::new();
             #[unroll]
             for i in 0usize..(warp_m / 16) {
-                let offset = bank * a_stage + a_rows[half * (warp_m / 16) + i];
+                let base = bank * a_stage + a_rows[i];
+                let mut offset = base;
+                if comptime!(ta) {
+                    offset = base + half * 16 * (bm / 8);
+                } else if comptime!(bk.is_power_of_two()) {
+                    offset = base ^ (half * 2);
+                } else {
+                    offset = bank * a_stage + shared_index(wm + i * 16 + lane % 16, half * 2 + lane / 16, bk / 8);
+                }
                 ar.push(def.load_matrix_vector::<_, Const<8>>(&sa.slice(offset, offset + 1), 4usize, ta));
             }
             #[unroll]
             for j in 0usize..(bn / 16) {
-                let offset = bank * b_stage + b_rows[half * (bn / 16) + j];
+                let base = bank * b_stage + b_rows[j];
+                let mut offset = base;
+                if comptime!(!nt) {
+                    offset = base + half * 16 * (bn / 8);
+                } else if comptime!(bk.is_power_of_two()) {
+                    offset = base ^ (half * 2);
+                } else {
+                    offset = bank * b_stage + shared_index(wn + j * 8 + lane % 8, half * 2 + lane % 16 / 8, bk / 8);
+                }
                 let br = def.load_matrix_vector::<_, Const<4>>(&sb.slice(offset, offset + 1), 2usize, !nt);
                 #[unroll]
                 for i in 0usize..(warp_m / 16) {

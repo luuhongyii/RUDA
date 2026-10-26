@@ -52,6 +52,58 @@ fn manual_training_epilogue_swizzle_preserves_coordinates_and_bank_transactions(
     }
 }
 
+#[test]
+fn manual_training_compact_offsets_match_full_fragment_addresses() {
+    let index = |row: usize, chunk: usize, chunks: usize| {
+        row * chunks + (chunk ^ ((row / 8usize.div_ceil(chunks)) % chunks.min(8)))
+    };
+    for bm in [32usize, 64, 96, 128, 256] {
+        for bn in [32usize, 64, 96, 128, 256] {
+            for bk in [32usize, 64, 96, 128] {
+                for warp_m in [32usize, 64] {
+                    if bm % warp_m != 0 { continue; }
+                    for warp in 0..bm / warp_m * 2 {
+                        let wm = warp / 2 * warp_m;
+                        let wn = warp % 2 * (bn / 2);
+                        for lane in 0..32 {
+                            for bank in 0..3 {
+                                for half in 0..bk / 16 {
+                                    for transposed in [false, true] {
+                                        for i in 0..warp_m / 16 {
+                                            let base = bank * bm * bk / 8 + if transposed {
+                                                index(lane % 8 + lane / 16 * 8, (wm + i * 16) / 8 + lane % 16 / 8, bm / 8)
+                                            } else { index(wm + i * 16 + lane % 16, lane / 16, bk / 8) };
+                                            let expected = bank * bm * bk / 8 + if transposed {
+                                                index(half * 16 + lane % 8 + lane / 16 * 8, (wm + i * 16) / 8 + lane % 16 / 8, bm / 8)
+                                            } else { index(wm + i * 16 + lane % 16, half * 2 + lane / 16, bk / 8) };
+                                            let actual = if transposed { base + half * 16 * (bm / 8) }
+                                                else if bk.is_power_of_two() { base ^ (half * 2) }
+                                                else { expected };
+                                            assert_eq!(actual, expected, "A: {bm}x{bn}x{bk}, warp={warp}, lane={lane}, bank={bank}, half={half}");
+                                        }
+                                        for j in 0..bn / 16 {
+                                            let base = bank * bn * bk / 8 + if transposed {
+                                                index(wn + j * 8 + lane % 8, lane % 16 / 8, bk / 8)
+                                            } else { index(lane % 16, wn / 8 + j, bn / 8) };
+                                            let expected = bank * bn * bk / 8 + if transposed {
+                                                index(wn + j * 8 + lane % 8, half * 2 + lane % 16 / 8, bk / 8)
+                                            } else { index(half * 16 + lane % 16, wn / 8 + j, bn / 8) };
+                                            let actual = if !transposed { base + half * 16 * (bn / 8) }
+                                                else if bk.is_power_of_two() { base ^ (half * 2) }
+                                                else { expected };
+                                            assert_eq!(actual, expected, "B: {bm}x{bn}x{bk}, warp={warp}, lane={lane}, bank={bank}, half={half}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn values(count: usize, seed: usize) -> Vec<bf16> {
     (0..count).map(|i| {
         let bits = ((i * 17 + seed) % 128) | (((i * 7 + seed) % 12 + 119) << 7)
