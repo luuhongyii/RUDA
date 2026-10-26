@@ -49,6 +49,33 @@ pub(super) fn dot_columns<F: Float>(a: &SharedMemory<F>, b: &SharedMemory<F>,
     acc
 }
 
+#[ruda]
+pub(super) fn dot_pair<F: Float>(a: &SharedMemory<F>, b: &SharedMemory<F>,
+    c: &SharedMemory<F>, d: &SharedMemory<F>, #[comptime] columns: usize)
+    -> Sequence<Vector<f32,Const<4>>> {
+    let lane = UNIT_POS as usize % 32;
+    let warp = UNIT_POS as usize / 32;
+    let def = MmaDefinition::<F,F,f32>::new(16usize,8usize,16usize);
+    let mut acc = Sequence::<Vector<f32,Const<4>>>::new();
+    #[unroll]
+    for _ in 0usize..4 { acc.push(Vector::new(0.0f32)); }
+    #[unroll]
+    for chunk in 0usize..8 {
+        let at = (warp*16+lane%16)*136+chunk*16+lane/16*8;
+        let ar = def.load_matrix_vector::<_,Const<8>>(&a.slice(at,at+8),4usize,false);
+        let cr = def.load_matrix_vector::<_,Const<8>>(&c.slice(at,at+8),4usize,false);
+        #[unroll]
+        for part in 0usize..2 {
+            let bt = (columns*16+part*8+lane%8)*136+chunk*16+lane/8%2*8;
+            let br = def.load_matrix_vector::<_,Const<4>>(&b.slice(bt,bt+8),2usize,false);
+            let dr = def.load_matrix_vector::<_,Const<4>>(&d.slice(bt,bt+8),2usize,false);
+            def.execute_vectors_inplace(&ar,&br,acc.index_mut(part));
+            def.execute_vectors_inplace(&cr,&dr,acc.index_mut(2+part));
+        }
+    }
+    acc
+}
+
 #[ruda(launch_unchecked)]
 pub fn query_registers<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
     stats: &Array<f32>, delta: &Array<f32>, dq: &mut Array<F>, heads: u32, kv_heads: u32,

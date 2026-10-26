@@ -1,7 +1,7 @@
 use ruda_kernel::dsl as kernel_dsl;
 use ruda_kernel::dsl::{cmma::MmaDefinition, prelude::*};
 use crate::dense_attention::flash_exp2;
-use super::register_backward::{dot_columns, stage};
+use super::register_backward::{dot_pair, stage};
 
 #[ruda(launch_unchecked)]
 pub fn fused_key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad: &Array<F>,
@@ -36,8 +36,7 @@ pub fn fused_key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad:
         sync_ruda();
         #[unroll]
         for chunk in 0usize..4 {
-            let scores = dot_columns(&k_tile,&q_tile,chunk);
-            let derivative = dot_columns(&v_tile,&g_tile,chunk);
+            let products = dot_pair(&k_tile,&q_tile,&v_tile,&g_tile,chunk);
             let mut ds = Vector::<F,Const<8>>::empty();
             let mut probability = Vector::<F,Const<8>>::empty();
             #[unroll]
@@ -52,9 +51,9 @@ pub fn fused_key_value<F: Float>(q: &Array<F>, k: &Array<F>, v: &Array<F>, grad:
                     let mut p = 0.0f32;
                     let mut value = 0.0f32;
                     if allowed {
-                        p = flash_exp2(scores[part][e]*(scale*1.4426950408889634f32)
+                        p = flash_exp2(products[part][e]*(scale*1.4426950408889634f32)
                             -stats[qr*2]*1.4426950408889634f32);
-                        value = p*(derivative[part][e]-delta[qr]);
+                        value = p*(products[2+part][e]-delta[qr]);
                     }
                     ds[part*4+e] = F::cast_from(value);
                     probability[part*4+e] = F::cast_from(p);
