@@ -17,7 +17,6 @@ pub fn rms_cuda_vector4<F: Float + RudaElement, W: Float + RudaElement>(
     let stride = comptime!(if width==8192 { 2048usize } else { 128usize });
     let column = if comptime!(width==8192) { thread*4 } else { lane*4 };
     let mut local = Array::<f32>::new(4usize);
-    let mut sums = SharedMemory::<f32>::new(comptime!(if width==8192 { 512usize } else { 128usize }));
     #[unroll]
     for j in 0usize..4 { local[j] = 0.0; }
     #[unroll]
@@ -28,26 +27,26 @@ pub fn rms_cuda_vector4<F: Float + RudaElement, W: Float + RudaElement>(
             local[j] += value*value;
         }
     }
-    sums[thread] = ((local[0]+local[1])+local[2])+local[3];
-    sync_ruda();
+    let mut total = ((local[0]+local[1])+local[2])+local[3];
     #[unroll]
     for stage in 0usize..5 {
-        let offset = 16usize>>stage;
-        if lane < offset {
-            sums[thread] = sums[thread]+sums[thread+offset];
-        }
-        sync_ruda();
+        total += plane_shuffle_down(total, (16usize>>stage) as u32);
     }
     if comptime!(width==8192) {
+        let mut sums = SharedMemory::<f32>::new(16usize);
+        if lane == 0 { sums[warp] = total; }
+        sync_ruda();
         #[unroll]
         for stage in 0usize..4 {
-            let offset = 256usize>>stage;
+            let offset = 8usize>>stage;
             if thread < offset { sums[thread] = sums[thread]+sums[thread+offset]; }
             sync_ruda();
         }
+        total = sums[0];
+    } else {
+        total = plane_shuffle(total, 0u32);
     }
-    let index = warp*comptime!(if width==8192 { 0usize } else { 32usize });
-    let inv = cuda_rsqrt(sums[index]*(1.0f32/width as f32)+epsilon);
+    let inv = cuda_rsqrt(total*(1.0f32/width as f32)+epsilon);
     if lane == 0 && (comptime!(width!=8192) || thread==0) { rstd[row] = inv; }
     #[unroll]
     for i in 0usize..(width/stride) {
