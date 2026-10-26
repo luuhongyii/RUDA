@@ -9,7 +9,7 @@ fn shared_index(row: usize, chunk: usize, #[comptime] chunks: usize) -> usize {
 }
 
 #[ruda(launch_unchecked)]
-pub(super) fn tiled<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
+pub(super) fn tiled_pipelined<F: Float, O: Float, OS: Size>(a: &Array<Vector<F, Const<8>>>, b: &Array<Vector<F, Const<8>>>,
     out: &mut Array<Vector<O, OS>>, #[comptime] k: usize, #[comptime] n: usize,
     #[comptime] lda: usize, #[comptime] ldb: usize, #[comptime] ta: bool, #[comptime] nt: bool,
     #[comptime] m: usize, #[comptime] batch: usize, #[comptime] last_k: usize,

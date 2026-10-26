@@ -122,7 +122,7 @@ pub(super) fn launch_tile<R: Runtime>(a: RudaTensor<R>, b: RudaTensor<R>, out: R
     left.meta.shape_mut()[0] = a_span; left.meta.shape_mut()[1] = 1;
     right.meta.shape_mut()[0] = b_span; right.meta.shape_mut()[1] = 1;
     if manual {
-        unsafe { super::training_mma::tiled::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
+        unsafe { super::training_mma::tiled_pipelined::launch_unchecked::<R>(&a.client, RudaCount::Static((n / bn * (m / bm)) as u32, batch as u32, 1), RudaDim::new_1d(threads as u32),
             left.into_array_arg(), right.into_array_arg(), out.clone().into_array_arg(), k, n, lda, ldb, ta, nt,
             m, batch, last_k, a_batch, b_batch, bm, bn, bk, asynchronous, warp_m,
             stages, DType::BF16.into(), out.dtype.into(), output_vector_size(&out)); }
