@@ -1,10 +1,7 @@
 diff --git a/crates/release_plz_core/src/package_compare.rs b/crates/release_plz_core/src/package_compare.rs
 --- a/crates/release_plz_core/src/package_compare.rs
 +++ b/crates/release_plz_core/src/package_compare.rs
-@@ -31,12 +31,23 @@ pub fn are_packages_equal(
-         return Ok(false);
-     }
- 
+@@ -34,9 +34,20 @@ pub fn are_packages_equal(
 -    let local_package_files = get_cargo_package_files(local_package).with_context(|| {
 -        format!("cannot determine packaged files of local package {local_package:?}")
 -    })?;
@@ -25,6 +22,7 @@ diff --git a/crates/release_plz_core/src/package_compare.rs b/crates/release_plz
 +    let local_package_files = get_cargo_package_files(local_package).with_context(|| {
 +        format!("cannot determine packaged files of local package {local_package:?}")
 +    })?;
- 
+-
++
      // Older published libraries may lack Cargo.lock, but modern `cargo package --list`
      // includes it even when absent. Ignore its presence to preserve the comparison
