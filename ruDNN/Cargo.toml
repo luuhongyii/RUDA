@@ -60,6 +60,10 @@ path = "tests/attention/lib.rs"
 required-features = ["kernel-ir", "cpu-reference"]
 
 [[test]]
+name = "flash-training-layout"
+path = "src/flash_training/tests.rs"
+
+[[test]]
 name = "convolution"
 path = "tests/convolution/lib.rs"
 required-features = ["kernel-ir", "cpu-reference"]

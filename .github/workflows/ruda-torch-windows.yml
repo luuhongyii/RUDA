@@ -181,7 +181,7 @@ jobs:
         run: |
           cargo build --release --locked -p ruda-torch-native
           cargo check --release --locked -p ruDNN --lib --tests --features tensor-paged-attention,ruda-test-runtime/cuda
-          cargo test --release --locked -p ruDNN --lib --features tensor-paged-attention,ruda-test-runtime/cuda flash_training::tests
+          cargo test --release --locked -p ruDNN --test flash-training-layout --features tensor-paged-attention,ruda-test-runtime/cuda
           RUDA_PTX_TEST_OUTPUT="$GITHUB_WORKSPACE/target/ptx-vector-memory" cargo test --release --locked -p ruda-compiler --no-default-features --features ptx ptx::tests
           test "$(find target/ptx-vector-memory -maxdepth 1 -name 'packed_vector_memory_*.ptx' | wc -l)" -eq 48
           test "$(find target/ptx-vector-memory -maxdepth 1 -name 'unsigned_power2_*.ptx' | wc -l)" -eq 288
