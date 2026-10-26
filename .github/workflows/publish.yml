@@ -32,7 +32,7 @@ jobs:
   plan:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_sha == github.sha)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: write
     outputs:
@@ -52,10 +52,21 @@ jobs:
         run: |
           rustup toolchain install 1.97.1 --profile minimal
           rustup override set 1.97.1
-      - name: Install release-plz
-        uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af
+      - name: Restore patched release-plz
+        id: release-tool-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          tool: release-plz@0.3.165
+          path: ${{ runner.temp }}/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-rust-1.97.1-0.3.165-${{ hashFiles('.github/patches/release-plz-package-compare.patch') }}
+      - name: Build patched release-plz
+        if: steps.release-tool-cache.outputs.cache-hit != 'true'
+        run: |
+          tool_source=$(mktemp -d)
+          curl --fail --location --retry 3 https://github.com/release-plz/release-plz/archive/e5fe979d231457bf96499f29384e45f0fccaee84.tar.gz | tar -xz --strip-components=1 -C "$tool_source"
+          git -C "$tool_source" apply "$GITHUB_WORKSPACE/.github/patches/release-plz-package-compare.patch"
+          cargo install --locked --path "$tool_source/crates/release_plz" --root "$RUNNER_TEMP/release-plz"
+      - name: Add release-plz to PATH
+        run: echo "$RUNNER_TEMP/release-plz/bin" >> "$GITHUB_PATH"
       - name: Test publisher and version preparation
         if: ${{ !inputs.compile_only }}
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v

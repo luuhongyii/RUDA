@@ -149,6 +149,19 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(self.version("core"), "0.1.1")
         self.assertIn('path = "../consumer"', core.read_text())
 
+    def test_real_changed_sources_do_not_resolve_invalid_historical_features(self):
+        core = self.root / "core/Cargo.toml"
+        original = core.read_text()
+        core.write_text(original+'\n[features]\ncache = ["serde"]\nenvironment = ["dep:serde"]\n'
+                        '[dependencies]\nserde = { version = "1.0", optional = true }\n')
+        (self.root / "consumer/src/lib.rs").write_text("pub fn value() -> u32 { 2 }\n")
+        self.commit("fix: update consumer with an invalid historical workspace feature")
+        core.write_text(original)
+        (self.root / "consumer/src/lib.rs").write_text("pub fn value() -> u32 { 3 }\n")
+        self.commit("fix: restore a resolvable workspace")
+        self.invoke(self.real_update)
+        self.assertEqual(self.version("consumer"), "0.1.1")
+
     def test_concurrent_push_is_not_overwritten(self):
         other = self.base / "other"
         self.command("git", "clone", str(self.remote), str(other))
