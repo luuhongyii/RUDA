@@ -27,7 +27,7 @@ full = ["extended"]
 [dependencies]
 ruda-driver-cann = { version = "0.1.105", path = "../ruda-driver/cann", optional = true }
 ruda-kernel = { version = "0.1.50", path = "../ruda-kernel", default-features = false }
-ruda = { version = "0.1.50", path = "../ruda", default-features = false }
+ruda = { version = "0.1.51", path = "../ruda", default-features = false }
 half = { version = "=2.7.1", features = ["alloc", "num-traits", "serde", "bytemuck"] }
 
 [lints.rust]
