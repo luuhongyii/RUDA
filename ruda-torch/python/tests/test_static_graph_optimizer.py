@@ -42,16 +42,28 @@ def test_defaults_preserve_old_plan():
     assert p.nodes==tuple(nodes) and p.storage_roots==tuple(range(4))
 
 
-@pytest.mark.parametrize('case',['public','fanout','double_read','right_activation'])
+@pytest.mark.parametrize('case',['public','fanout','double_read'])
 def test_fusion_preserves_observable_intermediates(case):
     nodes=[Op.silu('a','x')]
     out=None
     if case=='public':nodes+=[Op.mul('y','a','u')];out=['a','y']
     if case=='fanout':nodes+=[Op.mul('b','a','u'),Op.add('y','b','a')]
     if case=='double_read':nodes+=[Op.mul('y','a','a')]
-    if case=='right_activation':nodes+=[Op.mul('y','u','a')]
     p=m.prepare_plan(inputs(),nodes,out,optimize=True)
     assert not p.fused_activations
+
+
+@pytest.mark.parametrize('dtype',['float32','float16','bfloat16'])
+@pytest.mark.parametrize('right_activation',[False,True])
+def test_fusion_accepts_either_multiply_operand(dtype,right_activation):
+    mul=Op.mul('y','u','a') if right_activation else Op.mul('y','a','u')
+    nodes=[Op.silu('a','x'),mul]
+    base=m.prepare_plan(inputs(dtype),nodes)
+    fused=m.prepare_plan(inputs(dtype),nodes,optimize=True)
+    assert fused.fused_activations==('a',) and fused.nodes==(Op.silu_mul('y','x','u'),)
+    gen=torch.Generator().manual_seed(24002)
+    data={name:torch.randn(2,33,generator=gen).to(getattr(torch,dtype)) for name in inputs(dtype)}
+    torch.testing.assert_close(_execute(fused,data)['y'],_execute(base,data)['y'],rtol=0,atol=0)
 
 
 def test_fusion_does_not_move_after_dependency():
