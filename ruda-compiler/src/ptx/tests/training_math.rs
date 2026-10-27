@@ -10,7 +10,8 @@ fn tf32_conversion_uses_bit_register_destination() {
         load(&mut k.body,input,0u32.into(),x);
         k.body.register(Instruction::new(Operator::Cast(UnaryOperator{input:x}),y));
         store(&mut k.body,output,0u32.into(),y);
-        let ptx=compile(k,ExecutionMode::Unchecked,UIntKind::U32).unwrap();
+        let target=PtxCompilationOptions{target:Some(PtxTarget{version:(8,0),sm:90})};
+        let ptx=PtxCompiler.compile(k,&target,ExecutionMode::Unchecked,UIntKind::U32.into()).unwrap();
         let line=ptx.source.lines().find(|line|line.contains("cvt.rna.tf32.f32")).unwrap();
         let register=line.split_whitespace().nth(1).unwrap().trim_end_matches(',');
         assert!(ptx.source.contains(&format!(".reg .b32 {register};")),"{line}");
