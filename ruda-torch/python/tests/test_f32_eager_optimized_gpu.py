@@ -52,7 +52,20 @@ def test_f32_precision_layouts(allow_tf32, ta, nt, batched, backend):
         assert torch.isnan(storage[offset + expected.numel():].cpu()).all()
 
 
-@pytest.mark.parametrize('shape', [(32, 8, 32), (64, 72, 64), (128, 256, 128), (37, 19, 45), (32, 0, 64)])
+@pytest.mark.parametrize('allow_tf32', [False, True])
+@pytest.mark.parametrize('shape', [(32, 8, 32), (96, 160, 224), (352, 352, 352), (128, 8192, 128)])
+def test_f32_tiled_precision_and_edges(allow_tf32, shape):
+    torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    m, k, n = shape
+    a, b = torch.randn(2, m, k), torch.randn(2, k, n)
+    actual = torch.bmm(a.to('ruda'), b.to('ruda')).cpu()
+    expected = (a.double() @ b.double()).float()
+    tolerance = .004 if allow_tf32 else 2e-5
+    torch.testing.assert_close(actual / k ** .5, expected / k ** .5, atol=tolerance, rtol=tolerance)
+
+
+@pytest.mark.parametrize('shape', [(32, 8, 32), (64, 72, 64), (128, 256, 128), (96, 160, 224),
+                                  (224, 72, 96), (37, 19, 45), (32, 0, 64)])
 def test_f32_eager_matmul_addmm_and_grad(shape):
     m, k, n = shape
     a, b, bias = torch.randn(m, k), torch.randn(k, n), torch.randn(n)
@@ -105,7 +118,8 @@ def test_silu_lookup_vector_width_and_nonfinite(dtype):
 
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('queries,keys,width,policy', [(65, 127, 32, 'plain'), (128, 257, 64, 'causal'),
-                                                     (127, 65, 128, 'mask'), (257, 128, 64, 'gqa')])
+                                                     (127, 65, 128, 'mask'), (257, 128, 64, 'gqa'),
+                                                     (193, 193, 128, 'causal'), (65, 513, 80, 'plain')])
 def test_async_attention_tiles(dtype, queries, keys, width, policy):
     host = [torch.randn(1, h, n, width, dtype=dtype) for h, n in
             [(4, queries), (2 if policy == 'gqa' else 4, keys), (2 if policy == 'gqa' else 4, keys)]]
@@ -121,7 +135,7 @@ def test_async_attention_tiles(dtype, queries, keys, width, policy):
     torch.testing.assert_close(actual.cpu().float(), expected, atol=tolerance, rtol=tolerance)
 
 
-@pytest.mark.parametrize('shape', [(32, 24, 32), (64, 72, 64), (128, 128, 128)])
+@pytest.mark.parametrize('shape', [(32, 24, 32), (64, 72, 64), (128, 128, 128), (224, 96, 160)])
 @pytest.mark.parametrize('bias_kind', ['scalar', 'row', 'column', 'matrix'])
 def test_f32_fused_addmm_epilogue(shape, bias_kind, backend):
     m, k, n = shape
