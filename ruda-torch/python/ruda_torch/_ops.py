@@ -7,6 +7,29 @@ from . import _C
 from .math_backend import _nvidia
 
 _registry = torch.library.Library("aten", "IMPL", "PrivateUse1")
+_attention_autograd = torch.library.Library("aten", "IMPL", "AutogradPrivateUse1")
+
+
+def _scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
+                                  is_causal=False, *, scale=None, enable_gqa=False):
+    if (query.dtype in (torch.float16, torch.bfloat16, torch.float32)
+            and query.ndim >= 3 and query.ndim == key.ndim == value.ndim
+            and query.shape[-1] > 0 and value.shape[-1] > 0
+            and query.shape[-3] > 0 and key.shape[-3] > 0
+            and query.numel() > 0 and key.numel() > 0 and value.numel() > 0
+            and (scale is None or math.isfinite(scale))
+            and not (is_causal and attn_mask is not None)
+            and (attn_mask is None or attn_mask.dtype in (torch.bool, torch.float32, query.dtype))):
+        from .attention import scaled_dot_product_attention
+        return scaled_dot_product_attention(query, key, value, attn_mask=attn_mask,
+            dropout_p=dropout_p, is_causal=is_causal, scale=scale, enable_gqa=enable_gqa)
+    return torch.ops.aten._scaled_dot_product_attention_math.default(
+        query, key, value, attn_mask, dropout_p, is_causal, scale=scale, enable_gqa=enable_gqa)[0]
+
+
+_registry.impl("scaled_dot_product_attention", _scaled_dot_product_attention)
+_attention_autograd.impl("scaled_dot_product_attention", _scaled_dot_product_attention)
+
 _native_eager_ops = frozenset(getattr(_C, 'native_eager_ops', ()))
 if _native_eager_ops:
     from . import _native

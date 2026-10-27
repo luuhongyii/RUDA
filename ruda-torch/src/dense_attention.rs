@@ -107,7 +107,7 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
         assert_eq!(k.shape, vec![b,kh,s,d]);
         assert_eq!(v.shape, vec![b,kh,s,dv]);
         let rows = b.checked_mul(h).and_then(|n| n.checked_mul(l)).expect("attention rows overflow");
-        let scores = rows.checked_mul(s).filter(|&n| n <= u32::MAX as usize).expect("attention RNG/index range exceeds U32");
+        let scores = rows.checked_mul(s).expect("attention logical score size overflow");
         let (global_heads, head_start) = head_partition.unwrap_or((h as i64, 0));
         assert!(global_heads >= h as i64 && head_start >= 0 && head_start <= global_heads - h as i64);
         let global_scores = (b as i64).checked_mul(global_heads).and_then(|n|n.checked_mul(l as i64))
@@ -148,6 +148,7 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                     LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);return;
                 }
             }
+            assert!(scores <= u32::MAX as usize, "attention RNG/index range exceeds U32");
             if !flash && l == 1 && s >= 256 && mask_kind == 0 && !causal && dropout_p == 0.0 && rows > 0 && rows <= 256 {
                 let splits = 16usize;
                 let partial_values = View::packed(c.empty(rows * splits * dv * 4), vec![rows * splits, dv], 0);
@@ -191,6 +192,7 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                 LAUNCHES.fetch_add(1,Ordering::Relaxed);
             }
         } else {
+            assert!(scores <= u32::MAX as usize, "attention RNG/index range exceeds U32");
             for (x,like) in [(&xs[6],q),(&xs[7],k),(&xs[8],v)] {
                 packed(x); assert_eq!(x.shape,like.shape); assert_eq!(x.dtype,q.dtype);
             }

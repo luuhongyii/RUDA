@@ -109,3 +109,31 @@ def test_static_graph_model_entry_returns_callable_not_fixed_address_graph(front
     x = torch.randn(3)
     torch.testing.assert_close(compiled(x), x * x)
     compiled.close()
+
+
+@pytest.mark.parametrize('commuted', [False, True])
+@pytest.mark.parametrize('barrier', ['none', 'public', 'mutation', 'broadcast', 'dtype', 'cpu', 'double_use'])
+def test_swiglu_route_uses_metadata_and_preserves_boundaries(frontend, monkeypatch, commuted, barrier):
+    compiler, state = frontend
+    package = sys.modules[compiler.__package__]
+    monkeypatch.setattr(package, '_training_available', True, raising=False)
+    fusions = importlib.import_module(compiler.__package__ + '._compile_fusions')
+    before = len(state.allocations)
+    graph = torch.fx.Graph()
+    gate, up = graph.placeholder('gate'), graph.placeholder('up')
+    activated = graph.call_function(torch.nn.functional.silu, (gate,))
+    if barrier == 'mutation':
+        graph.call_function(torch.ops.aten.add_.Scalar, (gate, 1))
+    right = activated if barrier == 'double_use' else up
+    output = graph.call_function(torch.mul, (right, activated) if commuted else (activated, right))
+    graph.output((output, activated) if barrier == 'public' else output)
+    gm = torch.fx.GraphModule({}, graph)
+    mode = FakeTensorMode(allow_fallback_kernels=False)
+    device = torch.device('cpu' if barrier == 'cpu' else 'ruda:0')
+    for node in (gate, up, activated, output):
+        shape = (1, 7) if node is up and barrier == 'broadcast' else (3, 7)
+        dtype = torch.float32 if node is up and barrier == 'dtype' else torch.bfloat16
+        node.meta['example_value'] = FakeTensor(mode, torch.empty(shape, device='meta', dtype=dtype), device)
+    routed = fusions.route_fusions(gm)
+    assert any(n.target is fusions._silu_mul for n in routed.graph.nodes) == (barrier == 'none')
+    assert len(state.allocations) == before

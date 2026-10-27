@@ -74,9 +74,19 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
     let blocks = if warp { rows.div_ceil(4) } else { rows.div_ceil(128) };
     let count = u32::try_from(blocks).expect("softmax launch grid overflow");
     let client = client();
+    let width = a.shape[axis];
+    let cached = matches!(op, 31 | 33) && axis + 1 == a.shape.len()
+        && super::row_cached::eligible(width) && super::row_cached::packed(a)
+        && super::row_cached::packed(out)
+        && std::env::var("RUDA_TORCH_SOFTMAX").map_or(true, |value| value == "auto");
+    let threads = super::row_cached::threads(width);
     macro_rules! run {
         ($i:ty, $o:ty) => {
-            if warp {
+            if cached {
+                super::row_cached::softmax::launch::<$i, $o, CudaRuntime>(
+                    &client, RudaCount::Static(u32::try_from(rows).expect("softmax grid overflow"), 1, 1),
+                    RudaDim::new_1d(threads as u32), a.arg(), out.arg(), op == 33, width, threads)
+            } else if warp {
                 kernels::softmax_warp::launch::<$i, $o, CudaRuntime>(
                     &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
                     a.arg(), b.arg(), out.arg(), axis, op == 32 || op == 34, op >= 33)

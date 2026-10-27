@@ -75,7 +75,9 @@ def block(x, residual):
 | Softmax 与反向 | `aten._softmax.default`、`aten._log_softmax.default`、`aten._softmax_backward_data.default`、`aten._log_softmax_backward_data.default`；不做半精度到 FP32 的隐式提升，反向类型须匹配。 |
 | 激活反向 | `aten.silu_backward.default`、`aten.sigmoid_backward.default`、`aten.tanh_backward.default`。 |
 
-运行时仍检查 `ruda:0` 设备、稠密布局、FP32/FP16/BF16 类型、非空的 1–8 维形状和节点数限制；输入复制到连续暂存存储，操作输出须为连续布局。标量须能表示为有限 FP32 值。完整分段规则见 [`_compile_native.py`](../../ruda-torch/python/ruda_torch/_compile_native.py)。显式 `GraphOp` 的 RMSNorm/SiLU-mul 节点不代表 AOT 会自动识别对应复合操作。广播、视图、就地修改、随机操作及其他未支持操作在 `native='auto'` 下留在原设备普通执行，在 `native='required'` 下报错。
+运行时仍检查 `ruda:0` 设备、稠密布局、FP32/FP16/BF16 类型、非空的 1–8 维形状和节点数限制；输入复制到连续暂存存储，操作输出须为连续布局。标量须能表示为有限 FP32 值。完整分段规则见 [`_compile_native.py`](../../ruda-torch/python/ruda_torch/_compile_native.py)。显式 `GraphOp` 的 RMSNorm 节点不代表 AOT 会自动识别该复合操作。广播、视图、就地修改、随机操作及其他未支持操作在 `native='auto'` 下留在原设备普通执行，在 `native='required'` 下报错。
+
+在 RUDA 的 `native='auto'` 模式下，pre-AOT pass 将符合条件的 `F.silu(gate) * up`（包括交换乘法两侧）连接到原生 `silu_mul` 前向／反向。要求非原地 SiLU、激活结果仅使用一次、`ruda:0` 上静态非空且 shape／dtype 相同的输入，中间不能跨越修改操作或任意 Python 调用；保留低精度激活的存储舍入边界。这是设备分派而非 StaticGraph 捕获，`native='required'` 保留原图路径。调用者为 `aten.silu.default` 或 `aten.mul.Tensor` 提供 decomposition 时禁用该改写。源码：[`_compile_fusions.py`](../../ruda-torch/python/ruda_torch/_compile_fusions.py)。
 
 不能把 `fullgraph=True` 理解为“全部操作原生捕获”：它只约束 PyTorch 图是否出现断点。`native='required'` 也只审查捕获到的操作。
 

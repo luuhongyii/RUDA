@@ -93,7 +93,8 @@ def _experts_forward(module, hidden_states, top_k_index, top_k_weights):
     rows = hidden_states[:, None, :].expand(tokens, slots, hidden).reshape(-1, hidden).to(dtype)
     ids = top_k_index.reshape(-1).to(torch.int64)
     gate, up = grouped_gemm(rows.contiguous(), gate_up.to(dtype).contiguous(), ids.contiguous()).split(module.intermediate_dim, -1)
-    value = F.silu(gate) * up
+    from .training import silu_mul
+    value = silu_mul(gate.contiguous(), up.contiguous())
     output = grouped_gemm(value.contiguous(), down.to(dtype).contiguous(), ids.contiguous()).reshape(tokens, slots, hidden)
     output = (output * top_k_weights[:, :, None]).to(hidden_states.dtype)
     order = top_k_index.argsort(dim=-1, stable=True)

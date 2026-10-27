@@ -42,3 +42,16 @@ def test_internal_copy_is_removed_but_public_copy_is_preserved():
     assert [n.kind for n in plan.nodes]==['silu_mul','copy']
     assert plan.nodes[0].left=='x' and 'inner' in plan.eliminated_outputs
     assert plan.storage_roots[-1]!=plan.storage_roots[-2]
+
+
+@pytest.mark.parametrize('commuted', [False, True])
+@pytest.mark.parametrize('public', [False, True])
+def test_swiglu_fuses_both_operand_orders_but_not_public_activation(commuted, public):
+    T, Op = planner.TensorSpec, planner.GraphOp
+    operands = ('up', 'activated') if commuted else ('activated', 'up')
+    plan = planner.prepare_plan({'gate': T((3, 97), 'bfloat16'), 'up': T((3, 97), 'bfloat16')},
+        [Op.silu('activated', 'gate'), Op.mul('result', *operands)],
+        outputs=['result', 'activated'] if public else ['result'], optimize=True)
+    assert [n.kind for n in plan.nodes] == (['silu', 'mul'] if public else ['silu_mul'])
+    if not public:
+        assert plan.nodes[0].left == 'gate' and plan.nodes[0].right == 'up'

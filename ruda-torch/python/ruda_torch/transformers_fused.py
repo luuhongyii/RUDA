@@ -1,13 +1,16 @@
-"""Per-model HF dense-training fusion; CPU/CUDA and state-dict paths are unchanged."""
+"""Per-model HF inference/training fusion; CPU/CUDA and state dicts are unchanged."""
 from types import FunctionType, MethodType
 
 import torch
 from torch import nn
 
 
-_NORMS = {'Qwen2RMSNorm', 'Qwen3RMSNorm', 'LlamaRMSNorm', 'MistralRMSNorm'}
-_MLPS = {'Qwen2MLP', 'Qwen3MLP', 'LlamaMLP', 'MistralMLP'}
-_ATTENTIONS = {family + suffix for family in ('Qwen2', 'Qwen3', 'Llama', 'Mistral')
+_FAMILIES = ('Qwen2', 'Qwen3', 'Llama', 'Mistral', 'Qwen3Moe', 'Granite', 'Mixtral')
+_NORMS = {family + 'RMSNorm' for family in _FAMILIES}
+_MLPS = {family + 'MLP': ('gate_proj', 'up_proj', 'down_proj')
+         for family in _FAMILIES if family != 'Mixtral'}
+_MLPS['MixtralBlockSparseTop2MLP'] = ('w1', 'w3', 'w2')
+_ATTENTIONS = {family + suffix for family in _FAMILIES
                for suffix in ('Attention', 'SdpaAttention', 'FlashAttention2')}
 _attention_name = None
 
@@ -26,13 +29,35 @@ def _rms_forward(module, hidden_states):
     return module.weight * rms_norm(x, eps=module.variance_epsilon)
 
 
+def _plain_silu(activation):
+    cls = type(activation)
+    supported = (cls is nn.SiLU and not activation.inplace
+                 or cls.__name__ == 'SiLUActivation' and cls.__module__ == 'transformers.activations')
+    if not supported or getattr(activation.forward, '__func__', None) is not cls.forward:
+        return False
+    from torch.nn.modules import module
+    return not any((activation._forward_hooks, activation._forward_pre_hooks,
+                    activation._backward_hooks, activation._backward_pre_hooks,
+                    module._global_forward_hooks, module._global_forward_pre_hooks,
+                    module._global_backward_hooks, module._global_backward_pre_hooks))
+
+
+def _activation_mul(activation, gate, up):
+    if (gate.device.type == 'ruda' and gate.dtype in (torch.float32, torch.float16, torch.bfloat16)
+            and gate.device == up.device and gate.dtype == up.dtype and gate.shape == up.shape
+            and _plain_silu(activation)):
+        from .training import silu_mul
+        return silu_mul(gate.contiguous(), up.contiguous())
+    return activation(gate) * up
+
+
 def _mlp_forward(module, hidden_states):
-    if hidden_states.device.type != 'ruda':
+    if hidden_states.device.type != 'ruda' or not _plain_silu(module.act_fn):
         return module._ruda_fused_original_forward(hidden_states)
-    from .training import silu_mul
-    gate = module.gate_proj(hidden_states)
-    up = module.up_proj(hidden_states)
-    return module.down_proj(silu_mul(gate.contiguous(), up.contiguous()))
+    gate_name, up_name, down_name = _MLPS[type(module).__name__]
+    gate = getattr(module, gate_name)(hidden_states)
+    up = getattr(module, up_name)(hidden_states)
+    return getattr(module, down_name)(_activation_mul(module.act_fn, gate, up))
 
 
 def _with_rotary(original):
@@ -76,7 +101,7 @@ def _with_rotary(original):
 def enable_transformers_fused(model, *, attention=None):
     """Connect existing RUDA RMSNorm/SwiGLU forward AND backward implementations.
 
-    Exact HF dense modules only; custom forwards/activations, tensor-parallel
+    Exact HF dense/expert modules only; custom forwards/activations, tensor-parallel
     variants and unknown architectures are left intact. Parameter identities,
     LoRA projections, hooks, checkpoint paths and non-RUDA execution survive.
     """
@@ -86,7 +111,8 @@ def enable_transformers_fused(model, *, attention=None):
         raise ValueError('attention must be None or native')
     if attention is not None:
         config = getattr(model, 'config', None)
-        if getattr(config, 'model_type', None) not in ('qwen2', 'qwen3', 'llama', 'mistral'):
+        if getattr(config, 'model_type', None) not in ('qwen2', 'qwen3', 'llama', 'mistral',
+                                                      'qwen3_moe', 'granite', 'mixtral'):
             raise ValueError('native dense attention requires a supported HF dense architecture')
         setter = getattr(model, 'set_attn_implementation', None)
         if not callable(setter):
@@ -113,13 +139,10 @@ def enable_transformers_fused(model, *, attention=None):
         elif cls.__name__ in _MLPS:
             config = getattr(module, 'config', None)
             activation = getattr(module, 'act_fn', None)
-            silu = (type(activation) is nn.SiLU and not activation.inplace
-                    or type(activation).__name__ == 'SiLUActivation'
-                    and type(activation).__module__ == 'transformers.activations')
-            if (silu and getattr(config, 'hidden_act', None) == 'silu'
+            if (_plain_silu(activation) and getattr(config, 'hidden_act', 'silu') == 'silu'
                     and getattr(config, 'pretraining_tp', 1) == 1
                     and all(isinstance(getattr(module, name, None), nn.Module)
-                            for name in ('gate_proj', 'up_proj', 'down_proj'))):
+                            for name in _MLPS[cls.__name__])):
                 replacement = _mlp_forward
         elif cls.__name__ in _ATTENTIONS:
             original = module.forward.__func__

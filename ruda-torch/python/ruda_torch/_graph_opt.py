@@ -61,13 +61,15 @@ def _fuse(nodes: tuple[GraphOp, ...], outputs: tuple[str, ...]):
     replacements = {}
     removed = set()
     for node in nodes:
-        producer = producers.get(node.left)
-        if (node.kind == 'mul' and producer is not None
-                and producer.kind == 'silu' and uses[producer.output] == 1
-                and producer.output not in public):
-            replacements[node.output] = GraphOp.silu_mul(
-                node.output, producer.left, node.right)
-            removed.add(producer.output)
+        if node.kind != 'mul':
+            continue
+        for activation, up in ((node.left, node.right), (node.right, node.left)):
+            producer = producers.get(activation)
+            if (producer is not None and producer.kind == 'silu'
+                    and uses[producer.output] == 1 and producer.output not in public):
+                replacements[node.output] = GraphOp.silu_mul(node.output, producer.left, up)
+                removed.add(producer.output)
+                break
     result = tuple(replacements.get(n.output, n) for n in nodes if n.output not in removed)
     # Public intermediate outputs and fan-out retain their original storage cast.
     return result, tuple(n.output for n in nodes if n.output in removed)

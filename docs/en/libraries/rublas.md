@@ -41,6 +41,10 @@ Sources: [real GEMM](../../../ruBLAS/src/tensor_matmul/gemm.rs), [complex GEMM](
 
 Strategies include Ruda, CmmaResidueFirst, Naive, and Autotune when `tensor-matmul-autotune` is enabled. The default is Ruda without that feature and Autotune with it. For quantized inputs, Naive may dequantize and compute after its initial path fails; this is not native INT4 computation.
 
+On CUDA, `Ruda` also selects an internally tuned, ordered tiled Tensor Core path for matching unquantized F16/BF16 inputs. It accepts rank-2 GEMM or rank-3 matching-batch BMM, with positive M/N/K divisible by 32, compatible row/column-major input strides, leading dimensions divisible by 8, 16-byte-aligned input offsets and contiguous output. Output dtype is the input dtype or F32. Execution-queue, bounds, asynchronous-copy and matrix-instruction checks still apply; unsupported setups retain the existing strategy dispatch. Accumulation is FP32 in increasing K order. The public `matmul_bf16_training` helper remains BF16-only.
+
+This tile tuner runs inside `Ruda`, independently of selecting the top-level `Autotune` strategy. Its device-specific key includes input/output dtype, shape, strides and output vector width, so F16 and BF16 do not share a selection. A new key may require substantial JIT compilation and candidate timing before cached execution; steady-state kernel time excludes that startup work. Sources: [tiled dispatch](../../../ruBLAS/src/tensor_matmul/training_gemm.rs), [tile tuner](../../../ruBLAS/src/tensor_matmul/training_tile_tune.rs).
+
 `CmmaResidueFirst` explicitly selects the Tensor Core path that processes a partial K32 tile first, without requiring a materialized padded matrix. lhs and rhs must have matching unquantized BF16 or F16 dtype and compatible matrix dimensions. The device must support the path's matrix instructions. This function returns F32 output:
 
 ```rust

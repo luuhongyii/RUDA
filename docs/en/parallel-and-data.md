@@ -98,7 +98,7 @@ Sources: [full snapshot](../../ruda-torch/python/ruda_torch/training_checkpoint.
 
 | API | Storage and masking contract |
 | --- | --- |
-| `scaled_dot_product_attention` | Same-device floating MHA/GQA composition that materializes scores. Bool masks mean True=allowed; floating masks add to logits. Explicit causal masking and an external mask are mutually exclusive. |
+| `scaled_dot_product_attention` | Same-device floating MHA/GQA: RUDA uses fused online softmax and recomputed backward; CPU/CUDA retain the composition. Bool masks mean True=allowed; floating masks add to logits. Explicit causal masking and an external mask are mutually exclusive. See [native dispatch and limits](native-pytorch-api.md#dense-attention). |
 | `block_scaled_dot_product_attention` | Same-device online-softmax query/key tiles with explicit dropout generator, offsets and window options; not a fused attention kernel. |
 | `varlen_scaled_dot_product_attention` | `[total_tokens, heads, features]` payloads with explicit CPU integer `cu_seqlens`; documents are isolated. Unequal Q/K lengths use explicit `upper_left` or `lower_right` causal alignment. |
 | `vocab_parallel_cross_entropy` | Local contiguous vocabulary intervals, identical logical targets/order across TP ranks, optional padded vocabulary; returns one logical loss, not a DP rank sum. |

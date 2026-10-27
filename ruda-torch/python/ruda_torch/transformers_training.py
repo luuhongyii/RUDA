@@ -100,7 +100,8 @@ def _stacked_experts_forward(module, hidden_states, top_k_index, top_k_weights):
     rows = hidden_states[:, None].expand(tokens, slots, hidden).reshape(-1, hidden).to(dtype)
     ids = top_k_index.reshape(-1).to(torch.int64).contiguous()
     gate, up = grouped_gemm(rows.contiguous(), gate_up.to(dtype).contiguous(), ids).split(intermediate, -1)
-    values = module.act_fn(gate) * up
+    from .transformers_fused import _activation_mul
+    values = _activation_mul(module.act_fn, gate, up)
     output = grouped_gemm(values.contiguous(), down.to(dtype).contiguous(), ids).reshape(tokens, slots, hidden)
     output = (output * top_k_weights[:, :, None]).to(hidden_states.dtype)
     order = top_k_index.argsort(dim=-1, stable=True)

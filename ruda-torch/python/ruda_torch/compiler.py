@@ -247,6 +247,12 @@ class RudaBackend:
                 and torch.ops.aten.scaled_dot_product_attention.default not in self._decompositions):
             from ._compile_attention import route_attention
             gm=route_attention(gm)
+        if (self.options.native=='auto' and self.options.device_type=='ruda'
+                and not {torch.ops.aten.silu.default, torch.ops.aten.mul.Tensor}.intersection(self._decompositions)):
+            # Opaque fused forward/backward use native device dispatch, not
+            # StaticGraph capture; keep native='required' on its graph path.
+            from ._compile_fusions import route_fusions
+            gm=route_fusions(gm)
         with self._init_lock:
             if self._aot is None:
                 # Import lazily; incompatible PyTorch APIs fail visibly, without

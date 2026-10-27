@@ -420,6 +420,30 @@ def test_fused_operators_survive_real_aot_forward_backward():
 
 
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('commuted', [False, True])
+def test_general_compiler_routes_swiglu_forward_and_backward(dtype, commuted):
+    def function(gate, up):
+        return up * F.silu(gate) if commuted else F.silu(gate) * up
+    hosts = [torch.randn(4, 129, dtype=dtype) for _ in range(2)]
+    actual_inputs = [x.to('ruda').requires_grad_() for x in hosts]
+    reference_inputs = [x.to('ruda').requires_grad_() for x in hosts]
+    gradient = torch.randn_like(hosts[0]).to('ruda')
+    compiled = r.compile(function, fullgraph=True)
+    try:
+        actual = compiled(*actual_inputs)
+        expected = function(*reference_inputs)
+        actual.backward(gradient); expected.backward(gradient)
+        tolerance = 2e-6 if dtype == torch.float32 else .02
+        for a, b in [(actual, expected)] + [(a.grad, b.grad) for a, b in zip(actual_inputs, reference_inputs)]:
+            torch.testing.assert_close(a.cpu(), b.cpu(), rtol=tolerance, atol=tolerance)
+        targets = {op['target'] for graph in compiled.info['graphs'] for op in graph['operators']}
+        assert any('training_silu_forward' in target for target in targets)
+        assert any('training_silu_backward' in target for target in targets)
+    finally:
+        compiled.close()
+
+
+@pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('need_q,need_k', [(True, True), (True, False), (False, True)])
 def test_strided_gqa_rotary_forward_backward(dtype, need_q, need_k):
     torch.manual_seed(81)

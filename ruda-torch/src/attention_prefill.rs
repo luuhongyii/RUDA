@@ -11,7 +11,7 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,q:&View,k:&View,v:&View,out:
     let storage=ElemType::Float(if q.dtype==1 {FloatKind::F16}else {FloatKind::BF16}).into();
     let h=&c.properties().hardware;
     if h.plane_size_min==32 && h.plane_size_max==32 && h.max_units_per_ruda>=128 && h.max_ruda_dim.1>=4
-        && h.max_shared_memory_size>=3*64*(q.shape[3]+8)*2
+        && h.max_shared_memory_size>=2*64*(q.shape[3]+8)*2
         && q.shape[2].div_ceil(64)<=h.max_ruda_count.0 as usize
         && q.shape[1]<=h.max_ruda_count.1 as usize && q.shape[0]<=h.max_ruda_count.2 as usize
         && c.features().matmul.ldmatrix.contains(&storage)
@@ -19,7 +19,7 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,q:&View,k:&View,v:&View,out:
             cd_type:ElemType::Float(FloatKind::F32).into(),m:16,n:8,k:16}) {
         let asynchronous=c.features().copy_async && c.features().alignment
             && rublas::kernel_ir::components::global::read::validate_async_barrier(c.properties()).is_ok()
-            && h.max_shared_memory_size>=3*64*(q.shape[3]+8)*2+32
+            && h.max_shared_memory_size>=2*64*(q.shape[3]+8)*2+32
             && [q,k,v].iter().all(|x|x.handle.offset_start.unwrap_or(0)%16==0);
         let tensor=|x:&View| {let mut t=primitives::tensor(x);t.client=c.clone();t};
         macro_rules! run {($ty:ty)=>{super::attention_mma::flash::prepare::<$ty,CudaRuntime>(c,

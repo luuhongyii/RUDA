@@ -48,6 +48,12 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
                 unsafe { k::rms_cuda_3584::launch::<F,W,CudaRuntime>(
                     &c,RudaCount::Static(u32::try_from(rows/4).expect("norm grid overflow"),1,1),RudaDim::new_1d(128),
                     x.arg(),w.arg(),v[2].arg(),v[3].arg(),s[0],weighted); }
+            } else if !hf_rounding && super::row_cached::eligible(width) {
+                let threads = super::row_cached::threads(width);
+                unsafe { super::row_cached::norm::launch::<F, W, W, f32, CudaRuntime>(
+                    &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1),
+                    RudaDim::new_1d(threads as u32), x.arg(), w.arg(), w.arg(), v[2].arg(),
+                    v[3].arg(), v[3].arg(), s[0], weighted, false, false, true, width, threads); }
             } else if cached {
                 unsafe { k::rms_forward_cached::launch::<F, W, CudaRuntime>(
                     &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1), RudaDim::new_1d(128),
@@ -110,9 +116,15 @@ fn layer<F: Float + RudaElement, W: Float + RudaElement, B: Float + RudaElement>
         same(x,&v[3]); assert_eq!((v[4].dtype,v[4].len),(0,rows)); assert_eq!((v[5].dtype,v[5].len),(0,rows));
         assert!(s[0].is_finite() && s[0]>0.0);
         if rows>0 {
-            unsafe { k::layer_forward::launch::<F,W,B,CudaRuntime>(
+            if super::row_cached::eligible(width) {
+                let threads = super::row_cached::threads(width);
+                unsafe { super::row_cached::norm::launch::<F,W,B,f32,CudaRuntime>(
+                    &c,RudaCount::Static(u32::try_from(rows).expect("LayerNorm grid overflow"),1,1),
+                    RudaDim::new_1d(threads as u32),x.arg(),w.arg(),b.arg(),v[3].arg(),v[4].arg(),v[5].arg(),
+                    s[0],weighted,biased,true,true,width,threads); }
+            } else { unsafe { k::layer_forward::launch::<F,W,B,CudaRuntime>(
                 &c,count(rows.checked_mul(32).expect("LayerNorm grid overflow")),RudaDim::new_1d(128),
-                x.arg(),w.arg(),b.arg(),v[3].arg(),v[4].arg(),v[5].arg(),s[0],weighted,biased); }
+                x.arg(),w.arg(),b.arg(),v[3].arg(),v[4].arg(),v[5].arg(),s[0],weighted,biased); } }
             launches=1;
         }
     } else {

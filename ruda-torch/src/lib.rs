@@ -140,6 +140,7 @@ mod matmul;
 mod pointwise;
 mod softmax;
 mod normalization;
+mod row_cached;
 mod inference;
 mod qwen_kernels;
 mod qwen_graph;

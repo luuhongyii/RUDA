@@ -98,7 +98,7 @@ PipelineTrainer 的 `save_distributed`／`resume_distributed` 覆盖全部 stage
 
 | API | 存储与 mask 契约 |
 | --- | --- |
-| `scaled_dot_product_attention` | 同设备浮点 MHA/GQA 组合，物化 score；Bool mask 的 True 表示允许，浮点 mask 加到 logits。显式 causal 与外部 mask 互斥。 |
+| `scaled_dot_product_attention` | 同设备浮点 MHA/GQA：RUDA 使用融合 online softmax 和重计算反向，CPU／CUDA 保留组合实现；Bool mask 的 True 表示允许，浮点 mask 加到 logits。显式 causal 与外部 mask 互斥。见[原生分派与限制](native-pytorch-api.md#稠密注意力)。 |
 | `block_scaled_dot_product_attention` | 同设备 online-softmax query/key tile，显式 dropout generator、offset 与 window；不是 fused 注意力 kernel。 |
 | `varlen_scaled_dot_product_attention` | `[total_tokens, heads, features]` 数据与显式 CPU 整数 `cu_seqlens`，文档互不跨越；Q/K 长度不同时显式选择 `upper_left`／`lower_right` 因果对齐。 |
 | `vocab_parallel_cross_entropy` | 本地连续词表区间，TP rank 的逻辑 targets／顺序相同，可含词表 padding；返回一个逻辑 loss，不是 DP rank 总和。 |

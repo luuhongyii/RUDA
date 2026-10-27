@@ -101,9 +101,10 @@ Import registers `torch.ruda` and the device. Another PrivateUse1 backend cannot
 
 ## Native operators
 
-- Matrix operations including `mm`, `bmm` and `addmm` use ruBLAS or the selected scalar GPU path. `RUDA_TORCH_MATMUL` accepts `auto` (default), `rublas` or `scalar`.
-- FP32/FP16/BF16 paths retain their storage dtype where supported. Fused last-axis LayerNorm/RMSNorm and storage-aware reductions avoid separate full-size FP32 intermediates on those paths.
-- Softmax/log-softmax and their backward kernels support `RUDA_TORCH_SOFTMAX=auto|warp|scalar`. The default `auto` uses the warp path for axis lengths of at least 32.
+- Matrix operations including `mm`, `bmm` and `addmm` use ruBLAS or the selected scalar GPU path. `RUDA_TORCH_MATMUL` accepts `auto` (default), `rublas` or `scalar`. Eligible CUDA FP16/BF16 GEMM/BMM uses ordered tiled Tensor Core kernels with FP32 accumulation. Tile selection is cached separately by input/output dtype, shape and layout; a new key can incur substantial first-call compilation and tuning work. See the [ruBLAS dispatch requirements](../docs/en/libraries/rublas.md#tensor-matrix-multiplication).
+- FP32/FP16/BF16 paths retain their storage dtype where supported. Eligible last-axis LayerNorm/RMSNorm forward uses cached FP32 row values for widths 512–16384, with centered variance for LayerNorm and FP32 saved training statistics. Other widths, HF-specific RMSNorm rounding and backward retain their existing paths.
+- Softmax/log-softmax and their backward kernels support `RUDA_TORCH_SOFTMAX=auto|warp|scalar`. Default `auto` selects cached-row forward for contiguous last axes of width 512–16384, otherwise the warp path for axis lengths of at least 32 or the scalar path. Explicit overrides and backward selection are unchanged; ordinary softmax retains accurate exponential evaluation.
+- Standard `torch.nn.functional.scaled_dot_product_attention` dispatches eligible RUDA tensors to native attention with first-order autograd, without replacing the global Python function. Eligible FP16/BF16 prefill uses shared-memory reuse and fast exponential evaluation with FP32 accumulation; this is not bitwise-equivalent to the accurate-exp path. See [dense attention contracts](../docs/en/native-pytorch-api.md#dense-attention).
 
 Operator-specific shape, dtype and layout checks still apply. See the [operator registrations](https://github.com/shuqi2077/RUDA/blob/main/ruda-torch/python/ruda_torch/_ops.py) and [native kernels](https://github.com/shuqi2077/RUDA/tree/main/ruda-torch/src).
 
@@ -193,9 +194,10 @@ Supported explicit nodes include copy, unary pointwise operations, same-shape
 add/mul/div, scalar arithmetic, `mm`/`bmm`, keepdim sum/mean, softmax/log-softmax
 and their backward operations, SiLU/sigmoid/tanh backward, last-axis RMSNorm and
 storage-rounded SiLU-mul. See the operator codes and metadata checks in
-[`_graph_spec.py`](python/ruda_torch/_graph_spec.py). Explicit RMSNorm/SiLU-mul
-nodes do not imply automatic recognition of those composite operations by AOT.
-Opt-in `optimize=True` removes unused nodes and fuses single-use left SiLU/mul;
+[`_graph_spec.py`](python/ruda_torch/_graph_spec.py). Explicit RMSNorm nodes do
+not imply automatic AOT recognition; eligible SiLU-mul expressions have a separate
+[pre-AOT route](../docs/en/model-compiler.md#exact-native-operator-coverage) in `native='auto'`.
+Opt-in `optimize=True` removes unused nodes and fuses single-use SiLU on either side of multiplication;
 `reuse_workspace=True` reuses only equal-spec scratch storage after its last read.
 Returned outputs remain dedicated. Both options default to False pending GPU validation.
 Explicit `training=True` enables the first-order gradient bridge described in

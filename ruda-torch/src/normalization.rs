@@ -39,11 +39,19 @@ pub(super) fn layer_norm(
     let count = u32::try_from(rows.checked_mul(32).expect("LayerNorm launch overflow").div_ceil(128))
         .expect("LayerNorm launch grid overflow");
     let dummy = weight.or(bias).unwrap_or(input);
+    let cached = super::row_cached::eligible(width);
+    let threads = super::row_cached::threads(width);
     macro_rules! run {
-        ($dtype:ty) => { kernels::layer_norm_warp::launch::<$dtype, CudaRuntime>(
+        ($dtype:ty) => { if cached {
+            super::row_cached::norm::launch::<$dtype, $dtype, $dtype, $dtype, CudaRuntime>(
+                &client, RudaCount::Static(u32::try_from(rows).expect("LayerNorm grid overflow"), 1, 1),
+                RudaDim::new_1d(threads as u32), input.arg(), weight.unwrap_or(dummy).arg(),
+                bias.unwrap_or(dummy).arg(), out.arg(), mean.arg(), rstd.arg(), epsilon,
+                weight.is_some(), bias.is_some(), true, true, width, threads)
+        } else { kernels::layer_norm_warp::launch::<$dtype, CudaRuntime>(
             &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
             input.arg(), weight.unwrap_or(dummy).arg(), bias.unwrap_or(dummy).arg(),
-            out.arg(), mean.arg(), rstd.arg(), epsilon, weight.is_some(), bias.is_some()) };
+            out.arg(), mean.arg(), rstd.arg(), epsilon, weight.is_some(), bias.is_some()) } };
     }
     unsafe {
         match input.dtype {
@@ -75,10 +83,17 @@ pub(super) fn rms_norm(input: &View, weight: Option<&View>, out: &View, epsilon:
     let count = u32::try_from(rows.checked_mul(32).expect("RMSNorm launch overflow").div_ceil(128))
         .expect("RMSNorm launch grid overflow");
     let dummy = weight.unwrap_or(input);
+    let cached = super::row_cached::eligible(width);
+    let threads = super::row_cached::threads(width);
     macro_rules! run {
-        ($dtype:ty) => { kernels::rms_norm_warp::launch::<$dtype, CudaRuntime>(
+        ($dtype:ty) => { if cached {
+            super::row_cached::norm::launch::<$dtype, $dtype, $dtype, $dtype, CudaRuntime>(
+                &client, RudaCount::Static(u32::try_from(rows).expect("RMSNorm grid overflow"), 1, 1),
+                RudaDim::new_1d(threads as u32), input.arg(), dummy.arg(), dummy.arg(),
+                out.arg(), out.arg(), out.arg(), epsilon, weight.is_some(), false, false, false, width, threads)
+        } else { kernels::rms_norm_warp::launch::<$dtype, CudaRuntime>(
             &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
-            input.arg(), weight.unwrap_or(dummy).arg(), out.arg(), epsilon, weight.is_some()) };
+            input.arg(), weight.unwrap_or(dummy).arg(), out.arg(), epsilon, weight.is_some()) } };
     }
     unsafe {
         match input.dtype {

@@ -142,6 +142,16 @@ restored = torch.fft.irfft(spectrum, n=7, norm='ortho')
 
 反向前不能修改保存的输入／权重。这些融合反向接口拒绝 `create_graph=True`。可选 FP32 仿射参数与显式 StaticGraph RMSNorm 的同类型权重契约不同。源码：[training.py](../../ruda-torch/python/ruda_torch/training.py)。
 
+符合条件的归一化前向在末轴宽度 512–16384 时缓存 FP32 行数据；LayerNorm 使用中心化方差，保存的统计量为 FP32。其他宽度、HF 专用 RMSNorm 舍入和反向保留原内核。连续末轴的 softmax／log-softmax 前向在相同宽度范围内，且 `RUDA_TORCH_SOFTMAX` 未设置或为 `auto` 时采用行缓存路径；`warp`／`scalar` 显式选择、其他布局及反向保留原分派。普通 softmax 的指数计算不变。
+
+`ruda_torch.enable_transformers_fused(model, attention=None)` 将 Qwen2、Qwen3、Llama、Mistral、Qwen3Moe、Granite、Mixtral 家族中符合条件的 HF RMSNorm、SiLU 门控 MLP 和旋转位置编码模块连接到融合实现。Mixtral 专家投影使用 `w1`／`w3`／`w2`。按支持的 HF 类及模块契约匹配，不按模型相似性推断支持。自定义 forward、自定义或带 hook 的激活函数、张量并行 MLP 变体保留原执行；参数身份、投影模块及 checkpoint key 不变。`attention='native'` 还为该模型选择原生注意力，要求 Transformers 提供按模型选择 attention 的 API。源码：[transformers_fused.py](../../ruda-torch/python/ruda_torch/transformers_fused.py)。
+
+## 稠密注意力
+
+标准 `torch.nn.functional.scaled_dot_product_attention` 已注册 RUDA 设备及 autograd 实现。符合条件的非空 FP32／FP16／BF16、相同且至少三维的输入使用带一阶 autograd 的 `ruda_torch.scaled_dot_product_attention`。Bool mask 的 True 表示允许，浮点 mask 加到 logits；显式 mask 不能与 causal 同时使用。不满足路由条件时保留 PyTorch 在原设备上的 math 分派，不替换 CPU／CUDA 注册。见[路由条件](../../ruda-torch/python/ruda_torch/_ops.py)与[注意力契约](../../ruda-torch/python/ruda_torch/attention.py)。
+
+符合条件的零 dropout FP16／BF16 prefill 使用分块 Tensor Core 注意力，复用 Q／K 共享内存并采用快速指数计算，保留 FP32 累加，但不保证与精确 exp 逐位一致。在物理张量及设备启动限制仍满足时，该前向允许逻辑 score 数量超过 U32，且不物化 score 矩阵。通用前向和所有反向仍要求 score 数量不超过 U32；长序列前向成功不代表支持对应反向。源码：[prefill 选择](../../ruda-torch/src/attention_prefill.rs)、[稠密分派](../../ruda-torch/src/dense_attention.rs)。
+
 ## 优化器与损失缩放
 
 `AdamW(params, lr=1e-3, betas=(0.9,0.999), eps=1e-8, weight_decay=1e-2, fused_step=False, max_grad_norm=None, hierarchical_stats=False)` 要求不重叠的普通 RUDA leaf 参数，并满足上述连续浮点契约。不支持稀疏梯度、`amsgrad`、`maximize`、`differentiable`、`capturable`。LR／decay 非负，epsilon 为正，两个 beta 转为 FP32 后均在 `[0,1)`。

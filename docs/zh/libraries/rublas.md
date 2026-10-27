@@ -41,6 +41,10 @@ Python 提供带一阶 autograd 的 `ruda_torch.gemm`、`fused_gemm`、`grouped_
 
 策略包括 Ruda、CmmaResidueFirst、Naive，以及启用 `tensor-matmul-autotune` 后的 Autotune。默认策略随该 feature 改变：未启用时为 Ruda，启用后为 Autotune。Naive 路径处理量化输入时可能在原路径失败后解量化再计算，不等于原生 INT4 计算。
 
+在 CUDA 上，`Ruda` 还会为相同非量化 F16／BF16 输入选择内部调优的有序分块 Tensor Core 路径。该路径接受二维 GEMM 或 batch 匹配的三维 BMM，要求 M／N／K 为正且能被 32 整除、输入为兼容的行／列主序步幅、leading dimension 能被 8 整除、输入偏移按 16 字节对齐、输出连续。输出类型为输入类型或 F32。仍检查执行队列、索引范围、异步复制及矩阵指令能力；不满足条件时保留原策略分派。累加采用 FP32，并保持 K 递增顺序。公开的 `matmul_bf16_training` 辅助入口仍仅接受 BF16。
+
+该 tile tuner 位于 `Ruda` 内部，不要求选择顶层 `Autotune` 策略。每个设备的调优键包含输入／输出类型、shape、步幅和输出向量宽度，F16 与 BF16 不共用选择结果。新键的首次调用可能需要较长的 JIT 编译和候选计时，之后才使用缓存选择；稳态内核耗时不包含这些启动工作。源码：[分块分派](../../../ruBLAS/src/tensor_matmul/training_gemm.rs)、[tile tuner](../../../ruBLAS/src/tensor_matmul/training_tile_tune.rs)。
+
 `CmmaResidueFirst` 显式选择先处理不足 K32 尾块的 Tensor Core 路径，无需调用者物化补齐后的矩阵。lhs 和 rhs 必须是相同的非量化 BF16 或 F16，且矩阵维度匹配；设备还需支持该路径使用的矩阵指令。下面的函数返回 F32 输出：
 
 ```rust

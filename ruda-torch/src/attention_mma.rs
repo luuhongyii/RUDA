@@ -1,5 +1,10 @@
 use super::*;
 
+#[ruda(fast_math = FastMath::ReducedPrecision.into())]
+fn softmax_exp(value: f32) -> f32 {
+    f32::powf(2.0f32, value * core::f32::consts::LOG2_E)
+}
+
 #[ruda(launch)]
 pub(super) fn flash<F: Float + RudaElement>(
     query: &Array<F>, keys: &Array<F>, values: &Array<F>, output: &mut Array<F>,
@@ -15,7 +20,6 @@ pub(super) fn flash<F: Float + RudaElement>(
     let batch=RUDA_POS_Z as usize;
     let query_base=RUDA_POS_X as usize*64;
     let stride=comptime!(width+8);
-    let mut qs=SharedMemory::<F>::new_aligned(64*stride,32usize);
     let mut ks=SharedMemory::<F>::new_aligned(64*stride,32usize);
     let mut vs=SharedMemory::<F>::new_aligned(64*stride,32usize);
     let ready=if comptime!(asynchronous) {
@@ -31,7 +35,7 @@ pub(super) fn flash<F: Float + RudaElement>(
                 length=8;
             }
             let target=row*stride+col;
-            barrier::copy_async_checked(&query.slice(source,source+length),&mut qs.slice_mut(target,target+8),8u32);
+            barrier::copy_async_checked(&query.slice(source,source+length),&mut ks.slice_mut(target,target+8),8u32);
         }
         ready.as_ref().unwrap().commit_copy_async();
         ready.as_ref().unwrap().arrive_and_wait();
@@ -44,7 +48,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             if query_base+row<queries as usize {
                 value=query[((batch*heads as usize+head)*queries as usize+query_base+row)*width+col];
             }
-            qs[row*stride+col]=value;
+            ks[row*stride+col]=value;
         }
         sync_ruda();
     }
@@ -52,8 +56,10 @@ pub(super) fn flash<F: Float + RudaElement>(
     let mut qfragments=Sequence::<Array<Vector<F,Const<2>>>>::new();
     #[unroll] for d in 0usize..(width/16) {
         let start=(warp*16+lane%16)*stride+d*16+(lane/16)*8;
-        qfragments.push(def.load_matrix::<F,Const<2>>(&qs.slice(start,start+8),cmma::MatrixIdent::A,4usize,false));
+        qfragments.push(def.load_matrix::<F,Const<2>>(&ks.slice(start,start+8),cmma::MatrixIdent::A,4usize,false));
     }
+    // All Q fragments must be resident before any warp reuses this stage for K.
+    sync_ruda();
     let mut accumulators=Sequence::<Array<Vector<f32,Const<2>>>>::new();
     #[unroll] for _ in 0usize..(width/8) {
         let mut acc=Array::<Vector<f32,Const<2>>>::new(2usize);
@@ -139,11 +145,11 @@ pub(super) fn flash<F: Float + RudaElement>(
             next=f32::max(next,plane_shuffle_xor(next,2u32));
             if next==f32::cast_from(f32::NEG_INFINITY) {next=0.0f32;}
             let mut previous_scale=0.0f32;
-            if denominator[row]!=0.0f32 {previous_scale=(maximum[row]-next).exp();}
+            if denominator[row]!=0.0f32 {previous_scale=softmax_exp(maximum[row]-next);}
             let mut sum=0.0f32;
             #[unroll] for tile in 0usize..8 {
                 let mut pair=scores[tile][row];
-                #[unroll] for j in 0usize..2 {pair[j]=(pair[j]-next).exp();sum+=pair[j];}
+                #[unroll] for j in 0usize..2 {pair[j]=softmax_exp(pair[j]-next);sum+=pair[j];}
                 let score=scores.index_mut(tile);
                 score[row]=pair;
             }
@@ -154,14 +160,17 @@ pub(super) fn flash<F: Float + RudaElement>(
         #[unroll] for d in 0usize..(width/8) {
             let acc=accumulators.index_mut(d);
             #[unroll] for row in 0usize..2 {acc[row]=acc[row]*Vector::<f32,Const<2>>::new(rescale[row]);}
-            #[unroll] for tile in 0usize..4 {
-                let mut probability=Array::<Vector<F,Const<2>>>::new(4usize);
-                probability[0]=Vector::cast_from(scores[tile*2][0]);
-                probability[1]=Vector::cast_from(scores[tile*2][1]);
-                probability[2]=Vector::cast_from(scores[tile*2+1][0]);
-                probability[3]=Vector::cast_from(scores[tile*2+1][1]);
+        }
+        #[unroll] for tile in 0usize..4 {
+            let mut probability=Array::<Vector<F,Const<2>>>::new(4usize);
+            probability[0]=Vector::cast_from(scores[tile*2][0]);
+            probability[1]=Vector::cast_from(scores[tile*2][1]);
+            probability[2]=Vector::cast_from(scores[tile*2+1][0]);
+            probability[3]=Vector::cast_from(scores[tile*2+1][1]);
+            #[unroll] for d in 0usize..(width/8) {
                 let start=(tile*16+lane%16)*stride+d*8;
                 let value=def.load_matrix::<F,Const<2>>(&vs.slice(start,start+8),cmma::MatrixIdent::B,2usize,true);
+                let acc=accumulators.index_mut(d);
                 def.execute_inplace(&probability,&value,acc);
             }
         }
