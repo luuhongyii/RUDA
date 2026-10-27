@@ -120,7 +120,7 @@ features = [ "std",]
 
 [dependencies.ruda-test-runtime]
 path = "../../ruda-test-runtime"
-version = "0.1.108"
+version = "0.1.109"
 default-features = false
 optional = true
 
