@@ -21,16 +21,12 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,q:&View,k:&View,v:&View,out:
             && rublas::kernel_ir::components::global::read::validate_async_barrier(c.properties()).is_ok()
             && h.max_shared_memory_size>=2*64*(q.shape[3]+8)*2+32
             && [q,k,v].iter().all(|x|x.handle.offset_start.unwrap_or(0)%16==0);
-        let query_tile=if q.shape[2]>=1024 && k.shape[2]>=1024
-            && h.max_units_per_ruda>=256 && h.max_ruda_dim.1>=8
-            && h.max_shared_memory_size>=2*128*(q.shape[3]+8)*2+32 {128}else {64};
-        let key_tile=query_tile;
         let tensor=|x:&View| {let mut t=primitives::tensor(x);t.client=c.clone();t};
         macro_rules! run {($ty:ty)=>{super::attention_mma::flash::prepare::<$ty,CudaRuntime>(c,
-            RudaCount::Static(q.shape[2].div_ceil(query_tile) as u32,q.shape[1] as u32,q.shape[0] as u32),
-            RudaDim::new_2d(32,(query_tile/16) as u32),tensor(q).into_array_arg(),tensor(k).into_array_arg(),tensor(v).into_array_arg(),
+            RudaCount::Static(q.shape[2].div_ceil(64) as u32,q.shape[1] as u32,q.shape[0] as u32),
+            RudaDim::new_2d(32,4),tensor(q).into_array_arg(),tensor(k).into_array_arg(),tensor(v).into_array_arg(),
             tensor(out).into_array_arg(),mask.arg(),tensor(stats).into_array_arg(),q.shape[2] as u32,k.shape[2] as u32,
-            q.shape[1] as u32,k.shape[1] as u32,scale,q.shape[3],causal,mask_kind,asynchronous,key_tile,query_tile)};}
+            q.shape[1] as u32,k.shape[1] as u32,scale,q.shape[3],causal,mask_kind,asynchronous)};}
         return Some(if q.dtype==1 {run!(f16)}else {run!(bf16)});
     }
     if !c.features().matmul.cmma.contains(&MmaConfig{a_type:storage,b_type:storage,
