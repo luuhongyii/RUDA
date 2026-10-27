@@ -56,7 +56,7 @@ version = "1.16.1"
 
 [dependencies.ruda-compiler]
 path = "../../ruda-compiler"
-version = "0.1.21"
+version = "0.1.22"
 features = [ "mlir",]
 default-features = false
 
@@ -131,7 +131,7 @@ features = [ "runtime", "runtime-channel-mutex", "runtime-std", "runtime-storage
 
 [dependencies.ruda-kernel]
 path = "../../ruda-kernel"
-version = "0.1.50"
+version = "0.1.51"
 default-features = false
 features = [ "frontend", "frontend-std", "library", "lowering-mlir",]
 

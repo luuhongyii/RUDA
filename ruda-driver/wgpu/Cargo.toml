@@ -188,7 +188,7 @@ features = [ "runtime", "runtime-channel-mutex", "runtime-monitoring",]
 
 [dependencies.ruda-kernel]
 path = "../../ruda-kernel"
-version = "0.1.50"
+version = "0.1.51"
 default-features = false
 features = [ "frontend", "lowering-wgsl",]
 
@@ -199,6 +199,6 @@ features = [ "frontend", "frontend-default", "frontend-tests", "library", "libra
 
 [dependencies.ruda-compiler]
 path = "../../ruda-compiler"
-version = "0.1.21"
+version = "0.1.22"
 default-features = false
 features = [ "wgsl",]
