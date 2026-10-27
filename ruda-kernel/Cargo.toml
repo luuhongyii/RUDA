@@ -1,7 +1,7 @@
 [package]
 name = "ruda-kernel"
 readme = "README.md"
-version = "0.1.49"
+version = "0.1.50"
 edition.workspace = true
 description = "Ruda Rust kernel DSL and device tensor operations."
 license-file = "../LICENSE"
@@ -40,7 +40,7 @@ lowering-cpp = [ "frontend", "dep:ruda-compiler", "ruda-compiler/cpp",]
 lowering-metal = [ "lowering-cpp", "ruda-compiler/cpp-metal",]
 
 [dependencies]
-ruda-kernel-macros = { version = "0.1.13", path = "../ruda-kernel-macros", default-features = false }
+ruda-kernel-macros = { version = "0.1.14", path = "../ruda-kernel-macros", default-features = false }
 
 [dev-dependencies]
 ruda = { package = "ruda-runtime", path = "../ruda-runtime" }
