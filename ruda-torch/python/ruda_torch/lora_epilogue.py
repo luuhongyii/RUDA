@@ -124,3 +124,22 @@ def _rank16_gradient(ctx, grad):
 
 
 _rank16_residual.register_autograd(_rank16_gradient, setup_context=_rank16_setup)
+
+
+class _Rank16Residual(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, base, rank, weight, scale):
+        ctx.scale = scale
+        ctx.save_for_backward(rank, weight)
+        ctx.set_materialize_grads(False)
+        return _rank16_residual(base, rank, weight, scale)
+
+    @staticmethod
+    def backward(ctx, grad):
+        return _rank16_gradient(ctx, grad)
+
+
+def rank16_residual(base, rank, weight, scale):
+    if torch.compiler.is_compiling():
+        return _rank16_residual(base, rank, weight, scale)
+    return _Rank16Residual.apply(base, rank, weight, scale)

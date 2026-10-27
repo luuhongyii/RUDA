@@ -60,6 +60,18 @@ def _gradient(ctx, dq, dk):
 _forward.register_autograd(_gradient, setup_context=_setup)
 
 
+class _Rotary(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, q, k, cos, sin):
+        output = _forward(q, k, cos, sin)
+        _setup(ctx, (q, k, cos, sin), output)
+        return output
+
+    @staticmethod
+    def backward(ctx, dq, dk):
+        return _gradient(ctx, dq, dk)
+
+
 def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     """HF half-rotation, not interleaved RoPE; cosine/sine are fixed coefficients.
 
@@ -83,4 +95,6 @@ def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
                 or coefficient.shape[1] not in (1, q.shape[2])
                 or coefficient.shape[2] != q.shape[3]):
             raise ValueError('RoPE coefficients must be fixed [B or 1,T or 1,D] tensors')
-    return _forward(q, k, cos.unsqueeze(1), sin.unsqueeze(1))
+    forward = (_Rotary.apply if not torch.compiler.is_compiling() and torch.is_grad_enabled()
+               and (q.requires_grad or k.requires_grad) else _forward)
+    return forward(q, k, cos.unsqueeze(1), sin.unsqueeze(1))

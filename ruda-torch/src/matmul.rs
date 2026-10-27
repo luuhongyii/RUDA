@@ -73,9 +73,9 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
         LAUNCHES.fetch_add(2,Ordering::Relaxed);
         return;
     }
-    if op==7 && a.dtype==2 && out.dtype==2 && a.shape[0]==512 && matches!(a.shape[1],3584|18944)
-        && b.shape[..]==[a.shape[1],3584]
-        && a.strides[1]==1 && (b.strides[0]==1 || b.strides[1]==1) && out.strides[..]==[3584,1]
+    if op==7 && a.dtype==2 && out.dtype==2 && a.shape[0]==512
+        && matches!((a.shape[1],b.shape[1]), (3584|18944,3584)|(4096|12288|14336,4096))
+        && a.strides[1]==1 && (b.strides[0]==1 || b.strides[1]==1) && out.strides[..]==[b.shape[1],1]
         && cuda_bf16_precision()
     {
         rublas::tensor_matmul::matmul_bf16_serial_k3(primitives::tensor(a),primitives::tensor(b),primitives::tensor(out))
@@ -98,6 +98,21 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
                 | MatmulSetupError::Vectorization(_)) => {}
             Err(error) => panic!("RUDA ruBLAS GEMV failed: {error}"),
         }
+    }
+    if op==7 && a.dtype==2 && out.dtype==2
+        && (a.shape[..]==[512,4096] && b.shape[1]==1024 && b.strides[0]==1
+            || matches!(a.shape[0],31|32) && matches!(a.shape[1],32768|151936)
+                && b.shape[1]==4096 && b.strides[1]==1)
+        && a.strides[1]==1 && out.strides[..]==[b.shape[1],1] && cuda_bf16_precision()
+    {
+        let parts = if a.shape[0]==512 { 3 } else { 5 };
+        rublas::tensor_matmul::matmul_bf16_rounded_parallel_k(
+            primitives::tensor(a),primitives::tensor(b),primitives::tensor(out),parts)
+            .unwrap_or_else(|error|panic!("RUDA rounded parallel-K projection failed: {error}"));
+        finish_dispatch(&client());
+        RUBLAS_CALLS.fetch_add(1,Ordering::Relaxed);
+        LAUNCHES.fetch_add((parts+1) as u64,Ordering::Relaxed);
+        return;
     }
     let output = primitives::tensor(out);
     let dtype = output.dtype;

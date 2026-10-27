@@ -230,7 +230,7 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                                     RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
                             }
                             rudnn::flash_training::backward::contraction::launch_unchecked::<CudaRuntime>(&c,
-                                RudaCount::Static((rows/4) as u32,1,1),RudaDim::new_1d(128),
+                                RudaCount::Static((rows/16) as u32,1,1),RudaDim::new_1d(128),
                                 ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dtype.into());
                             rudnn::flash_training::fused_backward::fused_key_value::launch_unchecked::<CudaRuntime>(&c,
                                 RudaCount::Static((k.len/128/128) as u32,group as u32,1),RudaDim::new_1d(256),
@@ -257,7 +257,7 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                                 RudaCount::Static(dm.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),dmt.into_array_arg());
                         }
                         rudnn::flash_training::backward::contraction::launch_unchecked::<CudaRuntime>(&c,
-                            RudaCount::Static((rows / 4) as u32,1,1),RudaDim::new_1d(128),
+                            RudaCount::Static((rows / 16) as u32,1,1),RudaDim::new_1d(128),
                             ot.clone().into_array_arg(),st.clone().into_array_arg(),ct.clone().into_array_arg(),dtype.into());
                         if wide {
                             rudnn::flash_training::register_backward::query_registers::launch_unchecked::<CudaRuntime>(&c,

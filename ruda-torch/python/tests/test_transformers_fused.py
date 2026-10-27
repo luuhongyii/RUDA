@@ -10,19 +10,19 @@ from architecture_test_utils import NAME
 tf = importlib.import_module(NAME + '.transformers_fused')
 
 
-def qwen():
-    pytest.importorskip('transformers')
-    from transformers import Qwen2Config, Qwen2ForCausalLM
-    config = Qwen2Config(vocab_size=37, hidden_size=32, intermediate_size=64,
+def dense_model(family):
+    transformers = pytest.importorskip('transformers')
+    config = getattr(transformers, family + 'Config')(vocab_size=37, hidden_size=32, intermediate_size=64,
                          num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
-                         max_position_embeddings=32, attention_dropout=0., hidden_act='silu')
+                         head_dim=8, max_position_embeddings=32, attention_dropout=0., hidden_act='silu')
     config._attn_implementation = 'eager'
-    return Qwen2ForCausalLM(config)
+    return getattr(transformers, family + 'ForCausalLM')(config)
 
 
-def test_actual_hf_cpu_forward_backward_and_parameter_identity():
+@pytest.mark.parametrize('family', ['Qwen2', 'Qwen3', 'Llama', 'Mistral'])
+def test_actual_hf_cpu_forward_backward_and_parameter_identity(family):
     torch.manual_seed(97)
-    original = qwen().train()
+    original = dense_model(family).train()
     actual = copy.deepcopy(original)
     parameters = {name: id(value) for name, value in actual.named_parameters()}
     paths = tuple(actual.state_dict())
@@ -41,8 +41,9 @@ def test_actual_hf_cpu_forward_backward_and_parameter_identity():
         torch.testing.assert_close(left.grad, right.grad, rtol=0, atol=0)
 
 
-def test_custom_forwards_and_activations_are_not_replaced():
-    model = qwen()
+@pytest.mark.parametrize('family', ['Qwen2', 'Qwen3', 'Llama', 'Mistral'])
+def test_custom_forwards_and_activations_are_not_replaced(family):
+    model = dense_model(family)
     custom = lambda x: x
     model.model.layers[0].input_layernorm.forward = custom
     model.model.layers[0].mlp.act_fn = torch.nn.ReLU()
@@ -51,8 +52,9 @@ def test_custom_forwards_and_activations_are_not_replaced():
     assert not hasattr(model.model.layers[0].mlp, '_ruda_fused_original_forward')
 
 
-def test_native_attention_is_explicit_and_preserves_cuda_sdpa_interface():
-    model = qwen()
+@pytest.mark.parametrize('family', ['Qwen2', 'Qwen3', 'Llama', 'Mistral'])
+def test_native_attention_is_explicit_and_preserves_cuda_sdpa_interface(family):
+    model = dense_model(family)
     tf.enable_transformers_fused(model, attention='native')
     assert model.config._attn_implementation == 'ruda_fused_training'
     tokens = torch.randint(0, 37, (1, 7))

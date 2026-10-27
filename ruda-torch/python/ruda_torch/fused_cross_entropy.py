@@ -47,6 +47,18 @@ def _gradient(ctx, grad, ignored_stats):
 _forward.register_autograd(_gradient, setup_context=_setup)
 
 
+class _CrossEntropy(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, logits, targets, ignore):
+        output = _forward(logits, targets, ignore)
+        _setup(ctx, (logits, targets, ignore), output)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad, ignored_stats):
+        return _gradient(ctx, grad, ignored_stats)
+
+
 def cross_entropy(logits, targets, *, ignore_index=-100, reduction='mean'):
     """First-order index-target CE; mean of all-ignored rows is a differentiable zero.
 
@@ -65,8 +77,10 @@ def cross_entropy(logits, targets, *, ignore_index=-100, reduction='mean'):
         raise ValueError('ignore_index must fit int64')
     if reduction not in ('none', 'sum', 'mean'):
         raise ValueError('invalid loss reduction')
-    losses, _ = _forward(logits.resolve_neg().contiguous(),
-                         targets.resolve_neg().to(torch.int64).contiguous(), ignore_index)
+    forward = (_CrossEntropy.apply if not torch.compiler.is_compiling()
+               and torch.is_grad_enabled() and logits.requires_grad else _forward)
+    losses, _ = forward(logits.resolve_neg().contiguous(),
+                        targets.resolve_neg().to(torch.int64).contiguous(), ignore_index)
     if reduction == 'none':
         return losses
     total = losses.sum()
