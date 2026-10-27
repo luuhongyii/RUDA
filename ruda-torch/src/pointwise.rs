@@ -3,7 +3,7 @@ use super::{bf16, f16, client, finish_dispatch, kernels, CudaRuntime, View,
     LAUNCHES, DIRECT_POINTWISE_CALLS, Ordering};
 use ruda_kernel::dsl::prelude::*;
 
-fn vector_rows(view: &View) -> bool {
+pub(super) fn vector_rows(view: &View) -> bool {
     !view.shape.is_empty() && view.len % 4 == 0
         && view.shape.last().unwrap() % 4 == 0 && view.strides.last() == Some(&1)
         && view.shape.iter().zip(&view.strides).take(view.shape.len() - 1)
@@ -12,7 +12,7 @@ fn vector_rows(view: &View) -> bool {
 }
 
 #[ruda]
-fn vector_offset<F: Float + RudaElement>(input: &Tensor<Vector<F, Const<4>>>, position: usize,
+pub(super) fn vector_offset<F: Float + RudaElement>(input: &Tensor<Vector<F, Const<4>>>, position: usize,
     #[comptime] packed: bool) -> usize {
     let mut result = position;
     if !comptime!(packed) {

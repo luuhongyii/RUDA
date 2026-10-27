@@ -315,43 +315,59 @@ pub fn rms_dw_merge<W: Float + RudaElement>(partial: &Tensor<f32>, dw: &mut Tens
 }
 
 #[ruda(launch)]
-pub fn silu_mul_forward<F: Float + RudaElement>(
-    gate: &Tensor<F>, up: &Tensor<F>, y: &mut Tensor<F>,
-    #[comptime] cuda: bool,
+pub fn silu_mul_forward<F: Float + RudaElement, V: Size>(
+    gate: &Tensor<Vector<F, V>>, up: &Tensor<Vector<F, V>>, y: &mut Tensor<Vector<F, V>>,
+    #[comptime] cuda: bool, #[define(V)] _vector_size: usize,
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < y.len() {
-        let x = f32::cast_from(gate[pos]);
-        let denominator = if comptime!(cuda) { crate::loss::cuda_exp(-x, 1.0f32) }
-            else { 1.0f32 + (-x).exp() };
-        let activation = F::cast_from(x / denominator);
-        y[pos] = F::cast_from(f32::cast_from(activation) * f32::cast_from(up[pos]));
+        let g = gate[pos];
+        let u = up[pos];
+        let mut result = Vector::<F, V>::empty();
+        #[unroll] for lane in 0usize..y.vector_size().comptime() {
+            let x = f32::cast_from(g[lane]);
+            let denominator = if comptime!(cuda) { crate::loss::cuda_exp(-x, 1.0f32) }
+                else { 1.0f32 + (-x).exp() };
+            let activation = F::cast_from(x / denominator);
+            result[lane] = F::cast_from(f32::cast_from(activation) * f32::cast_from(u[lane]));
+        }
+        y[pos] = result;
     }
 }
 
 #[ruda(launch)]
-pub fn silu_mul_backward<F: Float + RudaElement>(
-    gate: &Tensor<F>, up: &Tensor<F>, dy: &Tensor<F>, dg: &mut Tensor<F>, du: &mut Tensor<F>,
-    #[comptime] need_gate: bool, #[comptime] need_up: bool, #[comptime] cuda: bool,
+pub fn silu_mul_backward<F: Float + RudaElement, V: Size>(
+    gate: &Tensor<Vector<F, V>>, up: &Tensor<Vector<F, V>>, dy: &Tensor<Vector<F, V>>,
+    dg: &mut Tensor<Vector<F, V>>, du: &mut Tensor<Vector<F, V>>,
+    #[comptime] need_gate: bool, #[comptime] need_up: bool, #[comptime] cuda: bool, #[define(V)] _vector_size: usize,
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < gate.len() {
-        let x = f32::cast_from(gate[pos]);
+        let g = gate[pos];
+        let u = up[pos];
+        let gradient = dy[pos];
+        let mut grad_gate = Vector::<F, V>::empty();
+        let mut grad_up = Vector::<F, V>::empty();
+        #[unroll] for lane in 0usize..gate.vector_size().comptime() {
+        let x = f32::cast_from(g[lane]);
         let denominator = if comptime!(cuda) { crate::loss::cuda_exp(-x, 1.0f32) }
             else { 1.0f32 + (-x).exp() };
         let sigmoid = 1.0f32 / denominator;
-        let grad = f32::cast_from(dy[pos]);
+        let grad = f32::cast_from(gradient[lane]);
         if comptime!(need_gate) {
             // Preserve the mul-backward storage rounding before SiLU backward.
-            let intermediate = F::cast_from(grad * f32::cast_from(up[pos]));
+            let intermediate = F::cast_from(grad * f32::cast_from(u[lane]));
             let derivative = if comptime!(cuda) { fma(x, 1.0f32 - sigmoid, 1.0f32) }
                 else { 1.0f32 + x * (1.0f32 - sigmoid) };
-            dg[pos] = F::cast_from(f32::cast_from(intermediate) * sigmoid * derivative);
+            grad_gate[lane] = F::cast_from(f32::cast_from(intermediate) * sigmoid * derivative);
         }
         if comptime!(need_up) {
             let activation = F::cast_from(x / denominator);
-            du[pos] = F::cast_from(grad * f32::cast_from(activation));
+            grad_up[lane] = F::cast_from(grad * f32::cast_from(activation));
         }
+        }
+        if comptime!(need_gate) { dg[pos] = grad_gate; }
+        if comptime!(need_up) { du[pos] = grad_up; }
     }
 }
 

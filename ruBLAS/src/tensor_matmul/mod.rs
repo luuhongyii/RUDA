@@ -1,6 +1,8 @@
 mod base;
 mod skinny;
 mod accurate;
+#[allow(unsafe_code)]
+mod f32_tiled;
 mod sliced;
 mod training_tune;
 mod training_gemm;
@@ -23,6 +25,7 @@ mod tune;
 pub mod utils;
 
 pub use base::*;
+pub use f32_tiled::try_addmm_f32_tiled;
 pub use training_gemm::matmul_bf16_training;
 pub use sliced::{matmul_bf16_sliced_k2_bias, matmul_bf16_serial_k3, matmul_bf16_head_parallel_k6,
     matmul_bf16_rounded_parallel_k};

@@ -51,6 +51,67 @@ fn qk<S: Float + RudaElement>(
     }
 }
 
+#[ruda]
+fn pair<S: Float + RudaElement>(
+    x: &Tensor<Vector<S, Const<4>>>, cos: &Tensor<Vector<S, Const<4>>>, sin: &Tensor<Vector<S, Const<4>>>,
+    out: &mut Tensor<Vector<S, Const<4>>>, pos: usize, #[comptime] backward: bool,
+) {
+    let width = x.shape(3);
+    let half = width / 2usize;
+    let row = pos / (half / 4usize);
+    let col = pos % (half / 4usize) * 4usize;
+    let logical = row * (width / 4usize) + col / 4usize;
+    let source = super::pointwise::vector_offset(x, logical, false);
+    let first = x[source];
+    let second = x[source + half / 4usize];
+    let token = row % x.shape(2);
+    let batch = row / x.shape(2) / x.shape(1);
+    let ci = ((batch % cos.shape(0)) * cos.stride(0) + (token % cos.shape(2)) * cos.stride(2) + col) / 4usize;
+    let si = ((batch % sin.shape(0)) * sin.stride(0) + (token % sin.shape(2)) * sin.stride(2) + col) / 4usize;
+    let cos_first = cos[ci];
+    let cos_second = cos[ci + half / 4usize];
+    let sin_first = sin[si];
+    let sin_second = sin[si + half / 4usize];
+    let mut out_first = Vector::<S, Const<4>>::empty();
+    let mut out_second = Vector::<S, Const<4>>::empty();
+    #[unroll] for lane in 0usize..4usize {
+        let a = f32::cast_from(first[lane]);
+        let b = f32::cast_from(second[lane]);
+        let left = S::cast_from(a * f32::cast_from(cos_first[lane]));
+        let right = S::cast_from(b * f32::cast_from(cos_second[lane]));
+        let mut cross_first = S::cast_from(0.0f32);
+        let mut cross_second = S::cast_from(0.0f32);
+        if comptime!(backward) {
+            cross_first = S::cast_from(b * f32::cast_from(sin_second[lane]));
+            cross_second = S::cast_from(-a * f32::cast_from(sin_first[lane]));
+        } else {
+            cross_first = S::cast_from(-b * f32::cast_from(sin_first[lane]));
+            cross_second = S::cast_from(a * f32::cast_from(sin_second[lane]));
+        }
+        out_first[lane] = S::cast_from(f32::cast_from(left) + f32::cast_from(cross_first));
+        out_second[lane] = S::cast_from(f32::cast_from(right) + f32::cast_from(cross_second));
+    }
+    out[logical] = out_first;
+    out[logical + half / 4usize] = out_second;
+}
+
+#[ruda(launch)]
+fn qk_pairs<S: Float + RudaElement>(
+    q: &Tensor<Vector<S, Const<4>>>, k: &Tensor<Vector<S, Const<4>>>,
+    cos: &Tensor<Vector<S, Const<4>>>, sin: &Tensor<Vector<S, Const<4>>>,
+    out_q: &mut Tensor<Vector<S, Const<4>>>, out_k: &mut Tensor<Vector<S, Const<4>>>,
+    #[comptime] backward: bool, #[comptime] need_q: bool, #[comptime] need_k: bool,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    let mut q_pairs = 0usize;
+    if comptime!(need_q) { q_pairs = q.len() / 2usize; }
+    if pos < q_pairs { pair(q, cos, sin, out_q, pos, backward); }
+    else if comptime!(need_k) {
+        let index = pos - q_pairs;
+        if index < k.len() / 2usize { pair(k, cos, sin, out_k, index, backward); }
+    }
+}
+
 pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
     assert_eq!(xs.len(), 6);
     assert_eq!(ints.len(), if op == 652 { 0 } else { 2 });
@@ -84,10 +145,17 @@ pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
     let work = (if need_q {q.len} else {0usize}).checked_add(if need_k {k.len} else {0usize})
         .filter(|&n| n <= u32::MAX as usize).expect("rotary grid overflow");
     if work == 0 { return; }
-    let c = client(); let grid = RudaCount::Static(work.div_ceil(128) as u32, 1, 1);
+    let vector = q.shape[3] % 8 == 0 && xs.iter().enumerate()
+        .filter(|(index, _)| match *index { 0 | 4 => need_q, 1 | 5 => need_k, _ => true })
+        .all(|(_, v)| super::pointwise::vector_rows(v));
+    let c = client(); let grid = RudaCount::Static((work / if vector { 8 } else { 1 }).div_ceil(128) as u32, 1, 1);
     macro_rules! run { ($s:ty) => { unsafe {
+        if vector { qk_pairs::launch::<$s,CudaRuntime>(&c,grid,RudaDim::new_1d(128),
+            q.arg(),k.arg(),xs[2].arg(),xs[3].arg(),xs[4].arg(),xs[5].arg(),op == 653,need_q,need_k); }
+        else {
         qk::launch::<$s,CudaRuntime>(&c,grid,RudaDim::new_1d(128),
             q.arg(),k.arg(),xs[2].arg(),xs[3].arg(),xs[4].arg(),xs[5].arg(),op == 653,need_q,need_k);
+        }
     } }; }
     match q.dtype {0=>run!(f32),1=>run!(f16),2=>run!(bf16),_=>unreachable!()}
     LAUNCHES.fetch_add(1,Ordering::Relaxed);

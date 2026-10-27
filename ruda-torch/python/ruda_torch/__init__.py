@@ -35,6 +35,14 @@ _C.initialize([ctypes.cast(getattr(_native, "ruda_torch_" + name), ctypes.c_void
                for name in ("alloc", "free", "error", "execute", "transfer", "sync", "fill", "spatial", "addmm", "layer_norm", "rms_norm", "stream", "paged")])
 torch.utils.rename_privateuse1_backend("ruda")
 
+_matmul_precision_available = False
+if hasattr(_native, 'ruda_torch_matmul_precision_api_version') and hasattr(_C, 'initialize_matmul_precision'):
+    _native.ruda_torch_matmul_precision_api_version.restype = ctypes.c_uint32
+    if _native.ruda_torch_matmul_precision_api_version() != 1 or _C.matmul_precision_api_version != 1:
+        raise RuntimeError('RUDA matmul precision API mismatch; rebuild both native libraries')
+    _C.initialize_matmul_precision(ctypes.cast(_native.ruda_torch_matmul_precision, ctypes.c_void_p).value)
+    _matmul_precision_available = True
+
 from . import _scientific
 _scientific_available = _scientific.initialize(_native)
 _blas_available = False

@@ -133,6 +133,62 @@ fn part(input: &View, imaginary: bool) -> View {
     } else { View { handle: input.handle.clone(), shape: input.shape.clone(), strides: input.strides.clone(), len: input.len, dtype: input.dtype } }
 }
 
+#[ruda(launch)]
+fn columns<S: Float + RudaElement, O: Float + RudaElement>(
+    input: &Array<Vector<S, Const<4>>>, output: &mut Array<Vector<O, Const<4>>>,
+    width: usize, tiles: usize, tasks: usize, factor: f32, #[comptime] mean: bool,
+) {
+    let task = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
+    if task < tasks {
+        let tid = UNIT_POS as usize;
+        let x = tid % 8usize;
+        let outer = task / tiles;
+        let column = task % tiles * 8usize + x;
+        let mut item = tid / 8usize;
+        let mut total = Vector::<f32, Const<4>>::new(0.0f32);
+        while item < width {
+            total += Vector::cast_from(input[(outer * width + item) * tiles * 8usize + column]);
+            item += 16usize;
+        }
+        #[unroll] for lane in 0usize..4usize {
+            let mut sum = total[lane];
+            sum += plane_shuffle_down(sum, 16u32);
+            sum += plane_shuffle_down(sum, 8u32);
+            total[lane] = sum;
+        }
+        let mut partials = SharedMemory::<Vector<f32, Const<4>>>::new(32usize);
+        if tid % 32usize < 8usize { partials[tid / 32usize * 8usize + x] = total; }
+        sync_ruda();
+        if tid < 8usize {
+            let mut sum = partials[x] + partials[8usize + x] + partials[16usize + x] + partials[24usize + x];
+            if comptime!(mean) { sum *= Vector::<f32, Const<4>>::new(factor); }
+            output[outer * tiles * 8usize + column] = Vector::cast_from(sum);
+        }
+    }
+}
+
+fn try_columns(input: &View, output: &View, reduced: &[i64], width: usize, mean: bool) -> bool {
+    if input.dtype > 2 || output.dtype > 2 || !row_cached::packed(input) || !row_cached::packed(output)
+        || reduced.iter().filter(|&&axis| axis != 0).count() != 1
+        || [input, output].iter().any(|v| v.handle.offset_start.unwrap_or(0) % (4 * element_bytes(v.dtype)) as u64 != 0)
+    { return false; }
+    let axis = reduced.iter().position(|&v| v != 0).unwrap();
+    let trailing: usize = input.shape[axis+1..].iter().product();
+    if trailing < 32 || trailing % 32 != 0 || input.len > u32::MAX as usize { return false; }
+    let tasks = output.len / 32;
+    let factor = output.len as f32 / input.len as f32;
+    let c = client();
+    macro_rules! run { ($s:ty, $o:ty) => { unsafe {
+        columns::launch::<$s, $o, CudaRuntime>(&c, grid(tasks), RudaDim::new_1d(128),
+            input.array_arg(), output.array_arg(), width, trailing / 32, tasks, factor, mean);
+    }}; }
+    match (input.dtype, output.dtype) {
+        (0, 0) => run!(f32, f32), (1, 1) => run!(f16, f16), (2, 2) => run!(bf16, bf16),
+        (1, 0) => run!(f16, f32), (2, 0) => run!(bf16, f32), _ => return false,
+    }
+    LAUNCHES.fetch_add(1, Ordering::Relaxed); finish_dispatch(&c); true
+}
+
 pub(super) fn dispatch(xs: &[View], ints: &[i64]) {
     assert_eq!(xs.len(), 2); let input = &xs[0]; let output = &xs[1];
     assert_eq!(ints.len(), input.shape.len() + 1); assert!(ints.iter().all(|&v| matches!(v, 0 | 1)));
@@ -146,6 +202,7 @@ pub(super) fn dispatch(xs: &[View], ints: &[i64]) {
     let rows = extent(false); let width = extent(true); assert_eq!(output.len, rows);
     if rows == 0 { return; }
     assert!(width > 0, "sum/mean native reduction dimension must be nonempty");
+    if try_columns(input, output, &reduced, width, mean) { return; }
     let c = client(); let block = RudaDim::new_1d(256);
     let re = part(input, false); let im = part(input, true); let out_re = part(output, false); let out_im = part(output, true);
     let factor32 = rows as f32 / input.len as f32; let factor64 = rows as f64 / input.len as f64;

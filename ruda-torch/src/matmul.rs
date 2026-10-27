@@ -9,6 +9,27 @@ use rublas::tensor_matmul::{matmul_with_precision, F32MathMode, MatmulStrategy};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Policy { Auto, Rublas, Scalar }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_matmul_precision_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ruda_torch_matmul_precision(op: u32,
+    a: *const super::Descriptor, b: *const super::Descriptor, bias: *const super::Descriptor,
+    out: *const super::Descriptor, alpha: f32, beta: f32, math: u32) -> i32 {
+    super::checked(|| {
+        let math = match math { 0 => F32MathMode::Strict, 1 => F32MathMode::AllowTf32,
+            _ => panic!("invalid matmul precision") };
+        let a = unsafe { super::abi::view(a) }; let b = unsafe { super::abi::view(b) };
+        let out = unsafe { super::abi::view(out) };
+        if op == 7 || op == 30 { launch_with_precision(op, &a, &b, &out, math); }
+        else {
+            assert_eq!(op, 0);
+            let bias = unsafe { super::abi::view(bias) };
+            addmm_with_precision(&bias, &a, &b, &out, alpha, beta, math);
+        }
+    })
+}
+
 fn parse_policy(value: &str) -> Result<Policy, &'static str> {
     match value {
         "auto" => Ok(Policy::Auto),
@@ -52,6 +73,10 @@ fn validate(op: u32, a: &View, b: &View, out: &View) {
 }
 
 pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
+    launch_with_precision(op, a, b, out, F32MathMode::Strict);
+}
+
+fn launch_with_precision(op: u32, a: &View, b: &View, out: &View, math: F32MathMode) {
     validate(op, a, b, out);
     if out.len == 0 { return; }
     let selected = policy();
@@ -118,7 +143,7 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View) {
     let dtype = output.dtype;
     let result = matmul_with_precision(
         primitives::tensor(a), primitives::tensor(b), Some(output),
-        MatmulStrategy::Ruda, dtype, F32MathMode::Strict,
+        MatmulStrategy::Ruda, dtype, math,
     );
     match result {
         Ok(result) => {
@@ -169,6 +194,10 @@ fn scalar(op: u32, a: &View, b: &View, out: &View) {
 }
 
 pub(super) fn addmm(bias: &View, a: &View, b: &View, out: &View, alpha: f32, beta: f32) {
+    addmm_with_precision(bias, a, b, out, alpha, beta, F32MathMode::Strict);
+}
+
+fn addmm_with_precision(bias: &View, a: &View, b: &View, out: &View, alpha: f32, beta: f32, math: F32MathMode) {
     validate(7, a, b, out);
     assert_eq!(a.dtype, out.dtype);
     assert_eq!(bias.dtype, out.dtype);
@@ -179,11 +208,22 @@ pub(super) fn addmm(bias: &View, a: &View, b: &View, out: &View, alpha: f32, bet
         return;
     }
     if alpha == 1.0 && beta == 0.0 {
-        launch(7, a, b, out);
+        launch_with_precision(7, a, b, out, math);
         return;
     }
     if super::qwen_graph::fused_addmm(bias,a,b,out,alpha,beta) {return;}
     let client = client();
+    if a.dtype == 0 && policy() != Policy::Scalar {
+        match rublas::tensor_matmul::try_addmm_f32_tiled(&primitives::tensor(bias), &primitives::tensor(a),
+            &primitives::tensor(b), &primitives::tensor(out), alpha, beta, math) {
+            Ok(true) => {
+                finish_dispatch(&client); RUBLAS_CALLS.fetch_add(1, Ordering::Relaxed);
+                LAUNCHES.fetch_add(1, Ordering::Relaxed); ADDMM_EPILOGUES.fetch_add(1, Ordering::Relaxed); return;
+            }
+            Ok(false) => {},
+            Err(error) => panic!("RUDA tiled F32 addmm failed: {error}"),
+        }
+    }
     if a.dtype==2 && alpha==1.0 && beta==1.0 && a.shape[..]==[512,3584] && b.shape[..]==[3584,512]
         && a.strides[1]==1 && b.strides[0]==1 && out.strides[..]==[512,1]
         && policy()!=Policy::Scalar && cuda_bf16_precision()
@@ -213,7 +253,7 @@ pub(super) fn addmm(bias: &View, a: &View, b: &View, out: &View, alpha: f32, bet
         Some(View::packed(client.empty(bytes), out.shape.clone(), 0))
     } else { None };
     let accumulator = scratch.as_ref().unwrap_or(out);
-    launch(7, a, b, accumulator);
+    launch_with_precision(7, a, b, accumulator, math);
     // ABSOLUTE_POS is a u32 in these compatibility kernels.
     assert!(out.len <= u32::MAX as usize, "native pointwise/scalar grid exceeds 32-bit indexing");
     let count = u32::try_from(out.len.div_ceil(128)).expect("launch grid overflow");

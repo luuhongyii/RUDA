@@ -75,17 +75,26 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
     let count = u32::try_from(blocks).expect("softmax launch grid overflow");
     let client = client();
     let width = a.shape[axis];
-    let cached = matches!(op, 31 | 33) && axis + 1 == a.shape.len()
+    let backward = matches!(op, 32 | 34);
+    let cached = axis + 1 == a.shape.len()
         && super::row_cached::eligible(width) && super::row_cached::packed(a)
+        && (!backward || super::row_cached::packed(b))
         && super::row_cached::packed(out)
         && std::env::var("RUDA_TORCH_SOFTMAX").map_or(true, |value| value == "auto");
-    let threads = super::row_cached::threads(width);
+    let threads = if width <= 1024 { 32 } else { super::row_cached::threads(width) };
+    let vector = super::row_cached::vector_size(width, a, out)
+        .min(if backward { super::row_cached::vector_size(width, b, out) } else { 4 });
     macro_rules! run {
         ($i:ty, $o:ty) => {
-            if cached {
+            if cached && backward {
+                super::row_cached::softmax_backward::launch::<$i, $o, CudaRuntime>(
+                    &client, RudaCount::Static(u32::try_from(if threads == 32 { rows.div_ceil(4) } else { rows }).expect("softmax grid overflow"), 1, 1),
+                    RudaDim::new_1d(threads.max(128) as u32), a.arg(), b.arg(), out.arg(), op == 34, width, threads, vector)
+            } else if cached {
                 super::row_cached::softmax::launch::<$i, $o, CudaRuntime>(
-                    &client, RudaCount::Static(u32::try_from(rows).expect("softmax grid overflow"), 1, 1),
-                    RudaDim::new_1d(threads as u32), a.arg(), out.arg(), op == 33, width, threads)
+                    &client, RudaCount::Static(u32::try_from(if threads == 32 { rows.div_ceil(4) } else { rows }).expect("softmax grid overflow"), 1, 1),
+                    RudaDim::new_1d(threads.max(128) as u32), a.arg(), out.arg(), op == 33, width, threads,
+                    vector)
             } else if warp {
                 kernels::softmax_warp::launch::<$i, $o, CudaRuntime>(
                     &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),

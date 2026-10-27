@@ -39,7 +39,6 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
         if hf_rounding { assert_eq!(w.dtype, x.dtype); }
     }
     let c = client(); let mut launches = 0;
-    let cached = (1024..=8192).contains(&width);
     if forward {
         same(x, &v[2]); assert_eq!((v[3].dtype, v[3].len), (0, rows));
         assert!(s[0].is_finite() && s[0] > 0.0);
@@ -51,16 +50,13 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
                     &c,RudaCount::Static(u32::try_from(if wide { rows } else { rows/4 }).expect("norm grid overflow"),1,1),
                     RudaDim::new_1d(if wide { 512 } else { 128 }),
                     x.arg(),w.arg(),v[2].arg(),v[3].arg(),s[0],weighted,width); }
-            } else if !hf_rounding && super::row_cached::eligible(width) {
+            } else if super::row_cached::eligible(width) {
                 let threads = super::row_cached::threads(width);
                 unsafe { super::row_cached::norm::launch::<F, W, W, f32, CudaRuntime>(
                     &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1),
                     RudaDim::new_1d(threads as u32), x.arg(), w.arg(), w.arg(), v[2].arg(),
-                    v[3].arg(), v[3].arg(), s[0], weighted, false, false, true, width, threads); }
-            } else if cached {
-                unsafe { k::rms_forward_cached::launch::<F, W, CudaRuntime>(
-                    &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1), RudaDim::new_1d(128),
-                    x.arg(), w.arg(), v[2].arg(), v[3].arg(), s[0], weighted, hf_rounding, width); }
+                    v[3].arg(), v[3].arg(), s[0], weighted, false, false, true, hf_rounding, width, threads,
+                    super::row_cached::vector_size(width, x, &v[2])); }
             } else {
                 unsafe { k::rms_forward::launch::<F, W, CudaRuntime>(
                     &c, count(rows.checked_mul(32).expect("norm grid overflow")), RudaDim::new_1d(128),
@@ -80,10 +76,14 @@ fn norm<F: Float + RudaElement, W: Float + RudaElement>(
                         &c,RudaCount::Static(u32::try_from(if wide { rows } else { rows/4 }).expect("norm grid overflow"),1,1),
                         RudaDim::new_1d(if wide { 512 } else { 128 }),
                         x.arg(),w.arg(),v[2].arg(),v[3].arg(),v[4].arg(),weighted,width); }
-                } else if cached {
-                    unsafe { k::rms_dx_cached::launch::<F, W, CudaRuntime>(
-                        &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1), RudaDim::new_1d(128),
-                        x.arg(), w.arg(), v[2].arg(), v[3].arg(), v[4].arg(), weighted, hf_rounding, width); }
+                } else if super::row_cached::eligible(width) {
+                    let threads = super::row_cached::threads(width);
+                    let vector = super::row_cached::vector_size(width, x, &v[4])
+                        .min(super::row_cached::vector_size(width, &v[2], &v[4]));
+                    unsafe { super::row_cached::norm_backward::launch::<F, W, CudaRuntime>(
+                        &c, RudaCount::Static(u32::try_from(rows).expect("norm grid overflow"),1,1), RudaDim::new_1d(threads as u32),
+                        x.arg(), w.arg(), v[2].arg(), v[3].arg(), v[3].arg(), v[4].arg(), weighted, false, hf_rounding,
+                        width, threads, vector); }
                 } else {
                     unsafe { k::rms_dx::launch::<F, W, CudaRuntime>(
                         &c, count(rows.checked_mul(32).expect("norm grid overflow")), RudaDim::new_1d(128),
@@ -131,7 +131,8 @@ fn layer<F: Float + RudaElement, W: Float + RudaElement, B: Float + RudaElement>
                 unsafe { super::row_cached::norm::launch::<F,W,B,f32,CudaRuntime>(
                     &c,RudaCount::Static(u32::try_from(rows).expect("LayerNorm grid overflow"),1,1),
                     RudaDim::new_1d(threads as u32),x.arg(),w.arg(),b.arg(),v[3].arg(),v[4].arg(),v[5].arg(),
-                    s[0],weighted,biased,true,true,width,threads); }
+                    s[0],weighted,biased,true,true,false,width,threads,
+                    super::row_cached::vector_size(width,x,&v[3])); }
             } else { unsafe { k::layer_forward::launch::<F,W,B,CudaRuntime>(
                 &c,count(rows.checked_mul(32).expect("LayerNorm grid overflow")),RudaDim::new_1d(128),
                 x.arg(),w.arg(),b.arg(),v[3].arg(),v[4].arg(),v[5].arg(),s[0],weighted,biased); } }
@@ -144,9 +145,16 @@ fn layer<F: Float + RudaElement, W: Float + RudaElement, B: Float + RudaElement>
         assert!(!need_b || biased,"LayerNorm bias gradient requested without bias");
         if need_x && rows>0 {
             same(x,&v[6]);
-            unsafe { k::layer_dx::launch::<F,W,CudaRuntime>(
+            if super::row_cached::eligible(width) {
+                let threads = super::row_cached::threads(width);
+                let vector = super::row_cached::vector_size(width, x, &v[6])
+                    .min(super::row_cached::vector_size(width, &v[3], &v[6]));
+                unsafe { super::row_cached::norm_backward::launch::<F,W,CudaRuntime>(
+                    &c,RudaCount::Static(u32::try_from(rows).expect("LayerNorm dx grid overflow"),1,1),RudaDim::new_1d(threads as u32),
+                    x.arg(),w.arg(),v[3].arg(),v[4].arg(),v[5].arg(),v[6].arg(),weighted,true,false,width,threads,vector); }
+            } else { unsafe { k::layer_dx::launch::<F,W,CudaRuntime>(
                 &c,count(rows.checked_mul(32).expect("LayerNorm dx grid overflow")),RudaDim::new_1d(128),
-                x.arg(),w.arg(),v[3].arg(),v[4].arg(),v[5].arg(),v[6].arg(),weighted); }
+                x.arg(),w.arg(),v[3].arg(),v[4].arg(),v[5].arg(),v[6].arg(),weighted); } }
             launches+=1;
         }
         if (need_w || need_b) && width>0 {
@@ -181,16 +189,19 @@ fn gate<F: Float + RudaElement>(op: u32, v: &[View], s: &[f32]) -> usize {
     if v[0].len == 0 { return 0; }
     let c = client();
     let cuda = v[0].dtype == 2 && super::matmul::cuda_bf16_precision();
+    let vector = if v[0].len % 4 == 0 && v.iter().all(|x|
+        x.handle.offset_start.unwrap_or(0) % (4 * super::element_bytes(x.dtype)) as u64 == 0) { 4 } else { 1 };
+    let work = count(v[0].len / vector);
     if op == 2 {
-        unsafe { k::silu_mul_forward::launch::<F, CudaRuntime>(&c, count(v[0].len), RudaDim::new_1d(128),
-            v[0].arg(), v[1].arg(), v[2].arg(), cuda); }
+        unsafe { k::silu_mul_forward::launch::<F, CudaRuntime>(&c, work, RudaDim::new_1d(128),
+            v[0].arg(), v[1].arg(), v[2].arg(), cuda, vector); }
     } else {
         let dx = flag(s[0]); let du = flag(s[1]);
         if !dx && !du { return 0; }
         if dx { same(&v[0], &v[3]); }
         if du { same(&v[0], &v[4]); }
-        unsafe { k::silu_mul_backward::launch::<F, CudaRuntime>(&c, count(v[0].len), RudaDim::new_1d(128),
-            v[0].arg(), v[1].arg(), v[2].arg(), v[3].arg(), v[4].arg(), dx, du, cuda); }
+        unsafe { k::silu_mul_backward::launch::<F, CudaRuntime>(&c, work, RudaDim::new_1d(128),
+            v[0].arg(), v[1].arg(), v[2].arg(), v[3].arg(), v[4].arg(), dx, du, cuda, vector); }
     }
     finish_dispatch(&c); 1
 }

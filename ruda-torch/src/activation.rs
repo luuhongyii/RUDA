@@ -14,13 +14,13 @@ fn pointwise<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Tensor<
 }
 
 #[ruda(launch)]
-fn pointwise_vector<S:Float+RudaElement,F:Float+RudaElement>(a:&Array<Vector<S,Const<4>>>,grad:&Array<Vector<S,Const<4>>>,weight:&Array<Vector<S,Const<4>>>,out:&mut Array<Vector<S,Const<4>>>,p0:F,p1:F,p2:F,#[comptime] op:u32,#[comptime] flag:bool) {
+fn pointwise_vector<S:Float+RudaElement,F:Float+RudaElement,V:Size>(a:&Array<Vector<S,V>>,grad:&Array<Vector<S,V>>,weight:&Array<Vector<S,V>>,out:&mut Array<Vector<S,V>>,p0:F,p1:F,p2:F,#[comptime] op:u32,#[comptime] flag:bool,#[define(V)] _vector_size:usize) {
     let p=ABSOLUTE_POS as usize;
     if p<out.len() {
         let x=a[p];let g=grad[p];let w=weight[p];
-        let mut result=Vector::<S,Const<4>>::new(S::cast_from(0.0f32));
+        let mut result=Vector::<S,V>::new(S::cast_from(0.0f32));
         #[unroll]
-        for lane in 0usize..4 {
+        for lane in 0usize..out.vector_size().comptime() {
             result[lane]=S::cast_from(pointwise_value::<S,F>(F::cast_from(x[lane]),F::cast_from(g[lane]),F::cast_from(w[lane]),p0,p1,p2,op,flag));
         }
         out[p]=result;
@@ -37,12 +37,12 @@ fn initialize_lookup<S:Float+RudaElement>(table:&mut Array<S>,#[comptime] op:u32
 }
 
 #[ruda(launch)]
-fn pointwise_lookup<S:Float+RudaElement>(a:&Array<Vector<S,Const<4>>>,table:&Array<S>,out:&mut Array<Vector<S,Const<4>>>) {
+fn pointwise_lookup<S:Float+RudaElement,V:Size>(a:&Array<Vector<S,V>>,table:&Array<S>,out:&mut Array<Vector<S,V>>,#[define(V)] _vector_size:usize) {
     let p=ABSOLUTE_POS as usize;
     if p<out.len() {
-        let x=a[p];let mut result=Vector::<S,Const<4>>::new(S::cast_from(0.0f32));
+        let x=a[p];let mut result=Vector::<S,V>::new(S::cast_from(0.0f32));
         #[unroll]
-        for lane in 0usize..4 {result[lane]=table[u16::reinterpret(x[lane]) as usize];}
+        for lane in 0usize..out.vector_size().comptime() {result[lane]=table[u16::reinterpret(x[lane]) as usize];}
         out[p]=result;
     }
 }
@@ -165,20 +165,23 @@ pub(super) fn dispatch(op:u32,xs:&[View],ints:&[i64],values:&[f64]) {
             }
             true
         });
-        let vector=contiguous && out.len>=512 && out.len%4==0;
-        let vector_work=RudaCount::Static(u32::try_from((out.len/4).div_ceil(128)).expect("activation grid overflow"),1,1);
+        let vector_size=if matches!(a.dtype,1|2) && out.len%8==0
+            && xs.iter().all(|v|v.handle.offset_start.unwrap_or(0)%16==0) {8}else {4};
+        let vector=contiguous && out.len>=512 && out.len%vector_size==0
+            && xs.iter().all(|v|v.handle.offset_start.unwrap_or(0)%(vector_size*element_bytes(v.dtype)) as u64==0);
+        let vector_work=RudaCount::Static(u32::try_from((out.len/vector_size).div_ceil(128)).expect("activation grid overflow"),1,1);
         if vector && matches!(a.dtype,1|2) && matches!(op,282|284) {
             if let Some(handle)=lookup(a.dtype,op,op==282 && ints[0]!=0,out.len>=65536) {
                 let table=View::packed(handle,vec![65536],a.dtype);
                 unsafe {
-                    if a.dtype==1 {pointwise_lookup::launch::<f16,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),table.array_arg(),out.array_arg());}
-                    else {pointwise_lookup::launch::<bf16,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),table.array_arg(),out.array_arg());}
+                    if a.dtype==1 {pointwise_lookup::launch::<f16,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),table.array_arg(),out.array_arg(),vector_size);}
+                    else {pointwise_lookup::launch::<bf16,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),table.array_arg(),out.array_arg(),vector_size);}
                 }
                 LAUNCHES.fetch_add(1,Ordering::Relaxed);return;
             }
         }
         macro_rules! run {($s:ty,$f:ty)=>{unsafe {
-            if vector {pointwise_vector::launch::<$s,$f,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),xs[1].array_arg(),xs[2].array_arg(),out.array_arg(),values[0] as $f,values[1] as $f,values[2] as $f,op,ints[0]!=0);}
+            if vector {pointwise_vector::launch::<$s,$f,CudaRuntime>(&client(),vector_work,dim,a.array_arg(),xs[1].array_arg(),xs[2].array_arg(),out.array_arg(),values[0] as $f,values[1] as $f,values[2] as $f,op,ints[0]!=0,vector_size);}
             else {pointwise::launch::<$s,$f,CudaRuntime>(&client(),work,dim,a.arg(),xs[1].arg(),xs[2].arg(),out.arg(),values[0] as $f,values[1] as $f,values[2] as $f,op,ints[0]!=0,contiguous);}
         }}}
         match a.dtype {0=>run!(f32,f32),1=>run!(f16,f32),2=>run!(bf16,f32),9=>run!(f64,f64),_=>panic!("activation requires real floating storage")}

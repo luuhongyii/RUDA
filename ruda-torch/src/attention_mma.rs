@@ -84,10 +84,22 @@ pub(super) fn flash<F: Float + RudaElement>(
                 }
                 let target=row*stride+col;
                 barrier::copy_async_checked(&keys.slice(source,source+length),&mut ks.slice_mut(target,target+8),8u32);
-                barrier::copy_async_checked(&values.slice(source,source+length),&mut vs.slice_mut(target,target+8),8u32);
             }
             ready.as_ref().unwrap().commit_copy_async();
             ready.as_ref().unwrap().arrive_and_wait();
+            // V can arrive while QK and online softmax execute using only K.
+            #[unroll] for i in 0usize..(width/16) {
+                let index=(unit+i*128)*8;
+                let row=index/width;let col=index%width;
+                let mut source=0usize;let mut length=0usize;
+                if key_base+row<key_count as usize {
+                    source=((batch*kv_heads as usize+kv_head)*key_count as usize+key_base+row)*width+col;
+                    length=8;
+                }
+                let target=row*stride+col;
+                barrier::copy_async_checked(&values.slice(source,source+length),&mut vs.slice_mut(target,target+8),8u32);
+            }
+            ready.as_ref().unwrap().commit_copy_async();
         } else {
             #[unroll] for i in 0usize..(width/2) {
                 let index=unit+i*128;
@@ -161,6 +173,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             let acc=accumulators.index_mut(d);
             #[unroll] for row in 0usize..2 {acc[row]=acc[row]*Vector::<f32,Const<2>>::new(rescale[row]);}
         }
+        if comptime!(asynchronous) { ready.as_ref().unwrap().arrive_and_wait(); }
         #[unroll] for tile in 0usize..4 {
             let mut probability=Array::<Vector<F,Const<2>>>::new(4usize);
             probability[0]=Vector::cast_from(scores[tile*2][0]);

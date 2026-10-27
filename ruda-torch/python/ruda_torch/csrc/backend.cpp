@@ -217,6 +217,7 @@ using Free = int (*)(void*);
 using Error = const char* (*)();
 using Execute = int (*)(uint32_t, const Descriptor*, const Descriptor*, const Descriptor*, float);
 using Addmm = int (*)(const Descriptor*, const Descriptor*, const Descriptor*, const Descriptor*, float, float);
+using MatmulPrecision = int (*)(uint32_t, const Descriptor*, const Descriptor*, const Descriptor*, const Descriptor*, float, float, uint32_t);
 using LayerNorm = int (*)(const Descriptor*, const Descriptor*, const Descriptor*, const Descriptor*, const Descriptor*, const Descriptor*, float);
 using RMSNorm = int (*)(const Descriptor*, const Descriptor*, const Descriptor*, float);
 using Spatial = int (*)(uint32_t, const Descriptor*, const Descriptor*, const Descriptor*, const int64_t*, size_t);
@@ -233,6 +234,7 @@ Free free_native = nullptr;
 Error error_native = nullptr;
 Execute execute_native = nullptr;
 Addmm addmm_native = nullptr;
+MatmulPrecision matmul_precision_native = nullptr;
 LayerNorm layer_norm_native = nullptr;
 RMSNorm rms_norm_native = nullptr;
 Spatial spatial_native = nullptr;
@@ -586,6 +588,11 @@ void execute(uint32_t op, const at::Tensor& a, const at::Tensor& b, at::Tensor o
     at::assert_no_partial_overlap(out, b);
   }
   Argument av(a), bv(b), ov(out);
+  if ((op == 7 || op == 30) && matmul_precision_native) {
+    check(matmul_precision_native(op, &av.desc, &bv.desc, nullptr, &ov.desc, 1.0f, 0.0f,
+          a.scalar_type() == at::kFloat && at::globalContext().allowTF32CuBLAS()));
+    return;
+  }
   check(execute_native(op, &av.desc, &bv.desc, &ov.desc, scalar));
 }
 
@@ -597,6 +604,11 @@ void addmm(const at::Tensor& bias, const at::Tensor& a, const at::Tensor& b,
   at::assert_no_overlap(out, b);
   at::assert_no_overlap(out, bias);
   Argument cv(bias), av(a), bv(b), ov(out);
+  if (matmul_precision_native) {
+    check(matmul_precision_native(0, &av.desc, &bv.desc, &cv.desc, &ov.desc, alpha, beta,
+          a.scalar_type() == at::kFloat && at::globalContext().allowTF32CuBLAS()));
+    return;
+  }
   check(addmm_native(&cv.desc, &av.desc, &bv.desc, &ov.desc, alpha, beta));
 }
 
@@ -909,6 +921,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("initialize_fused_autograd_dispatch", initialize_fused_autograd_dispatch);
   m.def("initialize_arithmetic_dispatch", initialize_arithmetic_dispatch);
   m.def("initialize_matmul_dispatch", initialize_matmul_dispatch);
+  m.attr("matmul_precision_api_version") = 1;
+  m.def("initialize_matmul_precision", [](uintptr_t address) {
+    TORCH_CHECK(address && !matmul_precision_native, "invalid or repeated matmul precision initialization");
+    matmul_precision_native = reinterpret_cast<MatmulPrecision>(address);
+  });
   #include "scientific_bridge_bindings.inc"
   #include "blas_bridge_bindings.inc"
   #include "linalg_bridge_bindings.inc"

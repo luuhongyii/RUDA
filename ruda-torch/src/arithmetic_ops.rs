@@ -79,6 +79,39 @@ fn floating_vector<A: Float, B: Float, S: Float>(
     }
 }
 
+#[ruda(launch)]
+fn floating_rows<A: Float + RudaElement, B: Float + RudaElement, S: Float>(
+    left: &Tensor<Vector<A, Const<4>>>, right: &Tensor<Vector<B, Const<4>>>,
+    left_scalar: &Tensor<A>, right_scalar: &Tensor<B>, output: &mut Array<Vector<S, Const<4>>>,
+    alpha: u64, immediate: u64,
+    #[comptime] op: u32, #[comptime] scalar_left: bool, #[comptime] scalar_right: bool,
+    #[comptime] left_packed: bool, #[comptime] right_packed: bool,
+    #[comptime] left_broadcast: bool, #[comptime] right_broadcast: bool,
+    #[define(A)] _left: StorageType, #[define(B)] _right: StorageType, #[define(S)] _output: StorageType,
+) {
+    let p = (RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize) * 256usize + UNIT_POS as usize;
+    if p < output.len() {
+        let mut a = Vector::<f32, Const<4>>::new(f32::reinterpret(u32::cast_from(immediate)));
+        let mut b = a;
+        if comptime!(!scalar_left) {
+            if comptime!(left_broadcast) { a = Vector::new(f32::cast_from(left_scalar[address(left_scalar, p*4)])); }
+            else { a = Vector::cast_from(left[super::pointwise::vector_offset(left,p,left_packed)]); }
+        }
+        if comptime!(op != 2 && !scalar_right) {
+            if comptime!(right_broadcast) { b = Vector::new(f32::cast_from(right_scalar[address(right_scalar, p*4)])); }
+            else { b = Vector::cast_from(right[super::pointwise::vector_offset(right,p,right_packed)]); }
+        }
+        let mut result = Vector::<S, Const<4>>::empty();
+        #[unroll] for lane in 0usize..4 {
+            let mut value = -a[lane];
+            if comptime!(op == 0) { value = fma(f32::reinterpret(u32::cast_from(alpha)), b[lane], a[lane]); }
+            else if comptime!(op == 1) { value = a[lane] * b[lane]; }
+            result[lane] = S::cast_from(value);
+        }
+        output[p] = result;
+    }
+}
+
 fn direct(xs: &[View], ints: &[i64]) {
     assert!((0..=2).contains(&ints[0]) && matches!(ints[1], 0 | 2) && matches!(ints[2], 0 | 2));
     assert!(xs.iter().all(|x| x.dtype <= 2));
@@ -98,11 +131,21 @@ fn direct(xs: &[View], ints: &[i64]) {
         (match code { 0 => ruda_core::tensor::DType::F32, 1 => ruda_core::tensor::DType::F16,
             2 => ruda_core::tensor::DType::BF16, _ => unreachable!() }).into()
     };
-    let vector = contiguous && xs[2].len >= 1024 && xs[2].len % 4 == 0;
+    let row_input = |v: &View, scalar: bool| scalar || super::pointwise::vector_rows(v)
+        || (v.strides.last() == Some(&0) && v.shape.last().is_some_and(|n| n % 4 == 0));
+    let vector = xs[2].len >= 1024 && output_packed && super::pointwise::vector_rows(&xs[2])
+        && row_input(&xs[0], scalar_left) && row_input(&xs[1], scalar_right || op == 2);
     let c = client(); let blocks = (xs[2].len / if vector { 4 } else { 1 }).div_ceil(256); let x = blocks.min(131072);
     let grid = RudaCount::Static(x as u32, blocks.div_ceil(x) as u32, 1);
     unsafe {
-        if vector {
+        if vector && !contiguous {
+            floating_rows::launch::<CudaRuntime>(&c, grid, RudaDim::new_1d(256),
+                xs[0].arg(), xs[1].arg(), xs[0].arg(), xs[1].arg(), xs[2].array_arg(),
+                ints[3] as u64, ints.get(4).copied().unwrap_or(0) as u64,
+                op, scalar_left, scalar_right, left_packed, right_packed,
+                xs[0].strides.last() == Some(&0), xs[1].strides.last() == Some(&0),
+                dtype(xs[0].dtype), dtype(xs[1].dtype), dtype(xs[2].dtype));
+        } else if vector {
             floating_vector::launch::<CudaRuntime>(&c, grid, RudaDim::new_1d(256),
                 xs[0].array_arg(), xs[1].array_arg(), xs[2].array_arg(), ints[3] as u64, ints.get(4).copied().unwrap_or(0) as u64,
                 op, scalar_left, scalar_right, dtype(xs[0].dtype), dtype(xs[1].dtype), dtype(xs[2].dtype));
