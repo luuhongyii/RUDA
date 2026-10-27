@@ -12,7 +12,7 @@ pub(super) fn vector_rows(view: &View) -> bool {
 }
 
 #[ruda]
-pub(super) fn vector_offset<F: Float + RudaElement>(input: &Tensor<Vector<F, Const<4>>>, position: usize,
+pub(super) fn vector_offset<F: Float>(input: &Tensor<Vector<F, Const<4>>>, position: usize,
     #[comptime] packed: bool) -> usize {
     let mut result = position;
     if !comptime!(packed) {

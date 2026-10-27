@@ -80,7 +80,7 @@ fn floating_vector<A: Float, B: Float, S: Float>(
 }
 
 #[ruda(launch)]
-fn floating_rows<A: Float + RudaElement, B: Float + RudaElement, S: Float>(
+fn floating_rows<A: Float, B: Float, S: Float>(
     left: &Tensor<Vector<A, Const<4>>>, right: &Tensor<Vector<B, Const<4>>>,
     left_scalar: &Tensor<A>, right_scalar: &Tensor<B>, output: &mut Array<Vector<S, Const<4>>>,
     alpha: u64, immediate: u64,
