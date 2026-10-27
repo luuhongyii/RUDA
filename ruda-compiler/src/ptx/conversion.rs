@@ -82,7 +82,7 @@ impl Emitter {
             self.line(format!("cvt.rn.f32.{} {converted}, {source};", from.suffix()));
             source = converted;
         }
-        let bits = self.reg(Scalar::U32);
+        let bits = self.reg_b32();
         self.line(format!("cvt.rna.tf32.f32 {bits}, {source};"));
         let destination = self.destination(out)?;
         self.line(format!("mov.b32 {destination}, {bits};"));

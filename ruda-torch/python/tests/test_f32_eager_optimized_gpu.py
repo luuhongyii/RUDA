@@ -119,7 +119,9 @@ def test_silu_lookup_vector_width_and_nonfinite(dtype):
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('queries,keys,width,policy', [(65, 127, 32, 'plain'), (128, 257, 64, 'causal'),
                                                      (127, 65, 128, 'mask'), (257, 128, 64, 'gqa'),
-                                                     (193, 193, 128, 'causal'), (65, 513, 80, 'plain')])
+                                                     (193, 193, 128, 'causal'), (65, 513, 80, 'plain'),
+                                                     (1024, 1089, 64, 'causal'), (1089, 1025, 128, 'mask'),
+                                                     (1025, 1089, 128, 'gqa')])
 def test_async_attention_tiles(dtype, queries, keys, width, policy):
     host = [torch.randn(1, h, n, width, dtype=dtype) for h, n in
             [(4, queries), (2 if policy == 'gqa' else 4, keys), (2 if policy == 'gqa' else 4, keys)]]
@@ -133,6 +135,33 @@ def test_async_attention_tiles(dtype, queries, keys, width, policy):
         attn_mask=None if mask is None else mask.to('ruda'), **options)
     tolerance = .02 if dtype == torch.bfloat16 else .003
     torch.testing.assert_close(actual.cpu().float(), expected, atol=tolerance, rtol=tolerance)
+
+
+@pytest.mark.parametrize('dtype',[torch.float16,torch.bfloat16])
+def test_long_attention_tile_gradients(dtype):
+    host=[torch.randn(1,2,1025,64,dtype=dtype) for _ in range(3)]
+    inputs=[x.to('ruda').requires_grad_() for x in host]
+    refs=[x.float().requires_grad_() for x in host]
+    actual=F.scaled_dot_product_attention(*inputs,is_causal=True)
+    expected=F.scaled_dot_product_attention(*refs,is_causal=True)
+    gradient=torch.randn_like(host[0]);actual.backward(gradient.to('ruda'));expected.backward(gradient.float())
+    tolerance=.04 if dtype==torch.bfloat16 else .006
+    for value,target in [(actual,expected),*[(x.grad,y.grad) for x,y in zip(inputs,refs)]]:
+        torch.testing.assert_close(value.cpu().float(),target.float(),rtol=tolerance,atol=tolerance)
+
+
+@pytest.mark.parametrize('dtype',[torch.float32,torch.float16,torch.bfloat16])
+@pytest.mark.parametrize('width,inner',[(3,64),(7,132),(16,16),(3,65)])
+@pytest.mark.parametrize('logarithmic',[False,True])
+def test_spatial_softmax_forward_and_grad(dtype,width,inner,logarithmic):
+    host=torch.randn(2,width,inner,dtype=dtype)
+    x=host.to('ruda').requires_grad_();ref=host.float().requires_grad_()
+    op=F.log_softmax if logarithmic else F.softmax
+    actual=op(x,dim=1);expected=op(ref,dim=1).to(dtype)
+    gradient=torch.randn_like(host);actual.backward(gradient.to('ruda'));expected.backward(gradient)
+    tolerance=.04 if dtype==torch.bfloat16 else .005 if dtype==torch.float16 else 2e-5
+    for value,target in [(actual,expected),(x.grad,ref.grad)]:
+        torch.testing.assert_close(value.cpu().float(),target.float(),rtol=tolerance,atol=tolerance)
 
 
 @pytest.mark.parametrize('shape', [(32, 24, 32), (64, 72, 64), (128, 128, 128), (224, 96, 160)])

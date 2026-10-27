@@ -8,8 +8,8 @@ fn softmax_exp(value: f32) -> f32 {
 #[ruda]
 fn load_keys<F: Float + RudaElement>(keys: &Array<F>, stage: &mut SharedMemory<F>,
     unit: usize, batch: usize, head: usize, key_base: usize, key_count: u32, kv_heads: u32,
-    #[comptime] width: usize) {
-    #[unroll] for i in 0usize..(width/16) {
+    #[comptime] width: usize, #[comptime] key_tile: usize) {
+    #[unroll] for i in 0usize..(key_tile*width/1024) {
         let index=(unit+i*128)*8;
         let row=index/width;let col=index%width;
         let mut source=0usize;let mut length=0usize;
@@ -28,7 +28,7 @@ pub(super) fn flash<F: Float + RudaElement>(
     mask: &Tensor<f32>, stats: &mut Array<f32>,
     queries: u32, key_count: u32, heads: u32, kv_heads: u32, scale: f32,
     #[comptime] width: usize, #[comptime] causal: bool, #[comptime] mask_kind: u32,
-    #[comptime] asynchronous: bool,
+    #[comptime] asynchronous: bool, #[comptime] key_tile: usize,
 ) {
     let lane=UNIT_POS_X as usize;
     let warp=UNIT_POS_Y as usize;
@@ -37,8 +37,8 @@ pub(super) fn flash<F: Float + RudaElement>(
     let batch=RUDA_POS_Z as usize;
     let query_base=RUDA_POS_X as usize*64;
     let stride=comptime!(width+8);
-    let mut ks=SharedMemory::<F>::new_aligned(64*stride,32usize);
-    let mut vs=SharedMemory::<F>::new_aligned(64*stride,32usize);
+    let mut ks=SharedMemory::<F>::new_aligned(key_tile*stride,32usize);
+    let mut vs=SharedMemory::<F>::new_aligned(key_tile*stride,32usize);
     let ready=if comptime!(asynchronous) {
         ComptimeOption::<Shared<barrier::Barrier>>::new_Some(barrier::Barrier::shared(128u32,UNIT_POS==0))
     } else {ComptimeOption::<Shared<barrier::Barrier>>::new_None()};
@@ -89,15 +89,17 @@ pub(super) fn flash<F: Float + RudaElement>(
     let mut end=key_count as usize;
     if comptime!(causal) {end=usize::min(end,query_base+64);}
     if comptime!(asynchronous) {
-        load_keys(keys,&mut ks,unit,batch,kv_head,0usize,key_count,kv_heads,width);
+        load_keys(keys,&mut ks,unit,batch,kv_head,0usize,key_count,kv_heads,width,key_tile);
         ready.as_ref().unwrap().commit_copy_async();
     }
-    for block in 0usize..((end+63)/64) {
-        let key_base=block*64;
+    for block in 0usize..((end+key_tile-1)/key_tile) {
+        let key_base=block*key_tile;
+        let full_tile=query_base+64<=queries as usize && key_base+key_tile<=key_count as usize
+            && (!comptime!(causal) || key_base+key_tile<=query_base);
         if comptime!(asynchronous) {
             ready.as_ref().unwrap().arrive_and_wait();
             // V can arrive while QK and online softmax execute using only K.
-            #[unroll] for i in 0usize..(width/16) {
+            #[unroll] for i in 0usize..(key_tile*width/1024) {
                 let index=(unit+i*128)*8;
                 let row=index/width;let col=index%width;
                 let mut source=0usize;let mut length=0usize;
@@ -110,7 +112,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             }
             ready.as_ref().unwrap().commit_copy_async();
         } else {
-            #[unroll] for i in 0usize..(width/2) {
+            #[unroll] for i in 0usize..(key_tile*width/128) {
                 let index=unit+i*128;
                 let row=index/width;let col=index%width;
                 let mut key=F::cast_from(0.0f32);let mut value=F::cast_from(0.0f32);
@@ -123,7 +125,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             sync_ruda();
         }
         let mut scores=Sequence::<Array<Vector<f32,Const<2>>>>::new();
-        #[unroll] for tile in 0usize..8 {
+        #[unroll] for tile in 0usize..(key_tile/8) {
             let mut score=Array::<Vector<f32,Const<2>>>::new(2usize);
             score[0]=Vector::new(0.0f32);score[1]=Vector::new(0.0f32);
             #[unroll] for d in 0usize..(width/16) {
@@ -131,6 +133,9 @@ pub(super) fn flash<F: Float + RudaElement>(
                 let key=def.load_matrix::<F,Const<2>>(&ks.slice(start,start+8),cmma::MatrixIdent::B,2usize,false);
                 def.execute_inplace(&qfragments[d],&key,&mut score);
             }
+            score[0]=score[0]*Vector::<f32,Const<2>>::new(scale);
+            score[1]=score[1]*Vector::<f32,Const<2>>::new(scale);
+            if !full_tile || comptime!(mask_kind!=0) {
             #[unroll] for row in 0usize..2 {
                 let position=query_base+warp*16+lane/4+row*8;
                 let mut pair=score[row];
@@ -139,7 +144,7 @@ pub(super) fn flash<F: Float + RudaElement>(
                     let mut value=f32::cast_from(f32::NEG_INFINITY);
                     if position<queries as usize && column<key_count as usize {
                         if !comptime!(causal) || column<=position {
-                            value=pair[j]*scale;
+                            value=pair[j];
                             if comptime!(mask_kind!=0) {
                                 let mut remaining=((batch*heads as usize+head)*queries as usize+position)*key_count as usize+column;
                                 let mut offset=0usize;let mut axis=mask.rank();
@@ -154,12 +159,13 @@ pub(super) fn flash<F: Float + RudaElement>(
                 }
                 score[row]=pair;
             }
+            }
             scores.push(score);
         }
         let mut rescale=Vector::<f32,Const<2>>::new(0.0f32);
         #[unroll] for row in 0usize..2 {
             let mut next=maximum[row];
-            #[unroll] for tile in 0usize..8 {
+            #[unroll] for tile in 0usize..(key_tile/8) {
                 let pair=scores[tile][row];next=f32::max(next,f32::max(pair[0],pair[1]));
             }
             next=f32::max(next,plane_shuffle_xor(next,1u32));
@@ -168,7 +174,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             let mut previous_scale=0.0f32;
             if denominator[row]!=0.0f32 {previous_scale=softmax_exp(maximum[row]-next);}
             let mut sum=0.0f32;
-            #[unroll] for tile in 0usize..8 {
+            #[unroll] for tile in 0usize..(key_tile/8) {
                 let mut pair=scores[tile][row];
                 #[unroll] for j in 0usize..2 {pair[j]=softmax_exp(pair[j]-next);sum+=pair[j];}
                 let score=scores.index_mut(tile);
@@ -185,12 +191,12 @@ pub(super) fn flash<F: Float + RudaElement>(
         if comptime!(asynchronous) {
             ready.as_ref().unwrap().arrive_and_wait();
             // All warps have finished QK. Reuse K while PV consumes only V.
-            if key_base+64<end {
-                load_keys(keys,&mut ks,unit,batch,kv_head,key_base+64,key_count,kv_heads,width);
+            if key_base+key_tile<end {
+                load_keys(keys,&mut ks,unit,batch,kv_head,key_base+key_tile,key_count,kv_heads,width,key_tile);
                 ready.as_ref().unwrap().commit_copy_async();
             }
         }
-        #[unroll] for tile in 0usize..4 {
+        #[unroll] for tile in 0usize..(key_tile/16) {
             let mut probability=Array::<Vector<F,Const<2>>>::new(4usize);
             probability[0]=Vector::cast_from(scores[tile*2][0]);
             probability[1]=Vector::cast_from(scores[tile*2][1]);

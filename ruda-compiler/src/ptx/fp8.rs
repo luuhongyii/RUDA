@@ -103,7 +103,7 @@ impl Emitter {
             self.f32_to_fp8(to, &destination, &source)
         } else if Scalar::is_tf32(out.ty) {
             self.tf32_target()?;
-            let bits = self.reg(Scalar::U32);
+            let bits = self.reg_b32();
             self.line(format!("cvt.rna.tf32.f32 {bits}, {source};"));
             self.line(format!("mov.b32 {destination}, {bits};"));
             Ok(())

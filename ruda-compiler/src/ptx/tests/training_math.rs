@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn tf32_conversion_uses_bit_register_destination() {
+    for input_kind in [FloatKind::F32, FloatKind::F16, FloatKind::E4M3] {
+        let mut k=kernel("tf32_conversion_register");
+        let input=buffer(&mut k,Type::from(input_kind),Visibility::Read);
+        let output=buffer(&mut k,Type::from(FloatKind::TF32),Visibility::ReadWrite);
+        let x=local(0,Type::from(input_kind));let y=local(1,Type::from(FloatKind::TF32));
+        load(&mut k.body,input,0u32.into(),x);
+        k.body.register(Instruction::new(Operator::Cast(UnaryOperator{input:x}),y));
+        store(&mut k.body,output,0u32.into(),y);
+        let ptx=compile(k,ExecutionMode::Unchecked,UIntKind::U32).unwrap();
+        let line=ptx.source.lines().find(|line|line.contains("cvt.rna.tf32.f32")).unwrap();
+        let register=line.split_whitespace().nth(1).unwrap().trim_end_matches(',');
+        assert!(ptx.source.contains(&format!(".reg .b32 {register};")),"{line}");
+    }
+}
+
+#[test]
 fn base_two_exponential_requires_explicit_reduced_precision() {
     for reduced in [false, true] {
         let ty=Type::scalar(ElemType::Float(FloatKind::F32));let mut k=kernel("base_two_exp");
