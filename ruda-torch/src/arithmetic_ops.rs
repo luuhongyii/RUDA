@@ -112,6 +112,60 @@ fn floating_rows<A: Float, B: Float, S: Float>(
     }
 }
 
+// Strided/broadcast rows with a packed output. Coordinates come from one
+// FastDivmod decomposition of the output position (no 64-bit div/mod per
+// operand), and 16-bit storage uses 16-byte vectors.
+#[ruda(launch)]
+fn floating_rows_indexed<A: Float, B: Float, S: Float, V: Size>(
+    left: &Tensor<Vector<A, V>>, right: &Tensor<Vector<B, V>>,
+    left_scalar: &Tensor<A>, right_scalar: &Tensor<B>, output: &mut Array<Vector<S, V>>,
+    alpha: u64, immediate: u64, shape: &Sequence<FastDivmod<usize>>,
+    #[comptime] op: u32, #[comptime] scalar_left: bool, #[comptime] scalar_right: bool,
+    #[comptime] left_broadcast: bool, #[comptime] right_broadcast: bool,
+    #[define(A)] _left: StorageType, #[define(B)] _right: StorageType, #[define(S)] _output: StorageType,
+    #[define(V)] _vector: usize,
+) {
+    let width = output.vector_size().comptime();
+    let p = (RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize) * 256usize + UNIT_POS as usize;
+    if p < output.len() {
+        let mut remaining = p * width; let mut i = 0usize; let mut j = 0usize;
+        #[unroll]
+        for index in 0usize..shape.len().comptime() {
+            let dim = comptime!(shape.len() - index - 1);
+            let (quotient, coordinate) = shape[dim].div_mod(remaining);
+            remaining = quotient;
+            if comptime!(!scalar_left) { i += coordinate * left_scalar.stride(dim); }
+            if comptime!(op != 2 && !scalar_right) { j += coordinate * right_scalar.stride(dim); }
+        }
+        let mut a = Vector::<f32, V>::new(f32::reinterpret(u32::cast_from(immediate)));
+        let mut b = a;
+        if comptime!(!scalar_left) {
+            if comptime!(left_broadcast) { a = Vector::new(f32::cast_from(left_scalar[i])); }
+            else { a = Vector::cast_from(left[i / width]); }
+        }
+        if comptime!(op != 2 && !scalar_right) {
+            if comptime!(right_broadcast) { b = Vector::new(f32::cast_from(right_scalar[j])); }
+            else { b = Vector::cast_from(right[j / width]); }
+        }
+        let mut result = Vector::<S, V>::empty();
+        #[unroll] for lane in 0usize..width {
+            let mut value = -a[lane];
+            if comptime!(op == 0) { value = fma(f32::reinterpret(u32::cast_from(alpha)), b[lane], a[lane]); }
+            else if comptime!(op == 1) { value = a[lane] * b[lane]; }
+            result[lane] = S::cast_from(value);
+        }
+        output[p] = result;
+    }
+}
+
+fn rows_of(view: &View, width: usize) -> bool {
+    !view.shape.is_empty() && view.len % width == 0
+        && view.shape.last().unwrap() % width == 0 && view.strides.last() == Some(&1)
+        && view.shape.iter().zip(&view.strides).take(view.shape.len() - 1)
+            .all(|(&size, &stride)| size <= 1 || stride % width == 0)
+        && view.handle.offset_start.unwrap_or(0) % (width * element_bytes(view.dtype)) as u64 == 0
+}
+
 fn direct(xs: &[View], ints: &[i64]) {
     assert!((0..=2).contains(&ints[0]) && matches!(ints[1], 0 | 2) && matches!(ints[2], 0 | 2));
     assert!(xs.iter().all(|x| x.dtype <= 2));
@@ -135,10 +189,25 @@ fn direct(xs: &[View], ints: &[i64]) {
         || (v.strides.last() == Some(&0) && v.shape.last().is_some_and(|n| n % 4 == 0));
     let vector = xs[2].len >= 1024 && output_packed && super::pointwise::vector_rows(&xs[2])
         && row_input(&xs[0], scalar_left) && row_input(&xs[1], scalar_right || op == 2);
-    let c = client(); let blocks = (xs[2].len / if vector { 4 } else { 1 }).div_ceil(256); let x = blocks.min(131072);
+    let indexed = vector && !contiguous && xs[2].len <= i32::MAX as usize;
+    let row_input8 = |v: &View, scalar: bool| scalar || rows_of(v, 8)
+        || (v.strides.last() == Some(&0) && v.shape.last().is_some_and(|n| n % 8 == 0));
+    let wide = indexed && xs.iter().all(|x| matches!(x.dtype, 1 | 2)) && rows_of(&xs[2], 8)
+        && row_input8(&xs[0], scalar_left) && row_input8(&xs[1], scalar_right || op == 2);
+    let width = if wide { 8 } else if vector { 4 } else { 1 };
+    let c = client(); let blocks = (xs[2].len / width).div_ceil(256); let x = blocks.min(131072);
     let grid = RudaCount::Static(x as u32, blocks.div_ceil(x) as u32, 1);
     unsafe {
-        if vector && !contiguous {
+        if indexed {
+            let mut shape=SequenceArg::<CudaRuntime,FastDivmod<usize>>::new();
+            for &size in &xs[2].shape { shape.push(size); }
+            floating_rows_indexed::launch::<CudaRuntime>(&c, grid, RudaDim::new_1d(256),
+                xs[0].arg(), xs[1].arg(), xs[0].arg(), xs[1].arg(), xs[2].array_arg(),
+                ints[3] as u64, ints.get(4).copied().unwrap_or(0) as u64, shape,
+                op, scalar_left, scalar_right,
+                xs[0].strides.last() == Some(&0), xs[1].strides.last() == Some(&0),
+                dtype(xs[0].dtype), dtype(xs[1].dtype), dtype(xs[2].dtype), width);
+        } else if vector && !contiguous {
             floating_rows::launch::<CudaRuntime>(&c, grid, RudaDim::new_1d(256),
                 xs[0].arg(), xs[1].arg(), xs[0].arg(), xs[1].arg(), xs[2].array_arg(),
                 ints[3] as u64, ints.get(4).copied().unwrap_or(0) as u64,

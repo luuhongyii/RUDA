@@ -274,6 +274,19 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> eager_layer_norm(const at::Tensor& 
   }
   const auto rows=a.numel()/width;
   const auto x=a.reshape({rows,width});
+  if (a.scalar_type()==at::kFloat && width<=16384 && layer_norm_native && std::isfinite(eps) &&
+      eps>=std::numeric_limits<float>::min() && eps<=std::numeric_limits<float>::max()) {
+    // One fused register-cached kernel instead of separate statistics and affine launches.
+    auto result=at::empty({rows,width},a.options());
+    auto mean=at::empty({rows},a.options()),inverse=at::empty({rows},a.options());
+    std::optional<at::Tensor> w,b;
+    if (weight.has_value() && weight->defined()) w=weight->reshape({width});
+    if (bias.has_value() && bias->defined()) b=bias->reshape({width});
+    layer_norm(x,w,b,result,mean,inverse,eps);
+    auto stat_shape=a.sizes().vec();
+    for (size_t axis=stat_shape.size()-normalized_shape.size();axis<stat_shape.size();++axis) stat_shape[axis]=1;
+    return {result.reshape(a.sizes()),mean.reshape(stat_shape),inverse.reshape(stat_shape)};
+  }
   const auto options=a.options().dtype(at::kFloat);
   auto mean=at::empty({rows},options),variance=at::empty({rows},options),inverse=at::empty({rows},options);
   bool vectorized=width<=(1LL<<24) && width%4==0 && reinterpret_cast<uintptr_t>(a.data_ptr())%(4*a.element_size())==0;

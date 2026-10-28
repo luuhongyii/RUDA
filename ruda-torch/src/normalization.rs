@@ -39,7 +39,7 @@ pub(super) fn layer_norm(
     let count = u32::try_from(rows.checked_mul(32).expect("LayerNorm launch overflow").div_ceil(128))
         .expect("LayerNorm launch grid overflow");
     let dummy = weight.or(bias).unwrap_or(input);
-    let cached = super::row_cached::eligible(width);
+    let cached = width <= 16384;
     let threads = super::row_cached::threads(width);
     macro_rules! run {
         ($dtype:ty) => { if cached {
@@ -84,7 +84,7 @@ pub(super) fn rms_norm(input: &View, weight: Option<&View>, out: &View, epsilon:
     let count = u32::try_from(rows.checked_mul(32).expect("RMSNorm launch overflow").div_ceil(128))
         .expect("RMSNorm launch grid overflow");
     let dummy = weight.unwrap_or(input);
-    let cached = super::row_cached::eligible(width);
+    let cached = width <= 16384;
     let threads = super::row_cached::threads(width);
     macro_rules! run {
         ($dtype:ty) => { if cached {

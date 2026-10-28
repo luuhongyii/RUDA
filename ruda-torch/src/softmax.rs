@@ -131,11 +131,11 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
     let width = a.shape[axis];
     let backward = matches!(op, 32 | 34);
     let cached = axis + 1 == a.shape.len()
-        && super::row_cached::eligible(width) && super::row_cached::packed(a)
+        && (32..=32768).contains(&width) && super::row_cached::packed(a)
         && (!backward || super::row_cached::packed(b))
         && super::row_cached::packed(out)
         && std::env::var("RUDA_TORCH_SOFTMAX").map_or(true, |value| value == "auto");
-    let threads = if width <= 1024 { 32 } else { super::row_cached::threads(width) };
+    let threads = if width <= 1024 { 32 } else if width <= 16384 { super::row_cached::threads(width) } else { 1024 };
     let vector = super::row_cached::vector_size(width, a, out)
         .min(if backward { super::row_cached::vector_size(width, b, out) } else { 4 });
     let inner:usize=a.shape[axis+1..].iter().product();

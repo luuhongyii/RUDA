@@ -16,9 +16,9 @@ fn vector_merge(left:f32,left_var:f32,left_n:u32,right:f32,right_var:f32,right_n
 }
 
 #[ruda(launch)]
-fn vector_statistics<S:Float+RudaElement>(a:&Tensor<S>,mean:&mut Tensor<f32>,variance:&mut Tensor<f32>,rstd:&mut Tensor<f32>,eps:f32) {
+fn vector_statistics<S:Float+RudaElement>(a:&Tensor<S>,mean:&mut Tensor<f32>,variance:&mut Tensor<f32>,rstd:&mut Tensor<f32>,eps:f32,#[comptime] threads:usize) {
     let row=RUDA_POS_X as usize;let lane=UNIT_POS as usize;let width=a.shape(1);
-    let mut sm=SharedMemory::<f32>::new(128usize);let mut sv=SharedMemory::<f32>::new(128usize);let mut sn=SharedMemory::<u32>::new(128usize);
+    let mut sm=SharedMemory::<f32>::new(threads);let mut sv=SharedMemory::<f32>::new(threads);let mut sn=SharedMemory::<u32>::new(threads);
     let mut mu=0.0f32;let mut m2=0.0f32;let mut n=0u32;let mut j=lane*4;
     while j<width {
         #[unroll]
@@ -26,7 +26,7 @@ fn vector_statistics<S:Float+RudaElement>(a:&Tensor<S>,mean:&mut Tensor<f32>,var
             let x=f32::cast_from(a[address(a,row*width+j+k)]);n+=1;let delta=x-mu;
             mu=fma(delta,1.0f32/f32::cast_from(n),mu);m2=fma(delta,x-mu,m2);
         }
-        j+=512;
+        j+=threads*4;
     }
     sm[lane]=mu;sv[lane]=m2;sn[lane]=n;sync_ruda();let mut stride=16usize;
     while stride>0 {
@@ -36,9 +36,9 @@ fn vector_statistics<S:Float+RudaElement>(a:&Tensor<S>,mean:&mut Tensor<f32>,var
         }
         sync_ruda();stride/=2;
     }
-    let mut stride=2usize;
+    let mut stride=16usize;
     while stride>0 {
-        if lane%32==0 && lane/32<stride {
+        if lane%32==0 && lane/32<stride && lane/32+stride<threads/32 {
             let other=lane+stride*32;let (m,v,count)=vector_merge(sm[lane],sv[lane],sn[lane],sm[other],sv[other],sn[other]);
             sm[lane]=m;sv[lane]=v;sn[lane]=count;
         }
@@ -352,7 +352,11 @@ fn dispatch_typed<S:Float+RudaElement,F:Float+RudaElement>(c:&ComputeClient<Cuda
     let kind=ints[0] as u32;
     if op==309 {
         if rows>0 {unsafe {
-            if ints.len()==2 && ints[1]!=0 {vector_statistics::launch::<S,CudaRuntime>(c,grid(rows),RudaDim::new_1d(128),a.arg(),xs[1].arg(),xs[2].arg(),xs[3].arg(),values[0] as f32);}
+            if ints.len()==2 && ints[1]!=0 {
+                // Few very wide rows: one 128-thread block per row leaves most SMs idle.
+                let threads=if a.shape[1]>=65536 {1024} else {128};
+                vector_statistics::launch::<S,CudaRuntime>(c,grid(rows),RudaDim::new_1d(threads as u32),a.arg(),xs[1].arg(),xs[2].arg(),xs[3].arg(),values[0] as f32,threads);
+            }
             else {statistics::launch::<S,F,CudaRuntime>(c,grid(rows),block,a.arg(),xs[1].arg(),xs[2].arg(),xs[3].arg(),epsilon,kind);}
         }}
     } else {
