@@ -53,7 +53,8 @@ def test_f32_precision_layouts(allow_tf32, ta, nt, batched, backend):
 
 
 @pytest.mark.parametrize('allow_tf32', [False, True])
-@pytest.mark.parametrize('shape', [(32, 8, 32), (96, 160, 224), (352, 352, 352), (128, 8192, 128)])
+@pytest.mark.parametrize('shape', [(32, 8, 32), (96, 32, 160), (128, 64, 128), (160, 96, 224),
+                                  (96, 160, 224), (352, 352, 352), (128, 8192, 128)])
 def test_f32_tiled_precision_and_edges(allow_tf32, shape):
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
     m, k, n = shape
@@ -120,6 +121,8 @@ def test_silu_lookup_vector_width_and_nonfinite(dtype):
 @pytest.mark.parametrize('queries,keys,width,policy', [(65, 127, 32, 'plain'), (128, 257, 64, 'causal'),
                                                      (127, 65, 128, 'mask'), (257, 128, 64, 'gqa'),
                                                      (193, 193, 128, 'causal'), (65, 513, 80, 'plain'),
+                                                     (257, 129, 16, 'plain'), (257, 193, 48, 'gqa'),
+                                                     (257, 257, 80, 'causal'), (385, 321, 112, 'causal'),
                                                      (1024, 1089, 64, 'causal'), (1089, 1025, 128, 'mask'),
                                                      (1025, 1089, 128, 'gqa')])
 def test_async_attention_tiles(dtype, queries, keys, width, policy):
