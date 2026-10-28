@@ -29,7 +29,7 @@ ruda-driver-cann = { version = "0.2.0", path = "../ruda-driver/cann", optional =
 ruda-model = { version = "0.21.65", path = "../ruda-model", default-features = false, features = ["std"] }
 ruda-autodiff = { version = "0.21.66", path = "../ruda-autodiff", default-features = false, features = ["std"] }
 ruda-optim = { version = "0.21.72", path = "../ruda-optim", default-features = false, features = ["std"] }
-ruccl = { version = "0.21.88", package = "ruCCL", path = "../ruCCL", default-features = false, optional = true }
+ruccl = { version = "0.21.89", package = "ruCCL", path = "../ruCCL", default-features = false, optional = true }
 ruda-nn = { version = "0.21.74", path = "../ruda-nn", default-features = false, features = ["std"] }
 ruda-tensor = { version = "0.21.82", path = "../ruda-tensor", default-features = false, features = ["std", "kernel"] }
 ruda-tensor-device = { version = "0.21.82", path = "../ruda-tensor/device", default-features = false, features = ["std", "fusion"] }
