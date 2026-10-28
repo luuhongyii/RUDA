@@ -8487,7 +8487,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-model"
-version = "0.21.68"
+version = "0.21.69"
 dependencies = [
  "ahash",
  "bincode",
