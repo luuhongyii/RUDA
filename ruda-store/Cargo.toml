@@ -143,7 +143,7 @@ version = "0.21.65"
 [dependencies.ruda-tensor]
 default-features = false
 path = "../ruda-tensor"
-version = "0.21.80"
+version = "0.21.81"
 features = [ "api",]
 
 [dependencies.ruda-tensor-device]
