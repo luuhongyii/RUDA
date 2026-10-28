@@ -102,7 +102,7 @@ optional = true
 
 [dependencies.ruda-tensor]
 path = ".."
-version = "0.21.79"
+version = "0.21.80"
 default-features = false
 features = [ "graph", "std", "serde",]
 
@@ -126,20 +126,20 @@ optional = true
 
 [dependencies.ruda-tensor-router]
 path = "../router"
-version = "0.21.71"
+version = "0.21.72"
 default-features = false
 features = [ "default",]
 
 [dependencies.ruda-fusion]
 path = "../../ruda-fusion"
-version = "0.21.78"
+version = "0.21.79"
 default-features = false
 features = ["std"]
 optional = true
 
 [dependencies.ruda-communication]
 path = "../../ruda-communication"
-version = "0.21.76"
+version = "0.21.77"
 default-features = false
 features = [ "data-service", "websocket",]
 
