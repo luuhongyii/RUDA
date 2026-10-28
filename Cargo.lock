@@ -8074,7 +8074,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-compiler"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
