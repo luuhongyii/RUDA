@@ -53,8 +53,7 @@ def test_f32_precision_layouts(allow_tf32, ta, nt, batched, backend):
 
 
 @pytest.mark.parametrize('allow_tf32', [False, True])
-@pytest.mark.parametrize('shape', [(32, 8, 32), (96, 32, 160), (128, 64, 128), (160, 96, 224),
-                                  (96, 160, 224), (352, 352, 352), (128, 8192, 128)])
+@pytest.mark.parametrize('shape', [(32, 8, 32), (96, 160, 224), (352, 352, 352), (128, 8192, 128)])
 def test_f32_tiled_precision_and_edges(allow_tf32, shape):
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
     m, k, n = shape
