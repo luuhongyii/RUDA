@@ -90,36 +90,36 @@ features = [ "tensor-host-storage", "serde", "shared-bytes", "tensor-data", "id"
 [dependencies.rufft-host]
 package = "ruFFT-host"
 path = "../../ruFFT/host"
-version = "0.1.105"
+version = "0.2.0"
 default-features = false
 
 [dependencies.rublas-host]
 path = "../../ruBLAS/host"
-version = "0.1.105"
+version = "0.2.0"
 default-features = false
 
 [dependencies.rudnn-host]
 package = "ruDNN-host"
 path = "../../ruDNN/host"
-version = "0.1.105"
+version = "0.2.0"
 default-features = false
 
 [dependencies.ruprim-host]
 package = "ruPRIM-host"
 path = "../../ruPRIM/host"
-version = "0.1.105"
+version = "0.2.0"
 default-features = false
 
 [dependencies.rurand-host]
 package = "ruRAND-host"
 path = "../../ruRAND/host"
-version = "0.1.105"
+version = "0.2.0"
 default-features = false
 
 [dependencies.rusparse]
 package = "ruSPARSE"
 path = "../../ruSPARSE"
-version = "0.1.109"
+version = "0.2.0"
 default-features = false
 features = [ "serde",]
 optional = true
@@ -137,7 +137,7 @@ default-features = false
 
 [dependencies.ruda-test-runtime]
 path = "../../ruda-test-runtime"
-version = "0.1.109"
+version = "0.2.0"
 default-features = false
 optional = true
 

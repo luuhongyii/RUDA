@@ -3,6 +3,7 @@ name = "ruda-tensor-capture"
 version.workspace = true
 edition.workspace = true
 license = "MIT OR Apache-2.0"
+description = "Non-executing tensor backend for capturing operation graphs and initialized values."
 
 [features]
 default = ["std"]
