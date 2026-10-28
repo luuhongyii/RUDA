@@ -59,7 +59,7 @@ optional = true
 
 [dependencies.ruda-driver-wgpu]
 path = "../../ruda-driver/wgpu"
-version = "0.2.4"
+version = "0.2.5"
 default-features = false
 
 [dependencies.ruda-kernel]
