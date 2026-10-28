@@ -784,7 +784,7 @@ mod custom_channel {
         pub fn shutdown(&self) {
             let mut thread = self.state.thread.lock().unwrap();
             let Some(handle) = thread.take() else { return; };
-            assert_ne!(handle.thread().id(), std::thread::current().id(),
+            assert!(!is_current_thread(&handle),
                 "A device runner cannot join itself");
             self.state.submissions.fetch_or(CLOSED, Ordering::AcqRel);
             while self.state.submissions.load(Ordering::Acquire) != CLOSED {
@@ -796,6 +796,25 @@ mod custom_channel {
             if let Err(error) = handle.join() {
                 std::panic::resume_unwind(error);
             }
+        }
+    }
+
+    fn is_current_thread(handle: &JoinHandle<()>) -> bool {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn GetCurrentThreadId() -> u32;
+                fn GetThreadId(thread: *mut core::ffi::c_void) -> u32;
+            }
+            // DLL atexit can run after Rust's current-thread TLS is destroyed.
+            // The join handle remains valid until shutdown joins the runner.
+            unsafe { GetThreadId(handle.as_raw_handle()) == GetCurrentThreadId() }
+        }
+        #[cfg(not(windows))]
+        {
+            handle.thread().id() == std::thread::current().id()
         }
     }
 

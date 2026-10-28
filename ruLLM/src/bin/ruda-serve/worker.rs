@@ -195,6 +195,9 @@ pub fn run(
 
 impl Worker {
     fn new(mut options: Options, jobs: mpsc::Receiver<serving::Job>) -> Result<Self, String> {
+        if options.dtype == Dtype::Fp16 {
+            options.model_id = format!("{}:dtype-fp16", options.model_id);
+        }
         let source: serde_json::Value = serde_json::from_slice(
             &std::fs::read(options.directory.join("config.json")).map_err(|e| e.to_string())?,
         )

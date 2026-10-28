@@ -64,6 +64,8 @@ jobs:
           restore-keys: |
             rullm-${{ matrix.cache }}-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
             torch-${{ matrix.cache }}-release-rust-1.97.1-${{ hashFiles('Cargo.lock') }}-
+      - name: Check ordered device shutdown
+        run: cargo test --release --locked -p ruda-core --features std device::handle::channel::shutdown_tests -- --test-threads=1
       - name: Build native server
         run: cargo build --release --locked -p ruda-llm --bin ruda-serve --features serving,nvidia-ptx,tensor-parallel
       - name: Check command-line entry without model weights

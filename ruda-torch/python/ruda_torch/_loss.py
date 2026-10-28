@@ -1,4 +1,4 @@
-from functools import partial
+from functools import lru_cache, partial
 
 import torch
 from torch._prims_common import elementwise_dtypes, ELEMENTWISE_TYPE_PROMOTION_KIND
@@ -12,7 +12,7 @@ def _reduction(reduction):
         raise RuntimeError('loss reduction must be none, mean or sum')
 
 
-def _inputs(a, target, grad=None, *, promote=False):
+def _inputs(a, target, grad=None, *, promote=False, compute_dtype=None):
     tensors = (a, target) if grad is None else (a, target, grad)
     if a.dtype not in _dtypes or any(t.device != a.device for t in tensors):
         raise RuntimeError('loss inputs must use a real floating input on the same device')
@@ -21,6 +21,10 @@ def _inputs(a, target, grad=None, *, promote=False):
         raise RuntimeError('loss inputs must have the same dtype')
     if dtype not in _dtypes:
         raise RuntimeError('loss requires real floating computation')
+    if compute_dtype is not None:
+        if compute_dtype not in _dtypes or not torch.can_cast(dtype, compute_dtype):
+            raise RuntimeError('loss backward output cannot safely receive the result')
+        dtype = compute_dtype
     return torch.broadcast_tensors(*(t.to(dtype).resolve_neg().resolve_conj() for t in tensors))
 
 
@@ -47,15 +51,31 @@ def regression(a, target, reduction=1, boundary=1., *, op, out=None):
     return _output(_reduce(value, reduction, dtype=out.dtype if out is not None else None), out, (a, target), cast=True)
 
 
+@lru_cache(maxsize=1)
+def _mse_backward_promotes():
+    # MSE's shared TensorIterator contract changed between supported Torch builds.
+    x = torch.empty(0, dtype=torch.float32, device='cpu')
+    y = torch.empty(0, dtype=torch.float64, device='cpu')
+    try:
+        torch.ops.aten.mse_loss_backward.default(x, x, y, 2)
+    except RuntimeError:
+        return False
+    return True
+
+
 def regression_backward(grad, a, target, reduction, boundary=1., *, op, grad_input=None):
     _reduction(reduction)
-    if op in (294, 298) and grad_input is not None and grad_input.dtype != a.dtype:
+    promote = op != 298 and (op != 294 or _mse_backward_promotes())
+    if not promote and grad_input is not None and grad_input.dtype != a.dtype:
         raise RuntimeError('loss backward output must match the input dtype')
-    x, y, g = _inputs(a, target, grad, promote=op not in (294, 298))
+    compute_dtype = (a.dtype if grad_input is None else grad_input.dtype) if op == 294 and promote else None
+    x, y, g = _inputs(a, target, grad, promote=promote, compute_dtype=compute_dtype)
     norm = 2. if op == 294 else 1.
     if reduction == 1:
         norm = norm / a.numel() if a.numel() else float('inf')
-    value = _pointwise(x, y, g, op=op, boundary=boundary, norm=norm).to(a.dtype if grad_input is None else grad_input.dtype)
+    value = _pointwise(x, y, g, op=op, boundary=boundary, norm=norm)
+    if grad_input is None:
+        value = value.to(a.dtype)
     return _output(value, grad_input, (a, target, grad), cast=True)
 
 

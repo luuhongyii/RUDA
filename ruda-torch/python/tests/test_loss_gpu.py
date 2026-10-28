@@ -255,12 +255,13 @@ def test_loss_promotion_and_fp64_precision(name):
             expected = torch.empty(0, dtype=dtype, device='cuda')
             equal(forward(name, x.to('ruda'), y.to('ruda'), reduction, actual), forward(name, x.cuda(), y.cuda(), reduction, expected))
     g = torch.tensor(.7, dtype=torch.float32)
-    if name == 'smooth_l1_loss':
-        equal(backward(name, g.to('ruda'), x.float().to('ruda'), y.double().to('ruda'), 1), backward(name, g.cuda(), x.float().cuda(), y.double().cuda(), 1))
+    try:
+        expected = backward(name, g.cuda(), x.float().cuda(), y.double().cuda(), 1)
+    except RuntimeError:
+        with pytest.raises(RuntimeError):
+            backward(name, g.to('ruda'), x.float().to('ruda'), y.double().to('ruda'), 1)
     else:
-        for device in ('cuda', 'ruda'):
-            with pytest.raises(RuntimeError):
-                backward(name, g.to(device), x.float().to(device), y.double().to(device), 1)
+        equal(backward(name, g.to('ruda'), x.float().to('ruda'), y.double().to('ruda'), 1), expected)
     a = torch.tensor([1.00000000001], dtype=torch.float64)
     b = torch.ones_like(a)
     equal(forward(name, a.to('ruda'), b.to('ruda'), 0), forward(name, a.cuda(), b.cuda(), 0), tol=1e-25)
@@ -268,14 +269,29 @@ def test_loss_promotion_and_fp64_precision(name):
 
 @pytest.mark.parametrize('operand', ['target', 'grad', 'out'])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16, torch.float64])
-def test_mse_backward_rejects_mixed_dtypes(operand, dtype):
-    for device in ('cuda', 'ruda'):
-        x = torch.ones(3, dtype=torch.float32, device=device)
-        y = x.to(dtype) if operand == 'target' else x
-        g = torch.ones((), dtype=dtype if operand == 'grad' else x.dtype, device=device)
-        out = torch.empty_like(x, dtype=dtype) if operand == 'out' else None
+def test_mse_backward_mixed_dtype_contract(operand, dtype):
+    x = torch.tensor([.1, -.3, .7], dtype=torch.float32)
+    y = torch.tensor([1.1, .2, -.5], dtype=dtype if operand == 'target' else x.dtype)
+    g = torch.tensor(.7, dtype=dtype if operand == 'grad' else x.dtype)
+    def evaluate(device):
+        out = torch.empty_like(x, dtype=dtype, device=device) if operand == 'out' else None
+        return backward('mse_loss', g.to(device), x.to(device), y.to(device), 1, out)
+    try:
+        expected = evaluate('cuda')
+    except RuntimeError:
         with pytest.raises(RuntimeError):
-            backward('mse_loss', g, x, y, 1, out)
+            evaluate('ruda')
+    else:
+        equal(evaluate('ruda'), expected)
+
+
+@pytest.mark.parametrize('dtype', [torch.int32, torch.int64, torch.bool])
+def test_mse_backward_rejects_unsafe_output_cast(dtype):
+    for device in ('cuda', 'ruda'):
+        x = torch.tensor([.1, .7], device=device)
+        with pytest.raises(RuntimeError):
+            backward('mse_loss', torch.ones_like(x), x, x, 0,
+                     torch.empty_like(x, dtype=dtype))
 
 
 def test_loss_rejections_and_boundary_parameters():
