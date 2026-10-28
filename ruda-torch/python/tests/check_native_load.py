@@ -23,7 +23,7 @@ for name, version in (('abi', 10), ('factory_api', 1), ('indexing_api', 1)):
     function = getattr(native, 'ruda_torch_'+name+'_version')
     function.restype = ctypes.c_uint32
     assert function() == version
-for name in ('arange', 'normal', 'advanced_index'):
+for name in ('arange', 'normal', 'advanced_index', 'shutdown'):
     assert getattr(native, 'ruda_torch_'+name)
 
 generator = cpp.default_generator().manual_seed(1729)

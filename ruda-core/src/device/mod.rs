@@ -1,7 +1,7 @@
 mod base;
 
 pub use base::*;
-pub use handle::register_device_service_shutdown;
+pub use handle::{register_device_service_shutdown, shutdown_device_services};
 
 pub(crate) mod handle;
 

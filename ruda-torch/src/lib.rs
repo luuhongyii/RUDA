@@ -340,6 +340,12 @@ pub unsafe extern "C" fn ruda_torch_free(allocation: *mut Allocation) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_sync() -> i32 { checked(streams::device_sync) }
 
+/// Finish native workers while the embedding process and its DLLs are still live.
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_shutdown() -> i32 {
+    checked(ruda_core::device::shutdown_device_services)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ruda_torch_fill(out: *const Descriptor, bits: u64) -> i32 {
     checked(|| {

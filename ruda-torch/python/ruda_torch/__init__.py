@@ -31,6 +31,21 @@ _native.ruda_torch_abi_version.restype = ctypes.c_uint32
 if _native.ruda_torch_abi_version() != 10 or getattr(_C, "abi_version", None) != 10:
     raise RuntimeError("RUDA native ABI mismatch; rebuild Rust and C++ extensions")
 
+if sys.platform == "win32":
+    import atexit
+    if not hasattr(_native, "ruda_torch_shutdown"):
+        raise RuntimeError("RUDA native library lacks Windows shutdown support; rebuild the Rust library")
+    _native.ruda_torch_shutdown.argtypes = []
+    _native.ruda_torch_shutdown.restype = ctypes.c_int
+    _native.ruda_torch_error.restype = ctypes.c_char_p
+
+    def _shutdown_native(shutdown=_native.ruda_torch_shutdown, error=_native.ruda_torch_error):
+        if shutdown() != 0:
+            raise RuntimeError("RUDA native shutdown failed: " + error().decode("utf-8", errors="replace"))
+
+    # Windows DLL detach runs after ExitProcess has terminated other threads.
+    atexit.register(_shutdown_native)
+
 _C.initialize([ctypes.cast(getattr(_native, "ruda_torch_" + name), ctypes.c_void_p).value
                for name in ("alloc", "free", "error", "execute", "transfer", "sync", "fill", "spatial", "addmm", "layer_norm", "rms_norm", "stream", "paged")])
 torch.utils.rename_privateuse1_backend("ruda")

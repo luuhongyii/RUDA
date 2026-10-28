@@ -256,7 +256,7 @@ extern "C" fn shutdown_at_exit() {
     }
 }
 
-fn shutdown_runners() {
+pub(super) fn shutdown_runners() {
     // No registry lock is held while joining: upstream shutdown may initialize
     // or submit work to downstream services that must remain available.
     for stage in [DeviceServiceStage::Upstream, DeviceServiceStage::Downstream] {

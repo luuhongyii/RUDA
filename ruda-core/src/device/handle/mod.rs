@@ -9,6 +9,13 @@ pub fn register_device_service_shutdown() {
     channel::register_exit_hook();
 }
 
+/// Drain and stop device runners before an embedding host unloads the runtime.
+/// No new device work may be submitted after this call.
+pub fn shutdown_device_services() {
+    #[cfg(all(feature = "std", multi_threading))]
+    channel::shutdown_runners();
+}
+
 use crate::device::{DeviceId, DeviceService, ServerUtilitiesHandle};
 
 #[cfg(feature = "std")]
