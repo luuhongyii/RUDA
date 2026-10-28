@@ -12,11 +12,12 @@ pub(super) fn vector_rows(view: &View) -> bool {
 }
 
 #[ruda]
-pub(super) fn vector_offset<F: Float>(input: &Tensor<Vector<F, Const<4>>>, position: usize,
+pub(super) fn vector_offset<F: Float, V: Size>(input: &Tensor<Vector<F, V>>, position: usize,
     #[comptime] packed: bool) -> usize {
     let mut result = position;
     if !comptime!(packed) {
-        let mut remaining = position * 4;
+        let vector = input.vector_size().comptime();
+        let mut remaining = position * vector;
         result = 0;
         let mut axis = input.rank();
         while axis > 0 {
@@ -24,7 +25,7 @@ pub(super) fn vector_offset<F: Float>(input: &Tensor<Vector<F, Const<4>>>, posit
             result += (remaining % input.shape(axis)) * input.stride(axis);
             remaining /= input.shape(axis);
         }
-        result /= 4;
+        result /= vector;
     }
     result
 }

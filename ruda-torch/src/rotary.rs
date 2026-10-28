@@ -52,29 +52,30 @@ fn qk<S: Float + RudaElement>(
 }
 
 #[ruda]
-fn pair<S: Float + RudaElement>(
-    x: &Tensor<Vector<S, Const<4>>>, cos: &Tensor<Vector<S, Const<4>>>, sin: &Tensor<Vector<S, Const<4>>>,
-    out: &mut Tensor<Vector<S, Const<4>>>, pos: usize, #[comptime] backward: bool,
+fn pair<S: Float + RudaElement, V: Size>(
+    x: &Tensor<Vector<S, V>>, cos: &Tensor<Vector<S, V>>, sin: &Tensor<Vector<S, V>>,
+    out: &mut Tensor<Vector<S, V>>, pos: usize, #[comptime] backward: bool,
 ) {
+    let vector = x.vector_size().comptime();
     let width = x.shape(3);
     let half = width / 2usize;
-    let row = pos / (half / 4usize);
-    let col = pos % (half / 4usize) * 4usize;
-    let logical = row * (width / 4usize) + col / 4usize;
+    let row = pos / (half / vector);
+    let col = pos % (half / vector) * vector;
+    let logical = row * (width / vector) + col / vector;
     let source = super::pointwise::vector_offset(x, logical, false);
     let first = x[source];
-    let second = x[source + half / 4usize];
+    let second = x[source + half / vector];
     let token = row % x.shape(2);
     let batch = row / x.shape(2) / x.shape(1);
-    let ci = ((batch % cos.shape(0)) * cos.stride(0) + (token % cos.shape(2)) * cos.stride(2) + col) / 4usize;
-    let si = ((batch % sin.shape(0)) * sin.stride(0) + (token % sin.shape(2)) * sin.stride(2) + col) / 4usize;
+    let ci = ((batch % cos.shape(0)) * cos.stride(0) + (token % cos.shape(2)) * cos.stride(2) + col) / vector;
+    let si = ((batch % sin.shape(0)) * sin.stride(0) + (token % sin.shape(2)) * sin.stride(2) + col) / vector;
     let cos_first = cos[ci];
-    let cos_second = cos[ci + half / 4usize];
+    let cos_second = cos[ci + half / vector];
     let sin_first = sin[si];
-    let sin_second = sin[si + half / 4usize];
-    let mut out_first = Vector::<S, Const<4>>::empty();
-    let mut out_second = Vector::<S, Const<4>>::empty();
-    #[unroll] for lane in 0usize..4usize {
+    let sin_second = sin[si + half / vector];
+    let mut out_first = Vector::<S, V>::empty();
+    let mut out_second = Vector::<S, V>::empty();
+    #[unroll] for lane in 0usize..vector {
         let a = f32::cast_from(first[lane]);
         let b = f32::cast_from(second[lane]);
         let left = S::cast_from(a * f32::cast_from(cos_first[lane]));
@@ -92,15 +93,16 @@ fn pair<S: Float + RudaElement>(
         out_second[lane] = S::cast_from(f32::cast_from(right) + f32::cast_from(cross_second));
     }
     out[logical] = out_first;
-    out[logical + half / 4usize] = out_second;
+    out[logical + half / vector] = out_second;
 }
 
 #[ruda(launch)]
-fn qk_pairs<S: Float + RudaElement>(
-    q: &Tensor<Vector<S, Const<4>>>, k: &Tensor<Vector<S, Const<4>>>,
-    cos: &Tensor<Vector<S, Const<4>>>, sin: &Tensor<Vector<S, Const<4>>>,
-    out_q: &mut Tensor<Vector<S, Const<4>>>, out_k: &mut Tensor<Vector<S, Const<4>>>,
+fn qk_pairs<S: Float + RudaElement, V: Size>(
+    q: &Tensor<Vector<S, V>>, k: &Tensor<Vector<S, V>>,
+    cos: &Tensor<Vector<S, V>>, sin: &Tensor<Vector<S, V>>,
+    out_q: &mut Tensor<Vector<S, V>>, out_k: &mut Tensor<Vector<S, V>>,
     #[comptime] backward: bool, #[comptime] need_q: bool, #[comptime] need_k: bool,
+    #[define(V)] _vector_size: usize,
 ) {
     let pos = ABSOLUTE_POS as usize;
     let mut q_pairs = 0usize;
@@ -145,13 +147,15 @@ pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
     let work = (if need_q {q.len} else {0usize}).checked_add(if need_k {k.len} else {0usize})
         .filter(|&n| n <= u32::MAX as usize).expect("rotary grid overflow");
     if work == 0 { return; }
-    let vector = q.shape[3] % 8 == 0 && xs.iter().enumerate()
+    let vector = [if q.dtype == 0 { 4 } else { 8 }, 4].into_iter().find(|&size| q.shape[3] % (2 * size) == 0 && xs.iter().enumerate()
         .filter(|(index, _)| match *index { 0 | 4 => need_q, 1 | 5 => need_k, _ => true })
-        .all(|(_, v)| super::pointwise::vector_rows(v));
-    let c = client(); let grid = RudaCount::Static((work / if vector { 8 } else { 1 }).div_ceil(128) as u32, 1, 1);
+        .all(|(_, v)| v.strides.last() == Some(&1)
+            && v.shape.iter().zip(&v.strides).take(v.shape.len() - 1).all(|(&dim, &stride)| dim <= 1 || stride % size == 0)
+            && v.handle.offset_start.unwrap_or(0) % (size * super::element_bytes(v.dtype)) as u64 == 0)).unwrap_or(1);
+    let c = client(); let grid = RudaCount::Static((work / if vector > 1 { 2 * vector } else { 1 }).div_ceil(128) as u32, 1, 1);
     macro_rules! run { ($s:ty) => { unsafe {
-        if vector { qk_pairs::launch::<$s,CudaRuntime>(&c,grid,RudaDim::new_1d(128),
-            q.arg(),k.arg(),xs[2].arg(),xs[3].arg(),xs[4].arg(),xs[5].arg(),op == 653,need_q,need_k); }
+        if vector > 1 { qk_pairs::launch::<$s,CudaRuntime>(&c,grid,RudaDim::new_1d(128),
+            q.arg(),k.arg(),xs[2].arg(),xs[3].arg(),xs[4].arg(),xs[5].arg(),op == 653,need_q,need_k,vector); }
         else {
         qk::launch::<$s,CudaRuntime>(&c,grid,RudaDim::new_1d(128),
             q.arg(),k.arg(),xs[2].arg(),xs[3].arg(),xs[4].arg(),xs[5].arg(),op == 653,need_q,need_k);

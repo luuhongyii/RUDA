@@ -45,14 +45,13 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
     let mut qs=SharedMemory::<F>::new_aligned(128*stride,32usize);
     let mut ks=SharedMemory::<F>::new_aligned(64*stride,32usize);
     let mut vs=SharedMemory::<F>::new_aligned(64*stride,32usize);
-    let ready=ComptimeOption::<Shared<barrier::Barrier>>::new_Some(barrier::Barrier::shared(128u32,UNIT_POS==0));
     let kv_head=head/(heads/kv_heads) as usize;
     let q_plane=batch*heads as usize+head;
     let kv_plane=batch*kv_heads as usize+kv_head;
     // Q and the first K block arrive together.
     stage_rows(query,&mut qs,unit,query_base,queries as usize,q_plane,128usize,width);
     stage_rows(keys,&mut ks,unit,0usize,key_count as usize,kv_plane,64usize,width);
-    ready.as_ref().unwrap().commit_copy_async();
+    barrier::commit_copy_group();
     let def=cmma::MmaDefinition::<F,F,f32>::new(16usize,8usize,16usize);
     let mut accumulators=Sequence::<Vector<f32,Const<4>>>::new();
     #[unroll] for _ in 0usize..(2*width/8) {
@@ -66,10 +65,11 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
     if comptime!(causal) {end=usize::min(end,query_base+128);}
     for block in 0usize..((end+63)/64) {
         let key_base=block*64;
-        ready.as_ref().unwrap().arrive_and_wait();
+        barrier::wait_copy_group(0u32);
+        sync_ruda();
         // V[i] arrives while QK and the online softmax use only Q and K[i].
         stage_rows(values,&mut vs,unit,key_base,key_count as usize,kv_plane,64usize,width);
-        ready.as_ref().unwrap().commit_copy_async();
+        barrier::commit_copy_group();
         let mut scores=Sequence::<Vector<f32,Const<4>>>::new();
         #[unroll] for _ in 0usize..16 {
             scores.push(Vector::new(0.0f32));
@@ -140,11 +140,12 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
                 maximum[r]=next;rescale[r]=previous_scale;
             }
         }
-        ready.as_ref().unwrap().arrive_and_wait();
+        barrier::wait_copy_group(0u32);
+        sync_ruda();
         // Every warp is done with K[i]; fetch K[i+1] while PV consumes V[i].
         if key_base+64<end {
             stage_rows(keys,&mut ks,unit,key_base+64,key_count as usize,kv_plane,64usize,width);
-            ready.as_ref().unwrap().commit_copy_async();
+            barrier::commit_copy_group();
         }
         #[unroll] for tile in 0usize..4 {
             let mut probability=Sequence::<Vector<F,Const<8>>>::new();

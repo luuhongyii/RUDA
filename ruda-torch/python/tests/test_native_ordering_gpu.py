@@ -14,7 +14,7 @@ def native_backend():
 
 
 @pytest.mark.parametrize('dtype', REAL)
-@pytest.mark.parametrize('length', [1, 3, 4, 5, 8, 257, 513])
+@pytest.mark.parametrize('length', [1, 3, 4, 5, 8, 31, 32, 33, 255, 256, 257, 513])
 def test_native_ordering_boundaries(dtype, length, monkeypatch):
     from ruda_torch import _C
     original = _C.ordering_call

@@ -2,7 +2,7 @@ use ruda_kernel::dsl::prelude::*;
 
 #[ruda]
 fn block_reduce(value: f32, scratch: &mut SharedMemory<f32>,
-    #[comptime] threads: usize, #[comptime] maximum: bool,
+    #[comptime] threads: usize, #[comptime] maximum: bool, #[comptime] slot: usize,
 ) -> f32 {
     let thread = UNIT_POS as usize;
     let mut reduced = 0.0f32;
@@ -12,17 +12,16 @@ fn block_reduce(value: f32, scratch: &mut SharedMemory<f32>,
         if nan > 0.0 { reduced = f32::new(f32::NAN); }
     } else { reduced = plane_sum(value); }
     if comptime!(threads > 32) {
-    if thread % 32 == 0 { scratch[thread / 32] = reduced; }
+    if thread % 32 == 0 { scratch[slot * (threads / 32) + thread / 32] = reduced; }
     sync_ruda();
     let mut partial = 0.0f32;
     if comptime!(maximum) { partial = f32::new(f32::NEG_INFINITY); }
-    if thread % 32 < threads / 32 { partial = scratch[thread % 32]; }
+    if thread % 32 < threads / 32 { partial = scratch[slot * (threads / 32) + thread % 32]; }
     if comptime!(maximum) {
         let nan = plane_max(f32::cast_from(partial != partial));
         reduced = plane_max(partial);
         if nan > 0.0 { reduced = f32::new(f32::NAN); }
     } else { reduced = plane_sum(partial); }
-    sync_ruda();
     }
     reduced
 }
@@ -41,7 +40,7 @@ pub fn norm<F: Float + RudaElement, W: Float + RudaElement, B: Float + RudaEleme
     let vector = input.vector_size().comptime();
     let chunks = comptime!(width.div_ceil(threads * vector));
     let mut values = Array::<Vector<f32, V>>::new(chunks);
-    let mut scratch = SharedMemory::<f32>::new(threads / 32);
+    let mut scratch = SharedMemory::<f32>::new(2 * (threads / 32));
     let mut local = 0.0f32;
     #[unroll]
     for j in 0usize..chunks {
@@ -53,7 +52,7 @@ pub fn norm<F: Float + RudaElement, W: Float + RudaElement, B: Float + RudaEleme
             if comptime!(layer) { local += value[lane]; } else { local += value[lane] * value[lane]; }
         }
     }
-    let total = block_reduce(local, &mut scratch, threads, false);
+    let total = block_reduce(local, &mut scratch, threads, false, 0usize);
     let mut mu = 0.0f32;
     let mut variance = total / width as f32;
     if comptime!(layer) {
@@ -68,7 +67,7 @@ pub fn norm<F: Float + RudaElement, W: Float + RudaElement, B: Float + RudaEleme
                 #[unroll] for lane in 0usize..vector { local += centered[lane] * centered[lane]; }
             }
         }
-        variance = block_reduce(local, &mut scratch, threads, false) / width as f32;
+        variance = block_reduce(local, &mut scratch, threads, false, 1usize) / width as f32;
     }
     let inv = (variance + epsilon).inverse_sqrt();
     if comptime!(statistics) {
@@ -108,7 +107,7 @@ pub fn softmax<F: Float + RudaElement, O: Float + RudaElement, V: Size>(
     if row < out.len() / (width / vector) {
     let chunks = comptime!(width.div_ceil(threads * vector));
     let mut values = Array::<Vector<f32, V>>::new(chunks);
-    let mut scratch = SharedMemory::<f32>::new(threads / 32);
+    let mut scratch = SharedMemory::<f32>::new(2 * (threads / 32));
     let mut local = f32::new(f32::NEG_INFINITY);
     #[unroll]
     for j in 0usize..chunks {
@@ -120,7 +119,7 @@ pub fn softmax<F: Float + RudaElement, O: Float + RudaElement, V: Size>(
             if value[lane] > local || value[lane] != value[lane] { local = value[lane]; }
         }
     }
-    let maximum = block_reduce(local, &mut scratch, threads, true);
+    let maximum = block_reduce(local, &mut scratch, threads, true, 0usize);
     local = 0.0f32;
     #[unroll]
     for j in 0usize..chunks {
@@ -137,7 +136,7 @@ pub fn softmax<F: Float + RudaElement, O: Float + RudaElement, V: Size>(
             values[j] = next;
         }
     }
-    let total = block_reduce(local, &mut scratch, threads, false);
+    let total = block_reduce(local, &mut scratch, threads, false, 1usize);
     let mut log_total = 0.0f32;
     if comptime!(logarithmic) { log_total = total.ln(); }
     #[unroll]
@@ -188,7 +187,7 @@ pub fn softmax_backward<F: Float + RudaElement, O: Float + RudaElement, V: Size>
             gradients[j] = g;
             values[j] = y;
         }
-        let total = block_reduce(local, &mut scratch, threads, false);
+        let total = block_reduce(local, &mut scratch, threads, false, 0usize);
         #[unroll] for j in 0usize..chunks {
             let col = thread + j * threads;
             if col < width / vector {
@@ -223,7 +222,7 @@ pub fn norm_backward<F: Float + RudaElement, W: Float + RudaElement, V: Size>(
     if comptime!(layer) { mu = mean[row]; }
     let mut values = Array::<Vector<f32, V>>::new(chunks);
     let mut gradients = Array::<Vector<f32, V>>::new(chunks);
-    let mut scratch = SharedMemory::<f32>::new(threads / 32);
+    let mut scratch = SharedMemory::<f32>::new(2 * (threads / 32));
     let mut sum_g = 0.0f32;
     let mut sum_gx = 0.0f32;
     #[unroll] for j in 0usize..chunks {
@@ -250,9 +249,9 @@ pub fn norm_backward<F: Float + RudaElement, W: Float + RudaElement, V: Size>(
         values[j] = x;
         gradients[j] = g;
     }
-    let correction = block_reduce(sum_gx, &mut scratch, threads, false) / width as f32;
+    let correction = block_reduce(sum_gx, &mut scratch, threads, false, 0usize) / width as f32;
     let mut mean_grad = 0.0f32;
-    if comptime!(layer) { mean_grad = block_reduce(sum_g, &mut scratch, threads, false) / width as f32; }
+    if comptime!(layer) { mean_grad = block_reduce(sum_g, &mut scratch, threads, false, 1usize) / width as f32; }
     #[unroll] for j in 0usize..chunks {
         let col = thread + j * threads;
         if col < width / vector {

@@ -189,8 +189,9 @@ fn gate<F: Float + RudaElement>(op: u32, v: &[View], s: &[f32]) -> usize {
     if v[0].len == 0 { return 0; }
     let c = client();
     let cuda = v[0].dtype == 2 && super::matmul::cuda_bf16_precision();
-    let vector = if v[0].len % 4 == 0 && v.iter().all(|x|
-        x.handle.offset_start.unwrap_or(0) % (4 * super::element_bytes(x.dtype)) as u64 == 0) { 4 } else { 1 };
+    let vector = [if v[0].dtype == 0 { 4 } else { 8 }, 4, 1].into_iter().find(|&size|
+        v[0].len % size == 0 && v.iter().all(|x|
+            x.handle.offset_start.unwrap_or(0) % (size * super::element_bytes(x.dtype)) as u64 == 0)).unwrap();
     let work = count(v[0].len / vector);
     if op == 2 {
         unsafe { k::silu_mul_forward::launch::<F, CudaRuntime>(&c, work, RudaDim::new_1d(128),

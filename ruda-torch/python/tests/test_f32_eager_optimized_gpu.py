@@ -55,7 +55,7 @@ def test_f32_precision_layouts(allow_tf32, ta, nt, batched, backend):
 @pytest.mark.parametrize('allow_tf32', [False, True])
 @pytest.mark.parametrize('shape', [(32, 8, 32), (96, 32, 160), (128, 64, 128), (160, 96, 224),
                                   (96, 160, 224), (352, 352, 352), (128, 1024, 128),
-                                  (160, 1024, 224), (128, 8192, 128)])
+                                  (160, 1024, 224), (128, 8192, 128), (256, 1024, 128)])
 def test_f32_tiled_precision_and_edges(allow_tf32, shape):
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
     m, k, n = shape
@@ -267,3 +267,20 @@ def test_rotary_paired_vector_matches_scalar(dtype, width, needs):
     for a, b in zip(aligned, scalar):
         if a is not None:
             torch.testing.assert_close(a.cpu(), b.cpu(), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('width', [32768, 32772, 65536])
+def test_cross_entropy_vector_matches_scalar(width, backend, monkeypatch):
+    monkeypatch.setenv('RUDA_TORCH_BF16_PRECISION', 'cuda')
+    source = torch.randn(3, width, dtype=torch.bfloat16)
+    targets = torch.tensor([0, width - 1, -100], device='ruda')
+    results = []
+    for offset in (0, 1):
+        logits = torch.empty(source.numel() + offset, dtype=source.dtype, device='ruda')[offset:].view_as(source)
+        logits.copy_(source.to('ruda'))
+        logits.requires_grad_()
+        loss = backend.cross_entropy(logits, targets, reduction='none')
+        loss.sum().backward()
+        results.append((loss.cpu(), logits.grad.cpu()))
+    for aligned, scalar in zip(*results):
+        torch.testing.assert_close(aligned, scalar, rtol=0, atol=0)

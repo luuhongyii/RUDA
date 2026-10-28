@@ -227,6 +227,7 @@ fn cross_entropy_block_reduce(value: f32, #[comptime] maximum: bool) -> f32 {
 fn cross_entropy_cuda(
     x: &Tensor<bf16>, targets: &Tensor<i64>, losses: &mut Tensor<f32>,
     stats: &mut Tensor<f32>, invalid: &mut Tensor<Atomic<u32>>, ignore: i64,
+    #[comptime] vectorized: bool,
 ) {
     let row = RUDA_POS_X as usize;
     let thread = UNIT_POS as usize;
@@ -238,8 +239,15 @@ fn cross_entropy_cuda(
     if target != ignore {
         let mut col = thread * 4;
         while col < vector_end {
+            let mut values = Vector::<bf16, Const<4>>::empty();
+            if comptime!(vectorized) {
+                let offset = row * width + col;
+                values = x.slice(offset, offset + 4).into_vectorized().with_vector_size::<Const<4>>()[0];
+            } else {
+                #[unroll] for j in 0usize..4 { values[j] = x[row * width + col + j]; }
+            }
             #[unroll]
-            for j in 0usize..4 { maximum = f32::max(maximum, f32::cast_from(x[row * width + col + j])); }
+            for j in 0usize..4 { maximum = f32::max(maximum, f32::cast_from(values[j])); }
             col += 4096;
         }
         col = vector_end + thread;
@@ -251,8 +259,15 @@ fn cross_entropy_cuda(
         let mut sum = 0.0f32;
         col = thread * 4;
         while col < vector_end {
+            let mut values = Vector::<bf16, Const<4>>::empty();
+            if comptime!(vectorized) {
+                let offset = row * width + col;
+                values = x.slice(offset, offset + 4).into_vectorized().with_vector_size::<Const<4>>()[0];
+            } else {
+                #[unroll] for j in 0usize..4 { values[j] = x[row * width + col + j]; }
+            }
             #[unroll]
-            for j in 0usize..4 { sum = cuda_exp(f32::cast_from(x[row * width + col + j]) - maximum, sum); }
+            for j in 0usize..4 { sum = cuda_exp(f32::cast_from(values[j]) - maximum, sum); }
             col += 4096;
         }
         col = vector_end + thread;
@@ -415,7 +430,7 @@ pub(super) fn dispatch_fused_cross_entropy(op: u32, xs: &[View], ints: &[i64]) {
         unsafe {
             cross_entropy_cuda::launch::<CudaRuntime>(&c,
                 RudaCount::Static(u32::try_from(rows).expect("loss grid overflow"),1,1),RudaDim::new_1d(1024),
-                x.arg(),target.arg(),losses.arg(),stats.arg(),invalid.arg(),ints[0]);
+                x.arg(),target.arg(),losses.arg(),stats.arg(),invalid.arg(),ints[0],x.handle.offset_start.unwrap_or(0) % 8 == 0);
         }
         check(&c, &invalid, "cross entropy target is out of bounds");
     } else if op == 650 {
