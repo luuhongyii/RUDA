@@ -83,7 +83,7 @@ optional = true
 [dependencies.ruprim]
 package = "ruPRIM"
 path = "../ruPRIM"
-version = "0.2.4"
+version = "0.2.5"
 default-features = false
 optional = true
 
