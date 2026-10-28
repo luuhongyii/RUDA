@@ -26,7 +26,7 @@ fn warp_reduce<E:Numeric>(value:E,key:u32,#[comptime] operation:u32)->(E,u32) {
     #[unroll] for stage in 0usize..5 {
         let other=plane_shuffle_down(value,(16usize >> stage) as u32);
         let index=plane_shuffle_down(key,(16usize >> stage) as u32);
-        let next=combine(value,key,other,index,operation);
+        let next=combine::<E>(value,key,other,index,operation);
         value=next.0;key=next.1;
     }
     (value,key)
@@ -51,11 +51,11 @@ fn reduce_rows<E:Numeric+RudaElement,O:Numeric+RudaElement>(input:&Tensor<E>,out
                 }
                 let mut item=input[offset];
                 if comptime!(operation==6 || operation==7) {item=E::cast_from(item!=E::cast_from(0));}
-                let next=combine(value,key,item,u32::cast_from(position),operation);
+                let next=combine::<E>(value,key,item,u32::cast_from(position),operation);
                 value=next.0;key=next.1;
             }
         }
-        let result=warp_reduce(value,key,operation);
+        let result=warp_reduce::<E>(value,key,operation);
         if lane==0 {
             if comptime!(operation==2 || operation==3) {out[row]=O::cast_from(result.1);}
             else {out[row]=O::cast_from(result.0);}
@@ -87,14 +87,14 @@ fn reduce_tile<E:Numeric+RudaElement>(input:&Tensor<E>,indices:&Tensor<u32>,out:
             if comptime!(operation==6 || operation==7) {value=E::cast_from(value!=E::cast_from(0));}
         } else {let offset=row*length as usize+position;value=input[offset];key=indices[offset];}
     }
-    let partial=warp_reduce(value,key,operation);
+    let partial=warp_reduce::<E>(value,key,operation);
     if lane%32==0 {values[lane/32]=partial.0;keys[lane/32]=partial.1;}
     sync_ruda();
     if lane<32 {
         value=E::cast_from(0);key=u32::MAX;
         if comptime!(operation==7 || operation==9) {value=E::cast_from(1);}
         if lane<8 {value=values[lane];key=keys[lane];}
-        let result=warp_reduce(value,key,operation);
+        let result=warp_reduce::<E>(value,key,operation);
         if lane==0 {out[task]=result.0;out_indices[task]=result.1;}
     }
 }
