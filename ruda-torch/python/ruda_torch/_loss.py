@@ -49,9 +49,9 @@ def regression(a, target, reduction=1, boundary=1., *, op, out=None):
 
 def regression_backward(grad, a, target, reduction, boundary=1., *, op, grad_input=None):
     _reduction(reduction)
-    if op == 298 and grad_input is not None and grad_input.dtype != a.dtype:
-        raise RuntimeError('huber_loss backward output must match the input dtype')
-    x, y, g = _inputs(a, target, grad, promote=op != 298)
+    if op in (294, 298) and grad_input is not None and grad_input.dtype != a.dtype:
+        raise RuntimeError('loss backward output must match the input dtype')
+    x, y, g = _inputs(a, target, grad, promote=op not in (294, 298))
     norm = 2. if op == 294 else 1.
     if reduction == 1:
         norm = norm / a.numel() if a.numel() else float('inf')

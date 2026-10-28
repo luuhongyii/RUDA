@@ -113,6 +113,14 @@ def nll_backward(rank, g, x, t, w, reduction, total, out=None):
     return op.default(g, x, t, w, reduction, -100, total) if out is None else op.grad_input(g, x, t, w, reduction, -100, total, grad_input=out)
 
 
+def equal_nll_total(actual, expected, rank, reduction):
+    if rank == 4 and reduction == 0:
+        # CUDA NLLLoss2d's no-reduction path never writes total_weight.
+        equal(actual, torch.zeros((), dtype=actual.dtype), exact=True)
+    else:
+        equal(actual, expected)
+
+
 @pytest.mark.parametrize('dtype', FLOATS)
 @pytest.mark.parametrize('rank', [1, 2, 4])
 @pytest.mark.parametrize('weighted', [False, True])
@@ -122,11 +130,11 @@ def test_nll_native_forward_backward(dtype, rank, weighted, reduction):
     cx, ct, cw = nll_data(dtype, rank, weighted, 'cuda')
     expected, etotal = nll_forward(rank, cx, ct, cw, reduction)
     value, total = nll_forward(rank, a, t, w, reduction)
-    equal(value, expected);equal(total, etotal)
+    equal(value, expected);equal_nll_total(total, etotal, rank, reduction)
     outs = (a.new_empty((0,)), a.new_empty((0,)))
     actual = nll_forward(rank, a, t, w, reduction, outs)
     assert actual[0] is outs[0] and actual[1] is outs[1]
-    equal(outs[0], expected);equal(outs[1], etotal)
+    equal(outs[0], expected);equal_nll_total(outs[1], etotal, rank, reduction)
     g = torch.full(expected.shape, .7, dtype=dtype)
     expected_grad = nll_backward(rank, g.cuda(), cx, ct, cw, reduction, etotal)
     equal(nll_backward(rank, g.to('ruda'), a, t, w, reduction, total), expected_grad)
@@ -149,7 +157,7 @@ def test_nll_edge_contracts(dtype, kind):
         for reduction in (0, 1, 2):
             expected, total = nll_forward(rank, x.cuda(), t.cuda(), w.cuda(), reduction)
             actual, atotal = nll_forward(rank, x.to('ruda'), t.to('ruda'), w.to('ruda'), reduction)
-            equal(actual, expected);equal(atotal, total)
+            equal(actual, expected);equal_nll_total(atotal, total, rank, reduction)
 
 
 def differentiable_case(case, dtype, device):
@@ -247,11 +255,27 @@ def test_loss_promotion_and_fp64_precision(name):
             expected = torch.empty(0, dtype=dtype, device='cuda')
             equal(forward(name, x.to('ruda'), y.to('ruda'), reduction, actual), forward(name, x.cuda(), y.cuda(), reduction, expected))
     g = torch.tensor(.7, dtype=torch.float32)
-    if name != 'huber_loss':
+    if name == 'smooth_l1_loss':
         equal(backward(name, g.to('ruda'), x.float().to('ruda'), y.double().to('ruda'), 1), backward(name, g.cuda(), x.float().cuda(), y.double().cuda(), 1))
+    else:
+        for device in ('cuda', 'ruda'):
+            with pytest.raises(RuntimeError):
+                backward(name, g.to(device), x.float().to(device), y.double().to(device), 1)
     a = torch.tensor([1.00000000001], dtype=torch.float64)
     b = torch.ones_like(a)
     equal(forward(name, a.to('ruda'), b.to('ruda'), 0), forward(name, a.cuda(), b.cuda(), 0), tol=1e-25)
+
+
+@pytest.mark.parametrize('operand', ['target', 'grad', 'out'])
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16, torch.float64])
+def test_mse_backward_rejects_mixed_dtypes(operand, dtype):
+    for device in ('cuda', 'ruda'):
+        x = torch.ones(3, dtype=torch.float32, device=device)
+        y = x.to(dtype) if operand == 'target' else x
+        g = torch.ones((), dtype=dtype if operand == 'grad' else x.dtype, device=device)
+        out = torch.empty_like(x, dtype=dtype) if operand == 'out' else None
+        with pytest.raises(RuntimeError):
+            backward('mse_loss', g, x, y, 1, out)
 
 
 def test_loss_rejections_and_boundary_parameters():
