@@ -23,11 +23,17 @@ impl Emitter {
     pub(super) fn matrix_read_registers(&mut self, variable: Variable, count: usize) -> Result<Vec<String>> {
         let ty = self.matrix_register_capacity(variable, count)?;
         if let Some(registers) = self.packed_array_registers(variable)? { return Ok(registers[..count].to_vec()); }
+        let array_values = self.array_registers(variable)?;
+        if ty.bytes() >= 4 && !matches!(variable.kind, VariableKind::Constant(_)) {
+            if let Some(values) = &array_values { return Ok(values[..count].to_vec()); }
+            if !matches!(variable.kind, VariableKind::LocalArray { .. }) {
+                return Ok(self.vector_values(variable)?[..count].to_vec());
+            }
+        }
         let register_type = if matches!(ty, Scalar::F32 | Scalar::F64) && !Scalar::is_tf32(variable.ty) { ty } else { Scalar::U32 };
         let registers = (0..count).map(|_| if register_type == Scalar::U32 {
             self.reg_b32()
         } else { self.reg(register_type) }).collect::<Vec<_>>();
-        let array_values = self.array_registers(variable)?;
         if matches!(variable.kind, VariableKind::LocalArray { .. }) && array_values.is_none() {
             let (base, space) = self.memory_base(variable, false)?;
             for (index, register) in registers.iter().enumerate() {
@@ -61,6 +67,17 @@ impl Emitter {
             }
         }
         Ok(registers)
+    }
+
+    pub(super) fn matrix_direct_destination(&mut self, variable: Variable, count: usize) -> Result<Option<Vec<String>>> {
+        if matches!(variable.kind, VariableKind::Constant(_)) {
+            return Err(invalid("manual matrix register destination cannot be constant"));
+        }
+        let ty = self.matrix_register_capacity(variable, count)?;
+        if ty.bytes() < 4 { return Ok(None); }
+        if let Some(values) = self.array_registers(variable)? { return Ok(Some(values[..count].to_vec())); }
+        if matches!(variable.kind, VariableKind::LocalArray { .. }) { return Ok(None); }
+        Ok(Some(self.vector_destination(variable)?[..count].to_vec()))
     }
 
     pub(super) fn matrix_write_registers(&mut self, variable: Variable, registers: &[String]) -> Result<()> {

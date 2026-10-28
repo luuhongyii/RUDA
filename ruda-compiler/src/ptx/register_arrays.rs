@@ -142,7 +142,9 @@ impl Emitter {
         if let Some(registers) = self.array_registers.get(&id) { return Ok(Some(registers.clone())); }
         let ty = Scalar::of(array.ty.with_vector_size(1))?;
         self.half_target(ty)?;
-        let registers = (0..length * array.ty.vector_size()).map(|_| self.reg(ty)).collect::<Vec<_>>();
+        let registers = (0..length * array.ty.vector_size()).map(|_| if Scalar::is_tf32(array.ty) {
+            self.reg_b32()
+        } else { self.reg(ty) }).collect::<Vec<_>>();
         self.array_registers.insert(id, registers.clone());
         Ok(Some(registers))
     }

@@ -26,7 +26,9 @@ impl Emitter {
         }
         let ty = Scalar::of(scalar(variable).ty)?;
         self.half_target(ty)?;
-        let registers = (0..width).map(|_| self.reg(ty)).collect::<Vec<_>>();
+        let registers = (0..width).map(|_| if Scalar::is_tf32(variable.ty) {
+            self.reg_b32()
+        } else { self.reg(ty) }).collect::<Vec<_>>();
         self.vector_registers.insert(variable, registers.clone());
         Ok(registers)
     }

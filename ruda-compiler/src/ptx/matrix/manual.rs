@@ -85,12 +85,13 @@ impl Emitter {
         let count = matrix.m * matrix.n / 32 * c_ty.bytes() / register_bytes;
         let c = self.matrix_read_registers(c, count)?;
         let register_type = if matches!(d_ty, Scalar::F32 | Scalar::F64 | Scalar::I32) { d_ty } else { Scalar::U32 };
-        let d = (0..count).map(|_| if register_type == Scalar::U32 {
+        let direct = self.matrix_direct_destination(out, count)?;
+        let d = if let Some(registers) = &direct { registers.clone() } else { (0..count).map(|_| if register_type == Scalar::U32 {
             self.reg_b32()
-        } else { self.reg(register_type) }).collect::<Vec<_>>();
+        } else { self.reg(register_type) }).collect::<Vec<_>>() };
         let a_element = if tf32 { "tf32" } else if integer { a_ty.memory_suffix() } else { a_ty.suffix() };
         let b_element = if tf32 { "tf32" } else if integer { b_ty.memory_suffix() } else { b_ty.suffix() };
         self.line(format!("mma.sync.aligned.{}.row.col.{}.{a_element}.{b_element}.{} {{{}}}, {{{}}}, {{{}}}, {{{}}};", shape(matrix), d_ty.suffix(), c_ty.suffix(), d.join(", "), a.join(", "), b.join(", "), c.join(", ")));
-        self.matrix_write_registers(out, &d)
+        if direct.is_some() { Ok(()) } else { self.matrix_write_registers(out, &d) }
     }
 }
