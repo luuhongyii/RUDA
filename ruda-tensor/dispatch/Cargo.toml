@@ -37,6 +37,6 @@ ruda-tensor-capture = { version = "0.2.3", path = "../capture", default-features
 ruda-tensor-device = { version = "0.21.85", path = "../device", default-features = false, optional = true }
 ruda-driver-cpu = { version = "0.2.4", path = "../../ruda-driver/cpu", optional = true }
 ruda-tensor-wgpu = { version = "0.21.83", path = "../wgpu", default-features = false, optional = true }
-ruda-tensor-rocm = { version = "0.21.83", path = "../rocm", default-features = false, optional = true }
+ruda-tensor-rocm = { version = "0.21.84", path = "../rocm", default-features = false, optional = true }
 ruda-tensor-tch = { version = "0.21.88", path = "../tch", default-features = false, optional = true }
 ruda-tensor-remote = { version = "0.21.58", path = "../remote", default-features = false, features = ["client"], optional = true }
