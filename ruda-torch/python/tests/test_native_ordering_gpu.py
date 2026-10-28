@@ -63,6 +63,20 @@ def test_native_empty_scalar_and_strided_outputs():
     equal(torch.searchsorted(torch.tensor([1., 3.], device='ruda'), 2.), torch.tensor(1))
 
 
+@pytest.mark.parametrize('length', [0, 1, 33, 256, 257])
+def test_native_reduce_identities_and_integer_overflow(length):
+    from ruda_torch import _C
+    source = ((torch.arange(3 * length).reshape(3, length) % 5) - 2).long()
+    if length:
+        source[:, 0] = 2**62 + 7
+    device = source.to('ruda')
+    for code, operation in [(6, torch.any), (7, torch.all), (8, torch.sum), (9, torch.prod)]:
+        expected = operation(source, dim=1)
+        out = torch.empty(expected.shape, dtype=expected.dtype, device='ruda')
+        _C.ordering_call(0, [device, out], [code, 2, 0])
+        equal(out, expected)
+
+
 @pytest.mark.parametrize('dtype', [torch.float64, torch.complex64, torch.complex128])
 @pytest.mark.parametrize('integer', [torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8, torch.bool])
 def test_mixed_true_division(dtype, integer):

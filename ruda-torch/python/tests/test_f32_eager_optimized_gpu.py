@@ -284,3 +284,16 @@ def test_cross_entropy_vector_matches_scalar(width, backend, monkeypatch):
         results.append((loss.cpu(), logits.grad.cpu()))
     for aligned, scalar in zip(*results):
         torch.testing.assert_close(aligned, scalar, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('offset', [0, 1, 4])
+def test_eager_arithmetic_vector_alignment(dtype, offset):
+    sources = [torch.randn(3, 1024, dtype=dtype) for _ in range(2)]
+    inputs = []
+    for source in sources:
+        value = torch.empty(source.numel() + offset, dtype=dtype, device='ruda')[offset:].view_as(source)
+        value.copy_(source.to('ruda'))
+        inputs.append(value)
+    for op in (torch.add, torch.sub, torch.mul):
+        torch.testing.assert_close(op(*inputs).cpu(), op(*sources), rtol=0, atol=0)
