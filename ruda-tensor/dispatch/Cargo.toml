@@ -27,7 +27,7 @@ autotune = ["ruda-tensor-device?/autotune", "ruda-tensor-wgpu?/autotune", "ruda-
 
 [dependencies]
 ruda-runtime = { version = "0.1.33", path = "../../ruda-runtime", default-features = false, features = ["runtime"], optional = true }
-ruda-kernel = { version = "0.1.51", path = "../../ruda-kernel", default-features = false, features = ["library"], optional = true }
+ruda-kernel = { version = "0.1.52", path = "../../ruda-kernel", default-features = false, features = ["library"], optional = true }
 ruda-tensor = { version = "0.21.80", path = "..", default-features = false }
 ruda-core = { version = "0.1.13", path = "../../ruda-core", default-features = false, features = ["ir"] }
 ruda-autodiff = { version = "0.21.65", path = "../../ruda-autodiff", default-features = false }

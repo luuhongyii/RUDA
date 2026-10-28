@@ -106,7 +106,7 @@ version = "0.21.79"
 
 [dependencies.ruda-kernel]
 path = "../ruda-kernel"
-version = "0.1.51"
+version = "0.1.52"
 default-features = false
 optional = true
 features = [ "frontend",]
