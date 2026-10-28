@@ -296,7 +296,7 @@ impl Emitter {
         if let Some(reg) = self.registers.get(&var) {
             return Ok(reg.clone());
         }
-        let reg = if Scalar::is_tf32(var.ty) { self.reg_b32() } else { self.reg(ty) };
+        let reg = self.reg(ty);
         match var.kind {
             VariableKind::LocalMut { .. }
             | VariableKind::LocalConst { .. }

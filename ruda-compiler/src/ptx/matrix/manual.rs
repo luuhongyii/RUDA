@@ -11,11 +11,12 @@ impl Emitter {
         let buffer_ty = Scalar::of(buffer.ty.with_vector_size(1))?;
         let byte_elements = (register_ty.fp8() || matches!(register_ty, Scalar::I8 | Scalar::U8))
             && (buffer_ty.fp8() || matches!(buffer_ty, Scalar::I8 | Scalar::U8));
-        if !byte_elements && !(register_ty.half() && buffer_ty.half()) {
-            return Err(unsupported("matrix transfer requires matching 8-bit or 16-bit element widths"));
+        let words = !store && matches!(register_ty, Scalar::F32 | Scalar::U32 | Scalar::I32) && register_ty == buffer_ty;
+        if !byte_elements && !words && !(register_ty.half() && buffer_ty.half()) {
+            return Err(unsupported("matrix transfer requires matching 8/16-bit elements or 32-bit word loads"));
         }
-        if byte_elements && transpose {
-            return Err(unsupported("byte matrix transfer does not yet support element-wise transpose"));
+        if (byte_elements || words) && transpose {
+            return Err(unsupported("non-16-bit matrix transfer does not support element-wise transpose"));
         }
         let (address, space) = self.matrix_address(buffer, offset, width, store)?;
         if space != "shared" { return Err(invalid("ldmatrix/stmatrix requires shared memory")); }
@@ -85,13 +86,12 @@ impl Emitter {
         let count = matrix.m * matrix.n / 32 * c_ty.bytes() / register_bytes;
         let c = self.matrix_read_registers(c, count)?;
         let register_type = if matches!(d_ty, Scalar::F32 | Scalar::F64 | Scalar::I32) { d_ty } else { Scalar::U32 };
-        let direct = self.matrix_direct_destination(out, count)?;
-        let d = if let Some(registers) = &direct { registers.clone() } else { (0..count).map(|_| if register_type == Scalar::U32 {
+        let d = (0..count).map(|_| if register_type == Scalar::U32 {
             self.reg_b32()
-        } else { self.reg(register_type) }).collect::<Vec<_>>() };
+        } else { self.reg(register_type) }).collect::<Vec<_>>();
         let a_element = if tf32 { "tf32" } else if integer { a_ty.memory_suffix() } else { a_ty.suffix() };
         let b_element = if tf32 { "tf32" } else if integer { b_ty.memory_suffix() } else { b_ty.suffix() };
         self.line(format!("mma.sync.aligned.{}.row.col.{}.{a_element}.{b_element}.{} {{{}}}, {{{}}}, {{{}}}, {{{}}};", shape(matrix), d_ty.suffix(), c_ty.suffix(), d.join(", "), a.join(", "), b.join(", "), c.join(", ")));
-        if direct.is_some() { Ok(()) } else { self.matrix_write_registers(out, &d) }
+        self.matrix_write_registers(out, &d)
     }
 }

@@ -262,6 +262,8 @@ pub fn ldmatrix_call<D: Dialect>(
 
 pub fn ldmatrix_template<D: Dialect>(elem: Elem<D>, factor: u32, transpose: bool) -> String {
     let width = 16 / elem.size();
+    assert!(elem.size() != 4 || !transpose, "32-bit matrix word loads cannot transpose 16-bit elements");
+    let matrix_width = if elem.size() == 4 { 8 } else { width };
     let arg_ty = Elem::<D>::U32;
 
     let args_regs = (0..factor).map(|i| format!("{arg_ty} &reg_{i}"));
@@ -283,7 +285,7 @@ pub fn ldmatrix_template<D: Dialect>(elem: Elem<D>, factor: u32, transpose: bool
     let num = format!("x{factor}");
 
     let ty = match elem.size() {
-        2 => "b16",
+        2 | 4 => "b16",
         1 => "b8",
         _ => unreachable!(),
     };
@@ -293,7 +295,7 @@ pub fn ldmatrix_template<D: Dialect>(elem: Elem<D>, factor: u32, transpose: bool
 inline __device__ void
 __ldmatrix_m{width}n8_{elem}_{factor}x{is_transposed}({args}) {{
   uint32 addr = static_cast<uint32>(__cvta_generic_to_shared(row_addr));
-  asm volatile("ldmatrix.sync.aligned.m8n{width}.{num}{transposed_arg}.shared::cta.{ty}"
+  asm volatile("ldmatrix.sync.aligned.m8n{matrix_width}.{num}{transposed_arg}.shared::cta.{ty}"
                " {placeholders_regs}, {placeholder_addr};"
                : {params_regs}
                : {param_addr});

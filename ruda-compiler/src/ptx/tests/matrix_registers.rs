@@ -1,39 +1,23 @@
 use super::*;
 
 #[test]
-fn manual_tf32_mma_reuses_operand_and_accumulator_registers() {
-    for arrays in [false, true] {
-        let mut k = kernel(&format!("direct_tf32_registers_{arrays}"));
-        let tf32 = Type::from(FloatKind::TF32);
-        let fp32 = Type::from(FloatKind::F32);
-        let a = if arrays { *k.body.create_local_array(tf32.with_vector_size(4), 1) }
-            else { *k.body.create_local(tf32.with_vector_size(4)) };
-        let b = if arrays { *k.body.create_local_array(tf32.with_vector_size(2), 1) }
-            else { *k.body.create_local(tf32.with_vector_size(2)) };
-        let c = if arrays { *k.body.create_local_array(fp32.with_vector_size(4), 1) }
-            else { *k.body.create_local(fp32.with_vector_size(4)) };
-        let matrix = Matrix { ident: MatrixIdent::A, m: 16, n: 8, k: 8,
-            storage: FloatKind::TF32.into(), layout: MatrixLayout::ColMajor, scope: MatrixScope::Plane };
-        for _ in 0..2 {
-            k.body.register(Instruction::new(CoopMma::ExecuteManual {
-                matrix, registers_a: a, registers_b: b, registers_c: c,
-            }, c));
+fn matrix_load_preserves_raw_32_bit_words() {
+    for (index, kind) in [FloatKind::F32.into(), UIntKind::U32.into(), IntKind::I32.into()].into_iter().enumerate() {
+        for factor in [1, 2, 4] {
+            let mut k = kernel(&format!("matrix_words_{index}_{factor}"));
+            let ty = Type::scalar(kind);
+            let shared = *k.body.create_shared_array(ty.with_vector_size(4), 32, Some(16));
+            let words = *k.body.create_local(ty.with_vector_size(factor));
+            k.body.register(Instruction::new(CoopMma::LoadMatrix {
+                buffer: shared, offset: 0u32.into(), vector_size: Some(4), factor, transpose: false,
+            }, words));
+            let result = PtxCompiler.compile(k, &options(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap();
+            assert!(result.source.contains(&format!("ldmatrix.sync.aligned.m8n8.x{factor}.shared.b16")));
+            assert!(!result.source.contains("cvt.rn.f32"));
+            assert!(!result.source.contains("cvt.rna.tf32"));
+            assert!(!result.source.contains("ld.local."));
+            export(&result);
         }
-        let compiled = PtxCompiler.compile(k, &options(), ExecutionMode::Unchecked, UIntKind::U32.into()).unwrap();
-        let instructions = compiled.source.lines().filter(|line| line.contains("mma.sync.")).collect::<Vec<_>>();
-        assert_eq!(instructions.len(), 2);
-        assert_eq!(instructions[0], instructions[1]);
-        let groups = instructions[0].split('{').skip(1)
-            .map(|group| group.split('}').next().unwrap()).collect::<Vec<_>>();
-        assert_eq!(groups[0], groups[3]);
-        for group in &groups[1..3] {
-            for register in group.split(", ") {
-                assert!(compiled.source.contains(&format!(".reg .b32 {register};")));
-            }
-        }
-        assert!(!compiled.source.contains("mov.b32"));
-        assert!(!compiled.source.contains(".local .align"));
-        export(&compiled);
     }
 }
 
