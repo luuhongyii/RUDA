@@ -148,6 +148,7 @@ mod qwen_flash;
 mod qwen_prefill;
 mod attention_prefill;
 mod attention_mma;
+mod attention_wide;
 mod normalization_ops;
 mod pooling_ops;
 mod padding_ops;

@@ -22,6 +22,17 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,q:&View,k:&View,v:&View,out:
             && h.max_shared_memory_size>=2*64*(q.shape[3]+8)*2+32
             && [q,k,v].iter().all(|x|x.handle.offset_start.unwrap_or(0)%16==0);
         let tensor=|x:&View| {let mut t=primitives::tensor(x);t.client=c.clone();t};
+        let wide=asynchronous && mask_kind==0 && scale>0.0 && q.shape[2]>=256
+            && std::env::var("RUDA_PREFILL").map_or(true,|value|value!="legacy")
+            && h.max_shared_memory_size>=(128+128)*(q.shape[3]+8)*2+32;
+        if wide {
+            macro_rules! run_wide {($ty:ty)=>{super::attention_wide::flash_wide::prepare::<$ty,CudaRuntime>(c,
+                RudaCount::Static(q.shape[2].div_ceil(128) as u32,q.shape[1] as u32,q.shape[0] as u32),
+                RudaDim::new_2d(32,4),tensor(q).into_array_arg(),tensor(k).into_array_arg(),tensor(v).into_array_arg(),
+                tensor(out).into_array_arg(),tensor(stats).into_array_arg(),q.shape[2] as u32,k.shape[2] as u32,
+                q.shape[1] as u32,k.shape[1] as u32,scale,scale*core::f32::consts::LOG2_E,q.shape[3],causal)};}
+            return Some(if q.dtype==1 {run_wide!(f16)}else {run_wide!(bf16)});
+        }
         macro_rules! run {($ty:ty)=>{super::attention_mma::flash::prepare::<$ty,CudaRuntime>(c,
             RudaCount::Static(q.shape[2].div_ceil(64) as u32,q.shape[1] as u32,q.shape[0] as u32),
             RudaDim::new_2d(32,4),tensor(q).into_array_arg(),tensor(k).into_array_arg(),tensor(v).into_array_arg(),
