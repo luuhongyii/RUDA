@@ -126,7 +126,7 @@ optional = true
 
 [dependencies.ruda-tensor]
 path = ".."
-version = "0.21.86"
+version = "0.21.87"
 default-features = false
 features = [ "graph",]
 
