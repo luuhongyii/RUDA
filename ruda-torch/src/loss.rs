@@ -44,8 +44,9 @@ fn pointwise<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,target:&Tenso
 }
 
 #[ruda(launch)]
-fn nll_unreduced<S:Float+RudaElement>(a:&Tensor<S>,target:&Tensor<i64>,weight:&Tensor<S>,out:&mut Tensor<S>,invalid:&mut Tensor<Atomic<u32>>,ignore:i64,#[comptime] weighted:bool) {
+fn nll_unreduced<S:Float+RudaElement>(a:&Tensor<S>,target:&Tensor<i64>,weight:&Tensor<S>,out:&mut Tensor<S>,total:&mut Tensor<S>,invalid:&mut Tensor<Atomic<u32>>,ignore:i64,#[comptime] weighted:bool) {
     let p=ABSOLUTE_POS as usize;
+    if p==0 {total[0]=S::new(0.0);}
     if p<target.len() {
         let t=target[address(target,p)];let mut y=S::new(0.0);
         if t!=ignore {
@@ -76,7 +77,7 @@ fn nll_single<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,target:&Tens
 }
 
 #[ruda(launch)]
-fn nll_reduce<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,target:&Tensor<i64>,weight:&Tensor<S>,partial:&mut Tensor<F>,invalid:&mut Tensor<Atomic<u32>>,ignore:i64,blocks:usize,#[comptime] threads:usize,#[comptime] spatial:bool,#[comptime] weighted:bool) {
+fn nll_reduce<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,target:&Tensor<i64>,weight:&Tensor<S>,partial:&mut Tensor<F>,out:&mut Tensor<S>,total_weight:&mut Tensor<S>,invalid:&mut Tensor<Atomic<u32>>,ignore:i64,blocks:usize,#[comptime] threads:usize,#[comptime] spatial:bool,#[comptime] weighted:bool,#[comptime] finalize:bool,#[comptime] mean:bool) {
     let lane=UNIT_POS as usize;let block=RUDA_POS_X as usize;
     let mut shared_loss=SharedMemory::<F>::new(threads);let mut shared_weight=SharedMemory::<F>::new(threads);
     let mut start=lane;let mut end=target.len();let mut step=usize::cast_from(threads);
@@ -100,7 +101,13 @@ fn nll_reduce<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,target:&Tens
     if lane==0 {
         let mut value=shared_loss[0];let mut count=shared_weight[0];
         if comptime!(spatial) {value=stored::<S,F>(value);count=stored::<S,F>(count);}
-        partial[block*2]=value;partial[block*2+1]=count;
+        if comptime!(finalize) {
+            value=F::new(0.0)+value;count=F::new(0.0)+count;
+            if comptime!(spatial) {value=stored::<S,F>(value);count=stored::<S,F>(count);}
+            total_weight[0]=S::cast_from(count);
+            if comptime!(mean) {value=value/count;}
+            out[0]=S::cast_from(value);
+        } else {partial[block*2]=value;partial[block*2+1]=count;}
     }
 }
 
@@ -134,9 +141,8 @@ fn nll_backward<S:Float+RudaElement>(target:&Tensor<i64>,weight:&Tensor<S>,grad:
 
 fn grid(len:usize)->RudaCount {RudaCount::Static(u32::try_from(len.div_ceil(128)).expect("loss grid overflow"),1,1)}
 fn status(c:&ComputeClient<CudaRuntime>)->View {
-    let value=View::packed(c.empty(4),vec![1],5);let bytes=value.byte_view();
-    unsafe {kernels::fill_bytes::launch::<CudaRuntime>(c,RudaCount::Static(1,1,1),RudaDim::new_1d(4),bytes.arg(),0,0);}
-    value
+    // A 4-byte upload initializes the flag without a separate fill kernel.
+    View::packed(c.create_from_slice(&0u32.to_ne_bytes()),vec![1],5)
 }
 fn check(c:&ComputeClient<CudaRuntime>,value:&View,message:&str) {
     let bytes=c.read_one(value.handle.clone()).expect("loss validation readback failed");DOWNLOAD.fetch_add(4,Ordering::Relaxed);
@@ -444,14 +450,14 @@ fn nll_dispatch<S:Float+RudaElement,F:Float+RudaElement>(c:&ComputeClient<CudaRu
     } else if mode==0 {
         unsafe {nll_single::launch::<S,F,CudaRuntime>(c,RudaCount::Static(1,1,1),RudaDim::new_1d(1),a.arg(),target.arg(),weight.arg(),xs[3].arg(),xs[4].arg(),invalid.arg(),ignore,weighted,reduction==1);}
     } else if reduction==0 {
-        if target.len>0 {unsafe {nll_unreduced::launch::<S,CudaRuntime>(c,grid(target.len),dim,a.arg(),target.arg(),weight.arg(),xs[3].arg(),invalid.arg(),ignore,weighted);}}
+        unsafe {nll_unreduced::launch::<S,CudaRuntime>(c,grid(target.len.max(1)),dim,a.arg(),target.arg(),weight.arg(),xs[3].arg(),xs[4].arg(),invalid.arg(),ignore,weighted);}
     } else {
         let spatial=mode==2;let blocks=if spatial {a.shape[2].div_ceil(1024).div_euclid(128).max(1)}else{1};
         let count=if spatial {a.shape[0]*blocks}else{1};
         let threads=if spatial {1024}else{((target.len.max(16)/16) as f64).log2().round().exp2().clamp(32.0,1024.0) as usize};
         let partial=View::packed(c.empty((count*2*std::mem::size_of::<F>()).max(1)),vec![count*2],if a.dtype==9 {9}else{0});
-        if count>0 {unsafe {nll_reduce::launch::<S,F,CudaRuntime>(c,RudaCount::Static(u32::try_from(count).expect("NLL grid overflow"),1,1),RudaDim::new_1d(threads as u32),a.arg(),target.arg(),weight.arg(),partial.arg(),invalid.arg(),ignore,blocks,threads,spatial,weighted);}}
-        unsafe {nll_finish::launch::<S,F,CudaRuntime>(c,RudaCount::Static(1,1,1),RudaDim::new_1d(1),partial.arg(),xs[3].arg(),xs[4].arg(),spatial,reduction==1);}
+        if count>0 {unsafe {nll_reduce::launch::<S,F,CudaRuntime>(c,RudaCount::Static(u32::try_from(count).expect("NLL grid overflow"),1,1),RudaDim::new_1d(threads as u32),a.arg(),target.arg(),weight.arg(),partial.arg(),xs[3].arg(),xs[4].arg(),invalid.arg(),ignore,blocks,threads,spatial,weighted,count==1,reduction==1);}}
+        if count!=1 {unsafe {nll_finish::launch::<S,F,CudaRuntime>(c,RudaCount::Static(1,1,1),RudaDim::new_1d(1),partial.arg(),xs[3].arg(),xs[4].arg(),spatial,reduction==1);}}
     }
     check(c,&invalid,"NLL target is out of bounds");
 }

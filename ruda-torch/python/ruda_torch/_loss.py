@@ -147,7 +147,8 @@ def _nll_inputs(a, target, weight, reduction, spatial):
 def nll_forward(a, target, weight, reduction, ignore_index, *, spatial=False, output=None, total_weight=None):
     x, t, w, mode = _nll_inputs(a, target, weight, reduction, spatial)
     shape = target.shape if reduction == 0 and mode != 0 else ()
-    result, total = a.new_empty(shape), a.new_zeros(())
+    # Every NLL forward kernel writes total_weight, so no zero-fill launch is needed.
+    result, total = a.new_empty(shape), a.new_empty(())
     _C.scientific_call(303, [x, t, w, result, total], [reduction, ignore_index, mode, int(weight is not None)], [])
     if (output is None) != (total_weight is None):
         raise RuntimeError('NLL output and total_weight must be provided together')

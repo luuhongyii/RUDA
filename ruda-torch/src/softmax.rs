@@ -135,7 +135,10 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
         && (!backward || super::row_cached::packed(b))
         && super::row_cached::packed(out)
         && std::env::var("RUDA_TORCH_SOFTMAX").map_or(true, |value| value == "auto");
-    let threads = if width <= 1024 { 32 } else if width <= 16384 { super::row_cached::threads(width) } else { 1024 };
+    // Few rows cannot hide per-lane load latency with one warp per row: give each
+    // row a 128-thread block so every lane holds at most two vectors.
+    let threads = if width <= 1024 { if rows >= 1024 || width < 512 { 32 } else { 128 } }
+        else if width <= 16384 { super::row_cached::threads(width) } else { 1024 };
     let vector = super::row_cached::vector_size(width, a, out)
         .min(if backward { super::row_cached::vector_size(width, b, out) } else { 4 });
     let inner:usize=a.shape[axis+1..].iter().product();
