@@ -193,6 +193,7 @@ fn process_exit_child() {
     }
     unsafe extern "C" {
         fn atexit(callback: extern "C" fn()) -> core::ffi::c_int;
+        fn exit(code: core::ffi::c_int) -> !;
     }
     // SAFETY: static C callback; this isolated child reports the exit ordering to its parent.
     assert_eq!(unsafe { atexit(observe) }, 0);
@@ -201,6 +202,10 @@ fn process_exit_child() {
     up.submit(|_| event("up_work"));
     if mode == "exit" {
         std::process::exit(0);
+    }
+    if mode == "c-exit" {
+        // Exercise the CRT hooks directly; Rust uses ExitProcess on Windows.
+        unsafe { exit(0) };
     }
 }
 
@@ -223,6 +228,10 @@ fn check_child(mode: &str) {
         "{}",
         String::from_utf8_lossy(&child.stderr)
     );
+    if cfg!(windows) && mode == "exit" {
+        assert!(!output.exists(), "ExitProcess does not invoke CRT atexit handlers");
+        return;
+    }
     assert_eq!(
         std::fs::read_to_string(output).unwrap(),
         "up_work,up_shutdown,up_drop,down_from_shutdown,down_from_drop,down_shutdown,down_drop"
@@ -236,6 +245,12 @@ fn normal_return_joins_pipeline_before_other_exit_handlers() {
 }
 #[cfg(any(unix, windows))]
 #[test]
-fn explicit_process_exit_joins_pipeline_before_other_exit_handlers() {
+fn explicit_process_exit_matches_platform_exit_hooks() {
     check_child("exit");
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn explicit_c_exit_joins_pipeline_before_other_exit_handlers() {
+    check_child("c-exit");
 }
