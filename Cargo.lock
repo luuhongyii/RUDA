@@ -7829,7 +7829,7 @@ dependencies = [
 
 [[package]]
 name = "ruCCL"
-version = "0.21.93"
+version = "0.21.94"
 dependencies = [
  "bytes",
  "crc32fast",
