@@ -33,7 +33,7 @@ path = "src/lib.rs"
 
 [dependencies.ruda-tensor]
 path = ".."
-version = "0.21.84"
+version = "0.21.85"
 default-features = false
 features = [ "std", "hip",]
 
