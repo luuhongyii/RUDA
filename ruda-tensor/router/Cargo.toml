@@ -54,7 +54,7 @@ features = [ "mutex", "spin_mutex", "portable-atomic",]
 
 [dependencies.ruda-tensor]
 path = ".."
-version = "0.21.81"
+version = "0.21.82"
 default-features = false
 features = [ "graph",]
 
