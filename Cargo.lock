@@ -8571,7 +8571,7 @@ dependencies = [
 
 [[package]]
 name = "ruda-onnx"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "burn-tensor",
  "clap",
