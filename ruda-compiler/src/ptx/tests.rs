@@ -19,6 +19,7 @@ mod register_arrays;
 mod integer_division;
 mod matrix_registers;
 mod async_groups;
+mod warp_reduce;
 
 fn options() -> PtxCompilationOptions {
     PtxCompilationOptions {

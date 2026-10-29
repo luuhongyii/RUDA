@@ -14,6 +14,14 @@ fn exp2_fast(value: f32) -> f32 {
 fn stage_rows<F: Float + RudaElement>(source_array: &Array<F>, stage: &mut SharedMemory<F>,
     unit: usize, base_row: usize, row_limit: usize, plane: usize,
     #[comptime] rows: usize, #[comptime] width: usize) {
+    if base_row+rows<=row_limit {
+        let base=(plane*row_limit+base_row)*width;
+        #[unroll] for i in 0usize..(rows*width/8/128) {
+            let index=(unit+i*128)*8;
+            let target=index/width*(width+8)+index%width;
+            barrier::copy_async(&source_array.slice(base+index,base+index+8),&mut stage.slice_mut(target,target+8),8u32);
+        }
+    } else {
     #[unroll] for i in 0usize..(rows*width/8/128) {
         let index=(unit+i*128)*8;
         let row=index/width;let col=index%width;
@@ -25,11 +33,12 @@ fn stage_rows<F: Float + RudaElement>(source_array: &Array<F>, stage: &mut Share
         let target=row*(width+8)+col;
         barrier::copy_async_checked(&source_array.slice(source,source+length),&mut stage.slice_mut(target,target+8),8u32);
     }
+    }
 }
 
 #[ruda(launch)]
 pub(super) fn flash_wide<F: Float + RudaElement>(
-    query: &Array<F>, keys: &Array<F>, values: &Array<F>, output: &mut Array<F>, stats: &mut Array<f32>,
+    query: &Array<F>, keys: &Array<F>, values: &Array<F>, output: &mut Array<Vector<F,Const<2>>>, stats: &mut Array<f32>,
     queries: u32, key_count: u32, heads: u32, kv_heads: u32, scale: f32, scale_log2: f32,
     #[comptime] width: usize, #[comptime] causal: bool,
 ) {
@@ -187,9 +196,11 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
                 if denominator[r]!=0.0f32 {inverse=1.0f32/denominator[r];}
                 #[unroll] for d in 0usize..(width/8) {
                     let acc=accumulators[mi*(width/8)+d];
+                    let mut result=Vector::<F,Const<2>>::empty();
                     #[unroll] for j in 0usize..2 {
-                        output[offset*width+d*8+(lane%4)*2+j]=F::cast_from(acc[row*2+j]*inverse);
+                        result[j]=F::cast_from(acc[row*2+j]*inverse);
                     }
+                    output[offset*(width/2)+d*4+lane%4]=result;
                 }
             }
         }

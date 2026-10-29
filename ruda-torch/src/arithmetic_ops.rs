@@ -9,7 +9,7 @@ pub extern "C" fn ruda_torch_arithmetic_api_version() -> u32 { 3 }
 #[ruda(launch)]
 fn floating_direct<A: Float, B: Float, S: Float>(
     left: &Tensor<A>, right: &Tensor<B>, output: &mut Tensor<S>, alpha: u64, immediate: u64,
-    shape: &Sequence<FastDivmod<usize>>,
+    shape: &Sequence<FastDivmod<u32>>,
     #[comptime] op: u32, #[comptime] scalar_left: bool, #[comptime] scalar_right: bool,
     #[comptime] left_packed: bool, #[comptime] right_packed: bool, #[comptime] output_packed: bool,
     #[comptime] fast_index: bool,
@@ -22,15 +22,15 @@ fn floating_direct<A: Float, B: Float, S: Float>(
             if comptime!(!scalar_left && !left_packed) { i=0; }
             if comptime!(op!=2 && !scalar_right && !right_packed) { j=0; }
             if comptime!(!output_packed) { destination=0; }
-            let mut remaining=p;
+            let mut remaining=p as u32;
             #[unroll]
             for index in 0usize..shape.len().comptime() {
                 let dim=comptime!(shape.len()-index-1);
                 let (quotient,coordinate)=shape[dim].div_mod(remaining);
                 remaining=quotient;
-                if comptime!(!scalar_left && !left_packed) { i+=coordinate*left.stride(dim); }
-                if comptime!(op!=2 && !scalar_right && !right_packed) { j+=coordinate*right.stride(dim); }
-                if comptime!(!output_packed) { destination+=coordinate*output.stride(dim); }
+                if comptime!(!scalar_left && !left_packed) { i+=coordinate as usize*left.stride(dim); }
+                if comptime!(op!=2 && !scalar_right && !right_packed) { j+=coordinate as usize*right.stride(dim); }
+                if comptime!(!output_packed) { destination+=coordinate as usize*output.stride(dim); }
             }
         } else {
             if comptime!(!scalar_left && !left_packed) { i=address(left,p); }
@@ -120,7 +120,7 @@ fn floating_rows<A: Float, B: Float, S: Float>(
 fn floating_rows_indexed<A: Float, B: Float, S: Float, V: Size>(
     left: &Tensor<Vector<A, V>>, right: &Tensor<Vector<B, V>>,
     left_scalar: &Tensor<A>, right_scalar: &Tensor<B>, output: &mut Array<Vector<S, V>>,
-    alpha: u64, immediate: u64, shape: &Sequence<FastDivmod<usize>>,
+    alpha: u64, immediate: u64, shape: &Sequence<FastDivmod<u32>>,
     #[comptime] op: u32, #[comptime] scalar_left: bool, #[comptime] scalar_right: bool,
     #[comptime] left_broadcast: bool, #[comptime] right_broadcast: bool,
     #[define(A)] _left: StorageType, #[define(B)] _right: StorageType, #[define(S)] _output: StorageType,
@@ -129,14 +129,14 @@ fn floating_rows_indexed<A: Float, B: Float, S: Float, V: Size>(
     let width = output.vector_size().comptime();
     let p = (RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize) * 256usize + UNIT_POS as usize;
     if p < output.len() {
-        let mut remaining = p * width; let mut i = 0usize; let mut j = 0usize;
+        let mut remaining = (p * width) as u32; let mut i = 0usize; let mut j = 0usize;
         #[unroll]
         for index in 0usize..shape.len().comptime() {
             let dim = comptime!(shape.len() - index - 1);
             let (quotient, coordinate) = shape[dim].div_mod(remaining);
             remaining = quotient;
-            if comptime!(!scalar_left) { i += coordinate * left_scalar.stride(dim); }
-            if comptime!(op != 2 && !scalar_right) { j += coordinate * right_scalar.stride(dim); }
+            if comptime!(!scalar_left) { i += coordinate as usize * left_scalar.stride(dim); }
+            if comptime!(op != 2 && !scalar_right) { j += coordinate as usize * right_scalar.stride(dim); }
         }
         let mut a = Vector::<f32, V>::new(f32::reinterpret(u32::cast_from(immediate)));
         let mut b = a;
@@ -200,8 +200,8 @@ fn direct(xs: &[View], ints: &[i64]) {
     let grid = RudaCount::Static(x as u32, blocks.div_ceil(x) as u32, 1);
     unsafe {
         if indexed {
-            let mut shape=SequenceArg::<CudaRuntime,FastDivmod<usize>>::new();
-            for &size in &xs[2].shape { shape.push(size); }
+            let mut shape=SequenceArg::<CudaRuntime,FastDivmod<u32>>::new();
+            for &size in &xs[2].shape { shape.push(size as u32); }
             floating_rows_indexed::launch::<CudaRuntime>(&c, grid, RudaDim::new_1d(256),
                 xs[0].arg(), xs[1].arg(), xs[0].arg(), xs[1].arg(), xs[2].array_arg(),
                 ints[3] as u64, ints.get(4).copied().unwrap_or(0) as u64, shape,
@@ -221,8 +221,8 @@ fn direct(xs: &[View], ints: &[i64]) {
                 op, scalar_left, scalar_right, dtype(xs[0].dtype), dtype(xs[1].dtype), dtype(xs[2].dtype), width);
         } else {
             let fast_index=!contiguous && xs[2].len<=i32::MAX as usize;
-            let mut shape=SequenceArg::<CudaRuntime,FastDivmod<usize>>::new();
-            if fast_index { for &size in &xs[2].shape { shape.push(size); } }
+            let mut shape=SequenceArg::<CudaRuntime,FastDivmod<u32>>::new();
+            if fast_index { for &size in &xs[2].shape { shape.push(size as u32); } }
             floating_direct::launch::<CudaRuntime>(&c, grid, RudaDim::new_1d(256),
                 xs[0].arg(), xs[1].arg(), xs[2].arg(), ints[3] as u64, ints.get(4).copied().unwrap_or(0) as u64,
                 shape, op, scalar_left, scalar_right, left_packed, right_packed, output_packed, fast_index,

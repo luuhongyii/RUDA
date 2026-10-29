@@ -9,6 +9,15 @@ impl Emitter {
         }
         let source = self.value(input)?;
         let mask = self.plane_active_mask();
+        if !scan && !exclusive && self.plane_width == 32
+            && self.target.sm >= 80 && self.target.version >= (7, 0)
+            && matches!(ty, Scalar::I32 | Scalar::U32)
+            && matches!(operation, "add" | "min" | "max")
+        {
+            let destination = self.destination(out)?;
+            self.line(format!("redux.sync.{operation}.{} {destination}, {source}, {mask};", ty.suffix()));
+            return Ok(());
+        }
         let full = self.reg(Scalar::Pred);
         let partial = self.label();
         let done = self.label();

@@ -1,15 +1,26 @@
 use ruda_kernel::dsl::prelude::*;
 
 #[ruda]
+fn maximum_key(value: f32) -> i32 {
+    let bits = i32::reinterpret(value);
+    let mut key = bits ^ ((bits >> 31) & 0x7fffffffi32);
+    if value != value { key = i32::MAX; }
+    key
+}
+
+#[ruda]
+fn key_maximum(key: i32) -> f32 {
+    f32::reinterpret(key ^ ((key >> 31) & 0x7fffffffi32))
+}
+
+#[ruda]
 fn block_reduce(value: f32, scratch: &mut SharedMemory<f32>,
     #[comptime] threads: usize, #[comptime] maximum: bool, #[comptime] slot: usize,
 ) -> f32 {
     let thread = UNIT_POS as usize;
     let mut reduced = 0.0f32;
     if comptime!(maximum) {
-        let nan = plane_max(f32::cast_from(value != value));
-        reduced = plane_max(value);
-        if nan > 0.0 { reduced = f32::new(f32::NAN); }
+        reduced = key_maximum(plane_max(maximum_key(value)));
     } else { reduced = plane_sum(value); }
     if comptime!(threads > 32) {
     if thread % 32 == 0 { scratch[slot * (threads / 32) + thread / 32] = reduced; }
@@ -18,9 +29,7 @@ fn block_reduce(value: f32, scratch: &mut SharedMemory<f32>,
     if comptime!(maximum) { partial = f32::new(f32::NEG_INFINITY); }
     if thread % 32 < threads / 32 { partial = scratch[slot * (threads / 32) + thread % 32]; }
     if comptime!(maximum) {
-        let nan = plane_max(f32::cast_from(partial != partial));
-        reduced = plane_max(partial);
-        if nan > 0.0 { reduced = f32::new(f32::NAN); }
+        reduced = key_maximum(plane_max(maximum_key(partial)));
     } else { reduced = plane_sum(partial); }
     }
     reduced

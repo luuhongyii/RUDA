@@ -6,6 +6,23 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 import ruda_torch as r
 
 
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('width', [64, 128])
+@pytest.mark.parametrize('causal', [False, True])
+def test_wide_attention_partial_query_and_key_tiles(dtype, width, causal):
+    torch.manual_seed(3551)
+    host = [torch.randn(1, h, length, width, dtype=dtype)
+            for h, length in [(4, 257), (2, 193), (2, 193)]]
+    actual = r.scaled_dot_product_attention(*(x.to('ruda') for x in host),
+        enable_gqa=True, is_causal=causal)
+    q, k, v = [x.float() for x in host]
+    with sdpa_kernel(SDPBackend.MATH):
+        expected = F.scaled_dot_product_attention(q, k.repeat_interleave(2, 1),
+            v.repeat_interleave(2, 1), is_causal=causal)
+    tolerance = .03 if dtype == torch.bfloat16 else .005
+    torch.testing.assert_close(actual.cpu().float(), expected, rtol=tolerance, atol=.003)
+
+
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('batch,heads,kv_heads', [(1, 2, 2), (1, 14, 2), (2, 4, 2)])
 @pytest.mark.parametrize('mask_kind', ['none', 'causal', 'boolean', 'additive'])

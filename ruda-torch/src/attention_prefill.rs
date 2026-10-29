@@ -23,6 +23,7 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,q:&View,k:&View,v:&View,out:
             && [q,k,v].iter().all(|x|x.handle.offset_start.unwrap_or(0)%16==0);
         let tensor=|x:&View| {let mut t=primitives::tensor(x);t.client=c.clone();t};
         let wide=asynchronous && mask_kind==0 && scale>0.0 && q.shape[2]>=256
+            && out.handle.offset_start.unwrap_or(0)%4==0
             && std::env::var("RUDA_PREFILL").map_or(true,|value|value!="legacy")
             && h.max_shared_memory_size>=(128+128)*(q.shape[3]+8)*2+32;
         if wide {
