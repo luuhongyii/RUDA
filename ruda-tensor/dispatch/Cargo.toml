@@ -39,4 +39,4 @@ ruda-driver-cpu = { version = "0.2.5", path = "../../ruda-driver/cpu", optional 
 ruda-tensor-wgpu = { version = "0.21.87", path = "../wgpu", default-features = false, optional = true }
 ruda-tensor-rocm = { version = "0.21.87", path = "../rocm", default-features = false, optional = true }
 ruda-tensor-tch = { version = "0.21.92", path = "../tch", default-features = false, optional = true }
-ruda-tensor-remote = { version = "0.21.61", path = "../remote", default-features = false, features = ["client"], optional = true }
+ruda-tensor-remote = { version = "0.21.62", path = "../remote", default-features = false, features = ["client"], optional = true }
