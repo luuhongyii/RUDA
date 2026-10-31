@@ -16,10 +16,10 @@ fn rotate<F:Float,V:Size>(input:&Tensor<F>,cos:&Tensor<F>,sin:&Tensor<F>,out:&mu
         for lane in 0usize..V::value() {
             let lo=base+lane;let hi=lo+half;
             let x=f32::cast_from(lower[lane]);let y=f32::cast_from(upper[lane]);
-            let c0=f32::cast_from(cos[crate::graph_fusion::address(cos,lo,shape)]);
-            let c1=f32::cast_from(cos[crate::graph_fusion::address(cos,hi,shape)]);
-            let s0=f32::cast_from(sin[crate::graph_fusion::address(sin,lo,shape)]);
-            let s1=f32::cast_from(sin[crate::graph_fusion::address(sin,hi,shape)]);
+            let c0=f32::cast_from(cos[crate::graph_fusion::address(cos,lo,shape.clone())]);
+            let c1=f32::cast_from(cos[crate::graph_fusion::address(cos,hi,shape.clone())]);
+            let s0=f32::cast_from(sin[crate::graph_fusion::address(sin,lo,shape.clone())]);
+            let s1=f32::cast_from(sin[crate::graph_fusion::address(sin,hi,shape.clone())]);
             let a=f32::cast_from(F::cast_from(x*c0));let b=f32::cast_from(F::cast_from((-y)*s0));
             let c=f32::cast_from(F::cast_from(y*c1));let d=f32::cast_from(F::cast_from(x*s1));
             if comptime!(subtract) {first[lane]=F::cast_from(a-b);second[lane]=F::cast_from(c-d);}
@@ -36,7 +36,7 @@ pub(super) fn prepare(client:&ComputeClient<CudaRuntime>,input:&View,cos:&View,s
     let half=input.shape.last().unwrap()/2;
     let vector=if half%4==0 && [input,out].iter().all(|v|v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0) {4}else {1};
     let grid=RudaCount::Static(u32::try_from((out.len/(2*vector)).div_ceil(128)).expect("rotary grid overflow"),1,1);
-    macro_rules! run {($f:ty,$v:ty)=>{unsafe {rotate::prepare::<$f,$v,CudaRuntime>(client,grid,RudaDim::new_1d(128),
+    macro_rules! run {($f:ty,$v:ty)=>{unsafe {rotate::prepare::<$f,CudaRuntime>(client,grid,RudaDim::new_1d(128),<$v as Size>::value(),
         input.arg(),cos.arg(),sin.arg(),out.arg(),input.shape.clone(),half,subtract)}};}
     match (input.dtype,vector) {
         (0,4)=>run!(f32,Const<4>),(1,4)=>run!(f16,Const<4>),(2,4)=>run!(bf16,Const<4>),

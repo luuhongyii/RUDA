@@ -205,7 +205,7 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,tensors:&[View],nodes:&[Node
     macro_rules! arguments {($indices:expr,$dtype:expr,$ty:ty)=>{
         ($indices).filter(|&i|tensors[i].dtype==$dtype).map(|i|tensors[i].arg()).collect::<SequenceArg<CudaRuntime,Tensor<$ty>>>()
     };}
-    macro_rules! run {($v:ty)=>{unsafe {fused_softmax::prepare::<$v,CudaRuntime>(c,super::row_cached::norm_grid(rows,threads),super::row_cached::norm_block(threads),
+    macro_rules! run {($v:ty)=>{unsafe {fused_softmax::prepare::<CudaRuntime>(c,super::row_cached::norm_grid(rows,threads),super::row_cached::norm_block(threads),<$v as Size>::value(),
         arguments!(external.iter().copied(),0,f32),arguments!(external.iter().copied(),1,f16),arguments!(external.iter().copied(),2,bf16),arguments!(external.iter().copied(),3,u8),
         arguments!(unique.iter().copied(),0,f32),arguments!(unique.iter().copied(),1,f16),arguments!(unique.iter().copied(),2,bf16),
         rows,first.shape.clone(),width,threads,periods,input_types,input_slots,codes,left,right,third,scalars,output_types,output_slots,stores,

@@ -51,7 +51,7 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,source:&View,scales:&View,ou
     let columns=source.shape[1];let block_columns=columns/(scales.len/(source.shape[0]/block_rows));
     let vector=super::row_cached::memory_vector_size(c,columns,&[source,out],8);
     let grid=RudaCount::Static(out.len.div_ceil(128*vector) as u32,1,1);
-    macro_rules! launch {($e:ty,$v:ty)=>{scaled_copy::prepare::<$e,$v,CudaRuntime>(c,grid,RudaDim::new_1d(128),
+    macro_rules! launch {($e:ty,$v:ty)=>{scaled_copy::prepare::<$e,CudaRuntime>(c,grid,RudaDim::new_1d(128),<$v as Size>::value(),
         source.arg(),scales.arg(),out.arg(),columns,block_rows,block_columns,source.dtype)};}
     macro_rules! typed {($e:ty)=>{match vector {8=>launch!($e,Const<8>),4=>launch!($e,Const<4>),2=>launch!($e,Const<2>),_=>launch!($e,Const<1>)}};}
     match source.dtype {0=>typed!(f32),1=>typed!(f16),2=>typed!(bf16),12|13|15=>typed!(u8),_=>unreachable!()}
@@ -171,13 +171,13 @@ fn tiled<A:Numeric,B:Numeric>(a:&Tensor<A>,b:&Tensor<B>,as_:&Tensor<f32>,bs:&Ten
     #[unroll] for i in 0usize..(tm*tn) {acc[i]=0.0f32;}
     load_tiles(a,b,as_,bs,indices32,indices64,gathered_a,gathered_b,invalid,outputs,&mut sa,&mut sb,
         row,col,0usize,0usize,batch_a,batch_b,owner_a,owner_b,
-        m,n,k,bm,bn,bk,ta,nt,at,bt,ar,ac,br,bc,scaled_a,scaled_b,store_a,store_b,slot_a,slot_b,index_codes);
+        m,n,k,bm,bn,bk,ta,nt,at,bt,ar,ac,br,bc,scaled_a,scaled_b,store_a,store_b,slot_a,slot_b,index_codes.clone());
     for block in 0usize..comptime!(k/bk) {
         let bank=block%2usize;sync_ruda();
         if block+1usize<k/bk {
             load_tiles(a,b,as_,bs,indices32,indices64,gathered_a,gathered_b,invalid,outputs,&mut sa,&mut sb,
                 row,col,block+1usize,1usize-bank,batch_a,batch_b,owner_a,owner_b,
-                m,n,k,bm,bn,bk,ta,nt,at,bt,ar,ac,br,bc,scaled_a,scaled_b,store_a,store_b,slot_a,slot_b,index_codes);
+                m,n,k,bm,bn,bk,ta,nt,at,bt,ar,ac,br,bc,scaled_a,scaled_b,store_a,store_b,slot_a,slot_b,index_codes.clone());
         }
         #[unroll] for inner in 0usize..bk {
             let mut av=Array::<f32>::new(tm);let mut bv=Array::<f32>::new(tn);

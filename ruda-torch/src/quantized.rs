@@ -83,9 +83,9 @@ pub(super) fn prepare_nibbles(c:&ComputeClient<CudaRuntime>,a:&View,out:&View)->
     assert!(a.contiguous() && out.contiguous());
     let width=[8usize,4,1].into_iter().find(|&width|out.len%width==0
         && a.handle.offset_start.unwrap_or(0)%(2*width) as u64==0 && out.handle.offset_start.unwrap_or(0)%width as u64==0).unwrap_or(1);
-    macro_rules! run {($i:ty,$o:ty)=>{pack_nibbles::prepare::<$i,$o,CudaRuntime>(c,
+    macro_rules! run {($i:ty,$o:ty)=>{pack_nibbles::prepare::<CudaRuntime>(c,
         RudaCount::Static(u32::try_from((out.len/width).div_ceil(128)).expect("byte packing grid overflow"),1,1),
-        RudaDim::new_1d(128),a.arg(),out.arg())};}
+        RudaDim::new_1d(128),<$i as Size>::value(),<$o as Size>::value(),a.arg(),out.arg())};}
     match width {8=>run!(Const<16>,Const<8>),4=>run!(Const<8>,Const<4>),_=>run!(Const<2>,Const<1>)}
 }
 
@@ -148,7 +148,7 @@ fn prepare_vector_convert(c:&ComputeClient<CudaRuntime>,a:&View,out:&View)->Opti
     let vector=super::row_cached::memory_vector_size(c,out.len,&[a,out],16).max(4);
     let grid=RudaCount::Static(u32::try_from((out.len/vector).div_ceil(128)).expect("FP8 vector grid overflow"),1,1);
     macro_rules! input {($i:ty)=>{{
-        macro_rules! run {($o:ty,$v:ty)=>{convert_vector::prepare::<$i,$o,$v,CudaRuntime>(c,grid,RudaDim::new_1d(128),a.arg(),out.arg(),a.dtype,out.dtype)};}
+        macro_rules! run {($o:ty,$v:ty)=>{convert_vector::prepare::<$i,$o,CudaRuntime>(c,grid,RudaDim::new_1d(128),<$v as Size>::value(),a.arg(),out.arg(),a.dtype,out.dtype)};}
         macro_rules! output {($o:ty)=>{match vector {16=>run!($o,Const<16>),8=>run!($o,Const<8>),_=>run!($o,Const<4>)}};}
         match out.dtype {0=>output!(f32),1=>output!(f16),2=>output!(bf16),_=>output!(u8)}
     }};}

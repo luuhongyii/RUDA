@@ -65,7 +65,7 @@ fn chain<V:Size>(inputs32:&Sequence<Tensor<f32>>,inputs16:&Sequence<Tensor<f16>>
                 y=read::<V>(inputs32,inputs16,inputsbf,source.0,comptime!(types[2*i+1]),comptime!(slots[2*i+1]),comptime!(splats[2*i+1]));
             }
             #[unroll] for lane in 0usize..V::value() {
-                value[lane]=super::graph_fusion::evaluate(x[lane],y[lane],f32::from_bits(comptime!(scalars[i])),comptime!(codes[i]),0);
+                value[lane]=super::graph_fusion::evaluate(x[lane],y[lane],f32::from_bits(comptime!(scalars[i])),comptime!(codes[i]),0u32);
             }
             if owners[i]!=0u32 {
                 let output=outputs.index_mut(i);
@@ -170,7 +170,7 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,tensors:&[View],nodes:&[Node
     if h.max_units_per_ruda<128 || h.max_ruda_dim.0<128 || blocks>h.max_ruda_count.0 as usize {return None;}
     macro_rules! arguments {($dtype:expr,$ty:ty)=>{external.iter().filter(|&&id|tensors[id].dtype==$dtype)
         .map(|&id|tensors[id].arg()).collect::<SequenceArg<CudaRuntime,Tensor<$ty>>>()};}
-    macro_rules! launch {($v:ty)=>{unsafe {chain::prepare::<$v,CudaRuntime>(c,RudaCount::Static(blocks as u32,1,1),RudaDim::new_1d(128),
+    macro_rules! launch {($v:ty)=>{unsafe {chain::prepare::<CudaRuntime>(c,RudaCount::Static(blocks as u32,1,1),RudaDim::new_1d(128),<$v as Size>::value(),
         arguments!(0,f32),arguments!(1,f16),arguments!(2,bf16),
         (lower..inputs+end).map(|id|tensors[id].arg()).collect::<SequenceArg<CudaRuntime,Tensor<f32>>>(),length,
         codes,scalars,terms,ranges,main,internal,types,slots,splats)}};}

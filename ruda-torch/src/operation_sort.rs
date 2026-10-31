@@ -350,7 +350,7 @@ fn radix_rank<E:Numeric>(value:E,valid:bool,histogram:&mut SharedMemory<u32>,
         let ballot=plane_ballot(set)[0usize];
         if set {peers&=ballot;}else {peers&=ballot^u32::MAX;}
     }
-    let mut rank=(peers & ((1u32<<lane)-1u32)).count_ones();
+    let mut rank=(peers & ((1u32<<(lane as u32))-1u32)).count_ones();
     if valid && rank==0u32 {histogram[warp*256+digit as usize]=peers.count_ones();}
     sync_ruda();
     #[unroll] for w in 0usize..8 {if w<warp {rank+=histogram[w*256+digit as usize];}}
@@ -365,7 +365,7 @@ fn radix_histogram<E:Numeric+RudaElement>(input:&Tensor<E>,counts:&mut Tensor<u3
     let column=tile*256+tid;let valid=column<length;let mut value=E::cast_from(0);
     if valid {value=input[row*length+column];}
     let mut histogram=SharedMemory::<u32>::new(8usize*256usize);
-    let _rank=radix_rank(value,valid,&mut histogram,shift,bits,dtype,descending);
+    let _rank=radix_rank::<E>(value,valid,&mut histogram,shift,bits,dtype,descending);
     let mut count=0u32;
     #[unroll] for w in 0usize..8 {count+=histogram[w*256+tid];}
     counts[(row*tiles+tile)*256+tid]=count;
@@ -389,7 +389,7 @@ fn radix_scatter<E:Numeric+RudaElement>(input:&Tensor<E>,keys:&Tensor<u32>,prefi
     let column=tile*256+UNIT_POS as usize;let valid=column<length;let mut value=E::cast_from(0);
     if valid {value=input[row*length+column];}
     let mut histogram=SharedMemory::<u32>::new(8usize*256usize);
-    let ranked=radix_rank(value,valid,&mut histogram,shift,bits,dtype,descending);
+    let ranked=radix_rank::<E>(value,valid,&mut histogram,shift,bits,dtype,descending);
     if valid {
         let digit=ranked.0 as usize;let mut destination=bases[row*256+digit]+ranked.1;
         if tile>0 {destination+=prefix[(row*tiles+tile-1)*256+digit];}

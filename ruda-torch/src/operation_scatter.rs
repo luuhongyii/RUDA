@@ -196,7 +196,7 @@ fn prepare_ordered_index_update(c:&ComputeClient<CudaRuntime>,input:&View,source
     let inner=out.shape[axis+1..].iter().product::<usize>();
     let width=super::row_cached::memory_vector_size(c,inner,&[input,source,out],16);
     let scaled=mode==2 && (alpha.is_some() || if floating {real!=1.0}else {integer!=1});
-    macro_rules! run {($e:ty,$v:ty)=>{ordered_index_update::prepare::<$e,$v,CudaRuntime>(c,grid(out.len/width),RudaDim::new_1d(128),
+    macro_rules! run {($e:ty,$v:ty)=>{ordered_index_update::prepare::<$e,CudaRuntime>(c,grid(out.len/width),RudaDim::new_1d(128),<$v as Size>::value(),
         input.arg(),source.arg(),permutation.arg(),offsets.arg(),out.arg(),alpha.unwrap_or(source).arg(),inner,bound,integer,real,floating,scaled,alpha.is_some(),mode,out.dtype)};}
     macro_rules! data {($e:ty)=>{match width {16=>run!($e,Const<16>),8=>run!($e,Const<8>),4=>run!($e,Const<4>),2=>run!($e,Const<2>),_=>run!($e,Const<1>)}};}
     nodes.push(match out.dtype {0=>data!(f32),1=>data!(f16),2=>data!(bf16),3|8=>data!(u8),4=>data!(i64),5=>data!(i32),6=>data!(i16),7=>data!(i8),9=>data!(f64),_=>unreachable!()});

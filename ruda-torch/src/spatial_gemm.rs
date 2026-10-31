@@ -101,13 +101,13 @@ fn left<F:Float>(b:&Tensor<F>,group:usize,row:usize,reduction:usize,#[comptime] 
 fn right<F:Float>(a:&Tensor<F>,group:usize,column:usize,reduction:usize,#[comptime] cfg:Geometry)->F {
     let mut position=0usize;let mut valid=false;
     if comptime!(cfg.mode==0) {
-        let mapped=patch(column%cfg.output_size,reduction/cfg.ic,cfg,false);valid=mapped.1;
+        let mapped=patch(column%cfg.output_size,reduction/cfg.ic,cfg.clone(),false);valid=mapped.1;
         position=((column/cfg.output_size)*(cfg.groups*cfg.ic)+group*cfg.ic+reduction%cfg.ic)*cfg.input_size+mapped.0;
     } else if comptime!(cfg.mode==1) {
-        let mapped=patch(column%cfg.input_size,reduction%cfg.volume,cfg,true);valid=mapped.1;
+        let mapped=patch(column%cfg.input_size,reduction%cfg.volume,cfg.clone(),true);valid=mapped.1;
         position=((column/cfg.input_size)*(cfg.groups*cfg.oc)+group*cfg.oc+reduction/cfg.volume)*cfg.output_size+mapped.0;
     } else {
-        let mapped=patch(reduction/cfg.batch,column%cfg.volume,cfg,false);valid=mapped.1;
+        let mapped=patch(reduction/cfg.batch,column%cfg.volume,cfg.clone(),false);valid=mapped.1;
         position=((reduction%cfg.batch)*(cfg.groups*cfg.ic)+group*cfg.ic+column/cfg.volume)*cfg.input_size+mapped.0;
     }
     let mut value=F::cast_from(0);if valid {value=a[offset(position,cfg.a_shape,cfg.a_strides,cfg.a_packed)];}value
@@ -131,7 +131,7 @@ fn load_tile<F:Float>(a:&Tensor<F>,b:&Tensor<F>,lhs:&mut SharedMemory<F>,rhs:&mu
     let tid=UNIT_POS as usize;
     #[unroll] for step in 0usize..comptime!(tile_m/4) {
         let p=tid+step*128;let r=row+p/32;let k=base+p%32;let mut value=F::cast_from(0);
-        if r<cfg.m && k<end {value=left(b,group,r,k,cfg);}lhs[p]=value;
+        if r<cfg.m && k<end {value=left(b,group,r,k,cfg.clone());}lhs[p]=value;
     }
     if comptime!((cfg.mode==0 && cfg.ic%32==0) || (cfg.mode==1 && cfg.volume==1)
         || (cfg.mode==2 && cfg.batch%32==0)) {
@@ -140,27 +140,27 @@ fn load_tile<F:Float>(a:&Tensor<F>,b:&Tensor<F>,lhs:&mut SharedMemory<F>,rhs:&mu
             else if cfg.mode==2 {cfg.groups*cfg.ic*cfg.input_size}else {cfg.input_size});
         if col<cfg.n && base<end {
             if comptime!(cfg.mode==0) {
-                let mapped=patch(col%cfg.output_size,base/cfg.ic,cfg,false);valid=mapped.1;
+                let mapped=patch(col%cfg.output_size,base/cfg.ic,cfg.clone(),false);valid=mapped.1;
                 source=((col/cfg.output_size)*(cfg.groups*cfg.ic)+group*cfg.ic+base%cfg.ic)*cfg.input_size+mapped.0;
             } else if comptime!(cfg.mode==1) {
-                let mapped=patch(col%cfg.input_size,0usize,cfg,true);valid=mapped.1;
+                let mapped=patch(col%cfg.input_size,0usize,cfg.clone(),true);valid=mapped.1;
                 source=((col/cfg.input_size)*(cfg.groups*cfg.oc)+group*cfg.oc+base)*cfg.output_size+mapped.0;
             } else {
-                let mapped=patch(base/cfg.batch,col%cfg.volume,cfg,false);valid=mapped.1;
+                let mapped=patch(base/cfg.batch,col%cfg.volume,cfg.clone(),false);valid=mapped.1;
                 source=((base%cfg.batch)*(cfg.groups*cfg.ic)+group*cfg.ic+col/cfg.volume)*cfg.input_size+mapped.0;
             }
         }
         #[unroll] for step in 0usize..8 {
             let p=tid+step*128;let k=base+p/32;let mut value=F::cast_from(0);
             if valid && k<end {
-                value=a[offset(source+(p/32)*channel_stride,cfg.a_shape,cfg.a_strides,cfg.a_packed)];
+                value=a[offset(source+(p/32)*channel_stride,cfg.a_shape.clone(),cfg.a_strides.clone(),cfg.a_packed)];
             }
             rhs[p]=value;
         }
     } else {
         #[unroll] for step in 0usize..8 {
             let p=tid+step*128;let k=base+p/32;let col=column+p%32;let mut value=F::cast_from(0);
-            if col<cfg.n && k<end {value=right(a,group,col,k,cfg);}rhs[p]=value;
+            if col<cfg.n && k<end {value=right(a,group,col,k,cfg.clone());}rhs[p]=value;
         }
     }
 }
@@ -178,7 +178,7 @@ fn implicit<F:Float+RudaElement>(a:&Tensor<F>,b:&Tensor<F>,out:&mut Tensor<f32>,
     if comptime!(accelerated) {
         let acc=cmma::Matrix::<f32>::from_value(cmma::MatrixIdent::Accumulator,16usize,16usize,16usize,cmma::MatrixLayout::Undefined,0.0f32);
         while base<end {
-            load_tile(a,b,&mut lhs,&mut rhs,group,row,column,base,end,cfg,tile_m);sync_ruda();
+            load_tile(a,b,&mut lhs,&mut rhs,group,row,column,base,end,cfg.clone(),tile_m);sync_ruda();
             if warp<comptime!(tile_m/8) {
                 #[unroll] for half in 0usize..2 {
                     let aa=cmma::Matrix::<F>::from_slice(cmma::MatrixIdent::A,16usize,16usize,16usize,cmma::MatrixLayout::RowMajor,
@@ -194,7 +194,7 @@ fn implicit<F:Float+RudaElement>(a:&Tensor<F>,b:&Tensor<F>,out:&mut Tensor<f32>,
     } else {
         let mut sums=Array::<f32>::new(tile_m/4);#[unroll] for i in 0usize..comptime!(tile_m/4) {sums[i]=0.0f32;}
         while base<end {
-            load_tile(a,b,&mut lhs,&mut rhs,group,row,column,base,end,cfg,tile_m);sync_ruda();
+            load_tile(a,b,&mut lhs,&mut rhs,group,row,column,base,end,cfg.clone(),tile_m);sync_ruda();
             #[unroll] for k in 0usize..32 {
                 #[unroll] for item in 0usize..comptime!(tile_m/4) {
                     let p=tid+item*128;let x=f32::cast_from(lhs[(p/32)*32+k]);let y=f32::cast_from(rhs[k*32+p%32]);
@@ -209,9 +209,9 @@ fn implicit<F:Float+RudaElement>(a:&Tensor<F>,b:&Tensor<F>,out:&mut Tensor<f32>,
     #[unroll] for item in 0usize..comptime!(tile_m/4) {
         let p=tid+item*128;let r=row+p/32;let col=column+p%32;
         if r<cfg.m && col<cfg.n {
-            let logical=destination(group,r,col,cfg);let mut at=0usize;
+            let logical=destination(group,r,col,cfg.clone());let mut at=0usize;
             if comptime!(partitions>1) {at=part*(cfg.groups*cfg.m*cfg.n)+logical;}
-            else {at=offset(logical,cfg.target_shape,cfg.target_strides,cfg.target_packed);}
+            else {at=offset(logical,cfg.target_shape.clone(),cfg.target_strides.clone(),cfg.target_packed);}
             out[at]=result[p];
         }
     }
@@ -222,8 +222,8 @@ fn direct<F:Float>(a:&Tensor<F>,b:&Tensor<F>,out:&mut Tensor<f32>,#[comptime] cf
     let p=ABSOLUTE_POS as usize;
     if p<cfg.groups*cfg.m*cfg.n {
         let group=p/(cfg.m*cfg.n);let row=p/cfg.n%cfg.m;let column=p%cfg.n;let mut value=0.0f32;
-        for k in 0usize..cfg.k {value+=f32::cast_from(left(b,group,row,k,cfg))*f32::cast_from(right(a,group,column,k,cfg));}
-        let logical=destination(group,row,column,cfg);out[offset(logical,cfg.target_shape,cfg.target_strides,cfg.target_packed)]=value;
+        for k in 0usize..cfg.k {value+=f32::cast_from(left(b,group,row,k,cfg.clone()))*f32::cast_from(right(a,group,column,k,cfg.clone()));}
+        let logical=destination(group,row,column,cfg.clone());out[offset(logical,cfg.target_shape,cfg.target_strides,cfg.target_packed)]=value;
     }
 }
 
@@ -251,7 +251,7 @@ fn depthwise_weight<F:Float>(a:&Tensor<F>,b:&Tensor<F>,out:&mut Tensor<f32>,#[co
     let p=RUDA_POS_X as usize;let tid=UNIT_POS as usize;
     let group=p/cfg.n;let column=p%cfg.n;let mut k=tid;let mut sum=0.0f32;
     while k<cfg.k {
-        sum+=f32::cast_from(left(b,group,0usize,k,cfg))*f32::cast_from(right(a,group,column,k,cfg));
+        sum+=f32::cast_from(left(b,group,0usize,k,cfg.clone()))*f32::cast_from(right(a,group,column,k,cfg.clone()));
         if cfg.k-k<=256usize {k=cfg.k;}else {k+=256usize;}
     }
     sum=plane_sum(sum);let mut partials=SharedMemory::<f32>::new(8usize);

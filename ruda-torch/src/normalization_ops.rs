@@ -147,7 +147,7 @@ fn input_gradient<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Te
             j+=256;
         }
     }
-    let total=ordered_pair_sum(sum,dot);
+    let total=ordered_pair_sum::<F>(sum,dot);
     let average=total.0/F::cast_from(width);let correction=total.1*inv*inv/F::cast_from(width);let mut j=lane;
     while j<width {
         let p=row*width+j;let mut g=F::cast_from(grad[address(grad,p)]);
@@ -178,7 +178,7 @@ fn affine_gradient<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&T
         if comptime!(kind!=3) {x-=mean[row];}
         w+=g*x*rstd[row];b+=g;j+=256;
     }
-    let total=ordered_pair_sum(w,b);
+    let total=ordered_pair_sum::<F>(w,b);
     if lane==0 {dw[index]=total.0;db[index]=total.1;}
 }
 

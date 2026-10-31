@@ -74,7 +74,7 @@ pub(super) fn prepare(client:&ComputeClient<CudaRuntime>,left:&View,right:&View,
     let vector=if aligned && contiguous_last && out.shape.last().unwrap()%4==0
         && input.shape.last().unwrap()%4==0 {4}else {1};
     let grid=RudaCount::Static(u32::try_from((out.len/vector).div_ceil(128)).expect("graph transform grid overflow"),1,1);
-    macro_rules! run {($e:ty,$v:ty)=>{unsafe {transform::prepare::<$e,$v,CudaRuntime>(client,grid,RudaDim::new_1d(128),
+    macro_rules! run {($e:ty,$v:ty)=>{unsafe {transform::prepare::<$e,CudaRuntime>(client,grid,RudaDim::new_1d(128),<$v as Size>::value(),
         left.arg(),right.arg(),out.arg(),op,axis,start,step,rank,input.shape.len(),flat)}};}
     macro_rules! typed {($e:ty)=>{if vector==4 {run!($e,Const<4>)}else {run!($e,Const<1>)}};}
     match out.dtype {0=>typed!(f32),1=>typed!(f16),2=>typed!(bf16),3|8=>typed!(u8),

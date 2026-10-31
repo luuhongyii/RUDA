@@ -439,8 +439,8 @@ fn prepare_chain(c: &ComputeClient<CudaRuntime>, tensors: &[View], nodes: &[Node
     macro_rules! arguments { ($ids:expr, $dtype:expr, $ty:ty) => {
         ($ids).filter(|&i| tensors[i].dtype.min(3) == $dtype).map(|i| tensors[i].arg()).collect::<SequenceArg<CudaRuntime, Tensor<$ty>>>()
     }; }
-    macro_rules! vector_chain {($v:ty)=>{unsafe {pointwise_chain_vector::prepare::<$v,CudaRuntime>(c,
-        RudaCount::Static(u32::try_from((first.len/vector).div_ceil(128)).ok()?,1,1),RudaDim::new_1d(128),
+    macro_rules! vector_chain {($v:ty)=>{unsafe {pointwise_chain_vector::prepare::<CudaRuntime>(c,
+        RudaCount::Static(u32::try_from((first.len/vector).div_ceil(128)).ok()?,1,1),RudaDim::new_1d(128),<$v as Size>::value(),
         arguments!(external.iter().copied(),0,f32),arguments!(external.iter().copied(),1,f16),arguments!(external.iter().copied(),2,bf16),
         arguments!(external.iter().copied(),3,u8),
         arguments!(unique_outputs.iter().copied(),0,f32),arguments!(unique_outputs.iter().copied(),1,f16),arguments!(unique_outputs.iter().copied(),2,bf16),

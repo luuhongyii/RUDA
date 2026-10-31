@@ -90,7 +90,7 @@ pub(super) fn flash<F: Float + RudaElement>(
     let mut end=key_count as usize;
     if comptime!(causal) {end=usize::min(end,query_base+64);}
     if comptime!(asynchronous) {
-        load_keys(keys,&mut ks,unit,batch,kv_head,0usize,key_count,width,k_strides);
+        load_keys(keys,&mut ks,unit,batch,kv_head,0usize,key_count,width,k_strides.clone());
         ready.as_ref().unwrap().commit_copy_async();
     }
     for block in 0usize..((end+63)/64) {
@@ -188,7 +188,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             ready.as_ref().unwrap().arrive_and_wait();
             // All warps have finished QK. Reuse K while PV consumes only V.
             if key_base+64<end {
-                load_keys(keys,&mut ks,unit,batch,kv_head,key_base+64,key_count,width,k_strides);
+                load_keys(keys,&mut ks,unit,batch,kv_head,key_base+64,key_count,width,k_strides.clone());
                 ready.as_ref().unwrap().commit_copy_async();
             }
         }

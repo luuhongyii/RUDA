@@ -55,7 +55,7 @@ fn reduce_rows<E:Numeric+RudaElement,O:Numeric+RudaElement>(input:&Tensor<E>,out
                 else {coordinate=outer%input.shape(d);outer/=input.shape(d);}
                 offset+=coordinate*input.stride(d);
             }
-            let mut item=preprocess(input[offset],absolute);
+            let mut item=preprocess::<E>(input[offset],absolute);
             if comptime!(operation==6 || operation==7) {item=E::cast_from(item!=E::cast_from(0));}
             let next=combine::<E>(value,key,item,u32::cast_from(position),operation);
             value=next.0;key=next.1;
@@ -85,7 +85,7 @@ fn reduce_block<E:Numeric+RudaElement,O:Numeric+RudaElement>(input:&Tensor<E>,ou
             else {coordinate=outer%input.shape(d);outer/=input.shape(d);}
             offset+=coordinate*input.stride(d);
         }
-        let mut item=preprocess(input[offset],absolute);
+        let mut item=preprocess::<E>(input[offset],absolute);
         if comptime!(operation==6 || operation==7) {item=E::cast_from(item!=E::cast_from(0));}
         let next=combine::<E>(value,key,item,position as u32,operation);
         value=next.0;key=next.1;position+=256usize;
@@ -117,7 +117,7 @@ fn reduce_columns<E:Numeric+RudaElement,O:Numeric+RudaElement>(input:&Tensor<E>,
     if column<inner {
         let mut position=part;
         while position<length {
-            let mut item=preprocess(input[(outer*length+position)*inner+column],absolute);
+            let mut item=preprocess::<E>(input[(outer*length+position)*inner+column],absolute);
             if comptime!(operation==6 || operation==7) {item=E::cast_from(item!=E::cast_from(0));}
             let next=combine::<E>(value,key,item,position as u32,operation);
             value=next.0;key=next.1;position+=8usize;
@@ -157,7 +157,7 @@ fn reduce_tile<E:Numeric+RudaElement>(input:&Tensor<E>,indices:&Tensor<u32>,out:
                 else {coordinate=outer%input.shape(d);outer/=input.shape(d);}
                 offset+=coordinate*input.stride(d);
             }
-            value=preprocess(input[offset],absolute);key=u32::cast_from(position);
+            value=preprocess::<E>(input[offset],absolute);key=u32::cast_from(position);
             if comptime!(operation==6 || operation==7) {value=E::cast_from(value!=E::cast_from(0));}
         } else {let offset=row*length as usize+position;value=input[offset];key=indices[offset];}
     }

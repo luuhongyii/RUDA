@@ -239,7 +239,7 @@ fn prepare_cat_many(c:&ComputeClient<CudaRuntime>,values:&[View],axis:usize)->Op
         .all(|v|v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0);
     let width=if vector {4}else {1};
     macro_rules! data {($e:ty)=>{{
-        macro_rules! run {($v:ty)=>{concatenate_many::prepare::<$e,$v,CudaRuntime>(c,grid(out.len/width),RudaDim::new_1d(128),
+        macro_rules! run {($v:ty)=>{concatenate_many::prepare::<$e,CudaRuntime>(c,grid(out.len/width),RudaDim::new_1d(128),<$v as Size>::value(),
             active.iter().map(|v|v.arg()).collect::<SequenceArg<CudaRuntime,Tensor<$e>>>(),out.arg(),inner,out.shape[axis],starts)};}
         if vector {run!(Const<4>)}else {run!(Const<1>)}
     }};}

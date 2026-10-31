@@ -78,8 +78,8 @@ fn native<A: Float, B: Float, O: Numeric, P: Float, S: Numeric>(
     let ca = def.vectors_per_lane(cmma::MatrixIdent::A); let cb = def.vectors_per_lane(cmma::MatrixIdent::B);
     let cc = def.vectors_per_lane(cmma::MatrixIdent::Accumulator);
     let mut ra = Array::<Vector<A, NA>>::new(ca); let mut rb = Array::<Vector<B, NB>>::new(cb);
-    let mut rc = Array::<Vector<f32, NC>>::new(cc*column_tiles); let mut group = Array::<Vector<f32, NC>>::new(cc*column_tiles);
-    let mut total = Array::<Vector<f32, NC>>::new(cc*column_tiles);
+    let mut rc = Array::<Vector<f32, NC>>::new(comptime!(cc*column_tiles)); let mut group = Array::<Vector<f32, NC>>::new(comptime!(cc*column_tiles));
+    let mut total = Array::<Vector<f32, NC>>::new(comptime!(cc*column_tiles));
     #[unroll] for i in 0..comptime!(cc*column_tiles) {
         rc[i] = Vector::cast_from(0.0f32); group[i] = Vector::cast_from(0.0f32); total[i] = Vector::cast_from(0.0f32);
     }

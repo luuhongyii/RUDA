@@ -18,7 +18,7 @@ pub(super) fn prepare(client:&ComputeClient<CudaRuntime>,input:&View,mask:&View,
     let width=input.shape[1];let groups=mask.shape[1];
     let vector=if (width/groups)%4==0 && [input,out].iter().all(|v|v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0) {4}else {1};
     let grid=RudaCount::Static(u32::try_from((out.len/vector).div_ceil(128)).expect("group mask grid overflow"),1,1);
-    macro_rules! launch {($f:ty,$m:ty,$v:ty)=>{unsafe {fill::prepare::<$f,$m,$v,CudaRuntime>(client,grid,RudaDim::new_1d(128),
+    macro_rules! launch {($f:ty,$m:ty,$v:ty)=>{unsafe {fill::prepare::<$f,$m,CudaRuntime>(client,grid,RudaDim::new_1d(128),<$v as Size>::value(),
         input.arg(),mask.arg(),out.arg(),value,width,groups)}};}
     macro_rules! sized {($f:ty,$m:ty)=>{if vector==4 {launch!($f,$m,Const<4>)}else {launch!($f,$m,Const<1>)}};}
     macro_rules! typed {($f:ty)=>{match mask.dtype {

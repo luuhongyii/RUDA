@@ -189,7 +189,7 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,values:&[View],kind:u32,ints
         if vectorized {
             let views=[out,&a,&b].into_iter().filter(|v|v.len!=1).collect::<Vec<_>>();
             let width=super::row_cached::memory_vector_size(c,out.len,&views,8).max(4);
-            macro_rules! vector {($f:ty,$v:ty)=>{activation_vector::prepare::<$f,$v,CudaRuntime>(c,grid(out.len/width),RudaDim::new_1d(128),
+            macro_rules! vector {($f:ty,$v:ty)=>{activation_vector::prepare::<$f,CudaRuntime>(c,grid(out.len/width),RudaDim::new_1d(128),<$v as Size>::value(),
                 a.arg(),b.arg(),out.arg(),scalars[0],scalars[1],operation,a.len==1,b.len==1)};}
             macro_rules! typed {($f:ty)=>{if width==8 {vector!($f,Const<8>)}else {vector!($f,Const<4>)}};}
             nodes.push(match out.dtype {0=>typed!(f32),1=>typed!(f16),2=>typed!(bf16),_=>unreachable!()});

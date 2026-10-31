@@ -2,7 +2,7 @@ use super::*;
 
 #[ruda]
 fn product<F:Float>(left:&Tensor<F>,right:&Tensor<F>,position:usize,#[comptime] shape:Vec<usize>)->f32 {
-    let a=f32::cast_from(left[crate::graph_fusion::address(left,position,shape)]);
+    let a=f32::cast_from(left[crate::graph_fusion::address(left,position,shape.clone())]);
     let b=f32::cast_from(right[crate::graph_fusion::address(right,position,shape)]);
     f32::cast_from(F::cast_from(a*b))
 }
@@ -11,7 +11,7 @@ fn product<F:Float>(left:&Tensor<F>,right:&Tensor<F>,position:usize,#[comptime] 
 fn product_vector<F:Float,V:Size>(left:&Tensor<F>,right:&Tensor<F>,position:usize,
     #[comptime] shape:Vec<usize>,#[comptime] left_vector:bool,#[comptime] right_vector:bool)->Vector<f32,V>
 {
-    let a=crate::graph_fusion::address(left,position,shape);
+    let a=crate::graph_fusion::address(left,position,shape.clone());
     let b=crate::graph_fusion::address(right,position,shape);
     let mut x=Vector::<F,V>::new(F::cast_from(0));let mut y=Vector::<F,V>::new(F::cast_from(0));
     if comptime!(left_vector) {
@@ -35,7 +35,7 @@ fn suffix<F:Float,V:Size>(left:&Tensor<F>,right:&Tensor<F>,out:&mut Array<F>,
     if row<out.len() {
         let mut local=Vector::<f32,V>::new(0.0f32);let mut column=lane;
         while column<width/V::value() {
-            local+=product_vector::<F,V>(left,right,row*width+column*V::value(),shape,left_vector,right_vector);
+            local+=product_vector::<F,V>(left,right,row*width+column*V::value(),shape.clone(),left_vector,right_vector);
             column+=threads;
         }
         let mut value=0.0f32;#[unroll] for i in 0usize..V::value() {value+=local[i];}
@@ -61,11 +61,11 @@ fn columns<F:Float,V:Size>(left:&Tensor<F>,right:&Tensor<F>,out:&mut Array<F>,
     if column<inner {
         let mut row=part;
         while row<width {
-            sum+=product_vector::<F,V>(left,right,(outer*width+row)*inner+column,shape,left_vector,right_vector);
+            sum+=product_vector::<F,V>(left,right,(outer*width+row)*inner+column,shape.clone(),left_vector,right_vector);
             row+=8usize;
         }
     }
-    let mut partials=SharedMemory::<Vector<f32,V>>::new(256);partials[part*32+lane]=sum;sync_ruda();
+    let mut partials=SharedMemory::<Vector<f32,V>>::new(256usize);partials[part*32+lane]=sum;sync_ruda();
     if part==0 && column<inner {
         let mut value=partials[lane];#[unroll] for p in 1usize..8 {value+=partials[p*32+lane];}
         if comptime!(mean) {value/=Vector::new(width as f32);}
@@ -96,9 +96,9 @@ fn arbitrary<F:Float>(left:&Tensor<F>,right:&Tensor<F>,out:&mut Array<F>,
                 position+=(index%comptime!(shape[dim]))*comptime!(strides[dim]);index/=comptime!(shape[dim]);
             }
         }
-        sum+=product(left,right,position,shape);column+=256usize;
+        sum+=product(left,right,position,shape.clone());column+=256usize;
     }
-    sum=plane_sum(sum);let mut partials=SharedMemory::<f32>::new(8);
+    sum=plane_sum(sum);let mut partials=SharedMemory::<f32>::new(8usize);
     if lane%32==0 {partials[lane/32]=sum;}sync_ruda();
     if lane<32 {
         let mut value=0.0f32;if lane<8 {value=partials[lane];}value=plane_sum(value);
@@ -126,9 +126,9 @@ fn contraction<F:Float>(left:&Array<F>,right:&Array<F>,out:&mut Array<F>,
         o_base+=coordinate*comptime!(batch_out[d]);
     }
     let lane=UNIT_POS as usize;let local_row=lane/32;let local_column=lane%32;
-    let mut a_tile=SharedMemory::<f32>::new(16*17);
-    let mut b_tile=SharedMemory::<f32>::new(16*33);
-    let mut sums=Array::<f32>::new(4);
+    let mut a_tile=SharedMemory::<f32>::new(16usize*17usize);
+    let mut b_tile=SharedMemory::<f32>::new(16usize*33usize);
+    let mut sums=Array::<f32>::new(4usize);
     #[unroll] for slot in 0usize..4 {sums[slot]=0.0f32;}
     let mut reduction=0usize;
     while reduction<k {
@@ -233,14 +233,14 @@ pub(super) fn prepare(client:&ComputeClient<CudaRuntime>,left:&View,right:&View,
     let mut strides=vec![1usize;rank];for d in (0..rank-1).rev() {strides[d]=strides[d+1]*shape[d+1];}
     macro_rules! run {($f:ty)=>{unsafe {
         if path==0 {
-            if vector==4 {suffix::prepare::<$f,Const<4>,CudaRuntime>(client,grid,RudaDim::new_1d(threads.max(128) as u32),
+            if vector==4 {suffix::prepare::<$f,CudaRuntime>(client,grid,RudaDim::new_1d(threads.max(128) as u32),4,
                 left.arg(),right.arg(),out.array_arg(),shape,width,threads,left_vector,right_vector,mean)}
-            else {suffix::prepare::<$f,Const<1>,CudaRuntime>(client,grid,RudaDim::new_1d(threads.max(128) as u32),
+            else {suffix::prepare::<$f,CudaRuntime>(client,grid,RudaDim::new_1d(threads.max(128) as u32),1,
                 left.arg(),right.arg(),out.array_arg(),shape,width,threads,left_vector,right_vector,mean)}
         } else if path==1 {
-            if column_vector==4 {columns::prepare::<$f,Const<4>,CudaRuntime>(client,grid,RudaDim::new_2d(32,8),
+            if column_vector==4 {columns::prepare::<$f,CudaRuntime>(client,grid,RudaDim::new_2d(32,8),4,
                 left.arg(),right.arg(),out.array_arg(),shape,width,axes.unwrap().1,mean,left_vector,right_vector)}
-            else {columns::prepare::<$f,Const<1>,CudaRuntime>(client,grid,RudaDim::new_2d(32,8),
+            else {columns::prepare::<$f,CudaRuntime>(client,grid,RudaDim::new_2d(32,8),1,
                 left.arg(),right.arg(),out.array_arg(),shape,width,axes.unwrap().1,mean,left_vector,right_vector)}
         } else {
             arbitrary::prepare::<$f,CudaRuntime>(client,grid,RudaDim::new_1d(256),

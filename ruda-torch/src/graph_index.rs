@@ -98,7 +98,7 @@ fn try_selected_direct(a:&View,indices:&View,out:&View,axis:usize,reverse:bool)-
     let vector=inner%4==0 && [a,out].iter().all(|v|v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0);
     let width=if vector {4}else {1};let c=client();
     macro_rules! data {($e:ty)=>{{
-        macro_rules! run {($i:ty,$v:ty)=>{selected_direct::prepare::<$e,$i,$v,CudaRuntime>(&c,grid(selected.len/width),RudaDim::new_1d(128),
+        macro_rules! run {($i:ty,$v:ty)=>{selected_direct::prepare::<$e,$i,CudaRuntime>(&c,grid(selected.len/width),RudaDim::new_1d(128),<$v as Size>::value(),
             a.arg(),indices.arg(),out.arg(),inner,indexed.shape[axis],reverse)};}
         if indices.dtype==4 {if vector {run!(i64,Const<4>)}else {run!(i64,Const<1>)}}
         else if vector {run!(i32,Const<4>)}else {run!(i32,Const<1>)}
@@ -425,7 +425,7 @@ impl IndexBuffers {
                 prepared.push(if b.dtype==4 {check!(i64)}else {check!(i32)});
                 let vector=out.shape[1]%4==0 && [a,out].iter().all(|v|v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0);
                 let width=if vector {4}else {1};
-                macro_rules! run {($e:ty,$v:ty)=>{embedding_segmented_backward::prepare::<$e,$v,CudaRuntime>(client,grid(out.len/width),RudaDim::new_1d(128),
+                macro_rules! run {($e:ty,$v:ty)=>{embedding_segmented_backward::prepare::<$e,CudaRuntime>(client,grid(out.len/width),RudaDim::new_1d(128),<$v as Size>::value(),
                     a.arg(),buffers[1].arg(),buffers[2].arg(),out.arg(),n.scalar as i64,n.op==138)};}
                 macro_rules! data {($e:ty)=>{if vector {run!($e,Const<4>)}else {run!($e,Const<1>)}};}
                 prepared.push(match a.dtype {0=>data!(f32),1=>data!(f16),2=>data!(bf16),_=>unreachable!()});

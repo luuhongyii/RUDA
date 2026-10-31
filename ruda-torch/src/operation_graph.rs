@@ -238,7 +238,7 @@ fn attention(c:&ComputeClient<CudaRuntime>,vs:&[View],scratch:&[View],kind:u32,i
         unsafe {if kind==2 {varlen::forward::prepare::<CudaRuntime>(c,blocks,dim,
             ts[0].clone().into_array_arg(),ts[1].clone().into_array_arg(),ts[2].clone().into_array_arg(),ts[3].clone().into_array_arg(),
             ts[4].clone().into_array_arg(),ts[5].clone().into_array_arg(),h as u32,kh as u32,docs,floats[0],floats[1],floats[2],ints[2],ints[3],
-            seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,d,dv,32,ints[0]!=0,ints[1]!=0,floats[1]!=0.0,floats[2]!=0.0,ts[0].dtype.into())}
+            seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,d,dv,32,ints[0]!=0,ints[1]!=0,floats[1]!=0.0,floats[2]!=0.0,1,ts[0].dtype.into())}
         else {varlen::backward::prepare::<CudaRuntime>(c,blocks,dim,
             ts[0].clone().into_array_arg(),ts[1].clone().into_array_arg(),ts[2].clone().into_array_arg(),ts[3].clone().into_array_arg(),
             ts[4].clone().into_array_arg(),ts[5].clone().into_array_arg(),ts[6].clone().into_array_arg(),tensor(c,&scratch[0]).into_array_arg(),tensor(c,&scratch[1]).into_array_arg(),

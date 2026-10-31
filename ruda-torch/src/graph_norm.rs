@@ -122,7 +122,7 @@ fn fused<V:Size>(inputs32:&Sequence<Tensor<f32>>,inputs16:&Sequence<Tensor<f16>>
                 if column<width {
                     #[unroll] for lane in 0usize..V::value() {
                         let mut term=value[lane];if comptime!(absolute) {term=term.abs();}
-                        let combined=crate::operation_reduce::combine::<f32>(local,key,term,(column+lane) as u32,comptime!(if minimum {1}else {0}));
+                        let combined=crate::operation_reduce::combine::<f32>(local,key,term,(column+lane) as u32,comptime!(if minimum {1u32}else {0u32}));
                         local=combined.0;key=combined.1;
                     }
                 }
@@ -133,14 +133,14 @@ fn fused<V:Size>(inputs32:&Sequence<Tensor<f32>>,inputs16:&Sequence<Tensor<f16>>
         if comptime!(!rms && !extremum) {#[unroll] for lane in 0usize..V::value() {local+=sums[lane];}}
         let mut reduced=0.0f32;
         if comptime!(extremum) {
-            let partial=crate::operation_reduce::warp_reduce::<f32>(local,key,comptime!(if minimum {1}else {0}));
+            let partial=crate::operation_reduce::warp_reduce::<f32>(local,key,comptime!(if minimum {1u32}else {0u32}));
             let mut value=partial.0;
             if comptime!(threads>32) {
                 let mut keys=SharedMemory::<u32>::new(threads/32);
                 if thread%32==0 {scratch[thread/32]=partial.0;keys[thread/32]=partial.1;}
                 sync_ruda();local=0.0f32;key=u32::MAX;
                 if thread%32<threads/32 {local=scratch[thread%32];key=keys[thread%32];}
-                let combined=crate::operation_reduce::warp_reduce::<f32>(local,key,comptime!(if minimum {1}else {0}));
+                let combined=crate::operation_reduce::warp_reduce::<f32>(local,key,comptime!(if minimum {1u32}else {0u32}));
                 value=combined.0;
             }
             reduced=plane_shuffle(value,0u32);
@@ -300,7 +300,7 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,tensors:&[View],nodes:&[Node
     macro_rules! arguments {($indices:expr,$dtype:expr,$ty:ty)=>{
         ($indices).filter(|&i|tensors[i].dtype.min(3)==$dtype).map(|i|tensors[i].arg()).collect::<SequenceArg<CudaRuntime,Tensor<$ty>>>()
     };}
-    macro_rules! run {($v:ty)=>{fused::prepare::<$v,CudaRuntime>(c,super::row_cached::norm_grid(rows,threads),super::row_cached::norm_block(threads),
+    macro_rules! run {($v:ty)=>{fused::prepare::<CudaRuntime>(c,super::row_cached::norm_grid(rows,threads),super::row_cached::norm_block(threads),<$v as Size>::value(),
         arguments!(external.iter().copied(),0,f32),arguments!(external.iter().copied(),1,f16),arguments!(external.iter().copied(),2,bf16),arguments!(external.iter().copied(),3,u8),
         arguments!(unique.iter().copied(),0,f32),arguments!(unique.iter().copied(),1,f16),arguments!(unique.iter().copied(),2,bf16),arguments!(unique.iter().copied(),3,u8),
         rows,first.shape.clone(),reduced_shape.clone(),width,threads,input_types,input_slots,periods,preloads,postloads,codes,left,right,third,scalars,output_types,output_slots,stores,
