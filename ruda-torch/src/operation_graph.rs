@@ -211,7 +211,7 @@ fn attention(c:&ComputeClient<CudaRuntime>,vs:&[View],scratch:&[View],kind:u32,i
     if kind==37 {return dense_attention::prepare_dropout(c,vs,ints,floats[0],seed,counter);}
     let kind=if matches!(kind,35|36) {kind-35} else {kind};
     let ts:Vec<_>=vs.iter().map(|v|tensor(c,v)).collect();let q=&vs[0];
-    let rows=vs[5].shape[0];let blocks=RudaCount::Static(rows as u32,1,1);let dim=RudaDim::new_1d(32);
+    let rows=vs[5].shape[0];let blocks=RudaCount::Static(rows.div_ceil(4) as u32,1,1);let dim=RudaDim::new_1d(128);
     if kind<=1 {
         if kind==0 && floats[1]==0.0 {
             if let Some(prepared)=super::attention_prefill::prepare(c,&vs[0],&vs[1],&vs[2],&vs[4],&vs[3],&vs[5],

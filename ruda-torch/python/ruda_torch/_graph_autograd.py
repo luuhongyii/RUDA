@@ -110,6 +110,20 @@ def forward_values(layout, inputs, device=None):
         elif 164<=op<=171:
             name=('logical_not','logical_and','logical_or','logical_xor','bitwise_not','bitwise_and','bitwise_or','bitwise_xor')[op-164]
             out=getattr(torch,name)(left) if op in (164,168) else getattr(torch,name)(left,values[b])
+        elif 212<=op<=216:
+            code=int(scalar);shape=layout.specs[layout.inputs+i].shape
+            if op==215:
+                source=(1,)*(len(shape)-left.ndim)+tuple(left.shape)
+                out=left.repeat(tuple(0 if size==0 else target//size for size,target in zip(source,shape)))
+            elif op==216:
+                axis=None if code==-1 else code;size=left.numel() if axis is None else left.shape[axis]
+                count=0 if size==0 else shape[0 if axis is None else axis]//size
+                out=torch.repeat_interleave(left,count,dim=axis)
+            else:
+                axis=code&7;start=(code>>3)&2047;step=code>>14
+                if op==212:out=torch.ops.aten.slice_copy.Tensor(left,axis,start,min(left.shape[axis],start+shape[axis]*step),step)
+                elif op==213:out=torch.ops.aten.slice_backward.default(left,shape,axis,start,min(shape[axis],start+left.shape[axis]*step),step)
+                else:out=torch.ops.aten.slice_scatter.default(left,values[b],axis,start,min(shape[axis],start+values[b].shape[axis]*step),step)
         elif op in (140,141,142,143,144,145):
             code=int(scalar);axis=code if op==142 else code&7;start=code>>3
             shape=layout.specs[layout.inputs+i].shape

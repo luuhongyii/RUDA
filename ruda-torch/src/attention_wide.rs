@@ -12,13 +12,13 @@ fn exp2_fast(value: f32) -> f32 {
 
 #[ruda]
 fn stage_rows<F: Float + RudaElement>(source_array: &Array<F>, stage: &mut SharedMemory<F>,
-    unit: usize, base_row: usize, row_limit: usize, plane: usize,
-    #[comptime] rows: usize, #[comptime] width: usize) {
-    if base_row+rows<=row_limit {
-        let base=(plane*row_limit+base_row)*width;
+    unit: usize, base_row: usize, row_limit: usize, base_offset: usize, target_offset: usize,
+    #[comptime] rows: usize, #[comptime] width: usize, #[comptime] row_stride: usize) {
+    if comptime!(row_stride==width) && base_row+rows<=row_limit {
+        let base=base_offset+base_row*row_stride;
         #[unroll] for i in 0usize..(rows*width/8/128) {
             let index=(unit+i*128)*8;
-            let target=index/width*(width+8)+index%width;
+            let target=target_offset+index/width*(width+8)+index%width;
             barrier::copy_async(&source_array.slice(base+index,base+index+8),&mut stage.slice_mut(target,target+8),8u32);
         }
     } else {
@@ -27,10 +27,10 @@ fn stage_rows<F: Float + RudaElement>(source_array: &Array<F>, stage: &mut Share
         let row=index/width;let col=index%width;
         let mut source=0usize;let mut length=0usize;
         if base_row+row<row_limit {
-            source=(plane*row_limit+base_row+row)*width+col;
+            source=base_offset+(base_row+row)*row_stride+col;
             length=8;
         }
-        let target=row*(width+8)+col;
+        let target=target_offset+row*(width+8)+col;
         barrier::copy_async_checked(&source_array.slice(source,source+length),&mut stage.slice_mut(target,target+8),8u32);
     }
     }
@@ -40,7 +40,8 @@ fn stage_rows<F: Float + RudaElement>(source_array: &Array<F>, stage: &mut Share
 pub(super) fn flash_wide<F: Float + RudaElement>(
     query: &Array<F>, keys: &Array<F>, values: &Array<F>, output: &mut Array<Vector<F,Const<2>>>, stats: &mut Array<f32>,
     queries: u32, key_count: u32, heads: u32, kv_heads: u32, scale: f32, scale_log2: f32,
-    #[comptime] width: usize, #[comptime] causal: bool,
+    #[comptime] width: usize, #[comptime] causal: bool, #[comptime] stages: usize,
+    #[comptime] q_strides: Vec<usize>, #[comptime] k_strides: Vec<usize>, #[comptime] v_strides: Vec<usize>,
 ) {
     let lane=UNIT_POS_X as usize;
     let warp=UNIT_POS_Y as usize;
@@ -52,14 +53,18 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
     let query_base=block_index*128;
     let stride=comptime!(width+8);
     let mut qs=SharedMemory::<F>::new_aligned(128*stride,32usize);
-    let mut ks=SharedMemory::<F>::new_aligned(64*stride,32usize);
-    let mut vs=SharedMemory::<F>::new_aligned(64*stride,32usize);
+    let mut ks=SharedMemory::<F>::new_aligned(64*stride*stages,32usize);
+    let mut vs=SharedMemory::<F>::new_aligned(64*stride*stages,32usize);
     let kv_head=head/(heads/kv_heads) as usize;
     let q_plane=batch*heads as usize+head;
-    let kv_plane=batch*kv_heads as usize+kv_head;
-    // Q and the first K block arrive together.
-    stage_rows(query,&mut qs,unit,query_base,queries as usize,q_plane,128usize,width);
-    stage_rows(keys,&mut ks,unit,0usize,key_count as usize,kv_plane,64usize,width);
+    let q_offset=batch*comptime!(q_strides[0])+head*comptime!(q_strides[1]);
+    let k_offset=batch*comptime!(k_strides[0])+kv_head*comptime!(k_strides[1]);
+    let v_offset=batch*comptime!(v_strides[0])+kv_head*comptime!(v_strides[1]);
+    stage_rows(query,&mut qs,unit,query_base,queries as usize,q_offset,0usize,128usize,width,comptime!(q_strides[2]));
+    stage_rows(keys,&mut ks,unit,0usize,key_count as usize,k_offset,0usize,64usize,width,comptime!(k_strides[2]));
+    if comptime!(stages==2) {
+        stage_rows(values,&mut vs,unit,0usize,key_count as usize,v_offset,0usize,64usize,width,comptime!(v_strides[2]));
+    }
     barrier::commit_copy_group();
     let def=cmma::MmaDefinition::<F,F,f32>::new(16usize,8usize,16usize);
     let mut accumulators=Sequence::<Vector<f32,Const<4>>>::new();
@@ -74,11 +79,20 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
     if comptime!(causal) {end=usize::min(end,query_base+128);}
     for block in 0usize..((end+63)/64) {
         let key_base=block*64;
+        let bank=(block%stages)*64*stride;
         barrier::wait_copy_group(0u32);
         sync_ruda();
-        // V[i] arrives while QK and the online softmax use only Q and K[i].
-        stage_rows(values,&mut vs,unit,key_base,key_count as usize,kv_plane,64usize,width);
-        barrier::commit_copy_group();
+        if comptime!(stages==2) {
+            if key_base+64<end {
+                let next=((block+1)%stages)*64*stride;
+                stage_rows(keys,&mut ks,unit,key_base+64,key_count as usize,k_offset,next,64usize,width,comptime!(k_strides[2]));
+                stage_rows(values,&mut vs,unit,key_base+64,key_count as usize,v_offset,next,64usize,width,comptime!(v_strides[2]));
+                barrier::commit_copy_group();
+            }
+        } else {
+            stage_rows(values,&mut vs,unit,key_base,key_count as usize,v_offset,0usize,64usize,width,comptime!(v_strides[2]));
+            barrier::commit_copy_group();
+        }
         let mut scores=Sequence::<Vector<f32,Const<4>>>::new();
         #[unroll] for _ in 0usize..16 {
             scores.push(Vector::new(0.0f32));
@@ -90,7 +104,7 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
                 qa.push(def.load_matrix_vector::<F,Const<8>>(&qs.slice(start,start+8),4usize,false));
             }
             #[unroll] for pair in 0usize..4 {
-                let start=((pair*2+lane/16)*8+lane%8)*stride+d*16+(lane/8%2)*8;
+                let start=bank+((pair*2+lane/16)*8+lane%8)*stride+d*16+(lane/8%2)*8;
                 let k4=def.load_matrix_vector::<F,Const<8>>(&ks.slice(start,start+8),4usize,false);
                 #[unroll] for half in 0usize..2 {
                     let mut key=Vector::<F,Const<4>>::empty();
@@ -149,12 +163,13 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
                 maximum[r]=next;rescale[r]=previous_scale;
             }
         }
-        barrier::wait_copy_group(0u32);
-        sync_ruda();
-        // Every warp is done with K[i]; fetch K[i+1] while PV consumes V[i].
-        if key_base+64<end {
-            stage_rows(keys,&mut ks,unit,key_base+64,key_count as usize,kv_plane,64usize,width);
-            barrier::commit_copy_group();
+        if comptime!(stages==1) {
+            barrier::wait_copy_group(0u32);
+            sync_ruda();
+            if key_base+64<end {
+                stage_rows(keys,&mut ks,unit,key_base+64,key_count as usize,k_offset,0usize,64usize,width,comptime!(k_strides[2]));
+                barrier::commit_copy_group();
+            }
         }
         #[unroll] for tile in 0usize..4 {
             let mut probability=Sequence::<Vector<F,Const<8>>>::new();
@@ -167,7 +182,7 @@ pub(super) fn flash_wide<F: Float + RudaElement>(
                 probability.push(p);
             }
             #[unroll] for d in 0usize..(width/16) {
-                let start=(tile*16+lane%16)*stride+(d*2+lane/16)*8;
+                let start=bank+(tile*16+lane%16)*stride+(d*2+lane/16)*8;
                 let v4=def.load_matrix_vector::<F,Const<8>>(&vs.slice(start,start+8),4usize,true);
                 #[unroll] for half in 0usize..2 {
                     let mut value=Vector::<F,Const<4>>::empty();

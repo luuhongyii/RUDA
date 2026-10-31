@@ -347,6 +347,9 @@ impl Optimizer {
         mut visit_read: impl FnMut(&mut Self, &mut Variable),
     ) {
         match cmma {
+            CoopMma::Blackwell { args, .. } => {
+                for value in args { visit_read(self, value); }
+            }
             CoopMma::CreateTensorLayout { shape, strides } => {
                 for value in shape.iter_mut().chain(strides.iter_mut().flatten()) {
                     visit_read(self, value);

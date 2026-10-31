@@ -628,6 +628,11 @@ fn matrix_operands(op: &mut CoopMma, visit: &mut dyn FnMut(&mut Variable, bool))
         CoopMma::ExecuteManual { registers_a, registers_b, registers_c, .. } => {
             visit(registers_a, false); visit(registers_b, false); visit(registers_c, false);
         }
+        CoopMma::Blackwell { kind, args } => {
+            for (index, arg) in args.iter_mut().enumerate() {
+                visit(arg, index == 0 && matches!(kind, ruda_core::ir::Tcgen05Op::Descriptor | ruda_core::ir::Tcgen05Op::DescriptorStrided { .. }));
+            }
+        }
         CoopMma::ExecuteScaled { registers_a, registers_b, registers_c, scales_a, scales_b, .. } => {
             visit(registers_a, false); visit(registers_b, false); visit(registers_c, false);
             visit(scales_a, false); visit(scales_b, false);

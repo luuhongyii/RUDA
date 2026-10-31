@@ -1,3 +1,5 @@
+import math
+import sys
 import torch
 from torch._prims_common import suggest_memory_format
 from . import _C
@@ -23,8 +25,21 @@ def _matching(a, *others):
             raise RuntimeError("RUDA spatial tensors must have matching devices and dtypes")
 
 
-def _empty(shape, a):
-    return torch.empty(shape, device=a.device, dtype=a.dtype, memory_format=suggest_memory_format(a))
+def _empty(shape, a, dtype=None):
+    return torch.empty(shape, device=a.device, dtype=a.dtype if dtype is None else dtype, memory_format=suggest_memory_format(a))
+
+
+def _math_inputs(values, shapes):
+    dtype=values[0].dtype
+    def indexable(t):
+        return (all(type(d) is int and 0<=d<=2**32-1 for d in (*t.shape,*t.stride())) and t.numel()<=2**32-1
+                and sum(max(size-1,0)*stride for size,stride in zip(t.shape,t.stride()))<=2**32-1)
+    if (dtype in (torch.float16,torch.bfloat16) and getattr(sys.modules[__package__],'_spatial_accumulate_available',False)
+            and all(t.dtype==dtype and indexable(t) for t in values)
+            and all(all(type(d) is int and 0<=d<=2**32-1 for d in shape) and math.prod(shape)<=2**32-1 for shape in shapes)):
+        return values
+    math_dtype=torch.float64 if dtype==torch.float64 else torch.float32
+    return tuple(t.to(math_dtype) for t in values)
 
 
 def _conv_shape(a, weight, bias, stride, padding, dilation, transposed, output_padding, groups):
@@ -61,8 +76,8 @@ def _conv_shape(a, weight, bias, stride, padding, dilation, transposed, output_p
     return (a.shape[0], channels, *spatial), (*stride, *padding, *dilation, *output_padding, groups)
 
 
-def _run_conv(op, a, b, shape, params):
-    result = _empty(shape, a)
+def _run_conv(op, a, b, shape, params, dtype=None):
+    result = _empty(shape, a, dtype)
     if result.numel():
         _C.spatial(op, a, b, result, params)
     return result
@@ -71,7 +86,8 @@ def _run_conv(op, a, b, shape, params):
 def convolution(a, weight, bias, stride, padding, dilation, transposed, output_padding, groups):
     shape, params = _conv_shape(a, weight, bias, stride, padding, dilation, transposed, output_padding, groups)
     math_dtype = torch.float64 if a.dtype == torch.float64 else torch.float32
-    result = _run_conv(3 if transposed else 0, a.to(math_dtype), weight.to(math_dtype), shape, params)
+    x,w=_math_inputs((a,weight),(shape,))
+    result = _run_conv(3 if transposed else 0, x, w, shape, params, math_dtype)
     if bias is not None:
         result = result + bias.to(math_dtype).view(1, -1, *((1,) * (a.ndim - 2)))
     return result.to(a.dtype).contiguous(memory_format=suggest_memory_format(a))
@@ -91,7 +107,7 @@ def convolution_backward(grad, a, weight, bias_sizes, stride, padding, dilation,
     if output_mask[2] and bias_sizes is not None and tuple(bias_sizes) != (shape[1],):
         raise RuntimeError("invalid convolution bias gradient shape")
     math_dtype = torch.float64 if a.dtype == torch.float64 else torch.float32
-    x, w, dy = a.to(math_dtype), weight.to(math_dtype), grad.to(math_dtype)
+    x, w, dy = _math_inputs((a,weight,grad),(a.shape,weight.shape,shape))
     dx = dw = db = None
     if a.shape[0] == 0:
         if output_mask[0]:
@@ -106,18 +122,18 @@ def convolution_backward(grad, a, weight, bias_sizes, stride, padding, dilation,
             rank = a.ndim - 2
             forward_params = (*params[:3 * rank], *((0,) * rank), groups)
             dx_shape, _ = _conv_shape(dy, w, None, stride, padding, dilation, False, (0,), groups)
-            value = _run_conv(0, dy, w, dx_shape, forward_params)
+            value = _run_conv(0, dy, w, dx_shape, forward_params, math_dtype)
             for axis in range(2, a.ndim):
                 value = value.narrow(axis, 0, a.shape[axis])
         else:
-            value = _run_conv(1, dy, w, a.shape, params)
+            value = _run_conv(1, dy, w, a.shape, params, math_dtype)
         dx = value.to(a.dtype).contiguous(memory_format=suggest_memory_format(a))
     if output_mask[1]:
-        value = _run_conv(2, dy if transposed else x, x if transposed else dy, weight.shape, params)
+        value = _run_conv(2, dy if transposed else x, x if transposed else dy, weight.shape, params, math_dtype)
         dw = value.to(weight.dtype).contiguous(memory_format=suggest_memory_format(weight))
     if output_mask[2]:
         if transposed:
-            db = torch.empty((shape[1],), device=a.device, dtype=dy.dtype)
+            db = torch.empty((shape[1],), device=a.device, dtype=math_dtype)
             _C.spatial(8, dy, dy, db, (0,))
             db = db.to(a.dtype)
         else:

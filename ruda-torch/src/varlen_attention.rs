@@ -42,16 +42,27 @@ pub unsafe extern "C" fn ruda_torch_varlen_attention(op: u32, descriptors: *cons
         let c = client();
         let ts: Vec<_> = xs.iter().map(primitives::tensor).collect();
         let dtype = ts[0].dtype;
-        let grid = RudaCount::Static(u32::try_from(rows).expect("varlen launch overflow"),1,1);
-        let dim = RudaDim::new_1d(32);
+        let grid = RudaCount::Static(u32::try_from(rows.div_ceil(4)).expect("varlen launch overflow"),1,1);
+        let dim = RudaDim::new_1d(128);
         if op == 0 {
             if rows != 0 {
-                unsafe { kernel::forward::launch::<CudaRuntime>(&c,grid,dim,
+                let hardware = &c.properties().hardware;
+                let parallel = hardware.plane_size_min == 32 && hardware.plane_size_max == 32
+                    && hardware.max_units_per_ruda >= 128 && hardware.max_ruda_dim.0 >= 128
+                    && dv.checked_add(2).and_then(|n| n.checked_mul(16))
+                        .is_some_and(|bytes| bytes <= hardware.max_shared_memory_size)
+                    && keys / documents as usize >= 256 && rows <= hardware.max_ruda_count.0 as usize
+                    && hardware.num_streaming_multiprocessors
+                        .is_some_and(|sms| rows <= sms as usize * 16);
+                let warps_per_row = if parallel { 4 } else { 1 };
+                let forward_grid = RudaCount::Static(u32::try_from(rows.div_ceil(4 / warps_per_row))
+                    .expect("varlen launch overflow"),1,1);
+                unsafe { kernel::forward::launch::<CudaRuntime>(&c,forward_grid,dim,
                     ts[0].clone().into_array_arg(),ts[1].clone().into_array_arg(),ts[2].clone().into_array_arg(),
                     ts[3].clone().into_array_arg(),ts[4].clone().into_array_arg(),ts[5].clone().into_array_arg(),
                     heads as u32,kv_heads as u32,documents,scale,p,softcap,left,right,
                     seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,
-                    d,dv,32,causal,lower_right,p != 0.0,softcap != 0.0,dtype.into()); }
+                    d,dv,32,causal,lower_right,p != 0.0,softcap != 0.0,warps_per_row,dtype.into()); }
                 LAUNCHES.fetch_add(1,Ordering::Relaxed);
             }
         } else {

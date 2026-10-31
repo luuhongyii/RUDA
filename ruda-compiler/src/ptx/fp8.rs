@@ -46,7 +46,7 @@ impl Emitter {
     pub fn fp8_to_f32(&mut self, ty: Scalar, source: &str) -> Result<String> {
         self.fp8_target()?;
         let packed = self.reg_b16();
-        let halves = self.reg(Scalar::U32);
+        let halves = self.reg_b32();
         let low = self.reg_b16();
         let high = self.reg_b16();
         let output = self.reg(Scalar::F32);
@@ -60,7 +60,10 @@ impl Emitter {
     pub(super) fn f32_to_fp8(&mut self, ty: Scalar, destination: &str, source: &str) -> Result<()> {
         self.fp8_target()?;
         let packed = self.reg_b16();
-        self.line(format!("cvt.rn.satfinite.{}x2.f32 {packed}, 0f00000000, {source};", ty.suffix()));
+        // cvt does not take immediate sources: the unused high lane comes from a zeroed register
+        let zero = self.reg(Scalar::F32);
+        self.line(format!("mov.f32 {zero}, 0f00000000;"));
+        self.line(format!("cvt.rn.satfinite.{}x2.f32 {packed}, {zero}, {source};", ty.suffix()));
         self.line(format!("cvt.u32.u16 {destination}, {packed};"));
         self.line(format!("and.b32 {destination}, {destination}, 255;"));
         Ok(())

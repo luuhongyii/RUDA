@@ -10,6 +10,37 @@ pub const MUL: u32 = 2;
 pub const SILU: u32 = 14;
 pub const RMS_NORM: u32 = 100;
 pub const SILU_MUL: u32 = 101;
+pub const MM_RHS_TRANSPOSED: u32 = 173;
+
+pub fn matmul_layout(op:u32)->Option<(usize,bool,bool)> {
+    match op {
+        7=>Some((2,false,false)),30=>Some((3,false,false)),
+        MM_RHS_TRANSPOSED=>Some((2,false,true)),196=>Some((3,false,true)),
+        197=>Some((3,true,false)),198=>Some((3,true,true)),
+        199=>Some((2,true,false)),200=>Some((2,true,true)),207=>Some((3,false,false)),_=>None,
+    }
+}
+
+pub fn bmm_permutation(code:u32)->Option<[usize;3]> {
+    let axes=[(code&7) as usize,((code>>3)&7) as usize,((code>>6)&7) as usize];
+    if code>=512 || axes.iter().any(|&d|d>=3) || axes[0]==axes[1] || axes[0]==axes[2] || axes[1]==axes[2] {None}
+    else {Some(axes)}
+}
+
+pub fn bmm_layout_variants(rank:usize)->usize {
+    if (2..=8).contains(&rank) {(1..=rank).product::<usize>()*(rank-1)}else {0}
+}
+
+pub fn bmm_layout_axes(rank:usize,code:usize)->Option<(Vec<usize>,usize)> {
+    if code>=bmm_layout_variants(rank) {return None;}
+    let repeat=code%(rank-1);let mut permutation=code/(rank-1);
+    let mut available=(0..rank).collect::<Vec<_>>();let mut axes=Vec::with_capacity(rank);
+    for remaining in (1..=rank).rev() {
+        let block=(1..remaining).product::<usize>();
+        axes.push(available.remove(permutation/block));permutation%=block;
+    }
+    Some((axes,repeat))
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -61,7 +92,7 @@ pub fn validate(tensors: &[TensorSpec<'_>], nodes: &[NodeSpec], inputs: usize) -
         return Err("static graph requires 1..256 nodes and one logical output per node (max 512 tensors)".into());
     }
     for t in tensors {
-        if t.dtype > 8 || t.shape.len() > 8 || t.shape.len() != t.strides.len() {
+        if (t.dtype > 8 && !matches!(t.dtype,12|13|15)) || t.shape.len() > 8 || t.shape.len() != t.strides.len() {
             return Err("static graph accepts rank 0..8 floating/integer/bool tensors".into());
         }
         if t.shape.iter().any(|&dim|dim>u32::MAX as usize) {
@@ -83,13 +114,174 @@ pub fn validate(tensors: &[TensorSpec<'_>], nodes: &[NodeSpec], inputs: usize) -
         let root=matches!(n.op,160|161|172) && n.a==NO_WEIGHT;
         if !root && n.a as usize >= out_index { return Err("static graph input must precede its output".into()); }
         let a = if root {out} else {&tensors[n.a as usize]};
-        if (!matches!(n.op,114|147..=161|164..=167|172) && a.dtype != out.dtype) || (!matches!(n.op, 7 | 30 | 57 | 104 | 105 | 112..=124 | 134..=172) && a.shape != out.shape) {
+        if (matches!(a.dtype,12|13|15) || matches!(out.dtype,12|13|15)) && !matches!(n.op,0|112..=115|218) {
+            return Err("FP8 graph storage requires explicit cast or layout operations".into());
+        }
+        if (!matches!(n.op,114|147..=161|164..=167|172|218) && a.dtype != out.dtype) || (!matches!(n.op, 7 | 30 | 57 | 104 | 105 | 112..=124 | 134..=173 | 183 | 184 | 189..=200 | 203..=209 | 211..=217) && a.shape != out.shape) {
             return Err("static graph output shape/dtype mismatch".into());
         }
-        if (a.dtype>2 || out.dtype>2) && !matches!(n.op,0|112..=115|134..=136|140..=172) {
+        if (a.dtype>2 || out.dtype>2) && !matches!(n.op,0|112..=115|134..=136|140..=172|193|212..=216|218) {
             return Err("nonfloating graph tensors require a storage/layout/indexing operation".into());
         }
         match n.op {
+            218 => {
+                if n.b as usize>=out_index || !matches!(a.dtype,0..=2|12|13|15) || out.dtype!=0
+                    || a.shape.len()!=2 || a.shape.contains(&0) || !n.scalar.is_finite()
+                    || n.scalar.fract()!=0.0 || n.scalar<1.0 || n.scalar>16777216.0 {
+                    return Err("invalid block-scaled cast input or row block".into());
+                }
+                let scales=&tensors[n.b as usize];let block=n.scalar as usize;let count:usize=scales.shape.iter().product();
+                if scales.dtype!=0 || a.shape[0]%block!=0 || count==0
+                    || count%(a.shape[0]/block)!=0 || a.shape[1]%(count/(a.shape[0]/block))!=0 {
+                    return Err("invalid block-scaled cast scale grid".into());
+                }
+            }
+            212..=216 => {
+                if n.b as usize>=out_index || !n.scalar.is_finite() || n.scalar.fract()!=0.0 {
+                    return Err("invalid strided transform input/scalar".into());
+                }
+                let b=&tensors[n.b as usize];
+                if b.dtype!=a.dtype || (n.op!=214 && n.b!=n.a) {
+                    return Err("invalid strided transform operands".into());
+                }
+                if n.op<=214 {
+                    if n.scalar<0.0 || n.scalar>=16777216.0 {return Err("invalid strided slice encoding".into());}
+                    let code=n.scalar as usize;let axis=code&7;let start=(code>>3)&2047;let step=code>>14;
+                    let (full,part)=if n.op==213 {(out,a)}else if n.op==214 {(a,b)}else {(a,out)};
+                    if step==0 || axis>=full.shape.len() || part.shape.len()!=full.shape.len()
+                        || (n.op==214 && a.shape!=out.shape) || start>full.shape[axis]
+                        || part.shape.iter().enumerate().any(|(d,&s)|d!=axis && s!=full.shape[d])
+                        || (part.shape[axis]>0 && (part.shape[axis]-1).checked_mul(step).and_then(|v|v.checked_add(start)).is_none_or(|v|v>=full.shape[axis])) {
+                        return Err("invalid strided slice shape/bounds".into());
+                    }
+                } else if n.op==215 {
+                    if n.scalar.to_bits()!=0 || out.shape.len()<a.shape.len() {return Err("invalid repeat rank/scalar".into());}
+                    for (&old,&new) in a.shape.iter().rev().zip(out.shape.iter().rev()) {
+                        if if old==0 {new!=0}else {new%old!=0} {return Err("invalid repeat shape".into());}
+                    }
+                } else if n.scalar==-1.0 {
+                    let len:usize=a.shape.iter().product();
+                    if out.shape.len()!=1 || (if len==0 {out.shape[0]!=0}else {out.shape[0]%len!=0}) {
+                        return Err("invalid flat repeat_interleave shape".into());
+                    }
+                } else {
+                    if n.scalar<0.0 || n.scalar as usize>=a.shape.len() || out.shape.len()!=a.shape.len() {
+                        return Err("invalid repeat_interleave axis/rank".into());
+                    }
+                    let axis=n.scalar as usize;
+                    if a.shape.iter().enumerate().any(|(d,&old)| if d!=axis {old!=out.shape[d]}
+                        else if old==0 {out.shape[d]!=0}else {out.shape[d]%old!=0}) {
+                        return Err("invalid repeat_interleave shape".into());
+                    }
+                }
+            }
+            211 | 217 => {
+                if n.b as usize>=out_index || !n.scalar.is_finite() || n.scalar.fract()!=0.0 || n.scalar<0.0 || n.scalar>=(if n.op==217 {16777216.0}else {4096.0}) {
+                    return Err("invalid grouped BMM inputs/axes".into());
+                }
+                let b=&tensors[n.b as usize];let code=n.scalar as u32;
+                let axes=if n.op==217 {
+                    let variants=bmm_layout_variants(a.shape.len());
+                    if variants==0 {return Err("invalid layout BMM input rank".into());}
+                    let (left,_)=bmm_layout_axes(a.shape.len(),code as usize%variants).ok_or("invalid left BMM layout")?;
+                    let (right,_)=bmm_layout_axes(b.shape.len(),code as usize/variants).ok_or("invalid right BMM layout")?;
+                    [left[left.len()-2],left[left.len()-1],right[right.len()-2],right[right.len()-1]]
+                }else {[(code&7) as usize,((code>>3)&7) as usize,((code>>6)&7) as usize,((code>>9)&7) as usize]};
+                if !(2..=8).contains(&a.shape.len()) || !(2..=8).contains(&b.shape.len()) || out.shape.len()!=3
+                    || a.shape.contains(&0) || b.shape.contains(&0) || out.shape.contains(&0) || a.dtype!=b.dtype
+                    || axes[0]==axes[1] || axes[2]==axes[3] || axes[..2].iter().any(|&d|d>=a.shape.len())
+                    || axes[2..].iter().any(|&d|d>=b.shape.len()) {return Err("invalid grouped BMM shape/dtype".into());}
+                let ab:usize=a.shape.iter().enumerate().filter(|(d,_)|!axes[..2].contains(d)).map(|(_,s)|s).product();
+                let bb:usize=b.shape.iter().enumerate().filter(|(d,_)|!axes[2..].contains(d)).map(|(_,s)|s).product();
+                if a.shape[axes[1]]!=b.shape[axes[2]] || out.shape[1]!=a.shape[axes[0]] || out.shape[2]!=b.shape[axes[3]]
+                    || out.shape[0]%ab!=0 || out.shape[0]%bb!=0
+                    || out.shape[0].checked_mul(a.shape[axes[0]]).and_then(|v|v.checked_mul(a.shape[axes[1]])).is_none_or(|v|v>u32::MAX as usize)
+                    || out.shape[0].checked_mul(b.shape[axes[2]]).and_then(|v|v.checked_mul(b.shape[axes[3]])).is_none_or(|v|v>u32::MAX as usize) {
+                    return Err("invalid grouped BMM dimensions/repeats".into());
+                }
+            }
+            210 => {
+                if n.b as usize>=out_index || a.shape.len()!=2 || a.shape[1]==0 || !scalar_fits(a.dtype,n.scalar) {
+                    return Err("invalid group mask input/fill".into());
+                }
+                let mask=&tensors[n.b as usize];
+                if mask.dtype>8 || mask.shape.len()!=2 || mask.shape[0]!=a.shape[0]
+                    || mask.shape[1]==0 || a.shape[1]%mask.shape[1]!=0 {return Err("invalid group indicator shape/dtype".into());}
+            }
+            207 => {
+                if n.b as usize>=out_index || !n.scalar.is_finite() || n.scalar.fract()!=0.0 || n.scalar<0.0 || n.scalar>=262144.0 {
+                    return Err("invalid permuted BMM inputs/axes".into());
+                }
+                let b=&tensors[n.b as usize];let code=n.scalar as u32;
+                let left=bmm_permutation(code&511).ok_or("invalid left BMM permutation")?;
+                let right=bmm_permutation(code>>9).ok_or("invalid right BMM permutation")?;
+                if a.shape.len()!=3 || b.shape.len()!=3 || out.shape.len()!=3 || a.dtype!=b.dtype
+                    || a.shape[left[0]]!=b.shape[right[0]] || a.shape[left[2]]!=b.shape[right[1]]
+                    || out.shape!=[a.shape[left[0]],a.shape[left[1]],b.shape[right[2]]] {
+                    return Err("invalid permuted BMM dimensions".into());
+                }
+            }
+            203..=206 => {
+                if n.b as usize>=out_index {return Err("future product reduction input".into());}
+                let b=&tensors[n.b as usize];let rank=a.shape.len().max(b.shape.len());let mask=n.scalar as u32;
+                if b.dtype!=a.dtype || rank==0 || !n.scalar.is_finite() || mask as f32!=n.scalar
+                    || mask==0 || mask>=(1<<rank) {return Err("invalid product reduction dtype/mask".into());}
+                let mut shape=Vec::with_capacity(rank);let mut length=1usize;
+                for d in 0..rank {
+                    let left=if d+a.shape.len()<rank {1}else {a.shape[d+a.shape.len()-rank]};
+                    let right=if d+b.shape.len()<rank {1}else {b.shape[d+b.shape.len()-rank]};
+                    if left==0 || right==0 || left!=1 && right!=1 && left!=right {return Err("invalid product broadcast dimensions".into());}
+                    let size=left.max(right);length=length.checked_mul(size).ok_or("product indexing overflow")?;
+                    if mask&(1<<d)==0 {shape.push(size);} else if matches!(n.op,203|205) {shape.push(1);}
+                }
+                if length>u32::MAX as usize || out.shape!=shape.as_slice() {return Err("invalid product reduction output shape".into());}
+            }
+            201|202 => {
+                if a.shape.is_empty() || a.shape.last()==Some(&0) || a.shape.last().unwrap()%2!=0
+                    || n.b as usize>=out_index || !n.scalar.is_finite() || n.scalar<0.0
+                    || n.scalar.fract()!=0.0 || n.scalar as usize>=out_index {
+                    return Err("invalid rotary feature axis or coefficients".into());
+                }
+                let b=&tensors[n.b as usize];let c=&tensors[n.scalar as usize];
+                if b.dtype!=a.dtype || c.dtype!=a.dtype || !broadcast_shape(&[a.shape,b.shape,c.shape],out.shape) {
+                    return Err("invalid rotary broadcast shape/dtype".into());
+                }
+            }
+            194|195 => {
+                if a.dtype!=0 || !(1..=7).contains(&a.shape.len()) || a.shape.last()==Some(&0) || n.a!=n.b || n.scalar.to_bits()!=0 {
+                    return Err("invalid segment scan input dtype/rank/scalar".into());
+                }
+                let mut shape=a.shape.to_vec();shape.push(*a.shape.last().unwrap());
+                if out.shape!=shape.as_slice() {return Err("invalid segment scan output shape".into());}
+            }
+            193 => {
+                if a.dtype!=8 || a.shape.is_empty() || a.shape.last().unwrap()%2!=0 || n.a!=n.b || n.scalar.to_bits()!=0 {
+                    return Err("invalid byte packing dtype/shape/scalar".into());
+                }
+                let mut shape=a.shape.to_vec();*shape.last_mut().unwrap()/=2;
+                if out.shape!=shape.as_slice() {return Err("invalid byte packing output shape".into());}
+            }
+            189..=192 | 208 | 209 => {
+                let mask=n.scalar as u32;let keep=n.op<=190 || n.op==208;
+                let expected:Vec<_>=a.shape.iter().enumerate().filter_map(|(d,&size)|
+                    if mask&(1<<d)==0 {Some(size)} else if keep {Some(1)} else {None}).collect();
+                if !n.scalar.is_finite() || mask as f32!=n.scalar || mask==0 || mask>=(1<<a.shape.len())
+                    || n.b!=n.a || out.shape!=expected.as_slice()
+                    || a.shape.iter().enumerate().any(|(d,&size)|size==0 && mask&(1<<d)!=0) {
+                    return Err("invalid extremum reduction mask/output or empty reduction axis".into());
+                }
+            }
+            174..=188 => {
+                if n.b as usize>=out_index || !n.scalar.is_finite() {return Err("invalid activation graph input/scalar".into());}
+                let b=&tensors[n.b as usize];
+                if b.dtype!=a.dtype {return Err("activation requires equal operand dtypes".into());}
+                if matches!(n.op,183|184) {
+                    if !broadcast_shape(&[a.shape,b.shape],out.shape) {return Err("invalid activation broadcast shape".into());}
+                } else if matches!(n.op,176|177|179|186|188) {
+                    if b.shape!=a.shape {return Err("activation gradient shape mismatch".into());}
+                } else if n.b!=n.a {return Err("unary activation requires a dummy input".into());}
+                if !matches!(n.op,178..=181|187|188) && n.scalar.to_bits()!=0 {return Err("activation requires canonical zero scalar".into());}
+            }
             172 => {
                 if out.dtype>2 || out.shape.len()!=1 || !n.scalar.is_finite() || !f32::from_bits(n.b).is_finite() {
                     return Err("invalid floating arange graph parameters".into());
@@ -274,14 +466,15 @@ pub fn validate(tensors: &[TensorSpec<'_>], nodes: &[NodeSpec], inputs: usize) -
                     return Err("invalid unary scalar operation".into());
                 }
             }
-            7 | 30 => {
+            7 | 30 | MM_RHS_TRANSPOSED | 196..=200 => {
                 if n.b as usize >= out_index { return Err("future matrix input".into()); }
                 let b = &tensors[n.b as usize];
-                let rank = if n.op == 7 { 2 } else { 3 };
+                let (rank,lhs_transposed,rhs_transposed)=matmul_layout(n.op).unwrap();
                 if a.shape.len() != rank || b.shape.len() != rank || out.shape.len() != rank
                     || b.dtype != a.dtype || n.scalar.to_bits() != 0
-                    || a.shape[rank-1] != b.shape[rank-2]
-                    || out.shape[rank-2] != a.shape[rank-2] || out.shape[rank-1] != b.shape[rank-1]
+                    || a.shape[rank-if lhs_transposed {2}else{1}] != b.shape[rank-if rhs_transposed {1}else{2}]
+                    || out.shape[rank-2] != a.shape[rank-if lhs_transposed {1}else{2}]
+                    || out.shape[rank-1] != b.shape[rank-if rhs_transposed {2}else{1}]
                     || a.shape[..rank-2] != b.shape[..rank-2] || a.shape[..rank-2] != out.shape[..rank-2] {
                     return Err("invalid static matrix multiply shapes/dtypes".into());
                 }

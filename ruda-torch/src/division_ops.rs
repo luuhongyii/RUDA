@@ -50,12 +50,13 @@ fn floating<S: Float + RudaElement, F: Float>(
 
 #[ruda(launch)]
 fn integral<S: Numeric + RudaElement>(
-    left: &Tensor<S>, right: &Tensor<S>, output: &mut Tensor<S>, minimum: i64,
-    #[comptime] op: u32, #[comptime] signed: bool,
+    left: &Tensor<S>, right: &Tensor<S>, output: &mut Tensor<S>, minimum: i64, scalar: u64,
+    #[comptime] op: u32, #[comptime] signed: bool, #[comptime] scalar_right: bool,
 ) {
     let p = (RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize) * 256usize + UNIT_POS as usize;
     if p < output.len() {
-        let a = left[address(left, p)]; let b = right[address(right, p)];
+        let a = left[address(left, p)]; let mut b = S::cast_from(scalar);
+        if comptime!(!scalar_right) { b = right[address(right, p)]; }
         let zero = S::cast_from(0u32); let one = S::cast_from(1u32); let mut result = zero;
         if comptime!(op == 1 || op == 2 && !signed) { result = a / b; }
         else if comptime!(op == 2) {
@@ -82,13 +83,14 @@ fn integral<S: Numeric + RudaElement>(
 
 pub(super) fn dispatch(xs: &[View], ints: &[i64]) {
     assert_eq!(xs.len(), 3); assert_eq!(ints.len(), 4);
-    assert!((0..=4).contains(&ints[0]) && matches!(ints[1], 0 | 1));
+    assert!((0..=4).contains(&ints[0]) && matches!(ints[1], 0 | 1 | 2));
     let op = ints[0] as u32; let scalar_right = ints[1] != 0; let code = xs[2].dtype;
     assert!(code <= 9 && code != 3); assert_eq!(xs[0].dtype, code); assert_eq!(xs[1].dtype, code);
     assert_eq!(xs[0].shape, xs[2].shape); assert_eq!(xs[1].shape, xs[2].shape);
     let integral = (4..=8).contains(&code);
-    assert!(!integral || op != 0 && !scalar_right);
-    assert!(!scalar_right || op <= 2);
+    assert!(!integral || op != 0 && ints[1] != 1);
+    assert!(integral || ints[1] != 2);
+    assert!(!scalar_right || integral || op <= 2);
     if xs[2].len == 0 { return; }
     let c = client(); let blocks = xs[2].len.div_ceil(256); let x = blocks.min(131072);
     let grid = RudaCount::Static(x as u32, blocks.div_ceil(x) as u32, 1); let block = RudaDim::new_1d(256);
@@ -97,7 +99,8 @@ pub(super) fn dispatch(xs: &[View], ints: &[i64]) {
             ints[2] as u64, ints[3] as u64, op, scalar_right, if code == 9 { 9 } else { 0 });
     }}; }
     macro_rules! integer { ($s:ty) => { unsafe {
-        integral::launch::<$s, CudaRuntime>(&c, grid, block, xs[0].arg(), xs[1].arg(), xs[2].arg(), <$s>::MIN as i64, op, code != 8);
+        integral::launch::<$s, CudaRuntime>(&c, grid, block, xs[0].arg(), xs[1].arg(), xs[2].arg(),
+            <$s>::MIN as i64, ints[2] as u64, op, code != 8, scalar_right);
     }}; }
     match code {
         0 => real!(f32, f32), 1 => real!(f16, f32), 2 => real!(bf16, f32), 9 => real!(f64, f64),

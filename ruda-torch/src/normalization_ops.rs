@@ -16,35 +16,61 @@ fn vector_merge(left:f32,left_var:f32,left_n:u32,right:f32,right_var:f32,right_n
 }
 
 #[ruda(launch)]
-fn vector_statistics<S:Float+RudaElement>(a:&Tensor<S>,mean:&mut Tensor<f32>,variance:&mut Tensor<f32>,rstd:&mut Tensor<f32>,eps:f32,#[comptime] threads:usize) {
+fn vector_statistics<S:Float+RudaElement>(a:&Tensor<S>,mean:&mut Tensor<f32>,variance:&mut Tensor<f32>,rstd:&mut Tensor<f32>,eps:f32,#[comptime] threads:usize,#[comptime] packed:bool) {
     let row=RUDA_POS_X as usize;let lane=UNIT_POS as usize;let width=a.shape(1);
-    let mut sm=SharedMemory::<f32>::new(threads);let mut sv=SharedMemory::<f32>::new(threads);let mut sn=SharedMemory::<u32>::new(threads);
+    let mut sm=SharedMemory::<f32>::new(threads/32);let mut sv=SharedMemory::<f32>::new(threads/32);let mut sn=SharedMemory::<u32>::new(threads/32);
     let mut mu=0.0f32;let mut m2=0.0f32;let mut n=0u32;let mut j=lane*4;
     while j<width {
+        let mut values=Vector::<S,Const<4>>::empty();
+        if comptime!(packed) {values=a.slice(0usize,a.len()).into_vectorized().with_vector_size::<Const<4>>()[(row*width+j)/4];}
+        else {#[unroll] for k in 0usize..4 {values[k]=a[address(a,row*width+j+k)];}}
         #[unroll]
         for k in 0..4usize {
-            let x=f32::cast_from(a[address(a,row*width+j+k)]);n+=1;let delta=x-mu;
+            let x=f32::cast_from(values[k]);n+=1;let delta=x-mu;
             mu=fma(delta,1.0f32/f32::cast_from(n),mu);m2=fma(delta,x-mu,m2);
         }
         j+=threads*4;
     }
-    sm[lane]=mu;sv[lane]=m2;sn[lane]=n;sync_ruda();let mut stride=16usize;
-    while stride>0 {
-        if lane%32<stride {
-            let (m,v,count)=vector_merge(sm[lane],sv[lane],sn[lane],sm[lane+stride],sv[lane+stride],sn[lane+stride]);
-            sm[lane]=m;sv[lane]=v;sn[lane]=count;
-        }
-        sync_ruda();stride/=2;
+    #[unroll] for step in 0usize..5 {
+        let distance=comptime!(16u32>>step);
+        let right=plane_shuffle_down(mu,distance);let right_var=plane_shuffle_down(m2,distance);let right_n=plane_shuffle_down(n,distance);
+        if lane%32<distance as usize {let merged=vector_merge(mu,m2,n,right,right_var,right_n);mu=merged.0;m2=merged.1;n=merged.2;}
     }
-    let mut stride=16usize;
-    while stride>0 {
-        if lane%32==0 && lane/32<stride && lane/32+stride<threads/32 {
-            let other=lane+stride*32;let (m,v,count)=vector_merge(sm[lane],sv[lane],sn[lane],sm[other],sv[other],sn[other]);
-            sm[lane]=m;sv[lane]=v;sn[lane]=count;
+    if lane%32==0 {sm[lane/32]=mu;sv[lane/32]=m2;sn[lane/32]=n;}
+    sync_ruda();
+    if lane<32 {
+        mu=0.0;m2=0.0;n=0;
+        if lane<threads/32 {mu=sm[lane];m2=sv[lane];n=sn[lane];}
+        #[unroll] for step in 0usize..5 {
+            let distance=comptime!(16u32>>step);
+            let right=plane_shuffle_down(mu,distance);let right_var=plane_shuffle_down(m2,distance);let right_n=plane_shuffle_down(n,distance);
+            if lane<distance as usize && lane+(distance as usize)<threads/32 {
+                let merged=vector_merge(mu,m2,n,right,right_var,right_n);mu=merged.0;m2=merged.1;n=merged.2;
+            }
         }
-        sync_ruda();stride/=2;
+        if lane==0 {let v=m2/f32::cast_from(width);mean[row]=mu;variance[row]=v;rstd[row]=cuda_inverse_sqrt::<f32>(v+eps);}
     }
-    if lane==0 {let v=sv[0]/f32::cast_from(width);mean[row]=sm[0];variance[row]=v;rstd[row]=cuda_inverse_sqrt::<f32>(v+eps);}
+}
+
+#[ruda]
+fn ordered_pair_sum<F:Float>(left:F,right:F)->(F,F) {
+    let lane=UNIT_POS as usize;
+    let mut sm=SharedMemory::<F>::new(256usize);let mut sd=SharedMemory::<F>::new(256usize);
+    sm[lane]=left;sd[lane]=right;sync_ruda();
+    #[unroll] for step in 0usize..3 {
+        let distance=comptime!(128usize>>step);
+        if lane<distance {sm[lane]=sm[lane]+sm[lane+distance];sd[lane]=sd[lane]+sd[lane+distance];}
+        sync_ruda();
+    }
+    if lane<32 {
+        let mut x=sm[lane];let mut y=sd[lane];
+        #[unroll] for step in 0usize..5 {
+            let distance=comptime!(16u32>>step);let a=plane_shuffle_down(x,distance);let b=plane_shuffle_down(y,distance);
+            if lane<distance as usize {x=x+a;y=y+b;}
+        }
+        if lane==0 {sm[0]=x;sd[0]=y;}
+    }
+    sync_ruda();(sm[0],sd[0])
 }
 
 #[ruda(launch)]
@@ -109,7 +135,6 @@ fn affine<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,mean:&Tensor<F>,
 #[ruda(launch)]
 fn input_gradient<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Tensor<S>,mean:&Tensor<F>,rstd:&Tensor<F>,weight:&Tensor<F>,out:&mut Tensor<S>,channels:usize,spatial:usize,groups:usize,#[comptime] kind:u32,#[comptime] weighted:bool,#[comptime] training:bool) {
     let row=RUDA_POS_X as usize;let lane=UNIT_POS as usize;let width=a.shape(1);
-    let mut sm=SharedMemory::<F>::new(256usize);let mut sd=SharedMemory::<F>::new(256usize);
     let mut mu=mean[row];if comptime!(kind==3) {mu=F::new(0.0);}let inv=rstd[row];
     let mut sum=F::new(0.0);let mut dot=F::new(0.0);let mut j=lane;
     if comptime!(training) {
@@ -122,15 +147,14 @@ fn input_gradient<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Te
             j+=256;
         }
     }
-    sm[lane]=sum;sd[lane]=dot;sync_ruda();let mut stride=128usize;
-    while stride>0 {if lane<stride {sm[lane]=sm[lane]+sm[lane+stride];sd[lane]=sd[lane]+sd[lane+stride];}sync_ruda();stride/=2;}
-    let average=sm[0]/F::cast_from(width);let correction=sd[0]*inv*inv/F::cast_from(width);let mut j=lane;
+    let total=ordered_pair_sum(sum,dot);
+    let average=total.0/F::cast_from(width);let correction=total.1*inv*inv/F::cast_from(width);let mut j=lane;
     while j<width {
         let p=row*width+j;let mut g=F::cast_from(grad[address(grad,p)]);
         if comptime!(weighted) {g*=weight[affine_index(row,j,channels,spatial,groups,kind)];}
         let mut result=g*inv;
         if comptime!(kind==1) {
-            let scale=F::new(1.0)/F::cast_from(width);let c2=fma(sm[0],mu,-sd[0])*inv*inv*inv*scale;let c3=fma(-c2,mu,-(sm[0]*inv*scale));
+            let scale=F::new(1.0)/F::cast_from(width);let c2=fma(total.0,mu,-total.1)*inv*inv*inv*scale;let c3=fma(-c2,mu,-(total.0*inv*scale));
             let mut c1=inv;if comptime!(weighted) {c1*=weight[affine_index(row,j,channels,spatial,groups,kind)];}
             result=fma(c1,F::cast_from(grad[address(grad,p)]),c2*F::cast_from(a[address(a,p)]))+c3;
         } else {
@@ -144,7 +168,6 @@ fn input_gradient<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Te
 #[ruda(launch)]
 fn affine_gradient<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&Tensor<S>,mean:&Tensor<F>,rstd:&Tensor<F>,dw:&mut Tensor<F>,db:&mut Tensor<F>,channels:usize,spatial:usize,groups:usize,#[comptime] kind:u32) {
     let index=RUDA_POS_X as usize;let lane=UNIT_POS as usize;let width=a.shape(1);let rows=a.shape(0);
-    let mut sw=SharedMemory::<F>::new(256usize);let mut sb=SharedMemory::<F>::new(256usize);
     let mut count=rows;if comptime!(kind==1) {count=rows/groups*spatial;}else if comptime!(kind==2) {count=width;}
     let mut w=F::new(0.0);let mut b=F::new(0.0);let mut j=lane;
     while j<count {
@@ -155,9 +178,8 @@ fn affine_gradient<S:Float+RudaElement,F:Float+RudaElement>(a:&Tensor<S>,grad:&T
         if comptime!(kind!=3) {x-=mean[row];}
         w+=g*x*rstd[row];b+=g;j+=256;
     }
-    sw[lane]=w;sb[lane]=b;sync_ruda();let mut stride=128usize;
-    while stride>0 {if lane<stride {sw[lane]=sw[lane]+sw[lane+stride];sb[lane]=sb[lane]+sb[lane+stride];}sync_ruda();stride/=2;}
-    if lane==0 {dw[index]=sw[0];db[index]=sb[0];}
+    let total=ordered_pair_sum(w,b);
+    if lane==0 {dw[index]=total.0;db[index]=total.1;}
 }
 
 #[ruda]
@@ -355,7 +377,8 @@ fn dispatch_typed<S:Float+RudaElement,F:Float+RudaElement>(c:&ComputeClient<Cuda
             if ints.len()==2 && ints[1]!=0 {
                 // Few very wide rows: one 128-thread block per row leaves most SMs idle.
                 let threads=if a.shape[1]>=65536 {1024} else {128};
-                vector_statistics::launch::<S,CudaRuntime>(c,grid(rows),RudaDim::new_1d(threads as u32),a.arg(),xs[1].arg(),xs[2].arg(),xs[3].arg(),values[0] as f32,threads);
+                let packed=a.contiguous() && a.shape[1]%4==0 && a.handle.offset_start.unwrap_or(0)%(4*element_bytes(a.dtype)) as u64==0;
+                vector_statistics::launch::<S,CudaRuntime>(c,grid(rows),RudaDim::new_1d(threads as u32),a.arg(),xs[1].arg(),xs[2].arg(),xs[3].arg(),values[0] as f32,threads,packed);
             }
             else {statistics::launch::<S,F,CudaRuntime>(c,grid(rows),block,a.arg(),xs[1].arg(),xs[2].arg(),xs[3].arg(),epsilon,kind);}
         }}

@@ -48,10 +48,22 @@ def quotient(a, b, *, op, inplace=False, out=None, exact_out=False):
 
     scalar_right = op <= 2 and dtype in _dtypes and (not isinstance(b, torch.Tensor) or b.device.type == 'cpu')
     parameters = _C.division_scalar(b, dtype, op) if scalar_right else (0, 0)
+    scalar_kind = int(scalar_right)
+    if op != 0 and dtype in _integral_dtypes and type(b) in (bool, int):
+        from ._arithmetic import _integer_scalar_available
+        if _integer_scalar_available():
+            try:
+                bits = _C.arithmetic_alpha(int(b), dtype, dtype, False)
+            except (OverflowError, RuntimeError):
+                pass
+            else:
+                scalar_right = True
+                scalar_kind = 2
+                parameters = (bits, 0)
     left = operand(a)
     right = left if scalar_right else operand(b)
     result = torch.empty(shape, dtype=dtype, device=device)
-    _C.scientific_call(486, [left, right, result], [op, int(scalar_right), *parameters], [])
+    _C.scientific_call(486, [left, right, result], [op, scalar_kind, *parameters], [])
     return _output(result, out, tensors, cast=True)
 
 

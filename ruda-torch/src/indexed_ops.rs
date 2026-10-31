@@ -104,6 +104,29 @@ fn bincount<I:Numeric+RudaElement,S:Numeric+RudaElement>(input:&Tensor<I>,weight
     }
 }
 
+#[ruda(launch)]
+fn integer_histogram<I:Numeric+RudaElement>(input:&Tensor<I>,out:&mut Tensor<Atomic<i64>>,#[comptime] bins:usize) {
+    let lane=UNIT_POS as usize;let mut shared=SharedMemory::<Atomic<u32>>::new(bins);
+    let mut bin=lane;
+    while bin<bins {shared[bin].store(0u32);bin+=256;}
+    sync_ruda();
+    let start=RUDA_POS_X as usize*4096;
+    for item in 0usize..16 {
+        let index=start+item*256+lane;
+        if index<input.len() {
+            let value=i64::cast_from(input[address(input,index)]);
+            if value<0i64 || value>=bins as i64 {intrinsic!(|scope| {scope.register(ruda_core::ir::Branch::Unreachable);});}
+            shared[usize::cast_from(value)].fetch_add(1u32);
+        }
+    }
+    sync_ruda();bin=lane;
+    while bin<bins {
+        let count=shared[bin].load();
+        if count!=0u32 {out[bin*out.stride(0)].fetch_add(i64::cast_from(count));}
+        bin+=256;
+    }
+}
+
 fn grid(n:usize)->RudaCount {RudaCount::Static(u32::try_from(n.div_ceil(256)).expect("indexed operation launch overflow"),1,1)}
 
 pub(super) fn dispatch(op:u32,xs:&[View],ints:&[i64],values:&[f64]) {
@@ -142,6 +165,12 @@ pub(super) fn dispatch(op:u32,xs:&[View],ints:&[i64],values:&[f64]) {
         assert_eq!(xs[0].shape.len(),1);assert_eq!(xs[2].shape.len(),1);assert!((4..=8).contains(&xs[0].dtype));
         if weighted {assert_eq!(xs[1].len,xs[0].len);assert!(matches!(xs[2].dtype,0|9));}else{assert_eq!(xs[2].dtype,4);}
         assert_eq!(xs[1].dtype,xs[2].dtype);if xs[0].len==0 {return;}
+        if !weighted && xs[0].len>=4096 && xs[2].len<=4096 {
+            let count=RudaCount::Static(u32::try_from(xs[0].len.div_ceil(4096)).expect("histogram grid overflow"),1,1);
+            macro_rules! histogram {($i:ty)=>{unsafe {integer_histogram::launch::<$i,CudaRuntime>(&c,count,block,xs[0].arg(),xs[2].arg(),xs[2].len);}};}
+            match xs[0].dtype {4=>histogram!(i64),5=>histogram!(i32),6=>histogram!(i16),7=>histogram!(i8),8=>histogram!(u8),_=>unreachable!()}
+            LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);return;
+        }
         macro_rules! run {($i:ty,$s:ty)=>{unsafe {bincount::launch::<$i,$s,CudaRuntime>(&c,grid(xs[0].len),block,xs[0].arg(),xs[1].arg(),xs[2].arg(),weighted);}};}
         macro_rules! scalar {($i:ty)=>{match xs[2].dtype {0=>run!($i,f32),4=>run!($i,i64),9=>run!($i,f64),_=>unreachable!()}};}
         match xs[0].dtype {4=>scalar!(i64),5=>scalar!(i32),6=>scalar!(i16),7=>scalar!(i8),8=>scalar!(u8),_=>unreachable!()}

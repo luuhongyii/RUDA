@@ -15,6 +15,7 @@ class TorchBuildExtension(BuildExtension):
         for extension in self.extensions:
             extension.depends.append(str(ROOT / 'ruda-torch/python/ruda_torch/csrc/qwen_graph.inc'))
             extension.depends.append(str(ROOT / 'ruda-torch/python/ruda_torch/csrc/eager_arithmetic.inc'))
+            extension.depends.append(str(ROOT / 'ruda-torch/python/ruda_torch/csrc/eager_selection.inc'))
         if self.compiler.compiler_type == "unix" and "GCC" in torch.__config__.show():
             version = subprocess.check_output(self.compiler.compiler_cxx + ["--version"], text=True)
             if "clang" in version.lower():

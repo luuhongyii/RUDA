@@ -37,6 +37,8 @@ if _native_eager_ops:
     _C.initialize_eager_arithmetic(_arithmetic_version is not None and _arithmetic_version() >= 2)
     if hasattr(_C, 'initialize_eager_cat'):
         _C.initialize_eager_cat(_arithmetic_version is not None and _arithmetic_version() >= 3)
+    if hasattr(_C, 'initialize_eager_integer_scalar'):
+        _C.initialize_eager_integer_scalar(_arithmetic_version is not None and _arithmetic_version() >= 4)
 _dtypes = (torch.float32, torch.float16, torch.bfloat16, torch.float64)
 _numeric_dtypes = _dtypes + (torch.complex64, torch.complex128)
 _wide_dtypes = (torch.float64, torch.complex64, torch.complex128)
@@ -1193,7 +1195,8 @@ for name, function in {
 
 for name, op in (("eq", 78), ("ne", 79), ("lt", 80), ("le", 81), ("gt", 82), ("ge", 83)):
     for overload in ("Tensor", "Scalar"):
-        _registry.impl(f"{name}.{overload}", lambda a, b, op=op: _comparison(op, a, b))
+        if f"{name}.{overload}" not in _native_eager_ops:
+            _registry.impl(f"{name}.{overload}", lambda a, b, op=op: _comparison(op, a, b))
         _registry.impl(f"{name}_.{overload}", lambda a, b, op=op: _comparison(op, a, b, inplace=True))
         _registry.impl(f"{name}.{overload}_out", lambda a, b, *, out, op=op: _comparison(op, a, b, out=out))
 

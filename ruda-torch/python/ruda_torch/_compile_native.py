@@ -13,7 +13,9 @@ import torch
 from torch.fx import Graph, GraphModule, Node
 from torch.fx.node import map_arg
 
-from ._graph_spec import GraphOp, MAX_NODES, MAX_TENSORS, TensorSpec, plan_layout, UNARY_CODES, DTYPE_BYTES, INDEX_CODES, TRANSFORM_CODES, PREDICATE_CODES, FACTORY_CODES, MASK_CODES
+from ._graph_spec import GraphOp, MAX_NODES, MAX_TENSORS, TensorSpec, plan_layout, UNARY_CODES, DTYPE_BYTES, INDEX_CODES, TRANSFORM_CODES, PREDICATE_CODES, FACTORY_CODES, MASK_CODES, FP8_DTYPES
+from ._compile_patterns import pack_nibbles as _pack_nibbles
+from ._compile_segment_scan import segment_sum as _segment_sum, segment_sum_exp as _segment_sum_exp
 
 
 class NativeCoverageError(RuntimeError):
@@ -40,6 +42,7 @@ _TARGETS.update({torch.ops.aten.clone.default: 'copy', torch.ops.aten.add.Tensor
 _TARGETS.update({torch.ops.aten.view_copy.default: 'reshape_copy',
     torch.ops.aten.permute_copy.default: 'permute_copy', torch.ops.aten._to_copy.default: 'cast',
     torch.ops.aten.expand_copy.default: 'expand_copy'})
+_TARGETS.update({torch.ops.aten.repeat.default:'repeat_copy',torch.ops.aten.repeat_interleave.self_int:'repeat_interleave_copy'})
 _TARGETS.update({torch.ops.aten.rms_norm.default: 'rms_norm',
     torch.ops.aten.softmax.int: 'softmax_public',torch.ops.aten.log_softmax.int: 'log_softmax_public'})
 _TARGETS.update({torch.ops.aten.index_select.default:'index_select',torch.ops.aten.gather.default:'gather',
@@ -49,11 +52,19 @@ _TARGETS.update({torch.ops.aten.slice_copy.Tensor:'slice_copy',torch.ops.aten.se
     torch.ops.aten.slice_backward.default:'slice_backward',torch.ops.aten.select_backward.default:'select_backward',
     torch.ops.aten.slice_scatter.default:'slice_scatter',torch.ops.aten.cat.default:'cat'})
 _TARGETS.update({torch.ops.aten.masked_fill.Scalar:'masked_fill',torch.ops.aten.where.self:'where'})
+for _activation in ('gelu','gelu_backward','leaky_relu','leaky_relu_backward',
+                    'clamp','clamp_min','clamp_max','log_sigmoid','minimum','maximum','mish','mish_backward','softplus','softplus_backward'):
+    _TARGETS[getattr(torch.ops.aten,_activation).default]='activation'
 _FACTORIES={getattr(torch.ops.aten,name).default:name for name in (
     'full','full_like','zeros','zeros_like','ones','ones_like','new_full','new_zeros','new_ones','scalar_tensor')}
 _FACTORIES.update({torch.ops.aten.arange.default:'arange',torch.ops.aten.arange.start:'arange_start',
                    torch.ops.aten.arange.start_step:'arange_start_step'})
 _TARGETS.update(_FACTORIES)
+_TARGETS[_pack_nibbles]='pack_nibbles'
+_TARGETS[_segment_sum]='segment_sum'
+_TARGETS[_segment_sum_exp]='segment_sum_exp'
+for _extremum in ('amax','amin','max','min'):
+    _TARGETS[getattr(torch.ops.aten,_extremum).default]='extremum'
 for _mask in MASK_CODES:
     _TARGETS[getattr(getattr(torch.ops.aten,_mask),'Tensor' if _mask in ('bitwise_and','bitwise_or','bitwise_xor') else 'default')]=_mask
 for _comparison in ('eq','ne','lt','le','gt','ge'):
@@ -214,7 +225,7 @@ def _lower_transform(node,kind,args,kwargs,value):
         if kind=='select_copy':start=parameters['index'];end=None;step=1
         else:start=parameters['start'];end=parameters['end'];step=parameters['step'];step=1 if step is None else step
     rank=len(full)
-    if type(axis) is not int or not -rank<=axis<rank or type(step) is not int or step!=1:return None
+    if type(axis) is not int or not -rank<=axis<rank or type(step) is not int or step<=0:return None
     axis%=rank;length=full[axis]
     if type(length) is not int:return None
     if kind.startswith('select_'):
@@ -222,8 +233,14 @@ def _lower_transform(node,kind,args,kwargs,value):
         start%=length
     else:
         if start is not None and type(start) is not int or end is not None and type(end) is not int:return None
-        start,end,_=slice(start,end,1).indices(length)
+        start,end,_=slice(start,end,step).indices(length)
         if end<=start and not _empty_capable():return None
+    if step!=1:
+        if (not getattr(sys.modules.get(__package__),'_graph_transform_available',False)
+                or start>=2048 or step>=1024 or kind not in ('slice_copy','slice_backward','slice_scatter')):return None
+        code=axis+(start<<3)+(step<<14)
+        right=args[1].name if kind=='slice_scatter' else None
+        return GraphOp(kind.replace('slice_','slice_strided_'),node.name,args[0].name,right,code,shape=tuple(value.shape))
     code=start*8+axis
     if code>=2**24:return None
     right=args[1].name if kind=='slice_scatter' else None
@@ -240,10 +257,46 @@ def _lower(node):
     if isinstance(value, torch.Tensor) and not value.is_contiguous() and not alias:
         return None  # Output stride/clone memory-format is observable to users.
     kind, args, kwargs = (_ALIASES[node.target] if alias else _TARGETS[node.target]), node.args, dict(node.kwargs)
+    fp8_values=[value,*(arg.meta.get('val') for arg in node.all_input_nodes)]
+    if any(isinstance(t,torch.Tensor) and str(t.dtype).removeprefix('torch.') in FP8_DTYPES for t in fp8_values):
+        if (kind not in ('copy','cast','reshape_copy','permute_copy','transpose_copy','expand_copy')
+                or not getattr(sys.modules.get(__package__),'_graph_fp8_available',False)):return None
     if node.target in _FACTORIES:return _lower_factory(node,kind,args,kwargs,value)
+    if kind=='extremum':
+        if not _layout_capable() or not getattr(sys.modules.get(__package__),'_graph_extremum_available',False):return None
+        from ._compile_reductions import definition,describe
+        defined=definition(node)
+        if defined is None:return None
+        q,code,dims,keepdim,dtype=defined[1]
+        source=q.meta.get('val')
+        if dtype not in (torch.float32,torch.float16,torch.bfloat16):return None
+        try: _,_,ints,_,_,_=describe((source,code,dims,keepdim,dtype))
+        except (ValueError,TypeError):return None
+        if source.ndim==0:return GraphOp('copy',node.name,q.name)
+        name=('amax','amin')[code]+('_keepdim' if keepdim else '')
+        return GraphOp(name,node.name,q.name,scalar=ints[1])
+    if kind=='activation':
+        if not _layout_capable() or not getattr(sys.modules.get(__package__),'_graph_activation_available',False):return None
+        from ._compile_pointwise import definition
+        defined=definition(node)
+        if defined is None or defined[0]!=18:return None
+        q,other,code,p0,p1,dtype=defined[1]
+        names={0:'softplus',1:'softplus_backward',2:'gelu',3:'gelu_tanh',4:'gelu_backward',5:'gelu_tanh_backward',
+               6:'leaky_relu',7:'leaky_relu_backward',8:'clamp_min',9:'clamp_max',
+               11:'log_sigmoid',12:'minimum',13:'maximum',14:'mish',15:'mish_backward'}
+        if code not in names or not math.isfinite(p0) or not math.isfinite(p1):return None
+        if code in (0,1) and p1!=20.:return None
+        if q.meta['val'].dtype!=dtype or other is not None and other.meta['val'].dtype!=dtype:return None
+        return GraphOp(names[code],node.name,q.name,other.name if other is not None else None,p0)
     if kind in TRANSFORM_CODES:return _lower_transform(node,kind,args,kwargs,value)
     if not args or not isinstance(args[0], Node): return None
     left = args[0].name
+    if kind in ('segment_sum','segment_sum_exp'):
+        if not getattr(sys.modules.get(__package__),'_graph_segment_available',False) or len(args)!=1 or kwargs:return None
+        return GraphOp(kind,node.name,left)
+    if kind=='pack_nibbles':
+        if not getattr(sys.modules.get(__package__),'_graph_pack_available',False) or len(args)!=1 or kwargs:return None
+        return GraphOp(kind,node.name,left)
     if kind in MASK_CODES:
         if not _factory_capable():return None
         if kind in ('tril','triu'):
@@ -325,6 +378,27 @@ def _lower(node):
             a,b=args[1]%rank,args[2]%rank
             axes[a],axes[b]=axes[b],axes[a]
         return GraphOp('permute_copy',node.name,left,scalar=sum(d<<(3*i) for i,d in enumerate(axes)),shape=tuple(value.shape))
+    if kind in ('repeat_copy','repeat_interleave_copy'):
+        if (not getattr(sys.modules.get(__package__),'_graph_transform_available',False)
+                or not isinstance(value,torch.Tensor) or value.dtype not in tuple(getattr(torch,name) for name in DTYPE_BYTES if name not in FP8_DTYPES)
+                or not args or not isinstance(args[0],Node)):return None
+        source=args[0].meta.get('val')
+        if not isinstance(source,torch.Tensor) or source.device!=value.device or source.dtype!=value.dtype:return None
+        if kind=='repeat_copy':
+            if len(args)!=2 or kwargs or not isinstance(args[1],(tuple,list)) or len(args[1])<source.ndim:return None
+            repeats=args[1]
+            if any(type(r) is not int or r<0 for r in repeats):return None
+            if tuple(value.shape)!=tuple(s*r for s,r in zip((1,)*(len(repeats)-source.ndim)+tuple(source.shape),repeats)):return None
+            axis=0
+        else:
+            if not 2<=len(args)<=3 or set(kwargs)-{'dim','output_size'} or type(args[1]) is not int or args[1]<0:return None
+            axis=args[2] if len(args)>2 else kwargs.get('dim')
+            if axis is not None and (type(axis) is not int or not -source.ndim<=axis<source.ndim):return None
+            shape=[source.numel()] if axis is None else list(source.shape)
+            logical_axis=0 if axis is None else axis%source.ndim;shape[logical_axis]*=args[1]
+            if tuple(value.shape)!=tuple(shape) or kwargs.get('output_size') not in (None,shape[logical_axis]):return None
+            axis=-1 if axis is None else logical_axis
+        return GraphOp(kind,node.name,left,scalar=axis,shape=tuple(value.shape))
     if kind in ('reshape_copy','permute_copy','expand_copy','cast'):
         if not _layout_capable():return None
         if not isinstance(value, torch.Tensor) or str(value.dtype).removeprefix('torch.') not in DTYPE_BYTES:
@@ -474,6 +548,8 @@ def _input_spec(value):
         raise ValueError('native regions require dense strided tensors')
     if value.is_conj() or value.is_neg():
         raise ValueError('native regions do not support unresolved conjugate/negative views')
+    if str(value.dtype).removeprefix('torch.') in FP8_DTYPES and not getattr(sys.modules.get(__package__),'_graph_fp8_available',False):
+        raise ValueError('native graph FP8 extension unavailable')
     return TensorSpec(tuple(value.shape), str(value.dtype).removeprefix('torch.'))
 
 
@@ -510,6 +586,8 @@ class NativeRegion(torch.nn.Module):
                 try:
                     specs = {name: _input_spec(value) for name, value in zip(self.names, args, strict=True)}
                     plan_layout(specs, self.nodes, self.outputs,layout_api=int(_layout_capable()),empty_api=int(_empty_capable()),root_api=int(_root_capable()))
+                    if any(node.dtype in FP8_DTYPES for node in self.nodes) and not getattr(sys.modules.get(__package__),'_graph_fp8_available',False):
+                        raise ValueError('native graph FP8 extension unavailable')
                     if any(node.kind in FACTORY_CODES or node.kind in MASK_CODES for node in self.nodes) and not _factory_capable():
                         raise ValueError('native graph factory extension unavailable')
                     if (any(node.kind in INDEX_CODES or node.kind in TRANSFORM_CODES or node.kind in PREDICATE_CODES for node in self.nodes)
@@ -628,12 +706,23 @@ def partition(gm, state, phase, options):
     if options.native!='off' and _layout_capable():
         from ._compile_normalization import expand_normalizations
         gm=expand_normalizations(gm)
+    if options.native!='off' and getattr(sys.modules.get(__package__),'_graph_activation_available',False):
+        from ._compile_pointwise import expand_clamps
+        gm=expand_clamps(gm)
+    if options.native!='off' and getattr(sys.modules.get(__package__),'_graph_pack_available',False):
+        from ._compile_patterns import fuse_nibble_packing
+        gm=fuse_nibble_packing(gm)
+    if options.native!='off' and getattr(sys.modules.get(__package__),'_graph_segment_available',False):
+        from ._compile_segment_scan import fuse_segment_scans
+        gm=fuse_segment_scans(gm)
     all_nodes = list(gm.graph.nodes)
     calls = [n for n in all_nodes if n.op in ('call_function', 'call_method', 'call_module')]
     from ._compile_operations import OperationRegion,operation,tuple_metadata,host_metadata_nodes
     from ._compile_collectives import make_region as collective_region,definition as collective_definition
     from ._compile_shapes import shape_guard
-    operations={n:OperationRegion(n,state,phase,options) for n in calls if options.native!='off' and operation(n) is not None}
+    fused_nodes={n for n in calls if n.op=='call_function'
+                 and _TARGETS.get(n.target) in ('activation','extremum',*MASK_CODES,*PREDICATE_CODES) and _lower(n) is not None}
+    operations={n:OperationRegion(n,state,phase,options) for n in calls if options.native!='off' and n not in fused_nodes and operation(n) is not None}
     collectives={n:collective_region(n,state,phase,options) for n in calls if options.native!='off' and collective_definition(n) is not None}
     operations.update(collectives)
     candidates = {n for n in calls if n not in operations and _lower(n) is not None}

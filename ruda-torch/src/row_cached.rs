@@ -14,7 +14,7 @@ fn key_maximum(key: i32) -> f32 {
 }
 
 #[ruda]
-fn block_reduce(value: f32, scratch: &mut SharedMemory<f32>,
+pub(super) fn block_reduce(value: f32, scratch: &mut SharedMemory<f32>,
     #[comptime] threads: usize, #[comptime] maximum: bool, #[comptime] slot: usize,
 ) -> f32 {
     let thread = UNIT_POS as usize;
@@ -44,9 +44,11 @@ pub fn norm<F: Float + RudaElement, W: Float + RudaElement, B: Float + RudaEleme
     #[comptime] width: usize, #[comptime] threads: usize,
     #[define(V)] _vector_size: usize,
 ) {
-    let row = RUDA_POS_X as usize;
-    let thread = UNIT_POS as usize;
+    let mut row = RUDA_POS_X as usize;
+    let thread = UNIT_POS as usize % threads;
+    if comptime!(threads == 32) { row = row * 4usize + UNIT_POS as usize / 32usize; }
     let vector = input.vector_size().comptime();
+    if row < out.len() / (width / vector) {
     let chunks = comptime!(width.div_ceil(threads * vector));
     let mut values = Array::<Vector<f32, V>>::new(chunks);
     let mut scratch = SharedMemory::<f32>::new(2 * (threads / 32));
@@ -91,15 +93,24 @@ pub fn norm<F: Float + RudaElement, W: Float + RudaElement, B: Float + RudaEleme
         if col < width / vector {
             let cached = values[j];
             let mut value = Vector::<F, V>::empty();
+            let mut weights = Vector::<f32,V>::new(1.0f32);
+            let mut biases = Vector::<f32,V>::new(0.0f32);
+            if comptime!(weighted) {
+                weights = Vector::cast_from(weight.slice(0usize,weight.len()).into_vectorized().with_vector_size::<V>()[col]);
+            }
+            if comptime!(biased) {
+                biases = Vector::cast_from(bias.slice(0usize,bias.len()).into_vectorized().with_vector_size::<V>()[col]);
+            }
             #[unroll] for lane in 0usize..vector {
                 let mut x = cached[lane] * inv;
                 if comptime!(hf_rounding) { x = f32::cast_from(F::cast_from(x)); }
-                if comptime!(weighted) { x *= f32::cast_from(weight[col * vector + lane]); }
-                if comptime!(biased) { x += f32::cast_from(bias[col * vector + lane]); }
+                if comptime!(weighted) { x *= weights[lane]; }
+                if comptime!(biased) { x += biases[lane]; }
                 value[lane] = F::cast_from(x);
             }
             out[row * (width / vector) + col] = value;
         }
+    }
     }
 }
 
@@ -138,7 +149,7 @@ pub fn softmax<F: Float + RudaElement, O: Float + RudaElement, V: Size>(
             let mut next = Vector::<f32, V>::empty();
             #[unroll] for lane in 0usize..vector {
                 let shifted = cached[lane] - maximum;
-                let exponential = shifted.exp();
+                let exponential = crate::softmax::exp_fast(shifted);
                 local += exponential;
                 if comptime!(logarithmic) { next[lane] = shifted; } else { next[lane] = exponential; }
             }
@@ -205,7 +216,7 @@ pub fn softmax_backward<F: Float + RudaElement, O: Float + RudaElement, V: Size>
                 let mut result = Vector::<O, V>::empty();
                 #[unroll] for lane in 0usize..vector {
                     let mut dx = 0.0f32;
-                    if comptime!(logarithmic) { dx = g[lane] - y[lane].exp() * total; }
+                    if comptime!(logarithmic) { dx = g[lane] - crate::softmax::exp_fast(y[lane]) * total; }
                     else { dx = y[lane] * (g[lane] - total); }
                     result[lane] = O::cast_from(dx);
                 }
@@ -222,9 +233,11 @@ pub fn norm_backward<F: Float + RudaElement, W: Float + RudaElement, V: Size>(
     #[comptime] weighted: bool, #[comptime] layer: bool, #[comptime] hf_rounding: bool,
     #[comptime] width: usize, #[comptime] threads: usize, #[define(V)] _vector_size: usize,
 ) {
-    let row = RUDA_POS_X as usize;
-    let thread = UNIT_POS as usize;
+    let mut row = RUDA_POS_X as usize;
+    let thread = UNIT_POS as usize % threads;
+    if comptime!(threads == 32) { row = row * 4usize + UNIT_POS as usize / 32usize; }
     let vector = input.vector_size().comptime();
+    if row < out.len() / (width / vector) {
     let chunks = comptime!(width.div_ceil(threads * vector));
     let inv = rstd[row];
     let mut mu = 0.0f32;
@@ -241,10 +254,14 @@ pub fn norm_backward<F: Float + RudaElement, W: Float + RudaElement, V: Size>(
         if col < width / vector {
             x = Vector::cast_from(input[row * (width / vector) + col]);
             g = Vector::cast_from(grad[row * (width / vector) + col]);
+            let mut weights = Vector::<f32,V>::new(1.0f32);
+            if comptime!(weighted) {
+                weights = Vector::cast_from(weight.slice(0usize,weight.len()).into_vectorized().with_vector_size::<V>()[col]);
+            }
             #[unroll] for lane in 0usize..vector {
                 let mut v = x[lane];
                 let mut dy = g[lane];
-                if comptime!(weighted) { dy *= f32::cast_from(weight[col * vector + lane]); }
+                if comptime!(weighted) { dy *= weights[lane]; }
                 if comptime!(hf_rounding) { dy = f32::cast_from(F::cast_from(dy)); }
                 if comptime!(layer) {
                     v = (v - mu) * inv;
@@ -276,15 +293,37 @@ pub fn norm_backward<F: Float + RudaElement, W: Float + RudaElement, V: Size>(
             out[row * (width / vector) + col] = result;
         }
     }
+    }
 }
 
 pub(super) fn threads(width: usize) -> usize { if width <= 4096 { 128 } else { 256 } }
 
-pub(super) fn eligible(width: usize) -> bool { (512..=16384).contains(&width) }
+pub(super) fn norm_threads(width: usize, rows: usize) -> usize {
+    if width <= 256 || width <= 1024 && rows >= 4 {32} else {threads(width)}
+}
+
+pub(super) fn norm_grid(rows: usize, threads: usize) -> RudaCount {
+    RudaCount::Static(u32::try_from(if threads == 32 {rows.div_ceil(4)} else {rows})
+        .expect("normalization grid overflow"),1,1)
+}
+
+pub(super) fn norm_block(threads: usize) -> RudaDim { RudaDim::new_1d(threads.max(128) as u32) }
+
+pub(super) fn eligible(width: usize) -> bool { (1..=16384).contains(&width) }
 
 pub(super) fn vector_size(width: usize, input: &super::View, output: &super::View) -> usize {
     if width % 4 == 0 && [input, output].iter().all(|v|
         v.handle.offset_start.unwrap_or(0) % (4 * super::element_bytes(v.dtype)) as u64 == 0) { 4 } else { 1 }
+}
+
+pub(super) fn memory_vector_size(client: &super::ComputeClient<super::CudaRuntime>, width: usize,
+    views: &[&super::View], maximum: usize) -> usize {
+    let bytes = (client.properties().hardware.load_width as usize / 8).min(32);
+    [16usize, 8, 4, 2, 1].into_iter().find(|&vector| vector <= maximum && width % vector == 0
+        && views.iter().all(|view| {
+            let size = vector * super::element_bytes(view.dtype);
+            size <= bytes && view.handle.offset_start.unwrap_or(0) % size as u64 == 0
+        })).unwrap_or(1)
 }
 
 pub(super) fn packed(view: &super::View) -> bool {

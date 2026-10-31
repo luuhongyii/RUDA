@@ -50,7 +50,8 @@ impl<T: SpirvTarget> SpirvCompiler<T> {
             CoopMma::Elementwise { input, function, captures } => {
                 self.compile_matrix_elementwise(input, out, *function, captures);
             }
-            CoopMma::RowIndex { .. }
+            CoopMma::Blackwell { .. }
+            | CoopMma::RowIndex { .. }
             | CoopMma::ColIndex { .. }
             | CoopMma::LoadMatrix { .. }
             | CoopMma::StoreMatrix { .. }

@@ -53,6 +53,8 @@ pub struct Types {
 /// Matrix multiplication-related features
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
 pub struct MatmulFeatures {
+    /// SM100 architecture-specific tensor-memory MMA through the direct PTX backend.
+    pub tcgen05: bool,
     /// The cmma feature enables cooperative matrix-multiply and accumulate operations.
     pub cmma: BTreeSet<MmaConfig>,
     /// Workgroup-level cooperative MMA with flexible matrix dimensions.

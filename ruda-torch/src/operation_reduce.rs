@@ -1,7 +1,14 @@
 use super::*;
 
 #[ruda]
-fn combine<E:Numeric>(a:E,ai:u32,b:E,bi:u32,#[comptime] operation:u32)->(E,u32) {
+fn preprocess<E:Numeric>(value:E,#[comptime] absolute:bool)->E {
+    let mut result=value;
+    if comptime!(absolute) {result=E::cast_from(f32::cast_from(value).abs());}
+    result
+}
+
+#[ruda]
+pub(super) fn combine<E:Numeric>(a:E,ai:u32,b:E,bi:u32,#[comptime] operation:u32)->(E,u32) {
     let mut value=a;let mut key=ai;
     if comptime!(operation>=6) {
         if comptime!(operation==6) {value=E::cast_from(a!=E::cast_from(0) || b!=E::cast_from(0));}
@@ -21,7 +28,7 @@ fn combine<E:Numeric>(a:E,ai:u32,b:E,bi:u32,#[comptime] operation:u32)->(E,u32) 
 }
 
 #[ruda]
-fn warp_reduce<E:Numeric>(value:E,key:u32,#[comptime] operation:u32)->(E,u32) {
+pub(super) fn warp_reduce<E:Numeric>(value:E,key:u32,#[comptime] operation:u32)->(E,u32) {
     let mut value=value;let mut key=key;
     #[unroll] for stage in 0usize..5 {
         let other=plane_shuffle_down(value,(16usize >> stage) as u32);
@@ -34,26 +41,25 @@ fn warp_reduce<E:Numeric>(value:E,key:u32,#[comptime] operation:u32)->(E,u32) {
 
 #[ruda(launch)]
 fn reduce_rows<E:Numeric+RudaElement,O:Numeric+RudaElement>(input:&Tensor<E>,out:&mut Tensor<O>,out_indices:&mut Tensor<i64>,
-    #[comptime] length:usize,#[comptime] operation:u32,#[comptime] mask:u32,#[comptime] rank:usize) {
+    #[comptime] length:usize,#[comptime] operation:u32,#[comptime] mask:u32,#[comptime] rank:usize,#[comptime] absolute:bool) {
     let row=(ABSOLUTE_POS/32) as usize;let lane=(UNIT_POS%32) as usize;
     if row<out.len() {
         let mut value=E::cast_from(0);let mut key=u32::MAX.runtime();
         if comptime!(operation==7 || operation==9) {value=E::cast_from(1);}
-        #[unroll] for chunk in 0usize..comptime!(length.div_ceil(32)) {
-            let position=lane+chunk*32;
-            if position<length {
-                let mut outer=row;let mut inner=position;let mut offset=0usize;
-                #[unroll] for axis in 0..rank {
-                    let d=comptime!(rank-axis-1);let mut coordinate=0usize;
-                    if comptime!((mask >> d)&1!=0) {coordinate=inner%input.shape(d);inner/=input.shape(d);}
-                    else {coordinate=outer%input.shape(d);outer/=input.shape(d);}
-                    offset+=coordinate*input.stride(d);
-                }
-                let mut item=input[offset];
-                if comptime!(operation==6 || operation==7) {item=E::cast_from(item!=E::cast_from(0));}
-                let next=combine::<E>(value,key,item,u32::cast_from(position),operation);
-                value=next.0;key=next.1;
+        let mut position=lane;
+        while position<length {
+            let mut outer=row;let mut inner=position;let mut offset=0usize;
+            #[unroll] for axis in 0..rank {
+                let d=comptime!(rank-axis-1);let mut coordinate=0usize;
+                if comptime!((mask >> d)&1!=0) {coordinate=inner%input.shape(d);inner/=input.shape(d);}
+                else {coordinate=outer%input.shape(d);outer/=input.shape(d);}
+                offset+=coordinate*input.stride(d);
             }
+            let mut item=preprocess(input[offset],absolute);
+            if comptime!(operation==6 || operation==7) {item=E::cast_from(item!=E::cast_from(0));}
+            let next=combine::<E>(value,key,item,u32::cast_from(position),operation);
+            value=next.0;key=next.1;
+            position+=32usize;
         }
         let result=warp_reduce::<E>(value,key,operation);
         if lane==0 {
@@ -65,8 +71,76 @@ fn reduce_rows<E:Numeric+RudaElement,O:Numeric+RudaElement>(input:&Tensor<E>,out
 }
 
 #[ruda(launch)]
+fn reduce_block<E:Numeric+RudaElement,O:Numeric+RudaElement>(input:&Tensor<E>,out:&mut Tensor<O>,out_indices:&mut Tensor<i64>,
+    length:usize,#[comptime] operation:u32,#[comptime] mask:u32,#[comptime] rank:usize,#[comptime] absolute:bool) {
+    let row=RUDA_POS_X as usize;let tid=UNIT_POS as usize;
+    let mut value=E::cast_from(0);let mut key=u32::MAX.runtime();
+    if comptime!(operation==7 || operation==9) {value=E::cast_from(1);}
+    let mut position=tid;
+    while position<length {
+        let mut outer=row;let mut inner=position;let mut offset=0usize;
+        #[unroll] for axis in 0..rank {
+            let d=comptime!(rank-axis-1);let mut coordinate=0usize;
+            if comptime!((mask>>d)&1!=0) {coordinate=inner%input.shape(d);inner/=input.shape(d);}
+            else {coordinate=outer%input.shape(d);outer/=input.shape(d);}
+            offset+=coordinate*input.stride(d);
+        }
+        let mut item=preprocess(input[offset],absolute);
+        if comptime!(operation==6 || operation==7) {item=E::cast_from(item!=E::cast_from(0));}
+        let next=combine::<E>(value,key,item,position as u32,operation);
+        value=next.0;key=next.1;position+=256usize;
+    }
+    let partial=warp_reduce::<E>(value,key,operation);
+    let mut values=SharedMemory::<E>::new(8usize);let mut keys=SharedMemory::<u32>::new(8usize);
+    if tid%32==0 {values[tid/32]=partial.0;keys[tid/32]=partial.1;}
+    sync_ruda();
+    if tid<32 {
+        value=E::cast_from(0);key=u32::MAX;
+        if comptime!(operation==7 || operation==9) {value=E::cast_from(1);}
+        if tid<8 {value=values[tid];key=keys[tid];}
+        let result=warp_reduce::<E>(value,key,operation);
+        if tid==0 {
+            if comptime!(operation==2 || operation==3) {out[row]=O::cast_from(result.1);}
+            else {out[row]=O::cast_from(result.0);}
+            if comptime!(operation==4 || operation==5) {out_indices[row]=i64::cast_from(result.1);}
+        }
+    }
+}
+
+#[ruda(launch)]
+fn reduce_columns<E:Numeric+RudaElement,O:Numeric+RudaElement>(input:&Tensor<E>,out:&mut Tensor<O>,out_indices:&mut Tensor<i64>,
+    length:usize,#[comptime] inner:usize,#[comptime] operation:u32,#[comptime] absolute:bool) {
+    let tile=RUDA_POS_X as usize;let lane=UNIT_POS_X as usize;let part=UNIT_POS_Y as usize;
+    let tiles=comptime!(inner.div_ceil(32));let outer=tile/tiles;let column=tile%tiles*32+lane;
+    let mut value=E::cast_from(0);let mut key=u32::MAX.runtime();
+    if comptime!(operation==7 || operation==9) {value=E::cast_from(1);}
+    if column<inner {
+        let mut position=part;
+        while position<length {
+            let mut item=preprocess(input[(outer*length+position)*inner+column],absolute);
+            if comptime!(operation==6 || operation==7) {item=E::cast_from(item!=E::cast_from(0));}
+            let next=combine::<E>(value,key,item,position as u32,operation);
+            value=next.0;key=next.1;position+=8usize;
+        }
+    }
+    let mut values=SharedMemory::<E>::new(256usize);let mut keys=SharedMemory::<u32>::new(256usize);
+    values[part*32+lane]=value;keys[part*32+lane]=key;sync_ruda();
+    if part==0 && column<inner {
+        value=values[lane];key=keys[lane];
+        #[unroll] for p in 1usize..8 {
+            let next=combine::<E>(value,key,values[p*32+lane],keys[p*32+lane],operation);
+            value=next.0;key=next.1;
+        }
+        let row=outer*inner+column;
+        if comptime!(operation==2 || operation==3) {out[row]=O::cast_from(key);}
+        else {out[row]=O::cast_from(value);}
+        if comptime!(operation==4 || operation==5) {out_indices[row]=i64::cast_from(key);}
+    }
+}
+
+#[ruda(launch)]
 fn reduce_tile<E:Numeric+RudaElement>(input:&Tensor<E>,indices:&Tensor<u32>,out:&mut Tensor<E>,out_indices:&mut Tensor<u32>,
-    length:u32,blocks:u32,#[comptime] operation:u32,#[comptime] mask:u32,#[comptime] rank:usize,#[comptime] first:bool)
+    length:u32,blocks:u32,#[comptime] operation:u32,#[comptime] mask:u32,#[comptime] rank:usize,#[comptime] first:bool,#[comptime] absolute:bool)
 {
     let task=RUDA_POS_X as usize;let lane=UNIT_POS as usize;
     let row=task/blocks as usize;let tile=task%blocks as usize;let position=tile*256+lane;
@@ -83,7 +157,7 @@ fn reduce_tile<E:Numeric+RudaElement>(input:&Tensor<E>,indices:&Tensor<u32>,out:
                 else {coordinate=outer%input.shape(d);outer/=input.shape(d);}
                 offset+=coordinate*input.stride(d);
             }
-            value=input[offset];key=u32::cast_from(position);
+            value=preprocess(input[offset],absolute);key=u32::cast_from(position);
             if comptime!(operation==6 || operation==7) {value=E::cast_from(value!=E::cast_from(0));}
         } else {let offset=row*length as usize+position;value=input[offset];key=indices[offset];}
     }
@@ -143,24 +217,53 @@ fn allocate(c:&ComputeClient<CudaRuntime>,shape:Vec<usize>,dtype:u32)->View {
     View::packed(c.empty(len.max(1).checked_mul(element_bytes(dtype)).expect("reduction workspace bytes overflow")),shape,dtype)
 }
 
+fn reuse_or_allocate(c:&ComputeClient<CudaRuntime>,shape:Vec<usize>,dtype:u32,reuse:&[View],index:usize)->View {
+    if let Some(value)=reuse.get(index) {
+        assert_eq!(value.shape,shape);assert_eq!(value.dtype,dtype);
+        View::packed(value.handle.clone(),shape,dtype)
+    } else {allocate(c,shape,dtype)}
+}
+
 fn stages<E:Numeric+RudaElement>(c:&ComputeClient<CudaRuntime>,values:&[View],operation:u32,mask:u32,
-    nodes:&mut Vec<PreparedKernel<CudaRuntime>>,scratch:&mut Vec<View>,input:View)
+    nodes:&mut Vec<PreparedKernel<CudaRuntime>>,scratch:&mut Vec<View>,input:View,reuse:&[View],absolute:bool)
 {
     let rows=values[1].len;let mut length=extent(&input,mask,true);let mut first=true;
+    let keys=if matches!(operation,4|5) {&values[2]}else {&values[1]};
+    if input.contiguous() && length>0 && length<=65536 {
+        if let Some((outer,inner))=graph_reduce::contiguous_axes(&input.shape,mask) {
+            if inner>=16 && length>=8 {
+                let count=RudaCount::Static(u32::try_from(outer.checked_mul(inner.div_ceil(32)).expect("reduction grid overflow"))
+                    .expect("reduction grid overflow"),1,1);
+                macro_rules! columns {($o:ty)=>{reduce_columns::prepare::<E,$o,CudaRuntime>(c,count,RudaDim::new_2d(32,8),
+                    input.arg(),values[1].arg(),keys.arg(),length,inner,operation,absolute)};}
+                nodes.push(if matches!(operation,2|3) {columns!(i64)}else if matches!(operation,6|7) {columns!(u8)}else {columns!(E)});
+                return;
+            }
+        }
+    }
     if length<=256 {
         let count=RudaCount::Static(u32::try_from(rows.div_ceil(4)).expect("reduction grid overflow"),1,1);
         let keys=if matches!(operation,4|5) {&values[2]}else {&values[1]};
         macro_rules! row {($o:ty)=>{reduce_rows::prepare::<E,$o,CudaRuntime>(c,count,RudaDim::new_1d(128),input.arg(),
-            values[1].arg(),keys.arg(),length,operation,mask,input.shape.len())};}
+            values[1].arg(),keys.arg(),length,operation,mask,input.shape.len(),absolute)};}
         nodes.push(if matches!(operation,2|3) {row!(i64)}else if matches!(operation,6|7) {row!(u8)}else {row!(E)});
+        return;
+    }
+    let sms=c.properties().hardware.num_streaming_multiprocessors.unwrap_or(108).max(1) as usize;
+    if length<=4096 || length<=65536 && rows>=sms {
+        let count=RudaCount::Static(u32::try_from(rows).expect("reduction grid overflow"),1,1);
+        macro_rules! block {($o:ty)=>{reduce_block::prepare::<E,$o,CudaRuntime>(c,count,RudaDim::new_1d(256),input.arg(),
+            values[1].arg(),keys.arg(),length,operation,mask,input.shape.len(),absolute)};}
+        nodes.push(if matches!(operation,2|3) {block!(i64)}else if matches!(operation,6|7) {block!(u8)}else {block!(E)});
         return;
     }
     let mut current=input;let mut indices:Option<View>=None;
     loop {
         let blocks=length.div_ceil(256).max(1);let count=RudaCount::Static(u32::try_from(rows*blocks).expect("reduction grid overflow"),1,1);
-        let next=allocate(c,vec![rows,blocks],current.dtype);let keys=allocate(c,vec![rows,blocks],5);
+        let next=reuse_or_allocate(c,vec![rows,blocks],current.dtype,reuse,scratch.len());
+        let keys=reuse_or_allocate(c,vec![rows,blocks],5,reuse,scratch.len()+1);
         nodes.push(reduce_tile::prepare::<E,CudaRuntime>(c,count,RudaDim::new_1d(256),current.arg(),
-            indices.as_ref().unwrap_or(&keys).arg(),next.arg(),keys.arg(),length as u32,blocks as u32,operation,mask,current.shape.len(),first));
+            indices.as_ref().unwrap_or(&keys).arg(),next.arg(),keys.arg(),length as u32,blocks as u32,operation,mask,current.shape.len(),first,absolute));
         current=View::packed(next.handle.clone(),next.shape.clone(),next.dtype);
         indices=Some(View::packed(keys.handle.clone(),keys.shape.clone(),keys.dtype));scratch.push(next);scratch.push(keys);
         if blocks==1 {break;}
@@ -174,15 +277,34 @@ fn stages<E:Numeric+RudaElement>(c:&ComputeClient<CudaRuntime>,values:&[View],op
 }
 
 pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,values:&[View],ints:&[i64])->(Vec<PreparedKernel<CudaRuntime>>,Vec<View>) {
+    prepare_reusing(c,values,ints,&[])
+}
+
+pub(super) fn prepare_reusing(c:&ComputeClient<CudaRuntime>,values:&[View],ints:&[i64],reuse:&[View])
+    ->(Vec<PreparedKernel<CudaRuntime>>,Vec<View>)
+{
+    prepare_transformed(c,values,ints,reuse,false)
+}
+
+pub(super) fn prepare_abs_reusing(c:&ComputeClient<CudaRuntime>,values:&[View],ints:&[i64],reuse:&[View])
+    ->(Vec<PreparedKernel<CudaRuntime>>,Vec<View>)
+{
+    assert!(values[0].dtype<=2 && values[0].dtype==values[1].dtype && ints[0]==0);
+    prepare_transformed(c,values,ints,reuse,true)
+}
+
+fn prepare_transformed(c:&ComputeClient<CudaRuntime>,values:&[View],ints:&[i64],reuse:&[View],absolute:bool)
+    ->(Vec<PreparedKernel<CudaRuntime>>,Vec<View>)
+{
     let mut nodes=Vec::new();let mut scratch=Vec::new();if values[1].len==0 {return (nodes,scratch);}
     let operation=ints[0] as u32;let mask=ints[1] as u32;
     let source=&values[0];let dtype=if operation>=8 {values[1].dtype}else {source.dtype};
     let input=if source.dtype==dtype {View::packed(source.handle.clone(),source.shape.clone(),dtype)}else {
-        let converted=allocate(c,source.shape.clone(),dtype);
+        let converted=reuse_or_allocate(c,source.shape.clone(),dtype,reuse,0);
         if source.len>0 {nodes.push(sequence_scan::cast(c,source,&converted));}
         let result=View::packed(converted.handle.clone(),converted.shape.clone(),dtype);scratch.push(converted);result
     };
-    macro_rules! run {($e:ty)=>{stages::<$e>(c,values,operation,mask,&mut nodes,&mut scratch,input)};}
+    macro_rules! run {($e:ty)=>{stages::<$e>(c,values,operation,mask,&mut nodes,&mut scratch,input,reuse,absolute)};}
     match dtype {0=>run!(f32),1=>run!(f16),2=>run!(bf16),3|8=>run!(u8),4=>run!(i64),5=>run!(i32),6=>run!(i16),7=>run!(i8),9=>run!(f64),_=>unreachable!()}
     (nodes,scratch)
 }

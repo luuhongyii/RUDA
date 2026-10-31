@@ -195,3 +195,27 @@ def test_special_values_roundtrip_reference(dtype):
     actual=_reference(Op.silu_mul('y','x','u'),a,b,dtype)
     torch.testing.assert_close(actual,expected,rtol=0,atol=0,equal_nan=True)
     assert torch.equal(torch.signbit(actual[:2]),torch.signbit(expected[:2]))
+
+
+@pytest.mark.parametrize('public_transpose',[False,True])
+@pytest.mark.parametrize('matmul_api',[0,1])
+def test_transposed_weight_rewrite_is_capability_and_lifetime_guarded(public_transpose,matmul_api):
+    ins={'a':T((3,256),'float32'),'w':T((129,256),'float32')}
+    nodes=[Op('permute_copy','wt','w',scalar=1,shape=(256,129)),Op('mm','y','a','wt')]
+    plan=m.prepare_plan(ins,nodes,['wt','y'] if public_transpose else ['y'],optimize=True,
+                        layout_api=1,matmul_layout_api=matmul_api)
+    fused=matmul_api==1 and not public_transpose
+    assert len(plan.nodes)==(1 if fused else 2)
+    assert plan.nodes[-1].kind==('mm_rhs_transposed' if fused else 'mm')
+    assert plan.layout.specs[-1].shape==(3,129)
+
+
+def test_transposed_empty_contraction_and_shared_weight():
+    ins={'a':T((3,0),'float32'),'w':T((7,0),'float32')}
+    nodes=[Op('permute_copy','wt','w',scalar=1,shape=(0,7)),Op('mm','y','a','wt')]
+    plan=m.prepare_plan(ins,nodes,['y'],optimize=True,layout_api=1,empty_api=1,matmul_layout_api=1)
+    assert plan.nodes[0].kind=='mm_rhs_transposed'
+    assert plan.layout.specs[-1].shape==(3,7)
+    nodes.append(Op('mm','z','a','wt'))
+    plan=m.prepare_plan(ins,nodes,['y','z'],optimize=True,layout_api=1,empty_api=1,matmul_layout_api=1)
+    assert len(plan.nodes)==3

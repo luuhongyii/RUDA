@@ -53,6 +53,25 @@ fn outer<S: Numeric + RudaElement, A: Numeric + RudaElement>(
 }
 
 #[ruda(launch)]
+fn outer_vector<S:Numeric+RudaElement,A:Numeric+RudaElement>(input:&Array<Vector<S,Const<4>>>,out:&mut Array<Vector<S,Const<4>>>,
+    width:usize,inner:usize,#[comptime] product:bool)
+{
+    let row=ABSOLUTE_POS as usize;
+    if row<out.len()/width {
+        let base=row/(inner/4)*width*(inner/4)+row%(inner/4);
+        let mut value=Vector::<S,Const<4>>::new(S::cast_from(0u32));
+        if comptime!(product) {value=Vector::new(S::cast_from(1u32));}
+        for position in 0usize..width {
+            let index=base+position*(inner/4);
+            let x=Vector::<A,Const<4>>::cast_from(value);
+            let y=Vector::<A,Const<4>>::cast_from(input[index]);
+            if comptime!(product) {value=Vector::cast_from(x*y);}else {value=Vector::cast_from(x+y);}
+            out[index]=value;
+        }
+    }
+}
+
+#[ruda(launch)]
 fn inner<S: Numeric + RudaElement, A: Numeric + RudaElement>(
     ar: &Tensor<S>, ai: &Tensor<S>, re: &mut Tensor<S>, im: &mut Tensor<S>,
     #[comptime] product: bool, #[comptime] complex: bool,
@@ -147,7 +166,19 @@ pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
     let rows = input.shape[0] * input.shape[2];
     let single = input.len == width;
     let c = client();
+    if op == 405 && parallel && !complex && matches!(input.dtype,4..=8)
+        && input.contiguous() && xs[2].contiguous() {
+        let (nodes,_workspace) = sequence_scan::prepare(&c,input,&xs[2],14,1);
+        let launches = nodes.len();
+        for node in nodes {
+            let (task,count,args,origin) = node.into_parts();origin.launch(task,count,args);
+        }
+        LAUNCHES.fetch_add(launches as u64, Ordering::Relaxed);finish_dispatch(&c);return;
+    }
     let mut threads = 256usize;
+    let vector=!parallel && !complex && input.shape[2]%4==0
+        && [input,&xs[2]].iter().all(|v|v.contiguous()
+            && v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0);
     let grid;
     if parallel {
         assert_eq!(input.shape[2], 1);
@@ -159,13 +190,15 @@ pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
         let x = count.min(1 << 20);
         grid = RudaCount::Static(x, count.div_ceil(x), 1);
     } else {
-        grid = RudaCount::Static(u32::try_from(rows.div_ceil(threads)).expect("cumulative launch overflow"), 1, 1);
+        grid = RudaCount::Static(u32::try_from((rows/if vector {4}else {1}).div_ceil(threads)).expect("cumulative launch overflow"), 1, 1);
     }
     let block = RudaDim::new_1d(threads as u32);
     macro_rules! run { ($s:ty, $a:ty) => { unsafe {
         if parallel {
             inner::launch::<$s, $a, CudaRuntime>(&c, grid, block,
                 xs[0].arg(), xs[1].arg(), xs[2].arg(), xs[3].arg(), op == 406, complex, threads, single);
+        } else if vector {
+            outer_vector::launch::<$s,$a,CudaRuntime>(&c,grid,block,xs[0].array_arg(),xs[2].array_arg(),width,input.shape[2],op==406);
         } else {
             outer::launch::<$s, $a, CudaRuntime>(&c, grid, block,
                 xs[0].arg(), xs[1].arg(), xs[2].arg(), xs[3].arg(), op == 406, complex);

@@ -60,6 +60,12 @@ if hasattr(_native, 'ruda_torch_matmul_precision_api_version') and hasattr(_C, '
 
 from . import _scientific
 _scientific_available = _scientific.initialize(_native)
+_mask_rows_available = False
+if (_scientific_available and hasattr(_native,'ruda_torch_mask_rows_api_version')
+        and getattr(_C,'mask_rows_api_version',0)==1 and hasattr(_C,'initialize_mask_rows')):
+    _native.ruda_torch_mask_rows_api_version.restype = ctypes.c_uint32
+    _mask_rows_available = _native.ruda_torch_mask_rows_api_version()==1
+    if _mask_rows_available:_C.initialize_mask_rows()
 _blas_available = False
 if hasattr(_native, "ruda_torch_blas_api_version") and hasattr(_C, "initialize_blas"):
     _native.ruda_torch_blas_api_version.restype = ctypes.c_uint32
@@ -219,6 +225,16 @@ def execution_stats():
          "paged_backward_placeholder_bytes_total", "paged_backward_ordered_calls",
          "paged_backward_ordered_workspace_allocations", "paged_backward_ordered_workspace_bytes_total"))}
 
+_spatial_accumulate_available = False
+if hasattr(_native,'ruda_torch_spatial_accumulate_api_version'):
+    _native.ruda_torch_spatial_accumulate_api_version.restype = ctypes.c_uint32
+    _spatial_accumulate_available = (_native.ruda_torch_spatial_accumulate_api_version()==1
+                                    and getattr(_C,'spatial_accumulate_api_version',0)==1)
+_attention_strides_available = False
+if hasattr(_native,'ruda_torch_attention_strides_api_version'):
+    _native.ruda_torch_attention_strides_api_version.restype = ctypes.c_uint32
+    _attention_strides_available = (_native.ruda_torch_attention_strides_api_version()==1
+                                    and getattr(_C,'attention_strides_api_version',0)==1)
 from . import _ops
 if _scientific_available:
     _scientific.register()
@@ -256,6 +272,56 @@ if _graph_available and hasattr(_native,'ruda_torch_graph_math_api_version'):
     _native.ruda_torch_graph_math_api_version.restype = ctypes.c_uint32
     _graph_math_available = (_native.ruda_torch_graph_math_api_version()==1
                              and getattr(_C,'graph_math_api_version',0)==1)
+_graph_activation_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_activation_api_version'):
+    _native.ruda_torch_graph_activation_api_version.restype = ctypes.c_uint32
+    _graph_activation_available = (_native.ruda_torch_graph_activation_api_version()==1
+                                   and getattr(_C,'graph_activation_api_version',0)==1)
+_graph_fp8_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_fp8_api_version'):
+    _native.ruda_torch_graph_fp8_api_version.restype = ctypes.c_uint32
+    _graph_fp8_available = (_native.ruda_torch_graph_fp8_api_version()==1
+                           and getattr(_C,'graph_fp8_api_version',0)==1)
+_graph_extremum_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_extremum_api_version'):
+    _native.ruda_torch_graph_extremum_api_version.restype = ctypes.c_uint32
+    _graph_extremum_available = (_native.ruda_torch_graph_extremum_api_version()==1
+                                and getattr(_C,'graph_extremum_api_version',0)==1)
+_graph_pack_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_pack_api_version'):
+    _native.ruda_torch_graph_pack_api_version.restype = ctypes.c_uint32
+    _graph_pack_available = (_native.ruda_torch_graph_pack_api_version()==1
+                            and getattr(_C,'graph_pack_api_version',0)==1)
+_graph_segment_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_segment_api_version'):
+    _native.ruda_torch_graph_segment_api_version.restype = ctypes.c_uint32
+    _graph_segment_available = (_native.ruda_torch_graph_segment_api_version()==1
+                               and getattr(_C,'graph_segment_api_version',0)==1)
+_graph_rotary_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_rotary_api_version'):
+    _native.ruda_torch_graph_rotary_api_version.restype = ctypes.c_uint32
+    _graph_rotary_available = (_native.ruda_torch_graph_rotary_api_version()==1
+                              and getattr(_C,'graph_rotary_api_version',0)==1)
+_graph_product_reduce_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_product_reduce_api_version'):
+    _native.ruda_torch_graph_product_reduce_api_version.restype = ctypes.c_uint32
+    _graph_product_reduce_available = (_native.ruda_torch_graph_product_reduce_api_version()==1
+                                      and getattr(_C,'graph_product_reduce_api_version',0)==1)
+_graph_abs_extremum_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_abs_extremum_api_version'):
+    _native.ruda_torch_graph_abs_extremum_api_version.restype = ctypes.c_uint32
+    _graph_abs_extremum_available = (_native.ruda_torch_graph_abs_extremum_api_version()==1
+                                    and getattr(_C,'graph_abs_extremum_api_version',0)==1)
+_graph_group_mask_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_group_mask_api_version'):
+    _native.ruda_torch_graph_group_mask_api_version.restype = ctypes.c_uint32
+    _graph_group_mask_available = (_native.ruda_torch_graph_group_mask_api_version()==1
+                                 and getattr(_C,'graph_group_mask_api_version',0)==1)
+_graph_transform_available = False
+if _graph_available and hasattr(_native,'ruda_torch_graph_transform_api_version'):
+    _native.ruda_torch_graph_transform_api_version.restype = ctypes.c_uint32
+    _graph_transform_available = (_native.ruda_torch_graph_transform_api_version()==1
+                                and getattr(_C,'graph_transform_api_version',0)==1)
 from ._graph import StaticGraph, GraphOp
 _graph_index_available = False
 if _graph_available and hasattr(_native,'ruda_torch_graph_index_api_version'):

@@ -46,6 +46,9 @@ pub(super) struct Emitter {
     pub target: PtxTarget,
     pub architecture_specific: bool,
     pub plane_width: u32,
+    /// `RUDA_PTX_ASSUME_ALIGNED=1`: global vector accesses are naturally aligned
+    /// (the launcher guarantees it), so no runtime alignment check/scalar fallback.
+    pub assume_aligned: bool,
 }
 
 impl Emitter {
@@ -153,6 +156,7 @@ impl Emitter {
             target,
             architecture_specific: false,
             plane_width: (dim.x * dim.y * dim.z).min(32),
+            assume_aligned: std::env::var("RUDA_PTX_ASSUME_ALIGNED").is_ok_and(|v| v == "1"),
         };
         let mut params = Vec::new();
         for map in &kernel.tensor_maps {

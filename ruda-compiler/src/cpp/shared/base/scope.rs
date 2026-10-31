@@ -117,6 +117,7 @@ impl<D: Dialect, P: super::super::DialectProcessors> CppCompiler<D, P> {
                 frag_c: self.compile_variable(registers_c),
                 frag_d: out,
             },
+            gpu::CoopMma::Blackwell { .. } => panic!("tcgen05 requires the direct PTX backend"),
             gpu::CoopMma::ExecuteScaled {
                 matrix,
                 registers_a,

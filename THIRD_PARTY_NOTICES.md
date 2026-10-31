@@ -4,6 +4,48 @@ Ruda reuses some operators and optimization implementations from open-source pro
 
 Ruda 复用了 CubeCL、Burn 等开源项目的部分算子和优化实现。相关代码保留其原有版权及许可证声明。
 
+## Recursive SOL-ExecBench routing
+
+`ruDNN/src/warp_routing.rs` adapts the warp-per-row grouped routing design from
+`SOL-ExecBench/049_group_limited_topk_routing.cu` in
+https://github.com/recursive-org/first-steps-toward-automated-ai-research,
+revision `a962ec43e2e3d7c018e59a2ece623fe6e232fdfb`.
+Copyright 2026 Recursive. Apache-2.0; the license text is reproduced below.
+The Rust adaptation retains full FP32 selection scores instead of the upstream
+truncated packed keys, and preserves RUDA's stable tie and normalization rules.
+
+## HAN Lab B200 grouped FP8 kernels
+
+`ruDNN/src/grouped_fp8.rs`, `ruDNN/src/grouped_fp8/blackwell.rs`, and the persistent
+expert scheduling in `ruDNN/src/standalone/moe.rs` adapt the expert tile table,
+block-scale promotion and fused SwiGLU design from `kernels/moe/kernel.py` in
+https://github.com/mit-han-lab/mlsys2026-flashinfer-contest-solution,
+revision `7aad04296c3d40f0fc6beeafeffd7a548a26dfae`.
+The Rust implementation uses RUDA-generated MMA/PTX, different tile sizes and
+synchronization, and FP32 intermediate activations rather than FP8 requantization.
+
+MIT License
+
+Copyright (c) 2026 the mlsys-contest-cute authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## ruda-core/LICENSE-APACHE, ruda-ir-macros/LICENSE-APACHE
 
                               Apache License

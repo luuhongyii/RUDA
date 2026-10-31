@@ -204,6 +204,15 @@ pub(super) fn dispatch(xs: &[View], ints: &[i64]) {
     assert!(width > 0, "sum/mean native reduction dimension must be nonempty");
     if try_columns(input, output, &reduced, width, mean) { return; }
     let c = client(); let block = RudaDim::new_1d(256);
+    if reduced.len() <= 32 {
+        let mask = reduced.iter().enumerate().fold(0u32, |mask,(dim,&value)|
+            mask | if value != 0 {1u32 << dim} else {0});
+        if let Some(kernel) = graph_reduce::prepare_sum(&c,input,output,mask,mean,true) {
+            let (task,count,args,origin) = kernel.into_parts();
+            origin.launch(task,count,args);
+            LAUNCHES.fetch_add(1, Ordering::Relaxed); finish_dispatch(&c); return;
+        }
+    }
     let re = part(input, false); let im = part(input, true); let out_re = part(output, false); let out_im = part(output, true);
     let factor32 = rows as f32 / input.len as f32; let factor64 = rows as f64 / input.len as f64;
     let numerator = match code { 5 => rows as i32 as i64, 6 => rows as i16 as i64, 7 => rows as i8 as i64, 8 => rows as u8 as i64, _ => rows as i64 };

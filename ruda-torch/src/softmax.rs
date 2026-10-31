@@ -1,7 +1,12 @@
 //! Softmax and log-softmax with storage-aware F32 accumulation.
 use super::{bf16, f16, client, finish_dispatch, kernels, CudaRuntime, View, LAUNCHES,
-    WARP_SOFTMAX_CALLS, SCALAR_SOFTMAX_CALLS, Ordering};
+    WARP_SOFTMAX_CALLS, SCALAR_SOFTMAX_CALLS, Ordering, ComputeClient, PreparedKernel};
 use ruda_kernel::dsl::prelude::*;
+
+#[ruda(fast_math = FastMath::ReducedPrecision.into())]
+pub(super) fn exp_fast(value: f32) -> f32 {
+    f32::powf(2.0f32, value * core::f32::consts::LOG2_E)
+}
 
 #[ruda]
 fn wide_offset(tensor:&Tensor<f64>,row:usize,#[comptime] axis:usize)->usize {
@@ -90,7 +95,7 @@ fn spatial<F: Float + RudaElement, O: Float + RudaElement>(
             #[unroll] for i in 0usize..width {
                 let shifted=values[i]-maximum;
                 let mut exponential=Vector::<f32,Const<4>>::empty();
-                #[unroll] for lane in 0usize..4 {exponential[lane]=shifted[lane].exp();}
+                #[unroll] for lane in 0usize..4 {exponential[lane]=exp_fast(shifted[lane]);}
                 sum+=exponential;
                 if comptime!(logarithmic) {values[i]=shifted;}else {values[i]=exponential;}
             }
@@ -104,7 +109,7 @@ fn spatial<F: Float + RudaElement, O: Float + RudaElement>(
                 let mut y=x[lane];
                 if comptime!(backward) {
                     let g=gradients[i];
-                    if comptime!(logarithmic) {y=g[lane]-x[lane].exp()*sum[lane];}
+                    if comptime!(logarithmic) {y=g[lane]-exp_fast(x[lane])*sum[lane];}
                     else {y=x[lane]*(g[lane]-sum[lane]);}
                 } else if comptime!(logarithmic) {y-=sum[lane];}else {y/=sum[lane];}
                 result[lane]=O::cast_from(y);
@@ -114,20 +119,20 @@ fn spatial<F: Float + RudaElement, O: Float + RudaElement>(
     }
 }
 
-pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
+pub(super) fn prepare(client: &ComputeClient<CudaRuntime>, op: u32, a: &View, b: &View,
+    out: &View, axis: usize) -> PreparedKernel<CudaRuntime> {
     assert!((31..=34).contains(&op));
     assert_eq!(a.dtype, b.dtype);
     assert_eq!(a.shape, out.shape);
     assert_eq!(a.shape, b.shape);
     assert!(axis < a.shape.len());
-    if out.len == 0 { return; }
+    assert_ne!(out.len, 0);
     let rows = out.len / a.shape[axis];
     let warp = use_warp(a.shape[axis]);
     let limit = if warp { u32::MAX as usize / 32 } else { u32::MAX as usize };
     assert!(rows <= limit, "softmax row grid exceeds 32-bit indexing");
     let blocks = if warp { rows.div_ceil(4) } else { rows.div_ceil(128) };
     let count = u32::try_from(blocks).expect("softmax launch grid overflow");
-    let client = client();
     let width = a.shape[axis];
     let backward = matches!(op, 32 | 34);
     let cached = axis + 1 == a.shape.len()
@@ -139,8 +144,8 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
     // row a 128-thread block so every lane holds at most two vectors.
     let threads = if width <= 1024 { if rows >= 1024 || width < 512 { 32 } else { 128 } }
         else if width <= 16384 { super::row_cached::threads(width) } else { 1024 };
-    let vector = super::row_cached::vector_size(width, a, out)
-        .min(if backward { super::row_cached::vector_size(width, b, out) } else { 4 });
+    let vector = super::row_cached::memory_vector_size(client,width,&[a,out],16)
+        .min(if backward { super::row_cached::memory_vector_size(client,width,&[b,out],16) } else { 16 });
     let inner:usize=a.shape[axis+1..].iter().product();
     let spatial=axis+1<a.shape.len() && width<=16 && inner%4==0
         && [a,b,out].iter().all(|x|super::row_cached::packed(x)
@@ -149,25 +154,25 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
     macro_rules! run {
         ($i:ty, $o:ty) => {
             if spatial {
-                spatial::launch::<$i,$o,CudaRuntime>(&client,
+                spatial::prepare::<$i,$o,CudaRuntime>(client,
                     RudaCount::Static(u32::try_from(rows.div_ceil(512)).expect("softmax grid overflow"),1,1),
                     RudaDim::new_1d(128),a.array_arg(),b.array_arg(),out.array_arg(),width,inner,backward,op>=33)
             } else if cached && backward {
-                super::row_cached::softmax_backward::launch::<$i, $o, CudaRuntime>(
-                    &client, RudaCount::Static(u32::try_from(if threads == 32 { rows.div_ceil(4) } else { rows }).expect("softmax grid overflow"), 1, 1),
+                super::row_cached::softmax_backward::prepare::<$i, $o, CudaRuntime>(
+                    client, RudaCount::Static(u32::try_from(if threads == 32 { rows.div_ceil(4) } else { rows }).expect("softmax grid overflow"), 1, 1),
                     RudaDim::new_1d(threads.max(128) as u32), a.arg(), b.arg(), out.arg(), op == 34, width, threads, vector)
             } else if cached {
-                super::row_cached::softmax::launch::<$i, $o, CudaRuntime>(
-                    &client, RudaCount::Static(u32::try_from(if threads == 32 { rows.div_ceil(4) } else { rows }).expect("softmax grid overflow"), 1, 1),
+                super::row_cached::softmax::prepare::<$i, $o, CudaRuntime>(
+                    client, RudaCount::Static(u32::try_from(if threads == 32 { rows.div_ceil(4) } else { rows }).expect("softmax grid overflow"), 1, 1),
                     RudaDim::new_1d(threads.max(128) as u32), a.arg(), out.arg(), op == 33, width, threads,
                     vector)
             } else if warp {
-                kernels::softmax_warp::launch::<$i, $o, CudaRuntime>(
-                    &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
+                kernels::softmax_warp::prepare::<$i, $o, CudaRuntime>(
+                    client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
                     a.arg(), b.arg(), out.arg(), axis, op == 32 || op == 34, op >= 33)
             } else {
-                kernels::softmax::launch::<$i, $o, CudaRuntime>(
-                    &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
+                kernels::softmax::prepare::<$i, $o, CudaRuntime>(
+                    client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
                     a.arg(), b.arg(), out.arg(), axis, op == 32 || op == 34, op >= 33)
             }
         };
@@ -186,8 +191,18 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
             _ => panic!("unsupported RUDA softmax dtype combination"),
         }
     }
-    finish_dispatch(&client);
+}
+
+pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, axis: usize) {
+    assert!((31..=34).contains(&op));
+    assert_eq!(a.dtype,b.dtype);assert_eq!(a.shape,b.shape);assert_eq!(a.shape,out.shape);
+    assert!(axis<a.shape.len());
+    if out.len==0 {return;}
+    let c=client();
+    let prepared=prepare(&c,op,a,b,out,axis);
+    let (task,count,args,origin)=prepared.into_parts();origin.launch(task,count,args);
+    finish_dispatch(&c);
     LAUNCHES.fetch_add(1, Ordering::Relaxed);
-    if warp { WARP_SOFTMAX_CALLS.fetch_add(1, Ordering::Relaxed); }
+    if use_warp(a.shape[axis]) { WARP_SOFTMAX_CALLS.fetch_add(1, Ordering::Relaxed); }
     else { SCALAR_SOFTMAX_CALLS.fetch_add(1, Ordering::Relaxed); }
 }

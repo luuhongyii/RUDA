@@ -1,5 +1,6 @@
 bool eager_arithmetic_ready = false;
 bool eager_cat_ready = false;
+bool eager_integer_scalar_ready = false;
 
 int64_t eager_scalar_float_bits(const at::Scalar& value) {
   if (!value.isFloatingPoint()) return static_cast<int64_t>(scalar_bits<float>(value));
@@ -13,6 +14,47 @@ bool eager_float(const at::Tensor& value) {
   return value.device().type() == c10::DeviceType::PrivateUse1 && value.layout() == at::kStrided &&
       !value.is_conj() && !value.is_neg() &&
       (dtype == at::kFloat || dtype == at::kHalf || dtype == at::kBFloat16);
+}
+
+bool eager_integral(const at::Tensor& value) {
+  const auto dtype=value.scalar_type();
+  return value.device().type()==c10::DeviceType::PrivateUse1 && value.layout()==at::kStrided &&
+    !value.is_neg() && !value.is_conj() &&
+    (dtype==at::kBool || dtype==at::kByte || dtype==at::kChar || dtype==at::kShort || dtype==at::kInt || dtype==at::kLong);
+}
+
+int64_t eager_integral_bits(const at::Scalar& value, at::ScalarType dtype) {
+  uint64_t word=0;
+  switch (dtype) {
+    case at::kBool: word=scalar_bits<bool>(value); break;
+    case at::kByte: word=scalar_bits<uint8_t>(value); break;
+    case at::kChar: word=scalar_bits<int8_t>(value); break;
+    case at::kShort: word=scalar_bits<int16_t>(value); break;
+    case at::kInt: word=scalar_bits<int32_t>(value); break;
+    case at::kLong: word=scalar_bits<int64_t>(value); break;
+    default: TORCH_CHECK(false,"integer scalar requires integral storage");
+  }
+  int64_t bits;std::memcpy(&bits,&word,sizeof(bits));return bits;
+}
+
+template<int Op>
+std::optional<at::Tensor> eager_integer_scalar(const at::Tensor& value, const at::Scalar& scalar,
+    const at::Scalar& alpha, bool reverse) {
+  if (!eager_integer_scalar_ready || !eager_integral(value) || !scalar.isIntegral(true) || scalar.isSymbolic() || alpha.isSymbolic())
+    return std::nullopt;
+  if constexpr (Op==1) {
+    if (value.scalar_type()==at::kBool || scalar.isBoolean()) return std::nullopt;
+  }
+  std::vector<int64_t> params{Op==2 ? 1 : 0,reverse ? 2 : 0,reverse ? 0 : 2};
+  if constexpr (Op<=1) {
+    at::native::alpha_check(value.scalar_type(),alpha);
+    params.push_back(eager_integral_bits(Op==1 ? -alpha : alpha,value.scalar_type()));
+  } else { params.push_back(0); }
+  try { params.push_back(eager_integral_bits(scalar,value.scalar_type())); }
+  catch (const c10::Error&) { return std::nullopt; }
+  auto output=at::empty(value.sizes(),value.options());
+  scientific_call(485,{value,value,output},params,{});
+  return output;
 }
 
 bool eager_native_math() {
@@ -85,6 +127,14 @@ template <int Op>
 at::Tensor eager_tensor_arithmetic(const at::Tensor& a, const at::Tensor& b, const at::Scalar& alpha=1) {
   const bool scalar_a=a.device().is_cpu() && a.dim()==0 && !a.is_complex();
   const bool scalar_b=b.device().is_cpu() && b.dim()==0 && !b.is_complex();
+  if (eager_integer_scalar_ready && ((scalar_a && eager_integral(b)) || (scalar_b && eager_integral(a)))) {
+    const auto& value=scalar_a ? b : a;
+    const auto& scalar=scalar_a ? a : b;
+    if (at::result_type(a,b)==value.scalar_type()) {
+      auto result=eager_integer_scalar<Op>(value,scalar.item(),alpha,scalar_a);
+      if (result.has_value()) return *result;
+    }
+  }
   if (eager_arithmetic_ready && ((scalar_a && eager_float(b)) || (scalar_b && eager_float(a)))) {
     const auto& value=scalar_a ? b : a;
     const auto& scalar=scalar_a ? a : b;
@@ -123,6 +173,10 @@ at::Tensor eager_tensor_arithmetic(const at::Tensor& a, const at::Tensor& b, con
 
 template <int Op>
 at::Tensor eager_scalar_arithmetic(const at::Tensor& a, const at::Scalar& b, const at::Scalar& alpha=1) {
+  if (eager_integer_scalar_ready && eager_integral(a) && !b.isSymbolic() && at::result_type(a,b)==a.scalar_type()) {
+    auto result=eager_integer_scalar<Op>(a,b,alpha,false);
+    if (result.has_value()) return *result;
+  }
   if (!eager_arithmetic_ready || !eager_float(a) || b.isComplex() || (Op==1 && b.isBoolean()))
     return eager_arithmetic_fallback<Op>(a,b,alpha);
   std::vector<int64_t> params{Op==2 ? 1 : 0,0,2};
@@ -214,12 +268,13 @@ at::Tensor eager_rsqrt(const at::Tensor& a) {
   return result;
 }
 
-at::Tensor eager_mean(const at::Tensor& a, at::OptionalIntArrayRef dim, bool keepdim, std::optional<at::ScalarType> dtype) {
+template<bool Mean>
+at::Tensor eager_additive_reduce(const at::Tensor& a, at::OptionalIntArrayRef dim, bool keepdim, std::optional<at::ScalarType> dtype) {
   auto fallback=[&]() {
     pybind11::gil_scoped_acquire gil;
     auto dimensions=dim.has_value() ? pybind11::cast(dim->vec()) : pybind11::none();
-    return pybind11::module_::import("ruda_torch._additive_reduce").attr("mean_reduce")(
-        a,dimensions,keepdim,pybind11::arg("dtype")=dtype).cast<at::Tensor>();
+    return pybind11::module_::import("ruda_torch._additive_reduce").attr(Mean ? "mean_reduce" : "sum_reduce")(
+        a,dimensions,keepdim,pybind11::arg("dtype")=dtype).template cast<at::Tensor>();
   };
   const auto output_type=dtype.value_or(a.scalar_type());
   if (!eager_arithmetic_ready || !eager_float(a) || a.numel()==0 ||
@@ -239,7 +294,7 @@ at::Tensor eager_mean(const at::Tensor& a, at::OptionalIntArrayRef dim, bool kee
     else if (keepdim) shape.push_back(1);
   }
   auto result=at::empty(shape,a.options().dtype(output_type));
-  flags.insert(flags.begin(),1);
+  flags.insert(flags.begin(),Mean ? 1 : 0);
   scientific_call(480,{a,result},flags,{});
   return result;
 }
@@ -315,6 +370,7 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("cat",eager_cat);
   m.impl("pow.Tensor_Scalar",eager_power);
   m.impl("rsqrt",eager_rsqrt);
-  m.impl("mean.dim",eager_mean);
+  m.impl("mean.dim",eager_additive_reduce<true>);
+  m.impl("sum.dim_IntList",eager_additive_reduce<false>);
   m.impl("native_layer_norm",eager_layer_norm);
 }

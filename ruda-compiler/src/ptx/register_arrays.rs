@@ -60,6 +60,12 @@ impl Arrays {
                         self.record(variable, true);
                     }
                 }
+                Operation::CoopMma(CoopMma::Blackwell { kind, args }) => {
+                    for arg in args { self.record(*arg, false); }
+                    if let Some(out) = instruction.out {
+                        self.record(out, matches!(kind, ruda_core::ir::Tcgen05Op::Load { .. }));
+                    }
+                }
                 Operation::CoopMma(CoopMma::LoadMatrix { buffer, offset, .. }) => {
                     self.record(*buffer, false); self.record(*offset, false);
                     if let Some(out) = instruction.out { self.record(out, true); }

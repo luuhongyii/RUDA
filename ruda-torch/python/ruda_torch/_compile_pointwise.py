@@ -1,5 +1,6 @@
 """Exact schema binding for integer and parameterized activation graph regions."""
 import struct
+import math
 import torch
 from torch.fx import Node
 
@@ -115,6 +116,56 @@ def definition(node):
 def _i64(value):
     if type(value) not in (int,bool) or not -(2**63)<=value<2**63:raise ValueError('native integer scalar must fit signed int64')
     return int(value)
+
+
+def expand_clamps(gm):
+    from torch._subclasses.fake_tensor import FakeTensor
+    from ._compile_normalization import _Writer
+    changed=False
+    for node in tuple(gm.graph.nodes):
+        if node.op=='call_function' and node.target is torch.ops.aten.clamp.Tensor:
+            args=_bind(node,('self','min','max'),{'min':None,'max':None})
+            if args is None:continue
+            q=args['self'];minimum=args['min'];maximum=args['max']
+            source=_value(q);result=node.meta.get('val')
+            if (not isinstance(source,FakeTensor) or not isinstance(result,torch.Tensor)
+                    or result.device.type!='ruda' or source.device!=result.device
+                    or result.dtype not in _FLOATS or source.dtype!=result.dtype or not result.is_contiguous()
+                    or any(type(d) is not int for d in (*source.shape,*result.shape))
+                    or tuple(source.shape)!=tuple(result.shape) or minimum is None and maximum is None):continue
+            bounds=[_value(bound) for bound in (minimum,maximum) if bound is not None]
+            if any(not isinstance(bound,torch.Tensor) or bound.dtype!=result.dtype or bound.device!=result.device
+                   or any(type(d) is not int for d in bound.shape)
+                   or tuple(bound.shape) not in ((),tuple(source.shape)) for bound in bounds):continue
+            if minimum is not None and maximum is not None:
+                writer=_Writer(gm.graph,source);aten=torch.ops.aten;shape=tuple(source.shape)
+                with gm.graph.inserting_before(node):
+                    below=writer.emit(aten.lt.Tensor,(q,minimum),shape,torch.bool)
+                    lower=writer.emit(aten.where.self,(below,minimum,q),shape,result.dtype)
+                    above=writer.emit(aten.lt.Tensor,(maximum,lower),shape,torch.bool)
+                    upper=writer.emit(aten.where.self,(above,maximum,lower),shape,result.dtype)
+                    for bound in (maximum,minimum):
+                        isnan=writer.emit(aten.ne.Tensor,(bound,bound),tuple(_value(bound).shape),torch.bool)
+                        upper=writer.emit(aten.where.self,(isnan,bound,upper),shape,result.dtype)
+                    isnan=writer.emit(aten.ne.Tensor,(q,q),shape,torch.bool)
+                node.target=aten.where.self;node.args=(isnan,q,upper)
+            else:
+                node.target=torch.ops.aten.minimum.default if minimum is None else torch.ops.aten.maximum.default
+                node.args=(q,maximum if minimum is None else minimum)
+            node.kwargs={};changed=True;continue
+        if node.op!='call_function' or node.target is not torch.ops.aten.clamp.default:continue
+        defined=definition(node)
+        if defined is None or defined[0]!=18 or defined[1][2]!=10:continue
+        q,_,_,minimum,maximum,dtype=defined[1]
+        value=node.meta.get('val')
+        if value.device.type!='ruda' or not value.is_contiguous() or not all(math.isfinite(v) for v in (minimum,maximum)):continue
+        with gm.graph.inserting_before(node):
+            lower=gm.graph.call_function(torch.ops.aten.clamp_min.default,(q,minimum))
+            lower.meta=dict(node.meta)
+        node.target=torch.ops.aten.clamp_max.default;node.args=(lower,maximum);node.kwargs={}
+        changed=True
+    if changed:gm.recompile()
+    return gm
 
 
 def describe(kind,args):

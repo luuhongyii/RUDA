@@ -127,6 +127,7 @@ pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
         }
         embedding_ops::validate_indices(&c, indices, input.shape[axis]);
         if output.len == 0 { return; }
+        if select && super::graph_index::try_select(input,indices,output,axis) {return;}
         let re = part(input, false); let im = part(input, true); let out_re = part(output, false); let out_im = part(output, true);
         let complex = matches!(input.dtype, 10 | 11 | 14);
         macro_rules! launch { ($s:ty, $i:ty) => { unsafe { gather::launch::<$s, $i, CudaRuntime>(&c, grid(output.len), block,
@@ -149,6 +150,7 @@ pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
         }
         embedding_ops::validate_indices(&c, indices, output.shape[axis]);
         if input.len == 0 { return; }
+        if select && super::operation_scatter::try_scaled_index_add(input,indices,output,axis,Some(&xs[3])) {return;}
         let re = part(input, false); let im = part(input, true); let out_re = part(output, false); let out_im = part(output, true);
         let scalar = if select { &xs[3] } else { input };
         let alpha = part(scalar, false); let alpha_i = part(scalar, true);

@@ -59,6 +59,11 @@ fn convolution<const N: usize>(op: u32, a: &View, b: &View, out: &View, p: &[i64
 
 pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, p: &[i64]) {
     assert!(a.dtype <= 2 || (a.dtype == 9 && matches!(op, 0..=3 | 8)));
+    if op<=3 && super::spatial_gemm::launch(op,a,b,out,p) {return;}
+    if op==8 {
+        assert_eq!(p,&[0]);
+        if super::spatial_gemm::bias_backward(a,out) {return;}
+    }
     assert_eq!(a.dtype, out.dtype);
     if op == 8 {
         assert_eq!(p, &[0]);
@@ -105,6 +110,8 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, p: &[i64]) {
     }
     assert_eq!(a.dtype, b.dtype);
     if out.len == 0 { return; }
+    if op==0 && super::spatial_direct::launch(a,b,out,p) {return;}
+    if matches!(op,1..=3) && super::spatial_direct::backward(op,a,b,out,p) {return;}
     let result = match op {
         0..=3 => match a.shape.len() {
             3 => convolution::<1>(op, a, b, out, p),

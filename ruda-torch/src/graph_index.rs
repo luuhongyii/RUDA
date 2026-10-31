@@ -43,6 +43,95 @@ fn frequencies<I:Int+RudaElement>(indices:&Tensor<I>,counts:&mut Tensor<Atomic<u
 }
 
 #[ruda(launch)]
+fn indexed_vector<E:Numeric+RudaElement,I:Int+RudaElement>(input:&Tensor<E>,indices:&Tensor<I>,output:&mut Tensor<E>,
+    invalid:&mut Tensor<Atomic<u32>>,inner:usize,bound:usize)
+{
+    let p=ABSOLUTE_POS as usize;
+    if p<output.len()/4 {
+        let row=p/(inner/4);let column=p%(inner/4);
+        let index=i64::cast_from(indices[row%indices.len()]);
+        let mut value=Vector::<E,Const<4>>::new(E::cast_from(0));
+        if index<0i64 || index>=i64::cast_from(bound) {invalid[0].store(1u32);}
+        else {
+            let source=(row/indices.len()*bound+usize::cast_from(index))*(inner/4)+column;
+            let packed=input.slice(0usize,input.len()).into_vectorized().with_vector_size::<Const<4>>();
+            value=packed[source];
+        }
+        let mut packed=output.slice_mut(0usize,output.len()).into_vectorized().with_vector_size::<Const<4>>();
+        packed[p]=value;
+    }
+}
+
+#[ruda(launch)]
+fn selected_direct<E:Numeric+RudaElement,I:Int+RudaElement,V:Size>(input:&Tensor<E>,indices:&Tensor<I>,output:&mut Tensor<E>,
+    inner:usize,bound:usize,#[comptime] reverse:bool)
+{
+    let p=ABSOLUTE_POS as usize;
+    let mut length=output.len();if comptime!(reverse) {length=input.len();}
+    if p<length/V::value() {
+        let row=p/(inner/V::value());let column=p%(inner/V::value());
+        let index=usize::cast_from(indices[row%indices.len()]);
+        let source=(row/indices.len()*bound+index)*(inner/V::value())+column;
+        let packed=input.slice(0usize,input.len()).into_vectorized().with_vector_size::<V>();
+        let mut target=output.slice_mut(0usize,output.len()).into_vectorized().with_vector_size::<V>();
+        if comptime!(reverse) {target[source]=packed[p];}else {target[p]=packed[source];}
+    }
+}
+
+pub(super) fn try_select(a:&View,indices:&View,out:&View,axis:usize)->bool {
+    try_selected_direct(a,indices,out,axis,false)
+}
+
+pub(super) fn try_copy(a:&View,indices:&View,out:&View,axis:usize)->bool {
+    try_selected_direct(a,indices,out,axis,true)
+}
+
+fn try_selected_direct(a:&View,indices:&View,out:&View,axis:usize,reverse:bool)->bool {
+    let indexed=if reverse {out}else {a};let selected=if reverse {a}else {out};
+    if axis>=indexed.shape.len() || a.dtype!=out.dtype || a.dtype>9 || indices.shape.len()!=1
+        || !matches!(indices.dtype,4|5) || ![a,indices,out].iter().all(|v|v.contiguous()) {return false;}
+    if super::graph_fusion::overlaps(a,out) || super::graph_fusion::overlaps(indices,out) {return false;}
+    let mut shape=indexed.shape.clone();shape[axis]=indices.len;
+    assert_eq!(shape,selected.shape);
+    if selected.len==0 {return true;}
+    let inner=indexed.shape[axis+1..].iter().product::<usize>();
+    let vector=inner%4==0 && [a,out].iter().all(|v|v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0);
+    let width=if vector {4}else {1};let c=client();
+    macro_rules! data {($e:ty)=>{{
+        macro_rules! run {($i:ty,$v:ty)=>{selected_direct::prepare::<$e,$i,$v,CudaRuntime>(&c,grid(selected.len/width),RudaDim::new_1d(128),
+            a.arg(),indices.arg(),out.arg(),inner,indexed.shape[axis],reverse)};}
+        if indices.dtype==4 {if vector {run!(i64,Const<4>)}else {run!(i64,Const<1>)}}
+        else if vector {run!(i32,Const<4>)}else {run!(i32,Const<1>)}
+    }};}
+    let prepared=match out.dtype {0=>data!(f32),1=>data!(f16),2=>data!(bf16),3|8=>data!(u8),4=>data!(i64),5=>data!(i32),6=>data!(i16),7=>data!(i8),9=>data!(f64),_=>unreachable!()};
+    let (task,count,args,origin)=prepared.into_parts();origin.launch(task,count,args);
+    LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);true
+}
+
+#[ruda(launch)]
+fn bounds_check<I:Int+RudaElement>(indices:&Tensor<I>,invalid:&mut Tensor<Atomic<u32>>,lower:i64,upper:i64) {
+    let p=ABSOLUTE_POS as usize;
+    if p<indices.len() {
+        let value=i64::cast_from(indices[crate::scientific::address(indices,p)]);
+        if value<lower || value>=upper {invalid[0].store(1u32);}
+    }
+}
+
+pub(super) fn check_bounds(indices:&View,lower:i64,upper:i64) {
+    let c=client();let flag=View::packed(c.empty(4),vec![1],5);let bytes=flag.byte_view();
+    let init=kernels::fill_bytes::prepare::<CudaRuntime>(&c,RudaCount::Static(1,1,1),RudaDim::new_1d(128),bytes.arg(),0u32,0u32);
+    let (task,count,args,origin)=init.into_parts();origin.launch(task,count,args);
+    macro_rules! run {($i:ty)=>{bounds_check::prepare::<$i,CudaRuntime>(&c,grid(indices.len),RudaDim::new_1d(128),indices.arg(),flag.arg(),lower,upper)};}
+    let check=if indices.dtype==4 {run!(i64)}else {run!(i32)};
+    let (task,count,args,origin)=check.into_parts();origin.launch(task,count,args);
+    sync(&c);LAUNCHES.fetch_add(2,Ordering::Relaxed);
+    let bytes=c.read_one(flag.handle).expect("RUDA index status readback failed");
+    DOWNLOAD.fetch_add(4,Ordering::Relaxed);
+    assert_eq!(bytes.len(),4);
+    assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()),0,"RUDA index out of bounds");
+}
+
+#[ruda(launch)]
 fn indexed_backward<E:Float+RudaElement,I:Int+RudaElement>(
     gradient:&Tensor<E>,indices:&Tensor<I>,output:&mut Tensor<Atomic<f32>>,counts:&Tensor<u32>,
     invalid:&mut Tensor<Atomic<u32>>,padding:i64,#[comptime] axis:usize,#[comptime] operation:u32,
@@ -70,6 +159,32 @@ fn indexed_backward<E:Float+RudaElement,I:Int+RudaElement>(
                 output[destination+usize::cast_from(index)*output.stride(axis)].fetch_add(value);
             }
         }
+    }
+}
+
+#[ruda(launch)]
+fn embedding_segmented_backward<E:Float+RudaElement,V:Size>(gradient:&Tensor<E>,permutation:&Tensor<i64>,offsets:&Tensor<u32>,
+    output:&mut Tensor<E>,padding:i64,#[comptime] frequency:bool)
+{
+    let p=ABSOLUTE_POS as usize;
+    if p<output.len()/V::value() {
+        let width=output.shape(1)/V::value();let row=p/width;let column=p%width;
+        let mut value=Vector::<f32,V>::new(0.0f32);
+        if i64::cast_from(row)!=padding {
+            let start=offsets[row] as usize;let end=offsets[row+1usize] as usize;
+            let packed=gradient.slice(0usize,gradient.len()).into_vectorized().with_vector_size::<V>();
+            for item in start..end {
+                let position=permutation[item] as usize;let next=packed[position*width+column];
+                #[unroll] for lane in 0usize..V::value() {
+                    let mut term=f32::cast_from(next[lane]);
+                    if comptime!(frequency) {term/=f32::cast_from(end-start);}
+                    value[lane]+=term;
+                }
+            }
+        }
+        let mut result=Vector::<E,V>::empty();
+        #[unroll] for lane in 0usize..V::value() {result[lane]=E::cast_from(value[lane]);}
+        let mut packed=output.slice_mut(0usize,output.len()).into_vectorized().with_vector_size::<V>();packed[p]=result;
     }
 }
 
@@ -201,31 +316,45 @@ fn transform<E:Numeric+RudaElement>(a:&Tensor<E>,b:&Tensor<E>,out:&mut Tensor<E>
 }
 
 pub(super) fn prepare_layout(client:&ComputeClient<CudaRuntime>,a:&View,out:&View,n:&NodeSpec)->Option<PreparedKernel<CudaRuntime>> {
+    if matches!(n.op,194|195) {return Some(super::segment_scan::prepare(client,a,out,n.op==195));}
+    if n.op==193 {return Some(super::quantized::prepare_nibbles(client,a,out));}
     if !matches!(n.op,0|112..=115) {return None;}
+    if n.op==114 && a.dtype!=out.dtype && (matches!(a.dtype,12|13|15) || matches!(out.dtype,12|13|15)) {
+        return Some(super::quantized::prepare_convert(client,a,out));
+    }
+    let tiled = if n.op==113 {super::layout_tiled::prepare_permute(client,a,out,n.scalar as u32)}
+        else if n.op!=115 {super::layout_tiled::prepare_copy(client,a,out)} else {None};
+    if tiled.is_some() {return tiled;}
     macro_rules! input {($e:ty)=>{{
         if n.op==113 {unsafe{kernels::graph_permute::prepare::<$e,CudaRuntime>(client,grid(out.len),RudaDim::new_1d(128),a.arg(),out.arg(),n.scalar as u32)}}
         else if n.op==115 {unsafe{kernels::graph_expand::prepare::<$e,CudaRuntime>(client,grid(out.len),RudaDim::new_1d(128),a.arg(),out.arg())}}
         else if out.dtype==3 {unsafe{to_bool::prepare::<$e,CudaRuntime>(client,grid(out.len),RudaDim::new_1d(128),a.arg(),out.arg())}}
         else {
             macro_rules! output {($o:ty)=>{unsafe{kernels::convert::prepare::<$e,$o,CudaRuntime>(client,grid(out.len),RudaDim::new_1d(128),a.arg(),out.arg())}};}
-            match out.dtype {0=>output!(f32),1=>output!(f16),2=>output!(bf16),4=>output!(i64),5=>output!(i32),6=>output!(i16),7=>output!(i8),8=>output!(u8),_=>unreachable!()}
+            match out.dtype {0=>output!(f32),1=>output!(f16),2=>output!(bf16),4=>output!(i64),5=>output!(i32),6=>output!(i16),7=>output!(i8),8|12|13|15=>output!(u8),_=>unreachable!()}
         }
     }};}
-    Some(match a.dtype {0=>input!(f32),1=>input!(f16),2=>input!(bf16),3|8=>input!(u8),4=>input!(i64),5=>input!(i32),6=>input!(i16),7=>input!(i8),_=>unreachable!()})
+    Some(match a.dtype {0=>input!(f32),1=>input!(f16),2=>input!(bf16),3|8|12|13|15=>input!(u8),4=>input!(i64),5=>input!(i32),6=>input!(i16),7=>input!(i8),_=>unreachable!()})
 }
 
-struct BackwardBuffers {accumulation:View,counts:Option<View>}
+enum BackwardBuffers {Atomic{accumulation:View,counts:Option<View>},Segmented}
 pub(super) struct IndexBuffers {invalid:Option<View>,backward:Vec<Option<BackwardBuffers>>}
 impl IndexBuffers {
     pub fn enabled(&self)->bool {self.invalid.is_some()}
+    pub fn error_flag(&self)->Option<&View> {self.invalid.as_ref()}
     pub fn new(client:&ComputeClient<CudaRuntime>,tensors:&[View],nodes:&[NodeSpec],inputs:usize)->Self {
         let invalid=nodes.iter().any(|n|(134..=139).contains(&n.op)).then(||View::packed(client.empty(4),vec![1],5));
         let backward=nodes.iter().enumerate().map(|(index,node)| {
             if !(137..=139).contains(&node.op) {return None;}
             let out=&tensors[inputs+index];
+            let a=&tensors[node.a as usize];let b=&tensors[node.b as usize];
+            if matches!(node.op,137|138) && b.len>=256 && out.shape[0]>=8 && out.shape[1]>=4
+                && a.dtype==out.dtype && [a,b,out].iter().all(|v|v.contiguous()) {
+                return Some(BackwardBuffers::Segmented);
+            }
             let accumulation=View::packed(if out.dtype==0 {out.handle.clone()} else {client.empty(out.len.checked_mul(4).expect("gradient workspace overflow").max(4))},out.shape.clone(),0);
             let counts=(node.op==138).then(||View::packed(client.empty(out.shape[0].checked_mul(4).expect("frequency workspace overflow").max(4)),vec![out.shape[0]],5));
-            Some(BackwardBuffers{accumulation,counts})
+            Some(BackwardBuffers::Atomic{accumulation,counts})
         }).collect();
         Self{invalid,backward}
     }
@@ -244,7 +373,7 @@ impl IndexBuffers {
         }
         Ok(())
     }
-    pub fn prepare(&self,client:&ComputeClient<CudaRuntime>,tensors:&[View],n:&NodeSpec,index:usize,inputs:usize)
+    pub fn prepare(&self,client:&ComputeClient<CudaRuntime>,tensors:&[View],n:&NodeSpec,index:usize,inputs:usize,workspace:&mut Vec<View>)
         ->Option<Vec<PreparedKernel<CudaRuntime>>> {
         if (140..=159).contains(&n.op) && tensors[inputs+index].len==0 {return Some(Vec::new());}
         if (146..=159).contains(&n.op) {
@@ -271,6 +400,17 @@ impl IndexBuffers {
         if n.op<=136 {
             if out.len==0 {return Some(prepared);}
             let axis=if n.op==136 {0} else {n.scalar as usize};
+            let inner=a.shape[axis+1..].iter().product::<usize>();
+            if n.op!=135 && inner>=4 && inner%4==0 && a.contiguous() && out.contiguous()
+                && [a,out].iter().all(|v|v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0) {
+                macro_rules! data {($e:ty)=>{{
+                    macro_rules! indices {($i:ty)=>{indexed_vector::prepare::<$e,$i,CudaRuntime>(client,grid(out.len/4),RudaDim::new_1d(128),
+                        a.arg(),b.arg(),out.arg(),invalid.arg(),inner,a.shape[axis])};}
+                    if b.dtype==4 {indices!(i64)} else {indices!(i32)}
+                }};}
+                prepared.push(match a.dtype {0=>data!(f32),1=>data!(f16),2=>data!(bf16),3|8=>data!(u8),4=>data!(i64),5=>data!(i32),6=>data!(i16),7=>data!(i8),_=>unreachable!()});
+                return Some(prepared);
+            }
             macro_rules! data {($e:ty)=>{{
                 macro_rules! indices {($i:ty)=>{unsafe{indexed::prepare::<$e,$i,CudaRuntime>(client,grid(out.len),RudaDim::new_1d(128),a.arg(),b.arg(),out.arg(),invalid.arg(),axis,n.op)}};}
                 if b.dtype==4 {indices!(i64)} else {indices!(i32)}
@@ -278,8 +418,22 @@ impl IndexBuffers {
             prepared.push(match a.dtype {0=>data!(f32),1=>data!(f16),2=>data!(bf16),3|8=>data!(u8),4=>data!(i64),5=>data!(i32),6=>data!(i16),7=>data!(i8),_=>unreachable!()});
         } else {
             let scratch=self.backward[index].as_ref().unwrap();
-            if out.len!=0 {prepared.push(Self::zero(client,&scratch.accumulation));}
-            let counts=scratch.counts.as_ref().unwrap_or(invalid);
+            if let BackwardBuffers::Segmented=scratch {
+                let (sorting,buffers)=super::operation_scatter::prepare_segments(client,b,out.shape[0],workspace);
+                prepared.extend(sorting);
+                macro_rules! check {($i:ty)=>{bounds_check::prepare::<$i,CudaRuntime>(client,grid(b.len),RudaDim::new_1d(128),b.arg(),invalid.arg(),0i64,out.shape[0] as i64)};}
+                prepared.push(if b.dtype==4 {check!(i64)}else {check!(i32)});
+                let vector=out.shape[1]%4==0 && [a,out].iter().all(|v|v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0);
+                let width=if vector {4}else {1};
+                macro_rules! run {($e:ty,$v:ty)=>{embedding_segmented_backward::prepare::<$e,$v,CudaRuntime>(client,grid(out.len/width),RudaDim::new_1d(128),
+                    a.arg(),buffers[1].arg(),buffers[2].arg(),out.arg(),n.scalar as i64,n.op==138)};}
+                macro_rules! data {($e:ty)=>{if vector {run!($e,Const<4>)}else {run!($e,Const<1>)}};}
+                prepared.push(match a.dtype {0=>data!(f32),1=>data!(f16),2=>data!(bf16),_=>unreachable!()});
+                *workspace=buffers;return Some(prepared);
+            }
+            let BackwardBuffers::Atomic{accumulation,counts}=scratch else {unreachable!()};
+            if out.len!=0 {prepared.push(Self::zero(client,accumulation));}
+            let counts=counts.as_ref().unwrap_or(invalid);
             if n.op==138 {
                 if counts.len!=0 {prepared.push(Self::zero(client,counts));}
                 macro_rules! count {($i:ty)=>{unsafe{frequencies::prepare::<$i,CudaRuntime>(client,grid(b.len),RudaDim::new_1d(128),b.arg(),counts.arg(),invalid.arg())}};}
@@ -287,12 +441,12 @@ impl IndexBuffers {
             }
             let axis=if n.op==139 {n.scalar as usize} else {0};let padding=if n.op==139 {-1} else {n.scalar as i64};
             macro_rules! data {($e:ty)=>{{
-                macro_rules! indices {($i:ty)=>{unsafe{indexed_backward::prepare::<$e,$i,CudaRuntime>(client,grid(a.len),RudaDim::new_1d(128),a.arg(),b.arg(),scratch.accumulation.arg(),counts.arg(),invalid.arg(),padding,axis,n.op)}};}
+                macro_rules! indices {($i:ty)=>{unsafe{indexed_backward::prepare::<$e,$i,CudaRuntime>(client,grid(a.len),RudaDim::new_1d(128),a.arg(),b.arg(),accumulation.arg(),counts.arg(),invalid.arg(),padding,axis,n.op)}};}
                 if b.dtype==4 {indices!(i64)} else {indices!(i32)}
             }};}
             if a.len!=0 {prepared.push(match a.dtype {0=>data!(f32),1=>data!(f16),2=>data!(bf16),_=>unreachable!()});}
             if out.len!=0 && out.dtype!=0 {
-                macro_rules! convert {($e:ty)=>{unsafe{kernels::convert::prepare::<f32,$e,CudaRuntime>(client,grid(out.len),RudaDim::new_1d(128),scratch.accumulation.arg(),out.arg())}};}
+                macro_rules! convert {($e:ty)=>{unsafe{kernels::convert::prepare::<f32,$e,CudaRuntime>(client,grid(out.len),RudaDim::new_1d(128),accumulation.arg(),out.arg())}};}
                 prepared.push(if out.dtype==1 {convert!(f16)} else {convert!(bf16)});
             }
         }

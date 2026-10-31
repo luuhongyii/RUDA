@@ -67,9 +67,19 @@ def _fused_dense(query,key,value,mask,p,causal,scale,gqa,tensor_group=None,globa
             batch,heads,l = shape[:-3],shape[-3],shape[-2]
             if not gqa: kv_heads = heads
     b = math.prod(batch)
-    q = query.expand(*batch,heads,l,d).contiguous().reshape(b,heads,l,d)
-    k = key.expand(*batch,kv_heads,s,d).contiguous().reshape(b,kv_heads,s,d)
-    v = value.expand(*batch,kv_heads,s,dv).contiguous().reshape(b,kv_heads,s,dv)
+    from . import _attention_strides_available
+    strided = (_attention_strides_available and precision=='fp32' and p==0
+               and query.dtype in (torch.float16,torch.bfloat16) and l>=64 and 0<d<=128 and d%16==0 and dv==d)
+    def canonical(t, h, length, width):
+        expanded=t.expand(*batch,h,length,width)
+        use_view=(strided and expanded.stride(-1)==1
+                  and all(type(n) is int and 0<=n<=0xffffffff for n in (*expanded.shape,*expanded.stride()))
+                  and expanded.numel()<=0xffffffff
+                  and sum(max(size-1,0)*step for size,step in zip(expanded.shape,expanded.stride()))<0xffffffff)
+        return (expanded if use_view else expanded.contiguous()).reshape(b,h,length,width)
+    q = canonical(query,heads,l,d)
+    k = canonical(key,kv_heads,s,d)
+    v = canonical(value,kv_heads,s,dv)
     shape = (*batch,heads,l,s)
     with precision_context(query):
         if (precision=='fp32' and p==0 and not torch.is_grad_enabled() and not torch.compiler.is_compiling()

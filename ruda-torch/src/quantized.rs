@@ -67,12 +67,35 @@ pub(super) fn copy_fp4(a:&View,out:&View) {
     LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);
 }
 
+#[ruda(launch)]
+fn pack_nibbles<I:Size,O:Size>(input:&Tensor<u8>,output:&mut Tensor<u8>) {
+    let p=ABSOLUTE_POS as usize;
+    if p<output.len()/O::value() {
+        let source=input.slice(0usize,input.len()).into_vectorized().with_vector_size::<I>();
+        let bytes=source[p];let mut packed=Vector::<u8,O>::empty();
+        #[unroll] for lane in 0usize..O::value() {packed[lane]=u8::cast_from(u32::cast_from(bytes[2*lane])+16u32*u32::cast_from(bytes[2*lane+1]));}
+        let mut target=output.slice_mut(0usize,output.len()).into_vectorized().with_vector_size::<O>();target[p]=packed;
+    }
+}
+
+pub(super) fn prepare_nibbles(c:&ComputeClient<CudaRuntime>,a:&View,out:&View)->PreparedKernel<CudaRuntime> {
+    assert_eq!(a.dtype,8);assert_eq!(out.dtype,8);assert_eq!(a.len,2*out.len);
+    assert!(a.contiguous() && out.contiguous());
+    let width=[8usize,4,1].into_iter().find(|&width|out.len%width==0
+        && a.handle.offset_start.unwrap_or(0)%(2*width) as u64==0 && out.handle.offset_start.unwrap_or(0)%width as u64==0).unwrap_or(1);
+    macro_rules! run {($i:ty,$o:ty)=>{pack_nibbles::prepare::<$i,$o,CudaRuntime>(c,
+        RudaCount::Static(u32::try_from((out.len/width).div_ceil(128)).expect("byte packing grid overflow"),1,1),
+        RudaDim::new_1d(128),a.arg(),out.arg())};}
+    match width {8=>run!(Const<16>,Const<8>),4=>run!(Const<8>,Const<4>),_=>run!(Const<2>,Const<1>)}
+}
+
 pub(super) fn convert(a:&View,out:&View) {
     if a.dtype==16 || out.dtype==16 {copy_fp4(a,out);return;}
     assert_eq!(a.shape,out.shape);
     assert!(matches!(a.dtype,12|13|15) || matches!(out.dtype,12|13|15));
     crate::scientific::indexable(a);crate::scientific::indexable(out);
     if out.len==0 {return;}
+    if a.dtype!=out.dtype && vector_convert(a,out) {return;}
     let client=client();
     let count=u32::try_from(out.len.div_ceil(128)).expect("FP8 grid overflow");
     if a.dtype==out.dtype {
@@ -98,6 +121,64 @@ pub(super) fn convert(a:&View,out:&View) {
         } }
     }
     LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&client);
+}
+
+#[ruda(launch)]
+fn convert_vector<I:Numeric+RudaElement,O:Numeric+RudaElement,V:Size>(input:&Tensor<I>,out:&mut Tensor<O>,
+    #[comptime] source:u32,#[comptime] target:u32)
+{
+    let p=ABSOLUTE_POS as usize;
+    if p<out.len()/V::value() {
+        let packed=input.slice(0usize,input.len()).into_vectorized().with_vector_size::<V>();
+        let values=packed[p];let mut converted=Vector::<O,V>::empty();
+        #[unroll] for lane in 0usize..V::value() {
+            let mut value=f32::cast_from(values[lane]);
+            if comptime!(source==12 || source==13 || source==15) {value=crate::foreach_copy::decode_fp8(u32::cast_from(values[lane]),source);}
+            if comptime!(target==12 || target==13 || target==15) {converted[lane]=O::cast_from(crate::foreach_copy::encode_fp8(value,target));}
+            else {converted[lane]=O::cast_from(value);}
+        }
+        let mut target=out.slice_mut(0usize,out.len()).into_vectorized().with_vector_size::<V>();target[p]=converted;
+    }
+}
+
+fn prepare_vector_convert(c:&ComputeClient<CudaRuntime>,a:&View,out:&View)->Option<PreparedKernel<CudaRuntime>> {
+    if !matches!(a.dtype,0..=2|12|13|15) || !matches!(out.dtype,0..=2|12|13|15)
+        || out.len%4!=0 || [a,out].iter().any(|v|!v.contiguous() || v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64!=0)
+    {return None;}
+    let vector=super::row_cached::memory_vector_size(c,out.len,&[a,out],16).max(4);
+    let grid=RudaCount::Static(u32::try_from((out.len/vector).div_ceil(128)).expect("FP8 vector grid overflow"),1,1);
+    macro_rules! input {($i:ty)=>{{
+        macro_rules! run {($o:ty,$v:ty)=>{convert_vector::prepare::<$i,$o,$v,CudaRuntime>(c,grid,RudaDim::new_1d(128),a.arg(),out.arg(),a.dtype,out.dtype)};}
+        macro_rules! output {($o:ty)=>{match vector {16=>run!($o,Const<16>),8=>run!($o,Const<8>),_=>run!($o,Const<4>)}};}
+        match out.dtype {0=>output!(f32),1=>output!(f16),2=>output!(bf16),_=>output!(u8)}
+    }};}
+    Some(unsafe {match a.dtype {0=>input!(f32),1=>input!(f16),2=>input!(bf16),_=>input!(u8)}})
+}
+
+fn vector_convert(a:&View,out:&View)->bool {
+    let c=client();
+    let Some(kernel)=prepare_vector_convert(&c,a,out) else {return false;};
+    let (task,count,args,origin)=kernel.into_parts();origin.launch(task,count,args);
+    LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);true
+}
+
+pub(super) fn prepare_convert(c:&ComputeClient<CudaRuntime>,a:&View,out:&View)->PreparedKernel<CudaRuntime> {
+    assert_eq!(a.shape,out.shape);
+    assert_ne!(a.dtype,out.dtype);
+    let source=matches!(a.dtype,12|13|15);let target=matches!(out.dtype,12|13|15);
+    assert!(source || target);
+    if let Some(kernel)=prepare_vector_convert(c,a,out) {return kernel;}
+    let grid=RudaCount::Static(u32::try_from(out.len.div_ceil(128)).expect("FP8 cast grid overflow"),1,1);
+    macro_rules! from {($t:ty)=>{unsafe {from_fp8::prepare::<$t,CudaRuntime>(c,grid,RudaDim::new_1d(128),
+        a.arg(),out.arg(),out.arg(),a.dtype,out.dtype,false)}};}
+    macro_rules! to {($t:ty)=>{unsafe {to_fp8::prepare::<$t,CudaRuntime>(c,grid,RudaDim::new_1d(128),a.arg(),out.arg(),out.dtype)}};}
+    if source && target {
+        unsafe {between_fp8::prepare::<CudaRuntime>(c,grid,RudaDim::new_1d(128),a.arg(),out.arg(),a.dtype,out.dtype)}
+    } else if source {match out.dtype {
+        0=>from!(f32),1=>from!(f16),2=>from!(bf16),3|8=>from!(u8),4=>from!(i64),5=>from!(i32),6=>from!(i16),7=>from!(i8),_=>unreachable!(),
+    }} else {match a.dtype {
+        0=>to!(f32),1=>to!(f16),2=>to!(bf16),3|8=>to!(u8),4=>to!(i64),5=>to!(i32),6=>to!(i16),7=>to!(i8),_=>unreachable!(),
+    }}
 }
 
 #[ruda]

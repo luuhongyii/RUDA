@@ -244,6 +244,11 @@ class RudaBackend:
             raise ValueError("an RudaBackend passed to torch.compile requires capture='aot'; "
                              "use ruda_torch.compile(..., capture='eager') for eager execution")
         if (self.options.native!='off' and self.options.device_type=='ruda'
+                and not {torch.ops.aten.index_put.default,torch.ops.aten.masked_fill_.Scalar,
+                         torch.ops.aten.masked_fill.Scalar}.intersection(self._decompositions)):
+            from ._compile_fusions import route_byte_assignments
+            gm=route_byte_assignments(gm)
+        if (self.options.native!='off' and self.options.device_type=='ruda'
                 and torch.ops.aten.scaled_dot_product_attention.default not in self._decompositions):
             from ._compile_attention import route_attention
             gm=route_attention(gm)

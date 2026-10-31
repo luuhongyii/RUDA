@@ -32,8 +32,16 @@ fn parts(x:&View)->(DeviceTensor,DeviceTensor) {
         (real,imag)
     }
 }
-fn write(re:&DeviceTensor,im:&DeviceTensor,out:&View) {
-    if matches!(out.dtype,10|11|14) { copy_complex(re,im,out); }
+fn transform_parts(x:&View,op:u32)->(DeviceTensor,Option<DeviceTensor>) {
+    if op==2 || op==5 {
+        assert!(matches!(x.dtype,0|1|9));
+        (real_tensor(x),None)
+    } else {
+        let (re,im)=parts(x);(re,Some(im))
+    }
+}
+fn write(re:&DeviceTensor,im:Option<&DeviceTensor>,out:&View) {
+    if matches!(out.dtype,10|11|14) { copy_complex(re,im.expect("complex FFT imaginary component"),out); }
     else { assert!(matches!(out.dtype,0|1|9)); copy_real(re,out); }
 }
 fn output_dtype(input:u32,op:u32)->u32 {
@@ -63,59 +71,65 @@ fn launch_byte_shift(input:&View,output:&View,axis:usize,shift:usize) {
             input.clone().into_tensor_arg(),output.into_tensor_arg(),axis,shift);
     }
 }
-fn transform(op:u32,re:&DeviceTensor,im:&DeviceTensor,axes:&[usize],lengths:&[usize],norm:FftNormalization)
-    ->(DeviceTensor,DeviceTensor) {
+fn transform(op:u32,re:&DeviceTensor,im:Option<&DeviceTensor>,axes:&[usize],lengths:&[usize],norm:FftNormalization)
+    ->(DeviceTensor,Option<DeviceTensor>) {
     let kind=match op {0=>NdFftKind::ComplexForward,1=>NdFftKind::ComplexInverse,
         2|5=>NdFftKind::RealForward,3|4=>NdFftKind::RealInverse,_=>panic!("invalid FFT transform")};
     let actual_norm=if op==4 || op==5 {reverse_normalization(norm)} else {norm};
     let mut plan=NdFftPlan::new(re,axes,lengths,kind,actual_norm).expect("exact FFT plan");
     execute(&mut plan,op,re,im)
 }
-fn execute(plan:&mut NdFftPlan<CudaRuntime>,op:u32,re:&DeviceTensor,im:&DeviceTensor)->(DeviceTensor,DeviceTensor) {
+fn execute(plan:&mut NdFftPlan<CudaRuntime>,op:u32,re:&DeviceTensor,im:Option<&DeviceTensor>)->(DeviceTensor,Option<DeviceTensor>) {
     match op {
-        0|1=>plan.execute_complex(re,im).expect("complex FFT execution"),
+        0|1=>{
+            let (re,im)=plan.execute_complex(re,im.expect("complex FFT input")).expect("complex FFT execution");
+            (re,Some(im))
+        },
         2|5=>{
             let (re,im)=plan.forward_real(re).expect("real FFT execution");
-            if op==5 {(re,layout::scale(&im,-1.0,None).expect("inverse Hermitian conjugation"))} else {(re,im)}
+            if op==5 {(re,Some(layout::scale(&im,-1.0,None).expect("inverse Hermitian conjugation")))} else {(re,Some(im))}
         },
         3|4=>{
+            let im=im.expect("inverse real FFT spectrum");
             let conjugate;
             let im=if op==4 {conjugate=layout::scale(im,-1.0,None).expect("Hermitian conjugation");&conjugate} else {im};
             let re=plan.inverse_real(re,im).expect("inverse real FFT execution");
-            let im=layout::zeros(&re,re.meta.shape().clone()).expect("real FFT imaginary allocation");
-            (re,im)
+            (re,None)
         },
         _=>unreachable!(),
     }
 }
 fn backward(op:u32,grad:&View,out:&View,axes:&[usize],lengths:&[usize],norm:FftNormalization) {
-    let (mut re,mut im)=parts(grad);
+    let (mut re,mut im)=transform_parts(grad,if op==3 || op==4 {2} else {0});
     let last=*axes.last().unwrap(); let n=*lengths.last().unwrap();
     let reversed=reverse_normalization(norm);
     let (re,im)=match op {
-        0|1=>transform(1-op,&re,&im,axes,lengths,reversed),
+        0|1=>transform(1-op,&re,im.as_ref(),axes,lengths,reversed),
         // The R2C adjoint uses a zero-extended one-sided spectrum, NOT a
         // mirrored spectrum. Taking the real part performs the real-input
         // projection without spuriously doubling the interior frequencies.
         2|5=>{
+            let mut im=im.take().unwrap();
             if op==5 {im=layout::scale(&im,-1.0,None).expect("Hermitian adjoint conjugation");}
             let mut full=re.meta.shape().clone();
             for (&a,&s) in axes.iter().zip(lengths) {full[a]=s;}
             re=layout::resize(&re,full.clone()).expect("RFFT adjoint zero extension");
             im=layout::resize(&im,full).expect("RFFT adjoint zero extension");
-            transform(1,&re,&im,axes,lengths,if op==5 {norm} else {reversed})
+            transform(1,&re,Some(&im),axes,lengths,if op==5 {norm} else {reversed})
         },
         3|4=>{
-            let (re,im)=transform(2,&re,&im,axes,lengths,if op==4 {norm} else {reversed});
+            let (re,im)=transform(2,&re,None,axes,lengths,if op==4 {norm} else {reversed});
             let re=layout::scale(&re,1.0,Some((last,n,2.0))).expect("IRFFT adjoint bins");
-            let im=layout::scale(&im,if op==4 {-1.0} else {1.0},Some((last,n,2.0))).expect("IRFFT adjoint bins");
-            (re,im)
+            let im=layout::scale(&im.unwrap(),if op==4 {-1.0} else {1.0},Some((last,n,2.0))).expect("IRFFT adjoint bins");
+            (re,Some(im))
         },
         _=>panic!("invalid FFT adjoint"),
     };
     let re=layout::resize(&re,Shape::from(out.shape.clone())).expect("FFT padding adjoint");
-    let im=layout::resize(&im,Shape::from(out.shape.clone())).expect("FFT padding adjoint");
-    write(&re,&im,out);
+    let im=if matches!(out.dtype,10|11|14) {
+        Some(layout::resize(&im.expect("complex adjoint"),Shape::from(out.shape.clone())).expect("FFT padding adjoint"))
+    } else {None};
+    write(&re,im.as_ref(),out);
 }
 
 #[unsafe(no_mangle)]
@@ -142,10 +156,10 @@ pub unsafe extern "C" fn ruda_torch_fft(op:u32,ds:*const Descriptor,count:usize,
                 if op==2 || op==5 {assert!(matches!(views[0].dtype,0|1|9));}
                 if op==3 || op==4 {assert!(matches!(views[0].dtype,0|1|9|10|11|14));}
                 assert_eq!(views[1].dtype,output_dtype(views[0].dtype,op));
-                let (re,im)=parts(&views[0]);
-                let (re,im)=transform(op,&re,&im,&axes,&lengths,norm);
+                let (re,im)=transform_parts(&views[0],op);
+                let (re,im)=transform(op,&re,im.as_ref(),&axes,&lengths,norm);
                 assert_eq!(re.meta.shape().as_slice(),views[1].shape.as_slice());
-                write(&re,&im,&views[1]);
+                write(&re,im.as_ref(),&views[1]);
             }
         } else if op==10 || op==11 {
             assert_eq!(count,2); assert_eq!(ns,0);
@@ -158,7 +172,7 @@ pub unsafe extern "C" fn ruda_torch_fft(op:u32,ds:*const Descriptor,count:usize,
             copy_real(&out,&views[0]);
         } else if op==15 {
             assert_eq!(count,2);assert_eq!(ni,0);assert_eq!(ns,0);
-            let (re,im)=parts(&views[0]);write(&re,&im,&views[1]);
+            let (re,im)=parts(&views[0]);write(&re,Some(&im),&views[1]);
         } else {panic!("unknown FFT bridge operation");}
         LAUNCHES.fetch_add(1,Ordering::Relaxed);
         finish_dispatch(&client());
@@ -194,7 +208,7 @@ pub unsafe extern "C" fn ruda_torch_fft_plan(op:u32,handle:*mut *mut std::ffi::c
             let view=unsafe {crate::abi::view(ds)};
             if kind==2 || kind==5 {assert!(matches!(view.dtype,0|1|9));}
             let (norm,axes,lengths)=spec(&args[1..],view.shape.len());
-            let (re,_)=parts(&view);
+            let (re,_)=transform_parts(&view,kind);
             let k=match kind {0=>NdFftKind::ComplexForward,1=>NdFftKind::ComplexInverse,
                 2|5=>NdFftKind::RealForward,3|4=>NdFftKind::RealInverse,_=>unreachable!()};
             let plan=NdFftPlan::new(&re,&axes,&lengths,k,if kind==4 || kind==5 {reverse_normalization(norm)} else {norm})
@@ -211,9 +225,9 @@ pub unsafe extern "C" fn ruda_torch_fft_plan(op:u32,handle:*mut *mut std::ffi::c
                     let input=unsafe {crate::abi::view(&args[0])}; let output=unsafe {crate::abi::view(&args[1])};
                     assert_eq!(input.dtype,saved.dtype);assert_eq!(input.shape,saved.shape);
                     assert_eq!(output.dtype,output_dtype(input.dtype,saved.op));
-                    let (re,im)=parts(&input);
-                    let (re,im)=execute(&mut saved.plan,saved.op,&re,&im);
-                    assert_eq!(re.meta.shape().as_slice(),output.shape.as_slice());write(&re,&im,&output);
+                    let (re,im)=transform_parts(&input,saved.op);
+                    let (re,im)=execute(&mut saved.plan,saved.op,&re,im.as_ref());
+                    assert_eq!(re.meta.shape().as_slice(),output.shape.as_slice());write(&re,im.as_ref(),&output);
                     LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&client());
                 },
                 2=>saved.plan.clear_lazy_workspace(),

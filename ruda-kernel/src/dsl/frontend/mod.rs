@@ -1,6 +1,7 @@
 pub mod barrier;
 pub mod branch;
 pub mod cmma;
+pub mod tcgen05;
 pub mod tensor_layout;
 pub mod synchronization;
 pub mod unaligned_vector;

@@ -762,6 +762,7 @@ at::Tensor& copy_(at::Tensor& dest, const at::Tensor& source, bool non_blocking)
 #include "foreach_ternary.inc"
 #include "foreach_reduce.inc"
 #include "eager_arithmetic.inc"
+#include "eager_selection.inc"
 #include "arithmetic_dispatch.inc"
 template <typename T>
 T read_scalar(const at::Tensor& value) {
@@ -915,9 +916,12 @@ REGISTER_PRIVATEUSE1_DISPATCH(dequantize_tensor_per_channel_float_qparams_stub, 
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.attr("native_eager_ops")=pybind11::make_tuple("add.Tensor","add.Scalar","sub.Tensor","sub.Scalar","mul.Tensor","mul.Scalar","neg","cat","pow.Tensor_Scalar","rsqrt","mean.dim","mm","bmm","addmm","silu","gelu","native_layer_norm");
+  m.attr("native_eager_ops")=pybind11::make_tuple("add.Tensor","add.Scalar","sub.Tensor","sub.Scalar","mul.Tensor","mul.Scalar","neg","cat","pow.Tensor_Scalar","rsqrt","mean.dim","sum.dim_IntList","mm","bmm","addmm","silu","gelu","native_layer_norm",
+      "div.Tensor","div.Tensor_mode","div.Scalar","div.Scalar_mode","floor_divide","floor_divide.Scalar",
+      "eq.Tensor","ne.Tensor","lt.Tensor","le.Tensor","gt.Tensor","ge.Tensor","masked_fill.Scalar","bitwise_not","exp","clone","max.dim","min.dim");
   m.def("initialize_eager_arithmetic",[](bool ready){eager_arithmetic_ready=ready;});
   m.def("initialize_eager_cat",[](bool ready){eager_cat_ready=ready;});
+  m.def("initialize_eager_integer_scalar",[](bool ready){eager_integer_scalar_ready=ready;});
   m.def("initialize_fused_autograd_dispatch", initialize_fused_autograd_dispatch);
   m.def("initialize_arithmetic_dispatch", initialize_arithmetic_dispatch);
   m.def("initialize_matmul_dispatch", initialize_matmul_dispatch);
@@ -948,6 +952,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       [owner=tensor](void*) {}, tensor.options().device(c10::Device(c10::DeviceType::CUDA, device_index)).requires_grad(false));
   });
   m.attr("indexing_api_version") = 1;
+  m.attr("mask_rows_api_version") = 1;
+  m.def("initialize_mask_rows",[]() {
+    TORCH_CHECK(scientific_native && !mask_rows_enabled,"invalid or repeated mask rows initialization");
+    mask_rows_enabled=true;
+  });
   m.def("initialize_indexing",[](uintptr_t address) {
     TORCH_CHECK(allocate_native && address && !advanced_index_native,"invalid or repeated indexing initialization");
     advanced_index_native=reinterpret_cast<AdvancedIndex>(address);
@@ -1404,5 +1413,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     auto scalar = parser.parse(args.ptr(), nullptr, parsed).scalar(0);
     ::fill(out, scalar);
   });
-  m.def("synchronize", synchronize);
+  m.attr("graph_matmul_layout_api_version") = 6;
+  m.attr("graph_rotary_api_version") = 1;
+  m.attr("graph_product_reduce_api_version") = 1;
+  m.attr("graph_abs_extremum_api_version") = 1;
+  m.attr("graph_group_mask_api_version") = 1;
+  m.attr("graph_transform_api_version") = 1;
+  m.attr("spatial_accumulate_api_version") = 1;
+  m.attr("graph_activation_api_version") = 1;
+  m.attr("graph_fp8_api_version") = 1;
+  m.attr("graph_extremum_api_version") = 1;
+  m.attr("graph_pack_api_version") = 1;
+  m.attr("graph_segment_api_version") = 1;
+  m.def("synchronize", synchronize, pybind11::call_guard<pybind11::gil_scoped_release>());
 }

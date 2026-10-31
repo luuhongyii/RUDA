@@ -58,29 +58,35 @@ fn activation<F:Float+RudaElement>(input:&Tensor<F>,other:&Tensor<F>,out:&mut Te
     let p=ABSOLUTE_POS as usize;
     if p>=out.len() {terminate!();}
     let x=f32::cast_from(input[broadcast_index(input,out,p)]);
+    let y=f32::cast_from(other[broadcast_index(other,out,p)]);
+    out[p]=F::cast_from(activation_value(x,y,parameter,limit,operation));
+}
+
+#[ruda]
+pub(super) fn activation_value(x:f32,y:f32,parameter:f32,limit:f32,#[comptime] operation:u32)->f32 {
     let mut result=x;
     if comptime!(operation<=1) {
         let scaled=x*parameter;
         if comptime!(operation==0) {if !(scaled>limit) {result=scaled.exp().log1p()/parameter;}}
         else {
-            let dy=f32::cast_from(other[p]);result=dy;
+            let dy=y;result=dy;
             if !(scaled>limit) {let z=scaled.exp();result=dy*z/(z+1.0f32);}
         }
     } else if comptime!(operation>=2 && operation<=5) {
         if comptime!(operation==2 || operation==4) {
             let cdf=0.5f32*(1.0f32+(x*0.7071067811865476f32).erf());
             result=x*cdf;
-            if comptime!(operation==4) {result=f32::cast_from(other[p])*(cdf+x*((-0.5f32*x*x).exp()*0.3989422804014327f32));}
+            if comptime!(operation==4) {result=y*(cdf+x*((-0.5f32*x*x).exp()*0.3989422804014327f32));}
         } else {
             let square=x*x;let inner=0.7978845608028654f32*(x+0.044715f32*square*x);let t=inner.tanh();
             result=0.5f32*x*(1.0f32+t);
             if comptime!(operation==5) {
                 let derivative=0.5f32*(1.0f32+t)+0.5f32*x*(1.0f32-t*t)*0.7978845608028654f32*(1.0f32+3.0f32*0.044715f32*square);
-                result=f32::cast_from(other[p])*derivative;
+                result=y*derivative;
             }
         }
     } else if comptime!(operation==6 || operation==7) {
-        if comptime!(operation==7) {result=f32::cast_from(other[p]);}
+        if comptime!(operation==7) {result=y;}
         if !(x>0.0f32) {result*=parameter;}
     } else if comptime!(operation>=8 && operation<=10) {
         if x==x {
@@ -90,17 +96,37 @@ fn activation<F:Float+RudaElement>(input:&Tensor<F>,other:&Tensor<F>,out:&mut Te
         }
     } else if comptime!(operation==11) {result=x.min(0.0f32)-(-x.abs()).exp().log1p();}
     else if comptime!(operation==12 || operation==13) {
-        let y=f32::cast_from(other[broadcast_index(other,out,p)]);
         if x!=x {result=x;}else if y!=y {result=y;}
         else if comptime!(operation==12) {result=x.min(y);}else {result=x.max(y);}
     } else if comptime!(operation==14 || operation==15) {
         let activated=x.exp().log1p().tanh();result=x*activated;
-        if comptime!(operation==15) {let sigmoid=1.0f32/(1.0f32+(-x).exp());result=f32::cast_from(other[p])*(activated+x*sigmoid*(1.0f32-activated*activated));}
+        if comptime!(operation==15) {let sigmoid=1.0f32/(1.0f32+(-x).exp());result=y*(activated+x*sigmoid*(1.0f32-activated*activated));}
     }
-    out[p]=F::cast_from(result);
+    result
 }
 
 fn grid(n:usize)->RudaCount {RudaCount::Static(u32::try_from(n.div_ceil(128)).unwrap(),1,1)}
+
+#[ruda(launch)]
+fn activation_vector<F:Float+RudaElement,V:Size>(input:&Tensor<F>,other:&Tensor<F>,out:&mut Tensor<F>,
+    parameter:f32,limit:f32,#[comptime] operation:u32,#[comptime] left_scalar:bool,#[comptime] right_scalar:bool)
+{
+    let p=ABSOLUTE_POS as usize;
+    if p<out.len()/V::value() {
+        let mut x=Vector::<F,V>::empty();
+        let mut y=Vector::<F,V>::empty();
+        if comptime!(left_scalar) {x=Vector::new(input[0usize]);}
+        else {x=input.slice(0usize,input.len()).into_vectorized().with_vector_size::<V>()[p];}
+        if comptime!(right_scalar) {y=Vector::new(other[0usize]);}
+        else {y=other.slice(0usize,other.len()).into_vectorized().with_vector_size::<V>()[p];}
+        let mut value=Vector::<F,V>::empty();
+        #[unroll] for lane in 0usize..V::value() {
+            value[lane]=F::cast_from(activation_value(f32::cast_from(x[lane]),f32::cast_from(y[lane]),parameter,limit,operation));
+        }
+        let mut target=out.slice_mut(0usize,out.len()).into_vectorized().with_vector_size::<V>();
+        target[p]=value;
+    }
+}
 
 pub(super) fn validate(values:&[View],kind:u32,ints:&[i64]) {
     assert!((2..=3).contains(&values.len()));let (out,inputs)=values.split_last().unwrap();
@@ -158,6 +184,17 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,values:&[View],kind:u32,ints
     } else {
         let a=converted(c,&inputs[0],out.dtype,&mut nodes,&mut scratch);
         let b=if inputs.len()==2 {converted(c,&inputs[1],out.dtype,&mut nodes,&mut scratch)}else {View::packed(a.handle.clone(),a.shape.clone(),out.dtype)};
+        let vectorized=out.len%4==0 && [out,&a,&b].iter().all(|v|v.contiguous()
+            && (v.len==1 || v.len==out.len && v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64==0));
+        if vectorized {
+            let views=[out,&a,&b].into_iter().filter(|v|v.len!=1).collect::<Vec<_>>();
+            let width=super::row_cached::memory_vector_size(c,out.len,&views,8).max(4);
+            macro_rules! vector {($f:ty,$v:ty)=>{activation_vector::prepare::<$f,$v,CudaRuntime>(c,grid(out.len/width),RudaDim::new_1d(128),
+                a.arg(),b.arg(),out.arg(),scalars[0],scalars[1],operation,a.len==1,b.len==1)};}
+            macro_rules! typed {($f:ty)=>{if width==8 {vector!($f,Const<8>)}else {vector!($f,Const<4>)}};}
+            nodes.push(match out.dtype {0=>typed!(f32),1=>typed!(f16),2=>typed!(bf16),_=>unreachable!()});
+            return (nodes,scratch);
+        }
         macro_rules! run {($f:ty)=>{activation::prepare::<$f,CudaRuntime>(c,grid(out.len),RudaDim::new_1d(128),a.arg(),b.arg(),out.arg(),scalars[0],scalars[1],operation)};}
         nodes.push(match out.dtype {0=>run!(f32),1=>run!(f16),2=>run!(bf16),_=>unreachable!()});
     }

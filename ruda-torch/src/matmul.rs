@@ -6,6 +6,14 @@ use ruda_kernel::dsl::prelude::*;
 use rublas::kernel_ir::definition::MatmulSetupError;
 use rublas::tensor_matmul::{matmul_with_precision, F32MathMode, MatmulStrategy};
 
+#[ruda]
+pub(super) fn tile_position(tile: usize, rows: usize, columns: usize) -> (usize, usize) {
+    let first = tile / (columns * 8usize) * 8usize;
+    let height = usize::min(8usize, rows - first);
+    let local = tile % (columns * 8usize);
+    (first + local % height, local / height)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Policy { Auto, Rublas, Scalar }
 
@@ -110,7 +118,22 @@ fn launch_with_precision(op: u32, a: &View, b: &View, out: &View, math: F32MathM
         LAUNCHES.fetch_add(4,Ordering::Relaxed);
         return;
     }
-    if op == 7 && a.shape[0] == 1 && matches!(a.dtype, 1 | 2) {
+    if op == 7 && (2..=4).contains(&a.shape[0]) && matches!(a.dtype, 1 | 2)
+        && a.strides[1] == 1 && b.strides[0] == 1 && a.shape[1] % 64 == 0 {
+        match rublas::tensor_matmul::launch_matmul_pipelined_counted(
+            primitives::tensor(a), primitives::tensor(b), primitives::tensor(out), math) {
+            Ok(launches) => {
+                finish_dispatch(&client());
+                RUBLAS_CALLS.fetch_add(1, Ordering::Relaxed);
+                LAUNCHES.fetch_add(launches as u64, Ordering::Relaxed);
+                return;
+            }
+            Err(MatmulSetupError::Unavailable(_) | MatmulSetupError::InvalidConfig(_)
+                | MatmulSetupError::Vectorization(_)) => {}
+            Err(error) => panic!("RUDA ruBLAS narrow GEMM failed: {error}"),
+        }
+    }
+    if op == 7 && (1..=4).contains(&a.shape[0]) && matches!(a.dtype, 1 | 2) {
         match rublas::tensor_matmul::launch_gemv_low_precision(
             primitives::tensor(a), primitives::tensor(b), primitives::tensor(out)) {
             Ok(()) => {

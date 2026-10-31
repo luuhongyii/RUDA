@@ -147,9 +147,10 @@ fn simt<I: Numeric, S: Numeric, O: Float>(
     let group = group_for(metadata, block, groups); let p = group * 10usize;
     let tile = block - usize::cast_from(metadata[p]); let nt = usize::cast_from(metadata[p + 9usize]);
     let tid = UNIT_POS as usize; let ty = tid / 16usize; let tx = tid % 16usize;
-    let row_base = tile / nt * 16usize; let col_base = tile % nt * 16usize;
-    let row = row_base + ty; let col = col_base + tx;
     let m = usize::cast_from(metadata[p + 1usize]); let n = usize::cast_from(metadata[p + 2usize]); let k = usize::cast_from(metadata[p + 3usize]);
+    let position = crate::matmul::tile_position(tile,(m+15usize)/16usize,nt);
+    let row_base = position.0 * 16usize; let col_base = position.1 * 16usize;
+    let row = row_base + ty; let col = col_base + tx;
     let ao = usize::cast_from(metadata[p + 4usize]); let bo = usize::cast_from(metadata[p + 5usize]);
     let ad = comptime!(if mode == 0 || mode == 2 {1usize} else {0usize});
     let bd = comptime!(if mode == 0 || mode == 1 {1usize} else {0usize});
@@ -187,8 +188,9 @@ fn carrier<I: Numeric, T: Float, S: Numeric, O: Float>(
     if block >= usize::cast_from(metadata[groups * 10usize]) { terminate!(); }
     let group = group_for(metadata, block, groups); let p = group * 10usize;
     let tile = block - usize::cast_from(metadata[p]); let nt = usize::cast_from(metadata[p + 9usize]);
-    let row_base = tile / nt * 16usize; let col_base = tile % nt * 16usize; let lane = UNIT_POS as usize;
     let m = usize::cast_from(metadata[p + 1usize]); let n = usize::cast_from(metadata[p + 2usize]); let k = usize::cast_from(metadata[p + 3usize]);
+    let position = crate::matmul::tile_position(tile,(m+15usize)/16usize,nt);
+    let row_base = position.0 * 16usize; let col_base = position.1 * 16usize; let lane = UNIT_POS as usize;
     let ao = usize::cast_from(metadata[p + 4usize]); let bo = usize::cast_from(metadata[p + 5usize]);
     let ad = comptime!(if mode == 0 || mode == 2 {1usize} else {0usize});
     let bd = comptime!(if mode == 0 || mode == 1 {1usize} else {0usize});
@@ -245,8 +247,9 @@ fn fp8<A: Float, S: Numeric>(a: &Tensor<u8>, b: &Tensor<u8>, sa: &Tensor<S>, sb:
     if block >= usize::cast_from(metadata[groups * 10usize]) { terminate!(); }
     let group_index = group_for(metadata, block, groups); let p = group_index * 10usize;
     let tile = block - usize::cast_from(metadata[p]); let nt = usize::cast_from(metadata[p + 9usize]);
-    let row_base = tile / nt * 16usize; let col_base = tile % nt * 8usize; let lane = UNIT_POS_PLANE;
     let m = usize::cast_from(metadata[p + 1usize]); let n = usize::cast_from(metadata[p + 2usize]); let k = usize::cast_from(metadata[p + 3usize]);
+    let position = crate::matmul::tile_position(tile,(m+15usize)/16usize,nt);
+    let row_base = position.0 * 16usize; let col_base = position.1 * 8usize; let lane = UNIT_POS_PLANE;
     let ao = usize::cast_from(metadata[p + 4usize]); let bo = usize::cast_from(metadata[p + 5usize]);
     let ad = comptime!(if mode == 0 || mode == 2 {1usize} else {0usize});
     let bd = comptime!(if mode == 0 || mode == 1 {1usize} else {0usize});

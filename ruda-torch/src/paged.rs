@@ -125,7 +125,10 @@ pub unsafe extern "C" fn ruda_torch_paged(op:u32, plan:*mut *mut NativePlan,
                     unsafe{plan.plan.attention_into_split(&q,&k,&v,position,&out,scale,causal,workspace.as_mut().unwrap())}
                         .expect("RUDA split paged attention failed");
                     SPLIT_CALLS.fetch_add(1,Ordering::Relaxed);
-                    LAUNCHES.fetch_add(2,Ordering::Relaxed);
+                    if out.meta.num_elements()!=0 {
+                        let launches=if workspace.as_ref().unwrap().fused_merge() {1} else {2};
+                        LAUNCHES.fetch_add(launches,Ordering::Relaxed);
+                    }
                 } else {
                     // SAFETY: C++ allocates a fresh output and checks overlap.
                     unsafe{plan.plan.attention_into(&q,&k,&v,position,&out,scale,causal)}

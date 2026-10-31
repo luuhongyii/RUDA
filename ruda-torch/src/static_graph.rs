@@ -21,6 +21,7 @@ struct State {
     nodes: Vec<NodeSpec>,
     inputs: usize,
     indexing: super::graph_index::IndexBuffers,
+    reduction_scratch: Vec<Vec<View>>,
     kernels: usize,
 }
 pub struct NativeStaticGraph { stream: u64, tracked: bool, state: Mutex<State> }
@@ -69,11 +70,64 @@ fn prepare(state_client: &ComputeClient<CudaRuntime>, ts: &[View], n: &NodeSpec,
     -> PreparedKernel<CudaRuntime>
 {
     if let Some(kernel)=super::graph_factory::prepare(state_client,ts,n,output) {return kernel;}
-    let a = &ts[n.a as usize];
+    if let Some(kernel)=super::graph_reduce::prepare(state_client,ts,n,output) {return kernel;}
+    if n.op==218 {
+        return super::graph_block_scale::prepare(state_client,&ts[n.a as usize],&ts[n.b as usize],&ts[output],n.scalar as usize);
+    }
+    if (212..=216).contains(&n.op) {
+        return super::graph_transform::prepare(state_client,&ts[n.a as usize],&ts[n.b as usize],&ts[output],n.op,n.scalar);
+    }
+    if n.op==217 {
+        return super::graph_matmul::prepare_layout(state_client,&ts[n.a as usize],&ts[n.b as usize],&ts[output],n.scalar as usize);
+    }
+    if n.op==211 {
+        return super::graph_matmul::prepare_grouped(state_client,&ts[n.a as usize],&ts[n.b as usize],&ts[output],n.scalar as u32);
+    }
+    if n.op==210 {
+        return super::graph_group_mask::prepare(state_client,&ts[n.a as usize],&ts[n.b as usize],&ts[output],n.scalar);
+    }
+    if (203..=206).contains(&n.op) {
+        return super::graph_product_reduce::prepare(state_client,&ts[n.a as usize],&ts[n.b as usize],
+            &ts[output],n.scalar as u32,n.op>=205);
+    }
+    if matches!(n.op,201|202) {
+        return super::graph_rotary::prepare(state_client,&ts[n.a as usize],&ts[n.b as usize],
+            &ts[n.scalar as usize],&ts[output],n.op==202);
+    }
+    if (174..=188).contains(&n.op) {
+        return super::graph_fusion::prepare(state_client,ts,std::slice::from_ref(n),output,0)
+            .expect("validated activation graph node").1;
+    }
+    let mut a = &ts[n.a as usize];
     let out = &ts[output];
-    let b = if n.b == NO_WEIGHT { a } else { &ts[n.b as usize] };
+    let mut b = if n.b == NO_WEIGHT { a } else { &ts[n.b as usize] };
+    let mut lhs_view;let mut rhs_view;
+    let matmul_layout=graph_contract::matmul_layout(n.op);
+    if n.op==207 {
+        let code=n.scalar as u32;
+        let left=graph_contract::bmm_permutation(code&511).unwrap();
+        let right=graph_contract::bmm_permutation(code>>9).unwrap();
+        lhs_view=View{handle:a.handle.clone(),shape:left.map(|d|a.shape[d]).to_vec(),
+            strides:left.map(|d|a.strides[d]).to_vec(),len:a.len,dtype:a.dtype};
+        rhs_view=View{handle:b.handle.clone(),shape:right.map(|d|b.shape[d]).to_vec(),
+            strides:right.map(|d|b.strides[d]).to_vec(),len:b.len,dtype:b.dtype};
+        a=&lhs_view;b=&rhs_view;
+    } else if let Some((rank,lhs_transposed,rhs_transposed))=matmul_layout {
+        if lhs_transposed {
+            lhs_view=View{handle:a.handle.clone(),shape:a.shape.clone(),strides:a.strides.clone(),len:a.len,dtype:a.dtype};
+            lhs_view.shape.swap(rank-2,rank-1);lhs_view.strides.swap(rank-2,rank-1);a=&lhs_view;
+        }
+        if rhs_transposed {
+            rhs_view=View{handle:b.handle.clone(),shape:b.shape.clone(),strides:b.strides.clone(),len:b.len,dtype:b.dtype};
+            rhs_view.shape.swap(rank-2,rank-1);rhs_view.strides.swap(rank-2,rank-1);b=&rhs_view;
+        }
+    }
+    if matches!(n.op,102|103|106|107) {
+        let op=match n.op {102=>31,103=>33,106=>32,_=>34};
+        return super::softmax::prepare(state_client,op,a,b,out,n.scalar as usize);
+    }
     if let Some(kernel)=super::graph_index::prepare_layout(state_client,a,out,n) {return kernel;}
-    if matches!(n.op,7|30) {
+    if matmul_layout.is_some() {
         if let Some(kernel)=super::graph_matmul::prepare(state_client,a,b,out) {return kernel;}
     }
     macro_rules! run {
@@ -117,23 +171,16 @@ fn prepare(state_client: &ComputeClient<CudaRuntime>, ts: &[View], n: &NodeSpec,
                 unsafe { kernels::rms_norm_warp::prepare::<$dtype, CudaRuntime>(
                     state_client, RudaCount::Static(blocks,1,1), RudaDim::new_1d(128),
                     a.arg(), b.arg(), out.arg(), n.scalar, n.b != NO_WEIGHT) }
-            } else if n.op == 7 || n.op == 30 {
+            } else if matmul_layout.is_some() {
                 let blocks = u32::try_from(out.len.div_ceil(128)).expect("graph matmul grid overflow");
                 unsafe { kernels::matmul_storage::prepare::<$dtype, $dtype, CudaRuntime>(
                     state_client, RudaCount::Static(blocks,1,1), RudaDim::new_1d(128),
-                    a.arg(), b.arg(), out.arg(), n.op == 30) }
+                    a.arg(), b.arg(), out.arg(), a.shape.len()==3) }
             } else if n.op == 104 || n.op == 105 {
                 let blocks = u32::try_from(out.len.div_ceil(128)).expect("graph reduction grid overflow");
                 unsafe { kernels::reduce_sum_storage::prepare::<$dtype, $dtype, CudaRuntime>(
                     state_client, RudaCount::Static(blocks,1,1), RudaDim::new_1d(128),
                     a.arg(), out.arg(), n.op == 105) }
-            } else if matches!(n.op, 102 | 103 | 106 | 107) {
-                let axis = n.scalar as usize;
-                let rows = a.len / a.shape[axis];
-                let blocks = u32::try_from(rows.div_ceil(128)).expect("graph softmax grid overflow");
-                unsafe { kernels::softmax::prepare::<$dtype, $dtype, CudaRuntime>(
-                    state_client, RudaCount::Static(blocks,1,1), RudaDim::new_1d(128),
-                    a.arg(), b.arg(), out.arg(), axis, n.op >= 106, n.op == 103 || n.op == 107) }
             } else {
                 let blocks = u32::try_from(out.len.div_ceil(128)).expect("graph pointwise grid overflow");
                 unsafe { kernels::pointwise::prepare::<$dtype,$dtype,$dtype,CudaRuntime>(
@@ -166,12 +213,73 @@ pub extern "C" fn ruda_torch_graph_empty_api_version() -> u32 { 1 }
 #[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_graph_root_api_version() -> u32 { 1 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_matmul_layout_api_version() -> u32 { 6 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_activation_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_fp8_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_extremum_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_pack_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_segment_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_rotary_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_product_reduce_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_abs_extremum_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_group_mask_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_graph_transform_api_version() -> u32 { 1 }
+
 fn prepare_all(client:&ComputeClient<CudaRuntime>,tensors:&[View],nodes:&[NodeSpec],inputs:usize,
-    indexing:&super::graph_index::IndexBuffers)->Vec<PreparedKernel<CudaRuntime>> {
+    indexing:&super::graph_index::IndexBuffers,reduction_scratch:&mut [Vec<View>])->Vec<PreparedKernel<CudaRuntime>> {
     let mut kernels=indexing.preamble(client);
-    for (i,node) in nodes.iter().enumerate() {
-        if let Some(indexed)=indexing.prepare(client,tensors,node,i,inputs) {kernels.extend(indexed);}
+    let mut i=0;
+    while i<nodes.len() {
+        if let Some((count,kernel))=super::graph_block_scale::prepare_matmul(client,tensors,nodes,inputs,i,indexing.error_flag()) {
+            kernels.push(kernel);i+=count;continue;
+        }
+        if let Some((count,kernel))=super::graph_norm::prepare(client,tensors,nodes,inputs,i) {
+            kernels.push(kernel);i+=count;continue;
+        }
+        if let Some((count,kernel))=super::graph_softmax::prepare(client,tensors,nodes,inputs,i) {
+            kernels.push(kernel);i+=count;continue;
+        }
+        if let Some((count,kernel))=super::graph_layout_chain::prepare(client,tensors,nodes,inputs,i) {
+            kernels.push(kernel);i+=count;continue;
+        }
+        if let Some((count,kernel))=super::graph_fusion::prepare(client,tensors,nodes,inputs,i) {
+            kernels.push(kernel);i+=count;continue;
+        }
+        let node=&nodes[i];
+        if matches!(node.op,189..=192|208|209) {
+            let source=&tensors[node.a as usize];let out=&tensors[inputs+i];
+            let values=[View::packed(source.handle.clone(),source.shape.clone(),source.dtype),
+                View::packed(out.handle.clone(),out.shape.clone(),out.dtype)];
+            let ints=[i64::from(matches!(node.op,190|192)),node.scalar as i64,i64::from(node.op<=190 || node.op==208)];
+            let (prepared,scratch)=if node.op>=208 {
+                super::operation_reduce::prepare_abs_reusing(client,&values,&ints,&reduction_scratch[i])
+            } else {super::operation_reduce::prepare_reusing(client,&values,&ints,&reduction_scratch[i])};
+            kernels.extend(prepared);reduction_scratch[i]=scratch;i+=1;continue;
+        }
+        if let Some(indexed)=indexing.prepare(client,tensors,node,i,inputs,&mut reduction_scratch[i]) {kernels.extend(indexed);}
         else if tensors[inputs+i].len!=0 {kernels.push(prepare(client,tensors,node,inputs+i));}
+        i+=1;
     }
     kernels
 }
@@ -212,7 +320,8 @@ pub unsafe extern "C" fn ruda_torch_graph(
             graph_contract::validate(&specs,&nodes,input_count).expect("invalid native static graph");
             let client=client().fixed_execution_queue();
             let indexing=super::graph_index::IndexBuffers::new(&client,&tensors,&nodes,input_count);
-            let prepared=prepare_all(&client,&tensors,&nodes,input_count,&indexing);
+            let mut reduction_scratch=(0..nodes.len()).map(|_|Vec::new()).collect::<Vec<_>>();
+            let prepared=prepare_all(&client,&tensors,&nodes,input_count,&indexing,&mut reduction_scratch);
             let kernels=prepared.len();
             // SAFETY: descriptor contracts checked above and storage overlap by C++;
             // all registered kernels have explicit bindings and no hidden side effects.
@@ -231,7 +340,7 @@ pub unsafe extern "C" fn ruda_torch_graph(
                     .expect("empty graph completion event creation failed"))
             } else {None};
             let edges=graph.as_ref().map_or(0,|graph|graph.edge_count() as u64);
-            let state=State{graph,empty_completion,client,stream,tensors,nodes,inputs:input_count,indexing,kernels};
+            let state=State{graph,empty_completion,client,stream,tensors,nodes,inputs:input_count,indexing,reduction_scratch,kernels};
             unsafe { *plan=Box::into_raw(Box::new(NativeStaticGraph{stream:state.stream,tracked:flags&1!=0,state:Mutex::new(state)})); *result=edges; }
             BUILDS.fetch_add(1,Ordering::Relaxed);
             return;
@@ -256,7 +365,8 @@ pub unsafe extern "C" fn ruda_torch_graph(
                         state.replay()?;
                         REPLAYS.fetch_add(1,Ordering::Relaxed);
                     } else {
-                        for prepared in prepare_all(&state.client,&state.tensors,&state.nodes,state.inputs,&state.indexing) {
+                        let State{client,tensors,nodes,inputs,indexing,reduction_scratch,..}=&mut *state;
+                        for prepared in prepare_all(client,tensors,nodes,*inputs,indexing,reduction_scratch) {
                             let (task,count,args,origin)=prepared.into_parts();
                             origin.launch(task,count,args);
                         }

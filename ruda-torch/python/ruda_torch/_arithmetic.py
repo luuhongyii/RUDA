@@ -15,6 +15,13 @@ def _direct_available():
     return version is not None and version() >= 2
 
 
+@lru_cache(maxsize=1)
+def _integer_scalar_available():
+    from . import _native
+    version = getattr(_native, 'ruda_torch_arithmetic_api_version', None)
+    return version is not None and version() >= 4
+
+
 def arithmetic(a, b=None, *, op, alpha=1, inplace=False, out=None):
     unary = op == 3
     if unary:
@@ -54,6 +61,25 @@ def arithmetic(a, b=None, *, op, alpha=1, inplace=False, out=None):
     coefficient = _C.arithmetic_alpha(alpha, dtype, out.dtype if out is not None else dtype, op == 1) if op <= 1 else 0
     math_dtype = torch.float32 if dtype in (torch.float16, torch.bfloat16) else dtype
     scalar = tuple(not isinstance(value, torch.Tensor) or value.device.type == 'cpu' for value in original)
+
+    if (not unary and dtype in _integral_dtypes and any(scalar) and _integer_scalar_available()
+            and all(value.dtype == dtype for value in tensors if value.device == device)
+            and all(isinstance(value, torch.Tensor) or type(value) in (bool, int) for value in original)):
+        value = original[0] if scalar[0] else original[1]
+        if isinstance(value, torch.Tensor):
+            value = value.item()
+        try:
+            immediate = _C.arithmetic_alpha(int(value), dtype, dtype, False)
+        except (OverflowError, RuntimeError):
+            pass
+        else:
+            operand = _logical(next(value for value in tensors if value.device == device)).expand(shape)
+            destination = (out if out is not None and out.shape == shape and out.dtype == dtype
+                           and not out.is_conj() and not out.is_neg() else None)
+            result = destination if destination is not None else torch.empty(shape, dtype=dtype, device=device)
+            _C.scientific_call(485, [operand, operand, result],
+                               [1 if op == 2 else 0, 2 * int(scalar[0]), 2 * int(scalar[1]), coefficient, immediate], [])
+            return result if destination is not None else _output(result, out, tensors, cast=True)
 
     direct = (dtype in (torch.float32, torch.float16, torch.bfloat16) and _direct_available()
               and all(value.device == device and value.dtype in (torch.float32, torch.float16, torch.bfloat16)

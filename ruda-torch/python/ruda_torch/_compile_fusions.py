@@ -14,6 +14,29 @@ def _value(node):
     return node.meta.get('val', node.meta.get('example_value')) if isinstance(node, Node) else None
 
 
+def route_byte_assignments(gm):
+    changed=False
+    for node in gm.graph.nodes:
+        if node.op!='call_function' or node.target is not operator.setitem or len(node.args)!=3 or node.kwargs or node.users:
+            continue
+        destination,mask,code=node.args
+        if isinstance(mask,(tuple,list)) and len(mask)==1:mask=mask[0]
+        target,condition=_value(destination),_value(mask)
+        if (not isinstance(target,torch.Tensor) or not isinstance(condition,torch.Tensor)
+                or target.device.type!='ruda' or condition.device!=target.device
+                or target.dtype!=torch.uint8 or condition.dtype!=torch.bool
+                or target.layout!=torch.strided or not target.is_contiguous()
+                or any(type(d) is not int for d in (*target.shape,*condition.shape))
+                or tuple(condition.shape)!=tuple(target.shape)
+                or type(code) is not int or not 0<=code<=255):continue
+        node.target=torch.ops.aten.masked_fill_.Scalar
+        node.args=(destination,mask,code)
+        node.meta=dict(destination.meta)
+        changed=True
+    if changed:gm.recompile()
+    return gm
+
+
 def _operands(node):
     if (node.op == 'call_function' and node.target in
             (operator.mul, torch.mul, torch.ops.aten.mul.Tensor)

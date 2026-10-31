@@ -7,47 +7,64 @@ fn matmul<O: Numeric, P: Float>(
     a: &Tensor<u8>, b: &Tensor<u8>, sa: &Tensor<u8>, sb: &Tensor<u8>,
     ga: &Tensor<f32>, gb: &Tensor<f32>, bias: &Tensor<P>, out: &mut Tensor<O>,
     #[comptime] group: usize, #[comptime] global: bool, #[comptime] has_bias: bool,
+    #[comptime] split_groups: usize, #[comptime] split: bool,
+    #[comptime] tile_rows: usize, #[comptime] tile_cols: usize,
     #[comptime] output_code: u32, #[define(O)] _output_type: StorageType, #[define(P)] _bias_type: StorageType,
 ) {
     let m = a.shape(0); let k = a.shape(1) * 2usize; let n = b.shape(1);
-    let row_base = RUDA_POS_Y as usize * 16usize; let col_base = RUDA_POS_X as usize * 16usize;
-    let lane = UNIT_POS as usize;
-    let mut left = SharedMemory::<f16>::new_aligned(256usize, 32usize);
-    let mut right = SharedMemory::<f16>::new_aligned(256usize, 32usize);
-    let mut partial = SharedMemory::<f32>::new_aligned(256usize, 32usize);
+    let tiles_m = m / (16usize * tile_rows) + usize::cast_from(m % (16usize * tile_rows) != 0usize);
+    let tiles_n = n / (16usize * tile_cols) + usize::cast_from(n % (16usize * tile_cols) != 0usize);
+    let tile = RUDA_POS_Y as usize * tiles_n + RUDA_POS_X as usize;
+    let position = crate::matmul::tile_position(tile,tiles_m,tiles_n);
+    let block_row = position.0 * (16usize * tile_rows);
+    let block_col = position.1 * (16usize * tile_cols);
+    let tid = UNIT_POS as usize; let lane = tid % 32usize; let warp = tid / 32usize;
+    let warp_row = warp / tile_cols; let warp_col = warp % tile_cols;
+    let row_base = block_row + warp_row * 16usize; let col_base = block_col + warp_col * 16usize;
+    let threads = comptime!(32 * tile_rows * tile_cols);
+    let mut left = SharedMemory::<f16>::new_aligned(256usize * tile_rows, 32usize);
+    let mut right = SharedMemory::<f16>::new_aligned(256usize * tile_cols, 32usize);
+    let mut partial = SharedMemory::<f32>::new_aligned(256usize * tile_rows * tile_cols, 32usize);
     let mut total = Array::<f32>::new(8usize);
     #[unroll] for i in 0usize..8usize { total[i] = 0.0f32; }
     let acc = cmma::Matrix::<f32>::from_value(cmma::MatrixIdent::Accumulator, 16usize, 16usize, 16usize,
         cmma::MatrixLayout::Undefined, 0.0f32);
-    let mut base = 0usize;
-    while base < k {
-        #[unroll] for i in 0usize..8usize {
-            let t = lane + i * 32usize; let r = t / 16usize; let c = t % 16usize;
-            let mut av = 0.0f32; let mut bv = 0.0f32;
-            if row_base + r < m && base + c < k {
-                let inner = base + c;
-                let byte = a[(row_base + r) * a.stride(0) + inner / 2usize * a.stride(1)] as u32;
+    let split_start = RUDA_POS_Z as usize * split_groups * group;
+    let split_end = (split_start + split_groups * group).min(k);
+    let mut base = split_start;
+    while base < split_end {
+        #[unroll] for i in 0usize..comptime!((256 * tile_rows).div_ceil(threads)) {
+            let t = tid + i * threads; let r = t / 16usize; let col = t % 16usize;
+            let mut av = 0.0f32;
+            if block_row + r < m && base + col < k {
+                let inner = base + col;
+                let byte = a[(block_row + r) * a.stride(0) + inner / 2usize * a.stride(1)] as u32;
                 av = decode_code((byte >> (u32::cast_from(inner % 2usize) * 4u32)) & 15u32, 14u32);
             }
-            if base + r < k && col_base + c < n {
+            left[t] = f16::cast_from(av);
+        }
+        #[unroll] for i in 0usize..comptime!((256 * tile_cols).div_ceil(threads)) {
+            let t = tid + i * threads; let r = t / (16usize * tile_cols); let col = t % (16usize * tile_cols);
+            let mut bv = 0.0f32;
+            if base + r < k && block_col + col < n {
                 let inner = base + r;
-                let byte = b[inner / 2usize * b.stride(0) + (col_base + c) * b.stride(1)] as u32;
+                let byte = b[inner / 2usize * b.stride(0) + (block_col + col) * b.stride(1)] as u32;
                 bv = decode_code((byte >> (u32::cast_from(inner % 2usize) * 4u32)) & 15u32, 14u32);
             }
-            left[t] = f16::cast_from(av); right[t] = f16::cast_from(bv);
+            right[t] = f16::cast_from(bv);
         }
         sync_ruda();
         let aa = cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::A, 16usize, 16usize, 16usize,
-            cmma::MatrixLayout::RowMajor, &left.to_slice(), 16u32);
+            cmma::MatrixLayout::RowMajor, &left.slice(warp_row * 256usize, (warp_row + 1usize) * 256usize), 16u32);
         let bb = cmma::Matrix::<f16>::from_slice(cmma::MatrixIdent::B, 16usize, 16usize, 16usize,
-            cmma::MatrixLayout::RowMajor, &right.to_slice(), 16u32);
+            cmma::MatrixLayout::RowMajor, &right.slice(warp_col * 16usize, 256usize * tile_cols), (16 * tile_cols) as u32);
         cmma::execute::<f16, f16, f32, f32, _>(&aa, &bb, &acc, &acc); sync_ruda();
         if k - base <= 16usize || (base + 16usize) % group == 0usize {
-            cmma::store(&mut partial.to_slice_mut(), &acc, 16u32, cmma::MatrixLayout::RowMajor); sync_ruda();
+            cmma::store(&mut partial.slice_mut(warp * 256usize, (warp + 1usize) * 256usize), &acc, 16u32, cmma::MatrixLayout::RowMajor); sync_ruda();
             #[unroll] for i in 0usize..8usize {
                 let t = lane + i * 32usize; let row = row_base + t / 16usize; let col = col_base + t % 16usize;
                 if row < m && col < n {
-                    let mut value = partial[t];
+                    let mut value = partial[warp * 256usize + t];
                     if comptime!(group == 32usize) {
                         value = crate::scaled_matmul::scaled_block(sa, sb, value, row, col, base, k, 6u32, 6u32);
                     } else {
@@ -68,8 +85,23 @@ fn matmul<O: Numeric, P: Float>(
         let t = lane + i * 32usize; let row = row_base + t / 16usize; let col = col_base + t % 16usize;
         if row < m && col < n {
             if k == 0usize { out[row * out.stride(0) + col * out.stride(1)] = O::cast_from(0u32); }
+            else if comptime!(split) { out[RUDA_POS_Z as usize*m*n+row*n+col]=O::cast_from(total[i]); }
             else { crate::scaled_matmul::store(bias, out, row, col, total[i] * alpha, has_bias, output_code); }
         }
+    }
+}
+
+#[ruda(launch)]
+pub(super) fn merge<O:Numeric,P:Float>(partial:&Tensor<f32>,ga:&Tensor<f32>,gb:&Tensor<f32>,bias:&Tensor<P>,out:&mut Tensor<O>,
+    #[comptime] splits:usize,#[comptime] global:bool,#[comptime] has_bias:bool,
+    #[comptime] output_code:u32,#[define(O)] _output_type:StorageType,#[define(P)] _bias_type:StorageType) {
+    let p=ABSOLUTE_POS as usize;
+    if p<out.len() {
+        let mut value=0.0f32;
+        #[unroll] for s in 0usize..splits {value+=partial[s*out.len()+p];}
+        if comptime!(global) {value*=ga[0]*gb[0];}
+        let n=out.shape(1);
+        crate::scaled_matmul::store(bias,out,p/n,p%n,value,has_bias,output_code);
     }
 }
 
@@ -104,13 +136,37 @@ pub(super) fn dispatch(xs: &[View], ints: &[i64]) {
         _ => panic!("unsupported FP4 matmul output/bias storage"),
     }.into() };
     let c = client(); let h = &c.properties().hardware;
+    if super::fp4_mma::try_dispatch(&c,xs,group,global,has_bias) {return;}
     let mma = MmaConfig {a_type: DType::F16.into(), b_type: DType::F16.into(), cd_type: DType::F32.into(), m: 16, n: 16, k: 16};
     assert!(h.plane_size_min == 32 && h.plane_size_max == 32 && h.max_shared_memory_size >= 2048);
     assert!(c.features().matmul.cmma.contains(&mma), "FP4 matmul requires FP16 tensor cores");
     assert!(m <= u32::MAX as usize - 16 && n <= u32::MAX as usize - 16 && k <= u32::MAX as usize - 16);
-    assert!(n.div_ceil(16) <= h.max_ruda_count.0 as usize && m.div_ceil(16) <= h.max_ruda_count.1 as usize);
-    unsafe { matmul::launch::<CudaRuntime>(&c, RudaCount::Static(n.div_ceil(16) as u32, m.div_ceil(16) as u32, 1),
-        RudaDim::new_1d(32), a.arg(), b.arg(), sa.arg(), sb.arg(), ga.arg(), gb.arg(), bias.arg(), out.arg(),
-        group, global, has_bias, out.dtype, storage(out.dtype), storage(bias.dtype)); }
-    LAUNCHES.fetch_add(1, Ordering::Relaxed); finish_dispatch(&c);
+    let (tile_rows,tile_cols) = if k >= 128 && h.max_units_per_ruda >= 128 && h.max_shared_memory_size >= 8192 {
+        if m >= 32 && n >= 32 {(2,2)} else if n >= 64 {(1,4)} else {(1,1)}
+    } else {(1,1)};
+    let grid_m=m.div_ceil(16*tile_rows);let grid_n=n.div_ceil(16*tile_cols);
+    let threads=32*tile_rows*tile_cols;
+    assert!(grid_n <= h.max_ruda_count.0 as usize && grid_m <= h.max_ruda_count.1 as usize);
+    let tiles=grid_m*grid_n;
+    let sms=h.num_streaming_multiprocessors.unwrap_or(108).max(1) as usize;
+    let groups=k.div_ceil(group);
+    let splits=if k>=2048 && tiles<sms*4 {
+        (sms*4).div_ceil(tiles).min(16).min(groups.div_ceil(32)).min((64*1024*1024)/(out.len*4)).max(1)
+    } else {1};
+    let split_groups=groups.div_ceil(splits);
+    if splits>1 {
+        let partial=View::packed(c.empty(splits*out.len*4),vec![splits,m,n],0);
+        unsafe {
+            matmul::launch::<CudaRuntime>(&c,RudaCount::Static(grid_n as u32,grid_m as u32,splits as u32),
+                RudaDim::new_1d(threads as u32),a.arg(),b.arg(),sa.arg(),sb.arg(),ga.arg(),gb.arg(),bias.arg(),partial.arg(),
+                group,false,false,split_groups,true,tile_rows,tile_cols,0,storage(0),storage(bias.dtype));
+            merge::launch::<CudaRuntime>(&c,RudaCount::Static(out.len.div_ceil(128) as u32,1,1),RudaDim::new_1d(128),
+                partial.arg(),ga.arg(),gb.arg(),bias.arg(),out.arg(),splits,global,has_bias,out.dtype,storage(out.dtype),storage(bias.dtype));
+        }
+    } else {
+        unsafe { matmul::launch::<CudaRuntime>(&c, RudaCount::Static(grid_n as u32, grid_m as u32, 1),
+            RudaDim::new_1d(threads as u32), a.arg(), b.arg(), sa.arg(), sb.arg(), ga.arg(), gb.arg(), bias.arg(), out.arg(),
+            group, global, has_bias,groups,false,tile_rows,tile_cols,out.dtype, storage(out.dtype), storage(bias.dtype)); }
+    }
+    LAUNCHES.fetch_add(if splits>1 {2}else{1}, Ordering::Relaxed); finish_dispatch(&c);
 }

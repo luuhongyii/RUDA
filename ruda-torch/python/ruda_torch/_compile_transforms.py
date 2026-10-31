@@ -28,7 +28,7 @@ def definition(node):
     if args is None:return None
     q=args[names[0]];source=q.meta.get('val') if isinstance(q,Node) else None
     if not isinstance(source,torch.Tensor) or source.dtype!=result.dtype:return None
-    if mode in (3,4) and source.numel()>0 and result.numel()>0:
+    if mode in (0,1,3,4) and source.numel()>0 and result.numel()>0:
         from ._compile_native import _lower
         if _lower(node) is not None:return None
     if node.target is torch.ops.aten.slice.Tensor:

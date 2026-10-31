@@ -7,7 +7,9 @@ import struct
 NO_WEIGHT = 2**32-1
 MAX_NODES = 256
 MAX_TENSORS = 512
-DTYPE_BYTES = {'float32':4,'float16':2,'bfloat16':2,'bool':1,'int64':8,'int32':4,'int16':2,'int8':1,'uint8':1}
+FP8_DTYPES = frozenset(('float8_e4m3fn','float8_e5m2','float8_e8m0fnu'))
+DTYPE_BYTES = {'float32':4,'float16':2,'bfloat16':2,'bool':1,'int64':8,'int32':4,'int16':2,'int8':1,'uint8':1,
+               **dict.fromkeys(FP8_DTYPES,1)}
 INDEX_CODES = {'index_select':134,'gather':135,'embedding':136,
                'embedding_backward':137,'embedding_backward_frequency':138,'gather_backward':139}
 TRANSFORM_CODES = {'slice_copy':140,'select_copy':141,'cat':142,
@@ -17,6 +19,19 @@ PREDICATE_CODES = {'masked_fill':146,'where':147,'eq':148,'ne':149,'lt':150,'le'
 FACTORY_CODES = {'full':160,'arange_integer':161,'arange_float':172}
 MASK_CODES = {'tril':162,'triu':163,'logical_not':164,'logical_and':165,'logical_or':166,
               'logical_xor':167,'bitwise_not':168,'bitwise_and':169,'bitwise_or':170,'bitwise_xor':171}
+
+def bmm_layout_variants(rank):
+    return math.factorial(rank)*(rank-1) if 2<=rank<=8 else 0
+
+
+def bmm_layout_axes(rank, code):
+    if type(code) is not int or not 0<=code<bmm_layout_variants(rank):
+        raise ValueError('invalid BMM layout encoding')
+    permutation,repeat=divmod(code,rank-1);available=list(range(rank));axes=[]
+    for remaining in range(rank,0,-1):
+        position,permutation=divmod(permutation,math.factorial(remaining-1))
+        axes.append(available.pop(position))
+    return tuple(axes),repeat
 
 @dataclass(frozen=True)
 class TensorSpec:
@@ -68,12 +83,27 @@ MATH_BINARY_CODES = {'pow': 121, 'floor_divide': 122, 'fmod': 123,
                      'remainder': 124, 'div_trunc': 57}
 MATH_SCALAR_CODES = {'pow_scalar': 129, 'floor_divide_scalar': 130,
                      'fmod_scalar': 131, 'remainder_scalar': 132, 'div_trunc_scalar': 133}
-CODES = {**UNARY_CODES, **BINARY_CODES, **SCALAR_CODES, 'mm': 7, 'bmm': 30,
+ACTIVATION_CODES = {'gelu':174,'gelu_tanh':175,'gelu_backward':176,'gelu_tanh_backward':177,
+    'leaky_relu':178,'leaky_relu_backward':179,'clamp_min':180,'clamp_max':181,
+    'log_sigmoid':182,'minimum':183,'maximum':184,'mish':185,'mish_backward':186,
+    'softplus':187,'softplus_backward':188}
+EXTREMUM_CODES = {'amax_keepdim':189,'amin_keepdim':190,'amax':191,'amin':192}
+ABS_EXTREMUM_CODES = {'abs_amax_keepdim':208,'abs_amax':209}
+MATMUL_CODES = {'mm':7,'bmm':30,'mm_rhs_transposed':173,'bmm_rhs_transposed':196,
+    'bmm_lhs_transposed':197,'bmm_both_transposed':198,'mm_lhs_transposed':199,'mm_both_transposed':200}
+ROTARY_CODES = {'rotary_add':201,'rotary_sub':202}
+PRODUCT_REDUCE_CODES = {'mul_sum_keepdim':203,'mul_sum':204,'mul_mean_keepdim':205,'mul_mean':206}
+STRIDED_TRANSFORM_CODES = {'slice_strided_copy':212,'slice_strided_backward':213,'slice_strided_scatter':214,
+    'repeat_copy':215,'repeat_interleave_copy':216}
+CODES = {**UNARY_CODES, **BINARY_CODES, **SCALAR_CODES, **MATMUL_CODES,
+    **ROTARY_CODES, **PRODUCT_REDUCE_CODES, **ABS_EXTREMUM_CODES, **STRIDED_TRANSFORM_CODES,
+    'bmm_permuted':207,'group_masked_fill':210,'bmm_grouped':211,'bmm_layout':217,'block_scaled_cast':218,
+    'pack_nibbles':193, 'segment_sum':194, 'segment_sum_exp':195,
     'rms_norm': 100, 'softmax': 102, 'log_softmax': 103, 'sum_keepdim': 104,
     'mean_keepdim': 105, 'softmax_backward': 106, 'log_softmax_backward': 107,
     'reshape_copy': 112, 'permute_copy': 113, 'cast': 114, 'expand_copy': 115,
     'add_broadcast': 116, 'mul_broadcast': 117, 'div_broadcast': 118,
-    'sum': 119, 'mean': 120, **MATH_BINARY_CODES, **MATH_SCALAR_CODES, **INDEX_CODES, **TRANSFORM_CODES, **PREDICATE_CODES, **FACTORY_CODES, **MASK_CODES}
+    'sum': 119, 'mean': 120, **MATH_BINARY_CODES, **MATH_SCALAR_CODES, **INDEX_CODES, **TRANSFORM_CODES, **PREDICATE_CODES, **FACTORY_CODES, **MASK_CODES, **ACTIVATION_CODES, **EXTREMUM_CODES}
 
 @dataclass(frozen=True)
 class Layout:
@@ -150,16 +180,127 @@ def plan_layout(inputs: Mapping[str,TensorSpec], nodes: Sequence[GraphOp], outpu
         root=node.kind in FACTORY_CODES and node.left is None and root_api==1
         if not root and node.left not in ids: raise ValueError('node input is missing or refers to a later node')
         a=NO_WEIGHT if root else ids[node.left]; spec=TensorSpec((),node.dtype) if root else specs[a]
+        if (spec.dtype in FP8_DTYPES or node.dtype in FP8_DTYPES
+                or any(name in ids and specs[ids[name]].dtype in FP8_DTYPES for name in (node.right,node.third))):
+            if node.kind not in ('copy','reshape_copy','permute_copy','cast','expand_copy','block_scaled_cast'):
+                raise ValueError('FP8 graph storage requires explicit cast or layout operations')
         if spec.dtype not in ('float32','float16','bfloat16') and node.kind not in (
-                'copy','reshape_copy','permute_copy','cast','expand_copy','index_select','gather','embedding',*TRANSFORM_CODES,*PREDICATE_CODES,*FACTORY_CODES,*MASK_CODES):
+                'copy','reshape_copy','permute_copy','cast','expand_copy','block_scaled_cast','pack_nibbles','index_select','gather','embedding',*STRIDED_TRANSFORM_CODES,*TRANSFORM_CODES,*PREDICATE_CODES,*FACTORY_CODES,*MASK_CODES):
             raise ValueError('nonfloating graph storage requires layout/copy/indexing operations')
-        if node.third is not None and node.kind!='where':raise ValueError('only where has three tensor inputs')
+        if node.third is not None and node.kind not in ('where',*ROTARY_CODES):raise ValueError('operator does not accept a third tensor input')
         if node.step is not None and node.kind not in ('arange_integer','arange_float'):raise ValueError('only arange has a step')
         if isinstance(node.scalar,bool): raise TypeError('graph scalar must be a finite number')
         try: scalar=struct.unpack('<f',struct.pack('<f',float(node.scalar)))[0]
         except (TypeError,ValueError,OverflowError,struct.error) as exc: raise ValueError('invalid FP32 scalar') from exc
-        if not math.isfinite(scalar) and node.kind not in (*PREDICATE_CODES,'full'): raise ValueError('graph scalar must be finite in FP32')
-        if node.kind in MASK_CODES:
+        if not math.isfinite(scalar) and node.kind not in (*PREDICATE_CODES,'full','group_masked_fill'): raise ValueError('graph scalar must be finite in FP32')
+        if node.kind=='block_scaled_cast':
+            if (node.right not in ids or node.shape is not None or node.dtype is not None
+                    or len(spec.shape)!=2 or 0 in spec.shape
+                    or spec.dtype not in ('float32','float16','bfloat16',*FP8_DTYPES)
+                    or scalar!=node.scalar or not scalar.is_integer() or not 1<=scalar<=2**24):
+                raise ValueError('invalid block-scaled cast input or row block')
+            b=ids[node.right];scale=specs[b];rows=int(scalar);count=math.prod(scale.shape)
+            if (scale.dtype!='float32' or spec.shape[0]%rows or count==0
+                    or count%(spec.shape[0]//rows) or spec.shape[1]%(count//(spec.shape[0]//rows))):
+                raise ValueError('invalid block-scaled cast scale grid')
+            spec=TensorSpec(spec.shape,'float32')
+        elif node.kind in STRIDED_TRANSFORM_CODES:
+            shape=node.shape;b=a
+            if (not isinstance(shape,tuple) or len(shape)>8 or not valid_dimensions(shape)
+                    or node.dtype is not None or scalar!=node.scalar or not scalar.is_integer()):
+                raise ValueError('invalid strided transform metadata')
+            if node.kind=='repeat_copy':
+                if node.right is not None or scalar!=0 or math.copysign(1.,scalar)<0 or len(shape)<len(spec.shape):raise ValueError('invalid repeat rank/scalar')
+                source=(1,)*(len(shape)-len(spec.shape))+spec.shape
+                if any((size!=0 if old==0 else size%old!=0) for old,size in zip(source,shape)):
+                    raise ValueError('repeat dimensions must be multiples of the input')
+            elif node.kind=='repeat_interleave_copy':
+                if node.right is not None or not -1<=scalar<len(spec.shape):raise ValueError('invalid interleave axis')
+                if scalar==-1:
+                    size=math.prod(spec.shape)
+                    if len(shape)!=1 or (shape[0]!=0 if size==0 else shape[0]%size!=0):raise ValueError('invalid flat interleave shape')
+                else:
+                    axis=int(scalar)
+                    if len(shape)!=len(spec.shape) or any(d!=axis and size!=spec.shape[d] for d,size in enumerate(shape)):
+                        raise ValueError('invalid interleave dimensions')
+                    if (shape[axis]!=0 if spec.shape[axis]==0 else shape[axis]%spec.shape[axis]!=0):
+                        raise ValueError('invalid interleave extent')
+            else:
+                if not 0<=scalar<2**24:raise ValueError('invalid strided slice encoding')
+                code=int(scalar);axis=code&7;start=(code>>3)&2047;step=code>>14
+                if step==0:raise ValueError('strided slice requires a positive step')
+                if node.kind=='slice_strided_scatter':
+                    if node.right not in ids:raise ValueError('missing strided scatter input')
+                    b=ids[node.right];part=specs[b].shape;full=spec.shape
+                    if specs[b].dtype!=spec.dtype or shape!=full:raise ValueError('invalid strided scatter output/dtype')
+                elif node.right is not None:raise ValueError('strided slice is unary')
+                elif node.kind=='slice_strided_backward':full,part=shape,spec.shape
+                else:full,part=spec.shape,shape
+                if (len(full)!=len(part) or not 0<=axis<len(full) or start>full[axis]
+                        or any(d!=axis and size!=part[d] for d,size in enumerate(full))
+                        or part[axis] and start+(part[axis]-1)*step>=full[axis]):
+                    raise ValueError('strided slice exceeds source')
+            spec=TensorSpec(shape,spec.dtype)
+        elif node.kind=='group_masked_fill':
+            if node.right not in ids or node.shape is not None or node.dtype is not None or len(spec.shape)!=2:raise ValueError('group masking needs a matrix and group indicators')
+            b=ids[node.right];mask=specs[b]
+            if (len(mask.shape)!=2 or mask.shape[0]!=spec.shape[0] or mask.shape[1]==0
+                    or spec.shape[1]==0 or spec.shape[1]%mask.shape[1] or not _scalar_fits(spec.dtype,scalar)):
+                raise ValueError('invalid group mask shape or fill scalar')
+        elif node.kind in ('bmm_grouped','bmm_layout'):
+            if node.right not in ids or node.dtype is not None or node.shape is None or len(node.shape)!=3:
+                raise ValueError('grouped BMM requires two inputs and a rank-3 output shape')
+            b=ids[node.right];right=specs[b]
+            if (not valid_dimensions(node.shape) or 0 in node.shape or not 2<=len(spec.shape)<=8
+                    or not 2<=len(right.shape)<=8 or 0 in spec.shape or 0 in right.shape or spec.dtype!=right.dtype
+                    or scalar!=node.scalar or not scalar.is_integer() or not 0<=scalar<(2**24 if node.kind=='bmm_layout' else 4096)):
+                raise ValueError('invalid grouped BMM dtype/shape/axes')
+            if node.kind=='bmm_layout':
+                variants=bmm_layout_variants(len(spec.shape))
+                right_code,left_code=divmod(int(scalar),variants)
+                left_axes,_=bmm_layout_axes(len(spec.shape),left_code)
+                right_axes,_=bmm_layout_axes(len(right.shape),right_code)
+                ar,ac=left_axes[-2:];br,bc=right_axes[-2:]
+            else:
+                ar,ac,br,bc=tuple((int(scalar)>>(3*d))&7 for d in range(4))
+            if ar==ac or br==bc or max(ar,ac)>=len(spec.shape) or max(br,bc)>=len(right.shape):
+                raise ValueError('invalid grouped BMM matrix axes')
+            if (spec.shape[ac]!=right.shape[br] or node.shape[1:]!=(spec.shape[ar],right.shape[bc])
+                    or node.shape[0]*spec.shape[ar]*spec.shape[ac]>2**32-1
+                    or node.shape[0]*right.shape[br]*right.shape[bc]>2**32-1
+                    or any(node.shape[0]%math.prod(s.shape[d] for d in range(len(s.shape)) if d not in pair)
+                           for s,pair in ((spec,(ar,ac)),(right,(br,bc))))):
+                raise ValueError('invalid grouped BMM dimensions/batch repeats')
+            spec=TensorSpec(node.shape,spec.dtype)
+        elif node.kind=='bmm_permuted':
+            if node.right not in ids or node.shape is not None or node.dtype is not None:raise ValueError('permuted BMM needs two matrix inputs')
+            b=ids[node.right];right=specs[b]
+            if len(spec.shape)!=3 or len(right.shape)!=3 or spec.dtype!=right.dtype:raise ValueError('permuted BMM needs equal-dtype rank-3 inputs')
+            if scalar!=node.scalar or not scalar.is_integer() or not 0<=scalar<2**18:raise ValueError('invalid BMM permutations')
+            code=int(scalar);axes=[tuple((code>>(side*9+d*3))&7 for d in range(3)) for side in range(2)]
+            if any(sorted(p)!=[0,1,2] for p in axes):raise ValueError('invalid BMM permutation axes')
+            left_shape=tuple(spec.shape[d] for d in axes[0]);right_shape=tuple(right.shape[d] for d in axes[1])
+            if left_shape[0]!=right_shape[0] or left_shape[2]!=right_shape[1]:raise ValueError('permuted BMM dimensions do not match')
+            spec=TensorSpec((left_shape[0],left_shape[1],right_shape[2]),spec.dtype)
+        elif node.kind in PRODUCT_REDUCE_CODES:
+            if node.right not in ids or node.shape is not None or node.dtype is not None:raise ValueError('product reduction needs two tensor inputs')
+            b=ids[node.right]
+            if specs[b].dtype!=spec.dtype:raise ValueError('product reduction requires explicit dtype promotion')
+            shape=_broadcast_shape(spec.shape,specs[b].shape);mask=int(scalar)
+            if (not shape or 0 in shape or math.prod(shape)>2**32-1 or scalar!=mask
+                    or not 0<mask<(1<<len(shape))):raise ValueError('invalid product reduction dimensions/mask')
+            if node.kind.endswith('_keepdim'):shape=tuple(1 if mask&(1<<d) else size for d,size in enumerate(shape))
+            else:shape=tuple(size for d,size in enumerate(shape) if not mask&(1<<d))
+            spec=TensorSpec(shape,spec.dtype)
+        elif node.kind in ROTARY_CODES:
+            if (node.right not in ids or node.third not in ids or scalar!=0 or math.copysign(1.,scalar)<0
+                    or node.shape is not None or node.dtype is not None or not spec.shape
+                    or spec.shape[-1]==0 or spec.shape[-1]%2):raise ValueError('rotary requires an even feature axis and three tensor inputs')
+            b=ids[node.right];c=ids[node.third]
+            if specs[b].dtype!=spec.dtype or specs[c].dtype!=spec.dtype:raise ValueError('rotary requires explicit dtype promotion')
+            if _broadcast_shape(spec.shape,specs[b].shape,specs[c].shape)!=spec.shape:raise ValueError('rotary coefficients cannot expand the input shape')
+            scalar=float(c)
+        elif node.kind in MASK_CODES:
             if node.shape is not None or node.dtype is not None:raise ValueError('mask shape/dtype are inferred')
             b=a
             if node.kind in ('tril','triu'):
@@ -294,6 +435,16 @@ def plan_layout(inputs: Mapping[str,TensorSpec], nodes: Sequence[GraphOp], outpu
                     if node.kind=='gather' and node.shape is not None:raise ValueError('gather shape is determined by indices')
                     result=shape if node.kind=='gather_backward' else indices.shape
                 spec=TensorSpec(tuple(result),spec.dtype)
+        elif node.kind in ('segment_sum','segment_sum_exp'):
+            if (spec.dtype!='float32' or not 1<=len(spec.shape)<=7 or spec.shape[-1]==0 or node.right is not None
+                    or node.shape is not None or node.dtype is not None or scalar!=0 or math.copysign(1.,scalar)<0):
+                raise ValueError('segment scan requires FP32 storage and a nonempty last dimension')
+            b=a;spec=TensorSpec((*spec.shape,spec.shape[-1]),spec.dtype)
+        elif node.kind=='pack_nibbles':
+            if (spec.dtype!='uint8' or not spec.shape or spec.shape[-1]%2 or node.right is not None
+                    or node.shape is not None or node.dtype is not None or scalar!=0 or math.copysign(1.,scalar)<0):
+                raise ValueError('nibble packing requires uint8 storage with an even last dimension')
+            b=a;spec=TensorSpec((*spec.shape[:-1],spec.shape[-1]//2),spec.dtype)
         elif node.kind in ('reshape_copy', 'permute_copy', 'cast', 'expand_copy'):
             if node.right is not None:
                 raise ValueError('layout operators have one input')
@@ -339,6 +490,22 @@ def plan_layout(inputs: Mapping[str,TensorSpec], nodes: Sequence[GraphOp], outpu
             if node.kind != 'add_broadcast' and scalar != 0:
                 raise ValueError('broadcast multiply/divide requires zero scalar')
             spec = TensorSpec(tuple(shape),spec.dtype)
+        elif node.kind in ACTIVATION_CODES:
+            if node.shape is not None or node.dtype is not None:
+                raise ValueError('activation shape/dtype are inferred')
+            binary=node.kind.endswith('_backward') or node.kind in ('minimum','maximum')
+            parameter=node.kind in ('leaky_relu','leaky_relu_backward','clamp_min','clamp_max','softplus','softplus_backward')
+            if not parameter and (scalar!=0. or math.copysign(1.,scalar)<0):
+                raise ValueError('activation requires canonical zero scalar')
+            b=a
+            if binary:
+                if node.right not in ids:raise ValueError('activation requires a second tensor')
+                b=ids[node.right]
+                if specs[b].dtype!=spec.dtype:raise ValueError('activation requires explicit dtype promotion')
+                if node.kind in ('minimum','maximum'):
+                    spec=TensorSpec(_broadcast_shape(spec.shape,specs[b].shape),spec.dtype)
+                elif specs[b]!=spec:raise ValueError('activation gradient shape/dtype mismatch')
+            elif node.right is not None:raise ValueError('unary activation has no second tensor')
         elif node.kind in UNARY_CODES:
             if node.right is not None or scalar != 0. or math.copysign(1., scalar) < 0:
                 raise ValueError('unary operation requires no right input and canonical zero scalar')
@@ -357,17 +524,20 @@ def plan_layout(inputs: Mapping[str,TensorSpec], nodes: Sequence[GraphOp], outpu
             if specs[b] != spec: raise ValueError('no broadcasting or mixed-dtype promotion in static graph')
             if node.kind not in ('add','threshold_backward') and (scalar != 0. or math.copysign(1., scalar) < 0):
                 raise ValueError('binary scalar must be canonical zero')
-        elif node.kind in ('mm', 'bmm'):
+        elif node.kind in MATMUL_CODES:
             if node.right not in ids: raise ValueError('missing matrix input')
             b = ids[node.right]; right = specs[b]
-            rank = 2 if node.kind == 'mm' else 3
+            rank = 3 if node.kind.startswith('bmm') else 2
             if len(spec.shape) != rank or len(right.shape) != rank or spec.dtype != right.dtype:
                 raise ValueError('matmul requires equal-dtype rank-2/rank-3 inputs')
-            if spec.shape[-1] != right.shape[-2] or spec.shape[:-2] != right.shape[:-2]:
+            lhs_transposed = '_lhs_' in node.kind or '_both_' in node.kind
+            rhs_transposed = '_rhs_' in node.kind or '_both_' in node.kind
+            if spec.shape[-2 if lhs_transposed else -1] != right.shape[-1 if rhs_transposed else -2] or spec.shape[:-2] != right.shape[:-2]:
                 raise ValueError('matmul dimensions/batches do not match')
             if scalar != 0. or math.copysign(1., scalar) < 0:
                 raise ValueError('matmul scalar must be canonical zero')
-            spec = TensorSpec(spec.shape[:-1] + (right.shape[-1],), spec.dtype)
+            spec = TensorSpec(spec.shape[:-2] + (spec.shape[-1 if lhs_transposed else -2],
+                                                right.shape[-2 if rhs_transposed else -1]), spec.dtype)
             if math.prod(spec.shape) > 2**32-1: raise ValueError('matmul indexing limit')
         elif node.kind in ('softmax', 'log_softmax', 'softmax_backward', 'log_softmax_backward'):
             if not scalar.is_integer() or not 0 <= scalar < len(spec.shape):
@@ -379,13 +549,15 @@ def plan_layout(inputs: Mapping[str,TensorSpec], nodes: Sequence[GraphOp], outpu
                 b = ids[node.right]
             elif node.right is not None:
                 raise ValueError('softmax forward has no right tensor')
-        elif node.kind in ('sum_keepdim', 'mean_keepdim', 'sum', 'mean'):
+        elif node.kind in ('sum_keepdim', 'mean_keepdim', 'sum', 'mean', *EXTREMUM_CODES, *ABS_EXTREMUM_CODES):
             # Bit mask, not a shape guessed from the resulting singleton axes.
             mask = int(scalar)
             if scalar != mask or not 0 < mask < (1 << len(spec.shape)) or node.right is not None:
                 raise ValueError('reduction requires a nonempty in-range dimension mask')
             b = a
-            if node.kind in ('sum','mean'):
+            if node.kind in (*EXTREMUM_CODES,*ABS_EXTREMUM_CODES) and any(size==0 and mask & (1<<d) for d,size in enumerate(spec.shape)):
+                raise ValueError('extremum reduction has no identity for an empty axis')
+            if node.kind in ('sum','mean','amax','amin','abs_amax'):
                 spec = TensorSpec(tuple(size for d,size in enumerate(spec.shape) if not mask & (1<<d)),spec.dtype)
             else:
                 spec = TensorSpec(tuple(1 if mask & (1 << d) else size

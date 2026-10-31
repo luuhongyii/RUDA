@@ -1,4 +1,5 @@
 import warnings
+import sys
 import torch
 from . import _C
 from ._ops import _registry, _dimension, _out, _typed_value, clone, div, fill_, masked_fill, mul
@@ -139,7 +140,42 @@ def _index_out(result, out, inputs, *, allow_self=False):
     return result
 
 
+def _leading_mask(a,indices):
+    if (not getattr(sys.modules[__package__],'_mask_rows_available',False) or len(indices)!=1
+            or a.dtype in (torch.float4_e2m1fn_x2,torch.float8_e8m0fnu)):return None
+    mask=indices[0]
+    if (not isinstance(mask,torch.Tensor) or mask.dtype!=torch.bool or mask.device!=a.device
+            or not 0<mask.ndim<=a.ndim or tuple(mask.shape)!=tuple(a.shape[:mask.ndim])):return None
+    return _logical(mask)
+
+
+def _leading_integer(a, indices):
+    if (len(indices)!=1 or a.ndim==0 or a.numel()==0
+            or a.dtype not in (torch.bool,torch.int8,torch.uint8,torch.int16,torch.int32,torch.int64,
+                               torch.float16,torch.bfloat16,torch.float32,torch.float64)):
+        return None
+    index=indices[0]
+    if (not isinstance(index,torch.Tensor) or index.ndim!=1 or index.dtype not in (torch.int32,torch.int64)
+            or index.device!=a.device and index.device.type!='cpu'):
+        return None
+    index=_logical(index).to(a.device)
+    rows=torch.empty(index.shape,device=a.device,dtype=torch.int64)
+    _C.scientific_call(475,[rows,index],[1,1,0,a.shape[0],0],[])
+    return rows
+
+
 def index_tensor(a, indices, *, out=None):
+    rows=_leading_integer(a,indices)
+    if rows is not None:
+        result=index_select(a,0,rows)
+        return _index_out(result,out,(a,*indices))
+    mask=_leading_mask(a,indices)
+    if mask is not None:
+        prefix,count=_nonzero_prefix(mask)
+        result=_out((count,*a.shape[mask.ndim:]),a)
+        if result.numel():
+            _C.scientific_call(465,[_logical(a),prefix,result],[count,mask.ndim,1],[])
+        return _index_out(result,out,(a,*indices))
     linear = _index_offsets(a, indices)
     result = _out(linear.shape, a)
     _C.scientific_call(473, [_logical(a), linear, result], [0], [])
@@ -354,6 +390,36 @@ def index_put(a, indices, values, accumulate=False, *, inplace=False, out=None, 
         for index in indices:
             if index is not None:
                 _C.check_index_output(a, index, index)
+    rows=_leading_integer(a,indices)
+    if rows is not None:
+        shape=(rows.numel(),*a.shape[1:]);values=_logical(values)
+        while values.ndim>len(shape) and values.shape[0]==1:values=values.squeeze(0)
+        values=values.expand(shape)
+        result=(index_add(a,0,rows,values,inplace=inplace) if accumulate
+                else index_copy(a,0,rows,values,inplace=inplace))
+        return _index_out(result,out,(a,*indices,original_values),allow_self=True)
+    if (not accumulate and len(indices)==1 and isinstance(indices[0],torch.Tensor)
+            and indices[0].dtype==torch.bool and indices[0].device==a.device
+            and 0<indices[0].ndim<=a.ndim and tuple(indices[0].shape)==tuple(a.shape[:indices[0].ndim])
+            and values.numel()==1 and a.is_contiguous() and a.dtype!=torch.float4_e2m1fn_x2
+            and a.dtype!=torch.float8_e8m0fnu):
+        mask=_logical(indices[0]).reshape((*indices[0].shape,*(1,)*(a.ndim-indices[0].ndim))).expand(a.shape)
+        scalar=_logical(values).reshape(()).expand(a.shape)
+        result=_target(a,inplace)
+        _C.scientific_call(482,[mask,scalar,result,result],[],[])
+        result=_finish_target(a,result,inplace)
+        return _index_out(result,out,(a,*indices,original_values),allow_self=True)
+    mask=None if accumulate else _leading_mask(a,indices)
+    if mask is not None:
+        prefix,count=_nonzero_prefix(mask)
+        shape=(count,*a.shape[mask.ndim:]);values=_logical(values)
+        while values.ndim>len(shape) and values.shape[0]==1:values=values.squeeze(0)
+        values=values.expand(shape)
+        result=_target(a,inplace)
+        if values.numel():
+            _C.scientific_call(466,[prefix,values,result],[count,mask.ndim,1],[])
+        result=_finish_target(a,result,inplace)
+        return _index_out(result,out,(a,*indices,original_values),allow_self=True)
     linear = _index_offsets(a, indices)
     values = _logical(values)
     while values.ndim > linear.ndim and values.shape[0] == 1:

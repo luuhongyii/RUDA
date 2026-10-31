@@ -116,6 +116,20 @@ fn warp_prefix(value: u32) -> u32 {
     result
 }
 
+#[ruda]
+pub(super) fn block_prefix(value:u32,warps:&mut SharedMemory<u32>)->u32 {
+    let tid=UNIT_POS as usize;let mut result=warp_prefix(value);
+    if tid%32==31 {warps[tid/32]=result;}
+    sync_ruda();
+    if tid<32 {
+        let mut subtotal=0u32;if tid<8 {subtotal=warps[tid];}
+        subtotal=warp_prefix(subtotal);if tid<8 {warps[tid]=subtotal;}
+    }
+    sync_ruda();
+    if tid>=32 {result+=warps[tid/32-1];}
+    result
+}
+
 #[ruda(launch)]
 fn scan_tiles(groups: &mut Tensor<u32>, totals: &mut Tensor<u32>) {
     let block = RUDA_POS_X as usize + RUDA_POS_Y as usize * RUDA_COUNT_X as usize;
@@ -124,18 +138,8 @@ fn scan_tiles(groups: &mut Tensor<u32>, totals: &mut Tensor<u32>) {
     if block < totals.len() {
         let mut value = 0u32;
         if p < groups.len() { value = groups[p]; }
-        value = warp_prefix(value);
         let mut warps = SharedMemory::<u32>::new(8usize);
-        if tid % 32usize == 31usize { warps[tid / 32usize] = value; }
-        sync_ruda();
-        if tid < 32usize {
-            let mut subtotal = 0u32;
-            if tid < 8usize { subtotal = warps[tid]; }
-            subtotal = warp_prefix(subtotal);
-            if tid < 8usize { warps[tid] = subtotal; }
-        }
-        sync_ruda();
-        if tid >= 32usize { value += warps[tid / 32usize - 1usize]; }
+        value=block_prefix(value,&mut warps);
         if p < groups.len() { groups[p] = value; }
         if tid == 255usize { totals[block] = value; }
     }

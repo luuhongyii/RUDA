@@ -227,7 +227,8 @@ for name, maximum in (('max', True), ('min', False)):
     _registry.impl(name + '.unary_out', lambda a, *, out, maximum=maximum: reduce_extreme(a, maximum=maximum, out=out))
     _registry.impl(name + '.other', lambda a, b, maximum=maximum: extreme(a, b, maximum=maximum))
     _registry.impl(name + '.out', lambda a, b, *, out, maximum=maximum: extreme(a, b, maximum=maximum, out=out))
-    _registry.impl(name + '.dim', lambda a, dim, keepdim=False, maximum=maximum: extreme_dim(a, dim, keepdim, maximum=maximum))
+    if name + '.dim' not in getattr(_C, 'native_eager_ops', ()):
+        _registry.impl(name + '.dim', lambda a, dim, keepdim=False, maximum=maximum: extreme_dim(a, dim, keepdim, maximum=maximum))
     _registry.impl('a' + name, lambda a, dim=(), keepdim=False, maximum=maximum: reduce_extreme(a, dim, keepdim, maximum=maximum))
     _registry.impl('a' + name + '.out', lambda a, dim=(), keepdim=False, *, out, maximum=maximum: reduce_extreme(a, dim, keepdim, maximum=maximum, out=out))
     _registry.impl('arg' + name, lambda a, dim=None, keepdim=False, maximum=maximum: arg_extreme(a, dim, keepdim, maximum=maximum))

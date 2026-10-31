@@ -17,7 +17,7 @@ mod tests {
             CompilerBackend::parse("nvrtc", None)
                 .unwrap()
                 .cache_namespace(89),
-            "cuda-nvrtc-strict-v19-sm89"
+            "cuda-nvrtc-strict-v22-sm89"
         );
         assert_ne!(CompilerBackend::Nvrtc.cache_namespace(89), "cuda");
         assert_ne!(CompilerBackend::Nvrtc.cache_namespace(89), CompilerBackend::Nvrtc.cache_namespace(90));
@@ -99,7 +99,7 @@ impl CompilerBackend {
 
     pub fn cache_namespace(self, _sm: u32) -> String {
         match self {
-            Self::Nvrtc => format!("cuda-nvrtc-strict-v19-sm{_sm}"),
+            Self::Nvrtc => format!("cuda-nvrtc-strict-v22-sm{_sm}"),
             #[cfg(feature = "direct-ptx")]
             Self::DirectPtx {
                 version: (major, minor),

@@ -9,6 +9,7 @@ mod manual;
 mod indexing;
 mod volta;
 mod scaled;
+mod blackwell;
 
 fn descriptor(variable: Variable) -> Result<Matrix> {
     let VariableKind::Matrix { mat, .. } = variable.kind else {
@@ -51,6 +52,7 @@ impl Emitter {
             _ => {}
         }
         match operation {
+            CoopMma::Blackwell { kind, args } => self.tcgen05(out, kind, args),
             CoopMma::Elementwise { .. } => {
                 Err(unsupported("cooperative matrix callbacks are not supported by PTX"))
             }

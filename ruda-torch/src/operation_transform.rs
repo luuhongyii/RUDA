@@ -1,12 +1,10 @@
 use super::*;
 
-#[ruda(launch)]
-fn transform<E:Numeric+RudaElement>(input:&Tensor<E>,out:&mut Tensor<E>,integer_fill:i64,float_fill:f32,
+#[ruda]
+fn mapped<E:Numeric>(input:&Tensor<E>,out:&Tensor<E>,p:usize,
     #[comptime] parameters:Vec<i64>,#[comptime] mode:u32,#[comptime] rank:usize,
-    #[comptime] input_rank:usize,#[comptime] integral:bool)
+    #[comptime] input_rank:usize)->(usize,bool)
 {
-    let p=ABSOLUTE_POS as usize;
-    if p>=out.len() {terminate!();}
     let mut source=0usize;let mut inside=true;let mut rest=p;
     if comptime!(mode==1 && parameters[3]!=0) {
         source=p/comptime!(parameters[2] as usize);
@@ -52,10 +50,51 @@ fn transform<E:Numeric+RudaElement>(input:&Tensor<E>,out:&mut Tensor<E>,integer_
             }
         }
     }
-    if inside {out[p]=input[source];}
+    (source,inside)
+}
+
+#[ruda(launch)]
+fn transform<E:Numeric+RudaElement>(input:&Tensor<E>,out:&mut Tensor<E>,integer_fill:i64,float_fill:f32,
+    #[comptime] parameters:Vec<i64>,#[comptime] mode:u32,#[comptime] rank:usize,
+    #[comptime] input_rank:usize,#[comptime] integral:bool)
+{
+    let p=ABSOLUTE_POS as usize;
+    if p>=out.len() {terminate!();}
+    let source=mapped(input,out,p,parameters,mode,rank,input_rank);
+    if source.1 {out[p]=input[source.0];}
     else if comptime!(mode==2 && integral) {out[p]=E::cast_from(integer_fill);}
     else if comptime!(mode==2) {out[p]=E::cast_from(float_fill);}
     else {out[p]=E::cast_from(0);}
+}
+
+#[ruda(launch)]
+fn transform_vector<E:Numeric+RudaElement>(input:&Tensor<E>,out:&mut Tensor<E>,integer_fill:i64,float_fill:f32,
+    #[comptime] parameters:Vec<i64>,#[comptime] mode:u32,#[comptime] rank:usize,
+    #[comptime] input_rank:usize,#[comptime] integral:bool)
+{
+    let p=ABSOLUTE_POS as usize;
+    if p<out.len()/4 {
+        let source=mapped(input,out,p*4usize,parameters,mode,rank,input_rank);
+        let mut value=Vector::<E,Const<4>>::new(E::cast_from(0));
+        if source.1 {value=input.slice(0usize,input.len()).into_vectorized().with_vector_size::<Const<4>>()[source.0/4];}
+        else if comptime!(mode==2 && integral) {value=Vector::new(E::cast_from(integer_fill));}
+        else if comptime!(mode==2) {value=Vector::new(E::cast_from(float_fill));}
+        let mut packed=out.slice_mut(0usize,out.len()).into_vectorized().with_vector_size::<Const<4>>();packed[p]=value;
+    }
+}
+
+fn vectorizable(input:&View,out:&View,ints:&[i64])->bool {
+    if input.shape.is_empty() || out.shape.is_empty() || [input,out].iter().any(|v|!v.contiguous()
+        || v.shape.last().unwrap()%4!=0 || v.handle.offset_start.unwrap_or(0)%(4*element_bytes(v.dtype)) as u64!=0) {return false;}
+    let last=input.shape.len()-1;
+    match ints[0] {
+        0=>true,
+        1=>ints[3]==0 && ints[1] as usize!=last,
+        2=>ints[3+2*last]%4==0 && ints[4+2*last]%4==0,
+        3|4=>ints[1] as usize!=last || ints[4]==1 && ints[2]%4==0 && ints[3]%4==0,
+        5=>ints[if ints[1]!=0 {2}else {2+last}]%4==0,
+        _=>false,
+    }
 }
 
 fn dimension(value:i128)->usize {
@@ -128,6 +167,13 @@ pub(super) fn prepare(c:&ComputeClient<CudaRuntime>,values:&[View],ints:&[i64],f
     let (input,out)=(&values[0],&values[1]);if out.len==0 {return Vec::new();}
     let mode=ints[0] as u32;let fill=if mode==2 {ints[1]}else {0};
     let scalar=if mode==2 {floats[0]}else {0.0};
+    if vectorizable(input,out,ints) {
+        let count=RudaCount::Static(u32::try_from((out.len/4).div_ceil(128)).expect("vector transform grid overflow"),1,1);
+        macro_rules! run {($e:ty)=>{transform_vector::prepare::<$e,CudaRuntime>(c,count,RudaDim::new_1d(128),input.arg(),out.arg(),
+            fill,scalar,ints.to_vec(),mode,out.shape.len(),input.shape.len(),(3..=8).contains(&out.dtype))};}
+        return vec![match out.dtype {0=>run!(f32),1=>run!(f16),2=>run!(bf16),3|8|12|13=>run!(u8),4=>run!(i64),
+            5=>run!(i32),6=>run!(i16),7=>run!(i8),9=>run!(f64),_=>unreachable!()}];
+    }
     let count=RudaCount::Static(u32::try_from(out.len.div_ceil(128)).expect("transform grid overflow"),1,1);
     macro_rules! run {($e:ty)=>{transform::prepare::<$e,CudaRuntime>(c,count,RudaDim::new_1d(128),input.arg(),out.arg(),
         fill,scalar,ints.to_vec(),mode,out.shape.len(),input.shape.len(),(3..=8).contains(&out.dtype))};}

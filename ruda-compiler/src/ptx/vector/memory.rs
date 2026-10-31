@@ -62,9 +62,16 @@ impl Emitter {
         let alignment = match array.kind {
             VariableKind::SharedArray { alignment, .. } => alignment.unwrap_or(element_bytes),
             VariableKind::ConstantArray { .. } => element_bytes.checked_next_power_of_two().unwrap_or(0),
+            VariableKind::GlobalInputArray(_) | VariableKind::GlobalOutputArray(_) if self.assume_aligned => stride,
             _ => 0,
         };
         let aligned = alignment >= stride && alignment % stride == 0;
+        if !matches!(array.kind, VariableKind::LocalArray { .. })
+            && self.packed_integer_memory(space, ty, &registers, &address, store, aligned)
+        {
+            self.line(format!("{end}:"));
+            return Ok(());
+        }
         if !matches!(array.kind, VariableKind::LocalArray { .. })
             && self.packed_vector_memory(space, ty, &registers, &address, store, aligned)
         {
@@ -75,12 +82,14 @@ impl Emitter {
             && ((ty.half() && width >= 2) || (ty.bytes() >= 4 && width >= 2));
         if vectorized {
             let scalar_path = self.label();
-            let bytes = stride.min(16);
+            let bytes = stride.min(self.vector_memory_bytes(space));
             let alignment = self.reg(Scalar::U64);
             let misaligned = self.reg(Scalar::Pred);
-            self.line(format!("and.b64 {alignment}, {address}, {};", bytes - 1));
-            self.line(format!("setp.ne.u64 {misaligned}, {alignment}, 0;"));
-            self.line(format!("@{misaligned} bra {scalar_path};"));
+            if !aligned {
+                self.line(format!("and.b64 {alignment}, {address}, {};", bytes - 1));
+                self.line(format!("setp.ne.u64 {misaligned}, {alignment}, 0;"));
+                self.line(format!("@{misaligned} bra {scalar_path};"));
+            }
             let elements = bytes / ty.bytes();
             for (chunk, values) in registers.chunks(elements).enumerate() {
                 let offset = chunk * bytes;
@@ -104,6 +113,10 @@ impl Emitter {
                     }
                 }
             }
+            if aligned {
+                self.line(format!("{end}:"));
+                return Ok(());
+            }
             self.line(format!("bra {end};"));
             self.line(format!("{scalar_path}:"));
         }
@@ -117,10 +130,68 @@ impl Emitter {
         Ok(())
     }
 
+    fn vector_memory_bytes(&self, space: &str) -> usize {
+        if space == "global" && self.target.sm >= 100 && self.target.version >= (8, 8) { 32 } else { 16 }
+    }
+
+    fn packed_integer_memory(&mut self, space: &str, ty: Scalar, registers: &[String], address: &str, store: bool, aligned: bool) -> bool {
+        if !(ty.narrow() || ty.fp8()) { return false; }
+        let lane_bits = ty.bytes() * 8;
+        let lanes = 32 / lane_bits;
+        let size = registers.len() * ty.bytes();
+        if size < 4 || !size.is_power_of_two() { return false; }
+        let bytes = size.min(self.vector_memory_bytes(space));
+        let fallback = if aligned { None } else { Some((self.label(), self.label())) };
+        if let Some((scalar_path, _)) = &fallback {
+            let low = self.reg(Scalar::U64);
+            let unaligned = self.reg(Scalar::Pred);
+            self.line(format!("and.b64 {low}, {address}, {};", bytes - 1));
+            self.line(format!("setp.ne.u64 {unaligned}, {low}, 0;"));
+            self.line(format!("@{unaligned} bra {scalar_path};"));
+        }
+        for (chunk, values) in registers.chunks(bytes / ty.bytes()).enumerate() {
+            let words = (0..values.len() / lanes).map(|_| self.reg_b32()).collect::<Vec<_>>();
+            if store {
+                for (group, word) in values.chunks_exact(lanes).zip(&words) {
+                    self.line(format!("mov.b32 {word}, 0;"));
+                    for (lane, value) in group.iter().enumerate() {
+                        self.line(format!("bfi.b32 {word}, {value}, {word}, {}, {lane_bits};", lane * lane_bits));
+                    }
+                }
+            }
+            let vector = if words.len() == 1 { String::new() } else { format!("v{}.", words.len()) };
+            let operands = if words.len() == 1 { words[0].clone() } else { format!("{{{}}}", words.join(", ")) };
+            let offset = chunk * bytes;
+            if store { self.line(format!("st.{space}.{vector}b32 [{address}+{offset}], {operands};")); }
+            else {
+                self.line(format!("ld.{space}.{vector}b32 {operands}, [{address}+{offset}];"));
+                let extension = if ty.signed() { "s32" } else { "u32" };
+                for (group, word) in values.chunks_exact(lanes).zip(&words) {
+                    for (lane, value) in group.iter().enumerate() {
+                        self.line(format!("bfe.{extension} {value}, {word}, {}, {lane_bits};", lane * lane_bits));
+                    }
+                }
+            }
+        }
+        if let Some((scalar_path, done)) = fallback {
+            self.line(format!("bra {done};"));
+            self.line(format!("{scalar_path}:"));
+            for (lane, register) in registers.iter().enumerate() {
+                let element_address = format!("{address}+{}", lane * ty.bytes());
+                if store { self.store_memory_scalar(space, ty, register, &element_address); }
+                else { self.load_memory_scalar(space, ty, register, &element_address); }
+            }
+            self.line(format!("{done}:"));
+        }
+        true
+    }
+
     fn packed_vector_memory(&mut self, space: &str, ty: Scalar, registers: &[String], address: &str, store: bool, aligned: bool) -> bool {
         let half = matches!(ty, Scalar::F16 | Scalar::BF16);
         let width = registers.len();
-        if !(half && matches!(width, 2 | 4 | 8) || ty == Scalar::F32 && matches!(width, 2 | 4)) {
+        let wide = self.vector_memory_bytes(space) == 32;
+        if !(half && (matches!(width, 2 | 4 | 8) || wide && width == 16)
+            || ty == Scalar::F32 && (matches!(width, 2 | 4) || wide && width == 8)) {
             return false;
         }
         let alignment = width * ty.bytes();

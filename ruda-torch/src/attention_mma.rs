@@ -7,14 +7,14 @@ fn softmax_exp(value: f32) -> f32 {
 
 #[ruda]
 fn load_keys<F: Float + RudaElement>(keys: &Array<F>, stage: &mut SharedMemory<F>,
-    unit: usize, batch: usize, head: usize, key_base: usize, key_count: u32, kv_heads: u32,
-    #[comptime] width: usize) {
+    unit: usize, batch: usize, head: usize, key_base: usize, key_count: u32,
+    #[comptime] width: usize, #[comptime] strides: Vec<usize>) {
     #[unroll] for i in 0usize..(width/16) {
         let index=(unit+i*128)*8;
         let row=index/width;let col=index%width;
         let mut source=0usize;let mut length=0usize;
         if key_base+row<key_count as usize {
-            source=((batch*kv_heads as usize+head)*key_count as usize+key_base+row)*width+col;
+            source=batch*comptime!(strides[0])+head*comptime!(strides[1])+(key_base+row)*comptime!(strides[2])+col;
             length=8;
         }
         let target=row*(width+8)+col;
@@ -29,6 +29,7 @@ pub(super) fn flash<F: Float + RudaElement>(
     queries: u32, key_count: u32, heads: u32, kv_heads: u32, scale: f32,
     #[comptime] width: usize, #[comptime] causal: bool, #[comptime] mask_kind: u32,
     #[comptime] asynchronous: bool,
+    #[comptime] q_strides: Vec<usize>, #[comptime] k_strides: Vec<usize>, #[comptime] v_strides: Vec<usize>,
 ) {
     let lane=UNIT_POS_X as usize;
     let warp=UNIT_POS_Y as usize;
@@ -48,7 +49,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             let row=index/width;let col=index%width;
             let mut source=0usize;let mut length=0usize;
             if query_base+row<queries as usize {
-                source=((batch*heads as usize+head)*queries as usize+query_base+row)*width+col;
+                source=batch*comptime!(q_strides[0])+head*comptime!(q_strides[1])+(query_base+row)*comptime!(q_strides[2])+col;
                 length=8;
             }
             let target=row*stride+col;
@@ -63,7 +64,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             let col=index%width;
             let mut value=F::cast_from(0.0f32);
             if query_base+row<queries as usize {
-                value=query[((batch*heads as usize+head)*queries as usize+query_base+row)*width+col];
+                value=query[batch*comptime!(q_strides[0])+head*comptime!(q_strides[1])+(query_base+row)*comptime!(q_strides[2])+col];
             }
             ks[row*stride+col]=value;
         }
@@ -89,7 +90,7 @@ pub(super) fn flash<F: Float + RudaElement>(
     let mut end=key_count as usize;
     if comptime!(causal) {end=usize::min(end,query_base+64);}
     if comptime!(asynchronous) {
-        load_keys(keys,&mut ks,unit,batch,kv_head,0usize,key_count,kv_heads,width);
+        load_keys(keys,&mut ks,unit,batch,kv_head,0usize,key_count,width,k_strides);
         ready.as_ref().unwrap().commit_copy_async();
     }
     for block in 0usize..((end+63)/64) {
@@ -102,7 +103,7 @@ pub(super) fn flash<F: Float + RudaElement>(
                 let row=index/width;let col=index%width;
                 let mut source=0usize;let mut length=0usize;
                 if key_base+row<key_count as usize {
-                    source=((batch*kv_heads as usize+kv_head)*key_count as usize+key_base+row)*width+col;
+                    source=batch*comptime!(v_strides[0])+kv_head*comptime!(v_strides[1])+(key_base+row)*comptime!(v_strides[2])+col;
                     length=8;
                 }
                 let target=row*stride+col;
@@ -115,8 +116,9 @@ pub(super) fn flash<F: Float + RudaElement>(
                 let row=index/width;let col=index%width;
                 let mut key=F::cast_from(0.0f32);let mut value=F::cast_from(0.0f32);
                 if key_base+row<key_count as usize {
-                    let source=((batch*kv_heads as usize+kv_head)*key_count as usize+key_base+row)*width+col;
-                    key=keys[source];value=values[source];
+                    let source=batch*comptime!(k_strides[0])+kv_head*comptime!(k_strides[1])+(key_base+row)*comptime!(k_strides[2])+col;
+                    let value_source=batch*comptime!(v_strides[0])+kv_head*comptime!(v_strides[1])+(key_base+row)*comptime!(v_strides[2])+col;
+                    key=keys[source];value=values[value_source];
                 }
                 ks[row*stride+col]=key;vs[row*stride+col]=value;
             }
@@ -186,7 +188,7 @@ pub(super) fn flash<F: Float + RudaElement>(
             ready.as_ref().unwrap().arrive_and_wait();
             // All warps have finished QK. Reuse K while PV consumes only V.
             if key_base+64<end {
-                load_keys(keys,&mut ks,unit,batch,kv_head,key_base+64,key_count,kv_heads,width);
+                load_keys(keys,&mut ks,unit,batch,kv_head,key_base+64,key_count,width,k_strides);
                 ready.as_ref().unwrap().commit_copy_async();
             }
         }

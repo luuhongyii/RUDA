@@ -38,7 +38,7 @@ impl DeviceService for CudaServer {
         };
         let supported_wmma_combinations = WmmaCompiler::supported_wmma_combinations(&arch);
         let supported_mma_combinations = WmmaCompiler::supported_mma_combinations(&arch);
-        let supported_scaled_mma_combinations =
+        let mut supported_scaled_mma_combinations =
             WmmaCompiler::supported_scaled_mma_combinations(&arch);
 
         // SAFETY: `device_ptr` is a valid CUDA device. `primary_ctx::retain` returns the
@@ -72,7 +72,7 @@ impl DeviceService for CudaServer {
 
         // SAFETY: `device_ptr` is a valid CUDA device. All `get_attribute` calls query
         // read-only device properties via the CUDA driver API.
-        let hardware_props = unsafe {
+        let mut hardware_props = unsafe {
             use cudarc::driver::{result::device::get_attribute, sys::CUdevice_attribute::*};
             let warp_size =
                 get_attribute(device_ptr, CU_DEVICE_ATTRIBUTE_WARP_SIZE).unwrap() as u32;
@@ -129,6 +129,23 @@ impl DeviceService for CudaServer {
 
         let compiler_backend = crate::compiler_backend::CompilerBackend::from_environment()
             .expect("invalid Ruda CUDA compiler configuration");
+        #[cfg(feature="direct-ptx")]
+        if let crate::compiler_backend::CompilerBackend::DirectPtx { version } = compiler_backend {
+            if arch_version >= 100 && version >= (8, 8) { hardware_props.load_width = 256; }
+        }
+        match compiler_backend {
+            crate::compiler_backend::CompilerBackend::Nvrtc => {
+                if CUDA_VERSION<12080 {supported_scaled_mma_combinations.clear();}
+            }
+            #[cfg(feature="direct-ptx")]
+            crate::compiler_backend::CompilerBackend::DirectPtx{version} => {
+                supported_scaled_mma_combinations.retain(|config|arch_version==120 && version>=(8,7)
+                    && config.m==16 && config.n==8 && config.k==64 && config.scales_factor==4
+                    && config.a_type==StorageType::Packed(ElemType::Float(FloatKind::E2M1),2)
+                    && config.b_type==config.a_type && config.cd_type==ElemType::Float(FloatKind::F32).into()
+                    && config.scales_type==ElemType::Float(FloatKind::E4M3).into());
+            }
+        }
         let mut identity = super::identity::probe(device_ptr);
         identity.fingerprint = compiler_backend.cache_namespace(arch_version);
         let mut device_props = DeviceProperties::new(
@@ -138,6 +155,11 @@ impl DeviceService for CudaServer {
             TimingMethod::Device,
         ).with_identity(identity);
         register_supported_types(&mut device_props);
+        #[cfg(feature = "direct-ptx")]
+        if let crate::compiler_backend::CompilerBackend::DirectPtx { version } = compiler_backend {
+            device_props.features.matmul.tcgen05 = arch_version == 100 && version >= (8, 6)
+                && CUDA_VERSION >= 12080;
+        }
         for elem in [
             ElemType::Int(IntKind::I32), ElemType::Int(IntKind::I64),
             ElemType::UInt(UIntKind::U32), ElemType::UInt(UIntKind::U64),

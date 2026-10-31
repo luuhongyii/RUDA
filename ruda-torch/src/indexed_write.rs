@@ -226,6 +226,7 @@ pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
         if work == 0 { return; }
         let launch_grid = grid(work);
         validate(&c, indices, target.shape[axis], mode == 2);
+        if mode==1 && super::graph_index::try_copy(source,indices,target,axis) {return;}
         macro_rules! launch { ($s:ty, $i:ty) => { unsafe { assign_axis::launch::<$s, $i, CudaRuntime>(&c, launch_grid, block,
             re.arg(), im.arg(), indices.arg(), out_re.arg(), out_im.arg(), work, axis, mode, complex); }}; }
         macro_rules! data { ($s:ty) => { if indices.dtype == 4 { launch!($s, i64); } else { launch!($s, i32); } }; }

@@ -40,15 +40,15 @@ pub(super) fn layer_norm(
         .expect("LayerNorm launch grid overflow");
     let dummy = weight.or(bias).unwrap_or(input);
     let cached = width <= 16384;
-    let threads = super::row_cached::threads(width);
+    let threads = super::row_cached::norm_threads(width, rows);
     macro_rules! run {
         ($dtype:ty) => { if cached {
             super::row_cached::norm::launch::<$dtype, $dtype, $dtype, $dtype, CudaRuntime>(
-                &client, RudaCount::Static(u32::try_from(rows).expect("LayerNorm grid overflow"), 1, 1),
-                RudaDim::new_1d(threads as u32), input.arg(), weight.unwrap_or(dummy).arg(),
+                &client, super::row_cached::norm_grid(rows,threads),
+                super::row_cached::norm_block(threads), input.arg(), weight.unwrap_or(dummy).arg(),
                 bias.unwrap_or(dummy).arg(), out.arg(), mean.arg(), rstd.arg(), epsilon,
                 weight.is_some(), bias.is_some(), true, true, false, width, threads,
-                super::row_cached::vector_size(width, input, out))
+                super::row_cached::memory_vector_size(&client,width,&[input,out],16))
         } else { kernels::layer_norm_warp::launch::<$dtype, CudaRuntime>(
             &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
             input.arg(), weight.unwrap_or(dummy).arg(), bias.unwrap_or(dummy).arg(),
@@ -85,14 +85,14 @@ pub(super) fn rms_norm(input: &View, weight: Option<&View>, out: &View, epsilon:
         .expect("RMSNorm launch grid overflow");
     let dummy = weight.unwrap_or(input);
     let cached = width <= 16384;
-    let threads = super::row_cached::threads(width);
+    let threads = super::row_cached::norm_threads(width, rows);
     macro_rules! run {
         ($dtype:ty) => { if cached {
             super::row_cached::norm::launch::<$dtype, $dtype, $dtype, $dtype, CudaRuntime>(
-                &client, RudaCount::Static(u32::try_from(rows).expect("RMSNorm grid overflow"), 1, 1),
-                RudaDim::new_1d(threads as u32), input.arg(), dummy.arg(), dummy.arg(),
+                &client, super::row_cached::norm_grid(rows,threads),
+                super::row_cached::norm_block(threads), input.arg(), dummy.arg(), dummy.arg(),
                 out.arg(), out.arg(), out.arg(), epsilon, weight.is_some(), false, false, false, false, width, threads,
-                super::row_cached::vector_size(width, input, out))
+                super::row_cached::memory_vector_size(&client,width,&[input,out],16))
         } else { kernels::rms_norm_warp::launch::<$dtype, CudaRuntime>(
             &client, RudaCount::Static(count, 1, 1), RudaDim::new_1d(128),
             input.arg(), weight.unwrap_or(dummy).arg(), out.arg(), epsilon, weight.is_some()) } };

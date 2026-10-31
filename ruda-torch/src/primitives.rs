@@ -31,29 +31,8 @@ pub(super) fn check_indices(indices: &View, bound: usize, allow_negative: bool) 
         TRUSTED_INDEX_CALLS.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    let widened;
-    let indices = if indices.dtype == 5 {
-        widened = View::packed(client().empty(indices.len.checked_mul(8).expect("index size overflow")),
-            indices.shape.clone(), 4);
-        convert(indices, &widened);
-        &widened
-    } else { indices };
     let lower_bound = if allow_negative { -i64::try_from(bound).expect("index bound overflow") } else { 0 };
-    let negative = ruprim::elementwise::comparison::lower_elem(
-        tensor(indices), InputScalar::new(lower_bound, DType::I64), DType::U32);
-    let too_large = ruprim::elementwise::comparison::greater_equal_elem(
-        tensor(indices), InputScalar::new(i64::try_from(bound).expect("index bound overflow"), DType::I64), DType::U32);
-    let invalid = arithmetic::bitwise_or(negative, too_large);
-    let status = ruprim::reduce::tensor::reduce(invalid, None,
-        KernelReduceStrategy::Unspecified, ReduceOperationConfig::Max)
-        .expect("RUDA index validation reduction failed");
-    sync(&client());
-    LAUNCHES.fetch_add(3 + indices.shape.len() as u64, Ordering::Relaxed);
-    let excess = status.handle.size_in_used().checked_sub(4).expect("invalid index status size");
-    let bytes = client().read_one(status.handle.offset_end(excess)).expect("RUDA index status readback failed");
-    DOWNLOAD.fetch_add(4, Ordering::Relaxed);
-    assert_eq!(bytes.len(), 4);
-    assert_eq!(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 0, "RUDA index out of bounds");
+    super::graph_index::check_bounds(indices,lower_bound,i64::try_from(bound).expect("index bound overflow"));
 }
 
 pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
@@ -107,6 +86,8 @@ pub(super) fn launch(op: u32, a: &View, b: &View, out: &View, scalar: f32) {
             let axis = scalar as usize;
             let bound = if op <= 103 { a.shape[axis] } else { out.shape[axis] };
             check_indices(b, bound, false);
+            if op==103 && super::graph_index::try_select(a,b,out,axis) {return;}
+            if op==105 && super::operation_scatter::try_index_add(a,b,out,axis) {return;}
             match op {
                 102 => ruprim::indexing::gather(axis, tensor(a), tensor(b)),
                 103 => ruprim::indexing::select(tensor(a), axis, tensor(b)),
@@ -155,6 +136,8 @@ fn wide_index(op:u32,a:&View,b:&View,out:&View,scalar:f32) {
     let bound=if op<=103 {a.shape[axis]} else {out.shape[axis]};
     check_indices(b,bound,false);
     if b.len==0 || out.len==0 {return;}
+    if op==103 && super::graph_index::try_select(a,b,out,axis) {return;}
+    if op==105 && super::operation_scatter::try_index_add(a,b,out,axis) {return;}
     if op==102 || op==103 || op==106 {
         let bytes=a.byte_view();let output=out.byte_view();
         let result=match op {

@@ -1,7 +1,7 @@
 use super::*;
 
 impl Emitter {
-    pub(super) fn transaction_barrier(&mut self, barrier: Variable) -> Result<String> {
+    pub(in crate::ptx) fn transaction_barrier(&mut self, barrier: Variable) -> Result<String> {
         if self.target.sm < 90 || self.target.version < (8, 0) {
             return Err(unsupported("barrier transactions require SM >= 90 and PTX >= 8.0"));
         }

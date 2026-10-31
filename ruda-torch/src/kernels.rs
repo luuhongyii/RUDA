@@ -1,7 +1,7 @@
 use ruda_kernel::dsl::prelude::*;
 
 #[ruda]
-fn offset<F: RudaPrimitive>(tensor: &Tensor<F>, position: usize) -> usize {
+pub(super) fn offset<F: RudaPrimitive>(tensor: &Tensor<F>, position: usize) -> usize {
     let mut remaining = position;
     let mut offset = 0usize;
     let mut dim = tensor.rank();
@@ -767,7 +767,7 @@ pub fn softmax<F: Float + RudaElement, O: Float + RudaElement>(
             for i in 0..width {
                 let grad = f32::cast_from(a[ab + i * a.stride(axis)]);
                 let y = f32::cast_from(b[bb + i * b.stride(axis)]);
-                if comptime!(logarithmic) { out[ob + i * out.stride(axis)] = O::cast_from(grad - y.exp() * total); }
+                if comptime!(logarithmic) { out[ob + i * out.stride(axis)] = O::cast_from(grad - crate::softmax::exp_fast(y) * total); }
                 else { out[ob + i * out.stride(axis)] = O::cast_from(y * (grad - total)); }
             }
         } else {
@@ -777,11 +777,11 @@ pub fn softmax<F: Float + RudaElement, O: Float + RudaElement>(
                 if value != value || value > maximum { maximum = value; }
             }
             let mut total = 0.0f32;
-            for i in 0..width { total += (f32::cast_from(a[ab + i * a.stride(axis)]) - maximum).exp(); }
+            for i in 0..width { total += crate::softmax::exp_fast(f32::cast_from(a[ab + i * a.stride(axis)]) - maximum); }
             for i in 0..width {
                 let shifted = f32::cast_from(a[ab + i * a.stride(axis)]) - maximum;
                 if comptime!(logarithmic) { out[ob + i * out.stride(axis)] = O::cast_from(shifted - total.ln()); }
-                else { out[ob + i * out.stride(axis)] = O::cast_from(shifted.exp() / total); }
+                else { out[ob + i * out.stride(axis)] = O::cast_from(crate::softmax::exp_fast(shifted) / total); }
             }
         }
     }
@@ -923,7 +923,7 @@ pub fn softmax_warp<F: Float + RudaElement, O: Float + RudaElement>(
                 let grad = f32::cast_from(a[ab + i * a.stride(axis)]);
                 let y = f32::cast_from(b[bb + i * b.stride(axis)]);
                 if comptime!(logarithmic) {
-                    out[ob + i * out.stride(axis)] = O::cast_from(grad - y.exp() * total);
+                    out[ob + i * out.stride(axis)] = O::cast_from(grad - crate::softmax::exp_fast(y) * total);
                 } else {
                     out[ob + i * out.stride(axis)] = O::cast_from(y * (grad - total));
                 }
@@ -947,7 +947,7 @@ pub fn softmax_warp<F: Float + RudaElement, O: Float + RudaElement>(
             let mut local = 0.0f32;
             let mut i = lane;
             while i < width {
-                local += (f32::cast_from(a[ab + i * a.stride(axis)]) - maximum).exp();
+                local += crate::softmax::exp_fast(f32::cast_from(a[ab + i * a.stride(axis)]) - maximum);
                 i += 32;
             }
             let total = plane_sum(local);
@@ -957,7 +957,7 @@ pub fn softmax_warp<F: Float + RudaElement, O: Float + RudaElement>(
                 if comptime!(logarithmic) {
                     out[ob + i * out.stride(axis)] = O::cast_from(shifted - total.ln());
                 } else {
-                    out[ob + i * out.stride(axis)] = O::cast_from(shifted.exp() / total);
+                    out[ob + i * out.stride(axis)] = O::cast_from(crate::softmax::exp_fast(shifted) / total);
                 }
                 i += 32;
             }

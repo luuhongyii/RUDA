@@ -231,6 +231,11 @@ pub(super) fn dispatch(op: u32, xs: &[View], ints: &[i64]) {
         assert_eq!(output.len, indices.len.checked_mul(input.shape[1]).expect("embedding output shape overflow"));
         validate_indices(&c, indices, input.shape[0]);
         if output.len == 0 { return; }
+        if indices.contiguous() && output.contiguous() {
+            let flat_indices=View::packed(indices.handle.clone(),vec![indices.len],indices.dtype);
+            let flat_output=View::packed(output.handle.clone(),vec![indices.len,input.shape[1]],output.dtype);
+            if super::graph_index::try_select(input,&flat_indices,&flat_output,0) {return;}
+        }
         let re = part(input, false); let im = part(input, true); let out_re = part(output, false); let out_im = part(output, true);
         let complex = matches!(input.dtype, 10 | 11 | 14);
         macro_rules! launch { ($s:ty, $i:ty) => { unsafe { gather::launch::<$s, $i, CudaRuntime>(&c, grid(output.len.div_ceil(256)), block,

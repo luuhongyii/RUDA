@@ -274,6 +274,13 @@ pub fn encode_code(value:f32,#[comptime] format:u32,#[comptime] saturate:bool)->
         let mut code=lower as u32;
         if clipped-lower>0.5 || (clipped-lower==0.5 && code&1!=0) { code+=1; }
         code
+    } else if comptime!(format==14) {
+        let magnitude=value.abs();
+        let code=u32::cast_from(magnitude>0.25f32)+u32::cast_from(magnitude>=0.75f32)
+            +u32::cast_from(magnitude>1.25f32)+u32::cast_from(magnitude>=1.75f32)
+            +u32::cast_from(magnitude>2.5f32)+u32::cast_from(magnitude>=3.5f32)
+            +u32::cast_from(magnitude>5.0f32);
+        code|((value.to_bits()>>31)*8u32)
     } else {
         let negative=value.to_bits()>>31;
         let sign_bit=comptime!(if format==14 {8u32} else {128u32});

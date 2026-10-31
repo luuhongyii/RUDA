@@ -7,6 +7,9 @@ use ruda_core::tensor::DType;
 pub extern "C" fn ruda_torch_dense_attention_api_version() -> u32 { 1 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn ruda_torch_attention_strides_api_version() -> u32 { 1 }
+
+#[unsafe(no_mangle)]
 pub extern "C" fn ruda_torch_indexed_dense_attention_api_version() -> u32 { 1 }
 
 #[unsafe(no_mangle)]
@@ -99,7 +102,10 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
         let ds = unsafe { crate::abi::slice(descriptors, count) };
         let xs: Vec<View> = ds.iter().map(|d| unsafe { crate::abi::view(d) }).collect();
         let (q, k, v, mask) = (&xs[0], &xs[1], &xs[2], &xs[3]);
-        for x in [q, k, v] { packed(x); assert_eq!(x.shape.len(), 4); assert_eq!(x.dtype, q.dtype); }
+        for x in [q, k, v] {
+            assert_eq!(x.shape.len(),4);assert_eq!(x.dtype,q.dtype);
+            assert!(x.len<=u32::MAX as usize && super::attention_prefill::storage_span(x).is_some(),"attention storage exceeds U32 indexing");
+        }
         assert!(q.dtype <= 2);
         let (b,h,l,d) = (q.shape[0],q.shape[1],q.shape[2],q.shape[3]);
         let (kh,s,dv) = (k.shape[1],k.shape[2],v.shape[3]);
@@ -126,8 +132,23 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
         }
         let output = &xs[4]; packed(output);
         assert_eq!(output.dtype,q.dtype); assert_eq!(output.shape,vec![b,h,l,dv]);
-        let flash_vectorized = [q,k,v,output].iter().all(|x| x.handle.offset_start.unwrap_or(0) % 16 == 0);
         let c = client();
+        let packed_inputs=[q,k,v].iter().all(|x|x.contiguous());
+        if !packed_inputs && op==0 && !flash && dropout_p==0.0 {
+            if let Some(prepared)=super::attention_prefill::prepare(&c,q,k,v,output,mask,stats,mask_kind,causal,scale) {
+                let (task,count,args,origin)=prepared.into_parts();origin.launch(task,count,args);
+                LAUNCHES.fetch_add(1,Ordering::Relaxed);finish_dispatch(&c);return;
+            }
+        }
+        let packed_views:Vec<_>=[q,k,v].into_iter().map(|source| {
+            if source.contiguous() {None}else {
+                let target=View::packed(c.empty(source.len.max(1).checked_mul(element_bytes(source.dtype)).expect("attention packing overflow")),
+                    source.shape.clone(),source.dtype);
+                convert(source,&target);Some(target)
+            }
+        }).collect();
+        let q=packed_views[0].as_ref().unwrap_or(q);let k=packed_views[1].as_ref().unwrap_or(k);let v=packed_views[2].as_ref().unwrap_or(v);
+        let flash_vectorized = [q,k,v,output].iter().all(|x| x.handle.offset_start.unwrap_or(0) % 16 == 0);
         let qt = primitives::tensor(q); let kt = primitives::tensor(k); let vt = primitives::tensor(v);
         let mt = primitives::tensor(mask); let ot = primitives::tensor(output); let st = primitives::tensor(stats);
         let grid = RudaCount::Static(u32::try_from(rows).expect("attention grid overflow"),1,1);
@@ -183,7 +204,7 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                 return;
             }
             if rows != 0 {
-                unsafe { kernel::forward::launch::<CudaRuntime>(&c,grid,dim,
+                unsafe { kernel::forward::launch::<CudaRuntime>(&c,RudaCount::Static(rows.div_ceil(4) as u32,1,1),RudaDim::new_1d(128),
                     qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),mt.into_tensor_arg(),
                     ot.into_array_arg(),st.into_array_arg(),h as u32,kh as u32,l as u32,s as u32,scale,dropout_p,
                     seed as u32,(seed>>32) as u32,counter as u32,(counter>>32) as u32,
@@ -341,7 +362,7 @@ unsafe fn dispatch(op: u32, descriptors: *const Descriptor, count: usize, mask_k
                     LAUNCHES.fetch_add(1,Ordering::Relaxed); }
             }
             if rows != 0 {
-                unsafe { kernel::backward::launch::<CudaRuntime>(&c,grid,dim,
+                unsafe { kernel::backward::launch::<CudaRuntime>(&c,RudaCount::Static(rows.div_ceil(4) as u32,1,1),RudaDim::new_1d(128),
                     qt.into_array_arg(),kt.into_array_arg(),vt.into_array_arg(),mt.into_tensor_arg(),
                     ot.into_array_arg(),st.into_array_arg(),dqt.into_array_arg(),
                     wkt.clone().into_array_arg(),wvt.clone().into_array_arg(),dmt.into_array_arg(),

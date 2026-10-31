@@ -1,5 +1,6 @@
 using AdvancedIndex = int (*)(const Descriptor*,const Descriptor*,size_t,const int64_t*,const int64_t*,const Descriptor*);
 AdvancedIndex advanced_index_native = nullptr;
+bool mask_rows_enabled = false;
 
 struct IndexMetadata {
   at::Tensor source;
@@ -87,8 +88,33 @@ void index_dispatch(const IndexMetadata& info,at::Tensor& result) {
                              info.sizes.data(),info.strides.data(),&out.desc));
 }
 
+bool index_mask_rows(const at::Tensor& self,const c10::List<std::optional<at::Tensor>>& indices,at::Tensor& result) {
+  if (!mask_rows_enabled || indices.size()!=1 || dtype_code(self.scalar_type())>14
+      || (result.defined() && (result.is_conj() || result.is_neg()))) return false;
+  const std::optional<at::Tensor> mask=indices.get(0);
+  if (!mask || mask->scalar_type()!=at::kBool || mask->device()!=self.device()
+      || mask->dim()==0 || mask->dim()>self.dim()) return false;
+  for(int64_t d=0;d<mask->dim();++d) if(mask->size(d)!=self.size(d)) return false;
+  auto logical_mask=scientific_resolve(*mask);
+  auto prefix=at::empty({mask->numel()},self.options().dtype(at::kInt));
+  int64_t count=0;
+  if(mask->numel()) {
+    auto total=at::empty({1},self.options().dtype(at::kLong));
+    scientific_call(463,{logical_mask,prefix,total},{},{});
+    count=total.item<int64_t>();
+  }
+  std::vector<int64_t> shape{count};
+  for(int64_t d=mask->dim();d<self.dim();++d) shape.push_back(self.size(d));
+  if(result.defined()) at::native::resize_output(result,shape);
+  else result=at::empty(shape,self.options());
+  if(result.numel()) scientific_call(465,{scientific_resolve(self),prefix,result},{count,mask->dim(),1},{});
+  return true;
+}
+
 at::Tensor advanced_index(const at::Tensor& self,const c10::List<std::optional<at::Tensor>>& indices) {
   validate(self.device());
+  at::Tensor masked;
+  if(index_mask_rows(self,indices,masked)) return masked;
   auto info=index_metadata(self,indices);
   auto result=at::empty(info.source.sizes(),self.options());
   index_dispatch(info,result);
@@ -106,6 +132,7 @@ at::Tensor& advanced_index_out(const at::Tensor& self,const c10::List<std::optio
     const std::optional<at::Tensor> index=item;
     if (index && index->defined()) at::assert_no_overlap(out,*index);
   }
+  if(index_mask_rows(self,indices,out)) return out;
   auto info=index_metadata(self,indices);
   at::native::resize_output(out,info.source.sizes());
   index_dispatch(info,out);

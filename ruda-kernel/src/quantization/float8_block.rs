@@ -32,7 +32,8 @@ pub fn scaled_mm<R: Runtime>(a: &RudaTensor<R>, w: &RudaTensor<R>, sa: &RudaTens
     let hardware = &a.client.properties().hardware;
     assert!(hardware.plane_size_min == 32 && hardware.plane_size_max == 32);
     assert!(native || (hardware.max_shared_memory_size >= 2048 && a.client.features().matmul.cmma.contains(&carrier)));
-    let tile = if native {8} else {16};
+    let column_tiles = if n >= 32 {4usize} else if n >= 16 {2} else {1};
+    let tile = if native {8 * column_tiles} else {16};
     assert!(n.div_ceil(tile) <= hardware.max_ruda_count.0 as usize && m.div_ceil(16) <= hardware.max_ruda_count.1 as usize);
     let output = empty_device_contiguous_dtype(a.client.clone(), a.device.clone(), Shape::new([m, n]), DType::F32);
     if m == 0 || n == 0 {return output;}
@@ -40,7 +41,7 @@ pub fn scaled_mm<R: Runtime>(a: &RudaTensor<R>, w: &RudaTensor<R>, sa: &RudaTens
     if native {
         native_block::launch::<R>(&a.client, grid, RudaDim::new_1d(32), a.clone().into_array_arg(), w.clone().into_array_arg(),
             sa.clone().into_array_arg(), sw.clone().into_array_arg(), output.clone().into_array_arg(),
-            m as u32, n as u32, k as u32, rows_a as u32, rows_w as u32, block_k as u32, groups as u32, dtype(format_a), dtype(format_w));
+            m as u32, n as u32, k as u32, rows_a as u32, rows_w as u32, block_k as u32, groups as u32, column_tiles, dtype(format_a), dtype(format_w));
     } else {
         carrier_block::launch::<R>(&a.client, grid, RudaDim::new_1d(32), a.clone().into_array_arg(), w.clone().into_array_arg(),
             sa.clone().into_array_arg(), sw.clone().into_array_arg(), output.clone().into_array_arg(),
@@ -77,13 +78,14 @@ pub fn prepare_scaled_mm<R: Runtime>(a: &RudaTensor<R>, w: &RudaTensor<R>, sa: &
     let hardware = &a.client.properties().hardware;
     assert!(hardware.plane_size_min == 32 && hardware.plane_size_max == 32);
     assert!(native || (hardware.max_shared_memory_size >= 2048 && a.client.features().matmul.cmma.contains(&carrier)));
-    let tile = if native {8} else {16};
+    let column_tiles = if n >= 32 {4usize} else if n >= 16 {2} else {1};
+    let tile = if native {8 * column_tiles} else {16};
     assert!(n.div_ceil(tile) <= hardware.max_ruda_count.0 as usize && m.div_ceil(16) <= hardware.max_ruda_count.1 as usize);
     let grid = RudaCount::Static(n.div_ceil(tile) as u32, m.div_ceil(16) as u32, 1);
     vec![unsafe {if native {
         native_block::prepare::<R>(&a.client, grid, RudaDim::new_1d(32), a.clone().into_array_arg(), w.clone().into_array_arg(),
             sa.clone().into_array_arg(), sw.clone().into_array_arg(), output.clone().into_array_arg(),
-            m as u32, n as u32, k as u32, rows_a as u32, rows_w as u32, block_k as u32, groups as u32, dtype(format_a), dtype(format_w))
+            m as u32, n as u32, k as u32, rows_a as u32, rows_w as u32, block_k as u32, groups as u32, column_tiles, dtype(format_a), dtype(format_w))
     } else {
         carrier_block::prepare::<R>(&a.client, grid, RudaDim::new_1d(32), a.clone().into_array_arg(), w.clone().into_array_arg(),
             sa.clone().into_array_arg(), sw.clone().into_array_arg(), output.clone().into_array_arg(),
@@ -243,7 +245,8 @@ pub fn linear<R: Runtime>(input: RudaTensor<R>, weight: &RudaTensor<R>, scales: 
     let hardware = &input.client.properties().hardware;
     assert!(hardware.plane_size_min == 32 && hardware.plane_size_max == 32);
     assert!(native || (hardware.max_shared_memory_size >= 2048 && input.client.features().matmul.cmma.contains(&carrier)));
-    let tile = if native { 8 } else { 16 };
+    let column_tiles = if n >= 32 {4usize} else if n >= 16 {2} else {1};
+    let tile = if native { 8 * column_tiles } else { 16 };
     assert!(m.checked_mul(groups).is_some_and(|v| v <= hardware.max_ruda_count.0 as usize) && m.div_ceil(16) <= hardware.max_ruda_count.1 as usize
         && n.div_ceil(tile) <= hardware.max_ruda_count.0 as usize);
     let allocate = |shape, dtype| empty_device_contiguous_dtype(input.client.clone(), input.device.clone(), shape, dtype);
@@ -258,7 +261,7 @@ pub fn linear<R: Runtime>(input: RudaTensor<R>, weight: &RudaTensor<R>, scales: 
     if native {
         native_block::launch::<R>(&input.client, grid, RudaDim::new_1d(32), encoded.into_array_arg(),
             weight.clone().into_array_arg(), activation_scales.into_array_arg(), scales.clone().into_array_arg(), out.clone().into_array_arg(),
-            m as u32, n as u32, k as u32, 1u32, bn as u32, bk as u32, groups as u32, fp8, fp8);
+            m as u32, n as u32, k as u32, 1u32, bn as u32, bk as u32, groups as u32, column_tiles, fp8, fp8);
     } else {
         carrier_block::launch::<R>(&input.client, grid, RudaDim::new_1d(32), encoded.into_array_arg(),
             weight.clone().into_array_arg(), activation_scales.into_array_arg(), scales.clone().into_array_arg(), out.clone().into_array_arg(),
@@ -312,7 +315,7 @@ fn quantize_rows<F: Float>(input: &Array<F>, encoded: &mut Array<u8>, scales: &m
 #[ruda(launch)]
 fn native_block<A: Float, W: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32>, sw: &Array<f32>, out: &mut Array<f32>,
     m: u32, n: u32, k: u32, #[comptime] bm: u32, #[comptime] bn: u32, #[comptime] bk: u32, groups: u32,
-    #[define(A)] _a_fp8: StorageType, #[define(W)] _w_fp8: StorageType) {
+    #[comptime] column_tiles: usize, #[define(A)] _a_fp8: StorageType, #[define(W)] _w_fp8: StorageType) {
     let def = cmma::MmaDefinition::<A, W, f32>::new(16usize, 8usize, 32usize);
     let va = def.vector_size(cmma::MatrixIdent::A); let vb = def.vector_size(cmma::MatrixIdent::B);
     let vc = def.vector_size(cmma::MatrixIdent::Accumulator);
@@ -321,12 +324,12 @@ fn native_block<A: Float, W: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32
     let cb = def.vectors_per_lane(cmma::MatrixIdent::B);
     let cc = def.vectors_per_lane(cmma::MatrixIdent::Accumulator);
     let mut left = Array::<Vector<A, NA>>::new(ca); let mut right = Array::<Vector<W, NB>>::new(cb);
-    let mut sum = Array::<Vector<f32, NC>>::new(cc);
-    #[unroll] for i in 0..cc { sum[i] = Vector::cast_from(0.0f32); }
-    let row_base = RUDA_POS_Y * 16; let col_base = RUDA_POS_X * 8; let lane = UNIT_POS_PLANE;
+    let mut sum = Array::<Vector<f32, NC>>::new(comptime!(cc * column_tiles));
+    #[unroll] for i in 0..cc * column_tiles { sum[i] = Vector::cast_from(0.0f32); }
+    let row_base = RUDA_POS_Y * 16; let col_base = RUDA_POS_X * (8 * column_tiles) as u32; let lane = UNIT_POS_PLANE;
     for group in 0..groups {
-        let mut acc = Array::<Vector<f32, NC>>::new(cc);
-        #[unroll] for i in 0..cc { acc[i] = Vector::cast_from(0.0f32); }
+        let mut acc = Array::<Vector<f32, NC>>::new(comptime!(cc * column_tiles));
+        #[unroll] for i in 0..cc * column_tiles { acc[i] = Vector::cast_from(0.0f32); }
         #[unroll] for tile in 0..bk / 32 {
             let base = group * bk + tile * 32;
             #[unroll] for i in 0..ca {
@@ -339,34 +342,43 @@ fn native_block<A: Float, W: Float>(a: &Array<u8>, w: &Array<u8>, sa: &Array<f32
                 }
                 left[i] = reg;
             }
-            #[unroll] for i in 0..cb {
-                let mut reg = Vector::empty();
-                #[unroll] for j in 0..vb {
-                    let (r, c) = def.position_of_nth(lane, (i * vb + j) as u32, cmma::MatrixIdent::B);
-                    let row = base + r; let col = col_base + c; let mut byte = 0u8;
-                    if row < k && col < n { byte = w[(col * k + row) as usize]; }
-                    reg[j] = W::reinterpret(byte);
+            #[unroll] for column in 0usize..column_tiles {
+                #[unroll] for i in 0..cb {
+                    let mut reg = Vector::empty();
+                    #[unroll] for j in 0..vb {
+                        let (r, c) = def.position_of_nth(lane, (i * vb + j) as u32, cmma::MatrixIdent::B);
+                        let row = base + r; let col = col_base + column as u32 * 8 + c; let mut byte = 0u8;
+                        if row < k && col < n { byte = w[(col * k + row) as usize]; }
+                        reg[j] = W::reinterpret(byte);
+                    }
+                    right[i] = reg;
                 }
-                right[i] = reg;
+                let mut current = Array::<Vector<f32, NC>>::new(cc);
+                #[unroll] for i in 0..cc { current[i] = acc[column * cc + i]; }
+                def.execute_inplace(&left, &right, &mut current);
+                #[unroll] for i in 0..cc { acc[column * cc + i] = current[i]; }
             }
-            def.execute_inplace(&left, &right, &mut acc);
         }
-        #[unroll] for i in 0..cc {
-            let partial = acc[i]; let mut total = sum[i];
-            #[unroll] for j in 0..vc {
-                let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
-                let row = row_base + r; let col = col_base + c;
-                if row < m && col < n { total[j] += partial[j] * sa[((row / bm) * groups + group) as usize] * sw[((col / bn) * groups + group) as usize]; }
+        #[unroll] for column in 0usize..column_tiles {
+            #[unroll] for i in 0..cc {
+                let partial = acc[column * cc + i]; let mut total = sum[column * cc + i];
+                #[unroll] for j in 0..vc {
+                    let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
+                    let row = row_base + r; let col = col_base + column as u32 * 8 + c;
+                    if row < m && col < n { total[j] += partial[j] * sa[((row / bm) * groups + group) as usize] * sw[((col / bn) * groups + group) as usize]; }
+                }
+                sum[column * cc + i] = total;
             }
-            sum[i] = total;
         }
     }
-    #[unroll] for i in 0..cc {
-        let total = sum[i];
-        #[unroll] for j in 0..vc {
-            let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
-            let row = row_base + r; let col = col_base + c;
-            if row < m && col < n { out[(row * n + col) as usize] = total[j]; }
+    #[unroll] for column in 0usize..column_tiles {
+        #[unroll] for i in 0..cc {
+            let total = sum[column * cc + i];
+            #[unroll] for j in 0..vc {
+                let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
+                let row = row_base + r; let col = col_base + column as u32 * 8 + c;
+                if row < m && col < n { out[(row * n + col) as usize] = total[j]; }
+            }
         }
     }
 }

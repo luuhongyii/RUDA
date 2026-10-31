@@ -4,7 +4,7 @@ from threading import RLock
 import torch
 import sys
 from . import _C
-from ._graph_spec import GraphOp, TensorSpec, MATH_BINARY_CODES, MATH_SCALAR_CODES, INDEX_CODES, TRANSFORM_CODES, PREDICATE_CODES, FACTORY_CODES, MASK_CODES
+from ._graph_spec import GraphOp, TensorSpec, MATH_BINARY_CODES, MATH_SCALAR_CODES, INDEX_CODES, TRANSFORM_CODES, PREDICATE_CODES, FACTORY_CODES, MASK_CODES, FP8_DTYPES
 from ._graph_opt import prepare_plan
 
 class StaticGraph:
@@ -72,8 +72,72 @@ class StaticGraph:
         layout_api=int(getattr(sys.modules[__package__],'_graph_layout_available',False))
         empty_api=int(getattr(sys.modules[__package__],'_graph_empty_available',False))
         root_api=int(getattr(sys.modules[__package__],'_graph_root_available',False))
-        plan=prepare_plan(metadata,nodes,outputs,optimize=optimize,reuse_workspace=reuse_workspace,layout_api=layout_api,empty_api=empty_api,root_api=root_api)
+        native=getattr(sys.modules[__package__],'_native',None)
+        matmul_version=getattr(native,'ruda_torch_graph_matmul_layout_api_version',None)
+        matmul_layout_api=min(getattr(_C,'graph_matmul_layout_api_version',0),
+                              matmul_version() if matmul_version is not None else 0,6)
+        plan=prepare_plan(metadata,nodes,outputs,optimize=optimize,reuse_workspace=reuse_workspace,
+                          layout_api=layout_api,empty_api=empty_api,root_api=root_api,
+                          matmul_layout_api=matmul_layout_api if not training else 0,
+                          rotary_api=int(not training and getattr(sys.modules[__package__],'_graph_rotary_available',False)),
+                          product_reduce_api=int(not training and getattr(sys.modules[__package__],'_graph_product_reduce_available',False)),
+                          abs_extremum_api=int(not training and getattr(sys.modules[__package__],'_graph_abs_extremum_available',False)),
+                          group_mask_api=int(not training and getattr(sys.modules[__package__],'_graph_group_mask_available',False)))
         layout=plan.layout
+        if any(212<=code<=216 for code in layout.words[::3]):
+            if not getattr(sys.modules[__package__],'_graph_transform_available',False):
+                raise RuntimeError('native graph transform API 1 required; rebuild Rust and C++ extensions')
+        if 210 in layout.words[::3]:
+            if not getattr(sys.modules[__package__],'_graph_group_mask_available',False):
+                raise RuntimeError('native graph group mask API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('group mask graph nodes require AOT autograd or inference mode')
+        if any(code in (208,209) for code in layout.words[::3]):
+            if not getattr(sys.modules[__package__],'_graph_abs_extremum_available',False):
+                raise RuntimeError('native graph absolute extremum API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('absolute extremum graph nodes require AOT autograd or inference mode')
+        if any(203<=code<=206 for code in layout.words[::3]):
+            if not getattr(sys.modules[__package__],'_graph_product_reduce_available',False):
+                raise RuntimeError('native graph product reduction API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('product reduction graph nodes require AOT autograd or inference mode')
+        if any(code in (201,202) for code in layout.words[::3]):
+            if not getattr(sys.modules[__package__],'_graph_rotary_available',False):
+                raise RuntimeError('native graph rotary API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('rotary graph nodes require AOT autograd or inference mode')
+        if any(code in (194,195) for code in layout.words[::3]):
+            if not getattr(sys.modules[__package__],'_graph_segment_available',False):
+                raise RuntimeError('native graph segment scan API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('segment scan graph nodes require AOT autograd or inference mode')
+        if 193 in layout.words[::3]:
+            if not getattr(sys.modules[__package__],'_graph_pack_available',False):
+                raise RuntimeError('native graph byte packing API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('byte packing graph nodes require AOT autograd or inference mode')
+        if any(189<=code<=192 for code in layout.words[::3]):
+            if not getattr(sys.modules[__package__],'_graph_extremum_available',False):
+                raise RuntimeError('native graph extremum API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('extremum graph nodes require AOT autograd or inference mode')
+        if any(spec.dtype in FP8_DTYPES for spec in layout.specs):
+            if not getattr(sys.modules[__package__],'_graph_fp8_available',False):
+                raise RuntimeError('native graph FP8 API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('FP8 graph nodes require AOT autograd or inference mode')
+        if any(174<=code<=188 for code in layout.words[::3]):
+            if not getattr(sys.modules[__package__],'_graph_activation_available',False):
+                raise RuntimeError('native graph activation API 1 required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('activation graph nodes require AOT autograd or inference mode')
+        if any(code in (173,207,211,217,218) or 196<=code<=200 for code in layout.words[::3]):
+            required=6 if 218 in layout.words[::3] else 5 if 217 in layout.words[::3] else 4 if 211 in layout.words[::3] else 3 if 207 in layout.words[::3] else 2 if any(196<=code<=200 for code in layout.words[::3]) else 1
+            if matmul_layout_api<required:
+                raise RuntimeError(f'native graph matmul layout API {required} required; rebuild Rust and C++ extensions')
+            if training:
+                raise ValueError('transposed matrix graph nodes require AOT autograd or inference mode')
         if any(code in (*FACTORY_CODES.values(),*MASK_CODES.values()) for code in layout.words[::3]):
             if not getattr(sys.modules[__package__],'_graph_factory_available',False):
                 raise RuntimeError('native graph factory API 1 required; rebuild Rust and C++ extensions')

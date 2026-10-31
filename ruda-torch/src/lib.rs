@@ -10,8 +10,20 @@ mod allocation;
 mod streams;
 mod graph_contract;
 mod graph_matmul;
+mod graph_block_scale;
+mod graph_fusion;
+mod graph_layout_chain;
+mod graph_softmax;
+mod graph_norm;
+mod graph_rotary;
+mod graph_product_reduce;
+mod graph_group_mask;
+mod graph_transform;
+mod segment_scan;
+mod graph_reduce;
 mod graph_index;
 mod graph_factory;
+mod layout_tiled;
 mod static_graph;
 mod operation_graph;
 mod operation_pointwise;
@@ -95,6 +107,7 @@ mod dot_ops;
 mod int_matmul;
 mod scaled_matmul;
 mod fp4_matmul;
+mod fp4_mma;
 mod grouped_matmul;
 mod sparse_coo;
 mod sparse_algebra;
@@ -179,6 +192,8 @@ mod triangular_indices;
 mod logspace;
 mod primitives;
 mod spatial;
+mod spatial_direct;
+mod spatial_gemm;
 mod factories;
 mod indexing;
 
@@ -588,6 +603,11 @@ fn convert(a: &View, out: &View) {
     }
     if a.dtype >= 9 || out.dtype >= 9 { scientific::convert(a,out);finish_dispatch(&client());return; }
     let client = client();
+    if let Some(prepared) = layout_tiled::prepare_copy(&client,a,out) {
+        let (task,count,args,origin) = prepared.into_parts();
+        origin.launch(task,count,args);
+        finish_dispatch(&client);LAUNCHES.fetch_add(1,Ordering::Relaxed);return;
+    }
     let contiguous_input = a.is_contiguous();
     let packed_rows = !contiguous_input
         && a.shape.last().is_some_and(|size| *size > 0 && size % 4 == 0)

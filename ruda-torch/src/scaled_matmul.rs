@@ -64,11 +64,12 @@ fn native<A: Float, B: Float, O: Numeric, P: Float, S: Numeric>(
     a: &Tensor<u8>, b: &Tensor<u8>, sa: &Tensor<S>, sb: &Tensor<S>, bias: &Tensor<P>, out: &mut Tensor<O>,
     #[comptime] mode_a: u32, #[comptime] mode_b: u32, #[comptime] fast: bool,
     #[comptime] has_bias: bool, #[comptime] output_code: u32,
+    #[comptime] column_tiles: usize, #[comptime] vector_a: bool, #[comptime] vector_b: bool,
     #[define(A)] _a_type: StorageType, #[define(B)] _b_type: StorageType,
     #[define(O)] _output_type: StorageType, #[define(P)] _bias_type: StorageType, #[define(S)] _scale_type: StorageType,
 ) {
     let m = a.shape(0); let k = a.shape(1); let n = b.shape(1);
-    let row_base = RUDA_POS_Y as usize * 16usize; let column_base = RUDA_POS_X as usize * 8usize;
+    let row_base = RUDA_POS_Y as usize * 16usize; let column_base = RUDA_POS_X as usize * (8usize * column_tiles);
     let lane = UNIT_POS_PLANE;
     let def = cmma::MmaDefinition::<A, B, f32>::new(16usize, 8usize, 32usize);
     let va = def.vector_size(cmma::MatrixIdent::A); let vb = def.vector_size(cmma::MatrixIdent::B);
@@ -77,69 +78,99 @@ fn native<A: Float, B: Float, O: Numeric, P: Float, S: Numeric>(
     let ca = def.vectors_per_lane(cmma::MatrixIdent::A); let cb = def.vectors_per_lane(cmma::MatrixIdent::B);
     let cc = def.vectors_per_lane(cmma::MatrixIdent::Accumulator);
     let mut ra = Array::<Vector<A, NA>>::new(ca); let mut rb = Array::<Vector<B, NB>>::new(cb);
-    let mut rc = Array::<Vector<f32, NC>>::new(cc); let mut group = Array::<Vector<f32, NC>>::new(cc);
-    let mut total = Array::<Vector<f32, NC>>::new(cc);
-    #[unroll] for i in 0..cc {
+    let mut rc = Array::<Vector<f32, NC>>::new(cc*column_tiles); let mut group = Array::<Vector<f32, NC>>::new(cc*column_tiles);
+    let mut total = Array::<Vector<f32, NC>>::new(cc*column_tiles);
+    #[unroll] for i in 0..comptime!(cc*column_tiles) {
         rc[i] = Vector::cast_from(0.0f32); group[i] = Vector::cast_from(0.0f32); total[i] = Vector::cast_from(0.0f32);
     }
     let mut base = 0usize;
     while base < k {
         #[unroll] for i in 0..ca {
             let mut reg = Vector::empty();
+            if comptime!(vector_a && va==4) {
+                let (r, c) = def.position_of_nth(lane, (i * va) as u32, cmma::MatrixIdent::A);
+                let row = row_base + r as usize; let col = base + c as usize;
+                let mut bytes=Vector::<u8,Const<4>>::new(0u8);
+                if row<m && col<k {
+                    let packed=a.slice(0usize,a.len()).into_vectorized().with_vector_size::<Const<4>>();
+                    bytes=packed[(row*a.stride(0)+col)/4usize];
+                }
+                #[unroll] for j in 0..va {reg[j]=A::reinterpret(bytes[j]);}
+            } else {
             #[unroll] for j in 0..va {
                 let (r, c) = def.position_of_nth(lane, (i * va + j) as u32, cmma::MatrixIdent::A);
                 let row = row_base + r as usize; let col = base + c as usize; let mut code = 0u8;
                 if row < m && col < k { code = a[row * a.stride(0) + col * a.stride(1)]; }
                 reg[j] = A::reinterpret(code);
             }
+            }
             ra[i] = reg;
         }
+        #[unroll] for tile in 0usize..column_tiles {
+        let column=column_base+tile*8usize;
         #[unroll] for i in 0..cb {
             let mut reg = Vector::empty();
+            if comptime!(vector_b && vb==4) {
+                let (r, c) = def.position_of_nth(lane, (i * vb) as u32, cmma::MatrixIdent::B);
+                let row = base + r as usize; let col = column + c as usize;
+                let mut bytes=Vector::<u8,Const<4>>::new(0u8);
+                if row<k && col<n {
+                    let packed=b.slice(0usize,b.len()).into_vectorized().with_vector_size::<Const<4>>();
+                    bytes=packed[(row+col*b.stride(1))/4usize];
+                }
+                #[unroll] for j in 0..vb {reg[j]=B::reinterpret(bytes[j]);}
+            } else {
             #[unroll] for j in 0..vb {
                 let (r, c) = def.position_of_nth(lane, (i * vb + j) as u32, cmma::MatrixIdent::B);
-                let row = base + r as usize; let col = column_base + c as usize; let mut code = 0u8;
+                let row = base + r as usize; let col = column + c as usize; let mut code = 0u8;
                 if row < k && col < n { code = b[row * b.stride(0) + col * b.stride(1)]; }
                 reg[j] = B::reinterpret(code);
             }
+            }
             rb[i] = reg;
         }
-        def.execute_inplace(&ra, &rb, &mut rc);
+        let mut current=Array::<Vector<f32,NC>>::new(cc);
+        #[unroll] for i in 0..cc {current[i]=rc[tile*cc+i];}
+        def.execute_inplace(&ra, &rb, &mut current);
         if comptime!(!fast) {
-            #[unroll] for i in 0..cc { group[i] = group[i] + rc[i]; rc[i] = Vector::cast_from(0.0f32); }
+            #[unroll] for i in 0..cc { group[tile*cc+i] = group[tile*cc+i] + current[i]; current[i] = Vector::cast_from(0.0f32); }
         }
         let mut end_group = k - base <= 32usize;
         if comptime!(mode_a >= 2) { end_group = end_group || (base + 32usize) % 128usize == 0usize; }
         if comptime!(mode_a == 6) { end_group = true; }
         if end_group {
             #[unroll] for i in 0..cc {
-                let mut value = group[i];
-                if comptime!(fast) { value = rc[i]; }
+                let mut value = group[tile*cc+i];
+                if comptime!(fast) { value = current[i]; }
                 if comptime!(mode_a >= 2) {
-                    let mut sum = total[i];
+                    let mut sum = total[tile*cc+i];
                     #[unroll] for j in 0..vc {
                         let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
-                        let row = row_base + r as usize; let col = column_base + c as usize;
+                        let row = row_base + r as usize; let col = column + c as usize;
                         if row < m && col < n { sum[j] += scaled_block(sa, sb, value[j], row, col, base, k, mode_a, mode_b); }
                     }
-                    total[i] = sum;
-                } else { total[i] = value; }
-                rc[i] = Vector::cast_from(0.0f32); group[i] = Vector::cast_from(0.0f32);
+                    total[tile*cc+i] = sum;
+                } else { total[tile*cc+i] = value; }
+                current[i] = Vector::cast_from(0.0f32); group[tile*cc+i] = Vector::cast_from(0.0f32);
             }
+        }
+        #[unroll] for i in 0..cc {rc[tile*cc+i]=current[i];}
         }
         if k - base <= 32usize { base = k; } else { base += 32usize; }
     }
+    #[unroll] for tile in 0usize..column_tiles {
     #[unroll] for i in 0..cc {
-        let reg = total[i];
+        let reg = total[tile*cc+i];
         #[unroll] for j in 0..vc {
             let (r, c) = def.position_of_nth(lane, (i * vc + j) as u32, cmma::MatrixIdent::Accumulator);
-            let row = row_base + r as usize; let col = column_base + c as usize;
+            let row = row_base + r as usize; let col = column_base + tile*8usize + c as usize;
             if row < m && col < n {
                 let mut value = reg[j];
                 if comptime!(mode_a < 2) { value = value * scale(sa, row, 0usize, mode_a, false) * scale(sb, col, 0usize, mode_b, true); }
                 store(bias, out, row, col, value, has_bias, output_code);
             }
         }
+    }
     }
 }
 
@@ -245,7 +276,12 @@ pub(super) fn dispatch(xs: &[View], ints: &[i64]) {
         let native = c.features().matmul.mma.contains(&MmaConfig {a_type: fp8(a.dtype), b_type: fp8(b.dtype),
             cd_type: DType::F32.into(), m: 16, n: 8, k: 32});
         let carrier = MmaConfig {a_type: DType::F16.into(), b_type: DType::F16.into(), cd_type: DType::F32.into(), m: 16, n: 16, k: 16};
-        let h = &c.properties().hardware; let tile = if native {8} else {16};
+        let h = &c.properties().hardware;
+        let sms=h.num_streaming_multiprocessors.unwrap_or(108).max(1) as usize;
+        let column_tiles=if native && n>=32 && m.div_ceil(16)*n.div_ceil(16)>=2*sms {2}else {1};
+        let tile = if native {8*column_tiles} else {16};
+        let vector_a=a.strides==[k,1] && a.handle.offset_start.unwrap_or(0)%4==0;
+        let vector_b=b.strides==[1,k] && b.handle.offset_start.unwrap_or(0)%4==0;
         assert!(h.plane_size_min == 32 && h.plane_size_max == 32);
         assert!(native || (h.max_shared_memory_size >= 2048 && c.features().matmul.cmma.contains(&carrier)), "scaled_mm requires FP8 or FP16 tensor cores");
         assert!(m <= u32::MAX as usize - 16 && k <= u32::MAX as usize - 32 && n <= u32::MAX as usize - 16);
@@ -254,7 +290,8 @@ pub(super) fn dispatch(xs: &[View], ints: &[i64]) {
         unsafe {
             if native {
                 native::launch::<CudaRuntime>(&c, grid, RudaDim::new_1d(32), a.arg(), b.arg(), sa.arg(), sb.arg(), bias.arg(), out.arg(),
-                    ma as u32, mb as u32, fast, has_bias, out.dtype, fp8(a.dtype), fp8(b.dtype), output_type, bias_type, scale_type);
+                    ma as u32, mb as u32, fast, has_bias, out.dtype, column_tiles, vector_a, vector_b,
+                    fp8(a.dtype), fp8(b.dtype), output_type, bias_type, scale_type);
             } else {
                 carrier::launch::<CudaRuntime>(&c, grid, RudaDim::new_1d(32), a.arg(), b.arg(), sa.arg(), sb.arg(), bias.arg(), out.arg(),
                     ma as u32, mb as u32, if a.dtype == 12 {18} else {19}, if b.dtype == 12 {18} else {19},

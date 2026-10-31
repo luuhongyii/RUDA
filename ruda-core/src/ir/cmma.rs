@@ -106,6 +106,28 @@ impl Matrix {
     }
 }
 
+/// SM100 tensor-memory operations. Allocation and loads are warp collective;
+/// MMA and completion notification are issued by one elected thread.
+#[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, TypeHash, PartialEq, Eq, Hash)]
+pub enum Tcgen05Op {
+    Allocate { columns: u32 },
+    Deallocate { columns: u32 },
+    Relinquish,
+    Descriptor,
+    Mma { n: u32, bf16: bool },
+    MmaFp8 { n: u32, e5m2_a: bool, e5m2_b: bool },
+    /// Generic M=128 MMA. `kind`: 0 f16, 1 bf16, 2 tf32, 3 e4m3, 4 e5m2 (both
+    /// operands share the kind). `a_mn`/`b_mn` select MN-major operand layouts.
+    MmaKind { n: u32, kind: u32, a_mn: bool, b_mn: bool },
+    /// 128B-swizzled shared descriptor with explicit leading/stride byte offsets
+    /// (MN-major operands: `lbo` = MN panel stride, `sbo` = 8-row K group stride).
+    DescriptorStrided { lbo: u32, sbo: u32 },
+    Commit,
+    Load { columns: u32 },
+    Fence { before: bool },
+}
+
 /// Cooperative Matrix-Multiply and Accumulate Instruction.
 #[cfg_attr(feature = "ir-serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, TypeHash, PartialEq, Eq, Hash, OperationCode)]
@@ -218,6 +240,7 @@ pub enum CoopMma {
         scales_b: Variable,
         scales_factor: usize,
     },
+    Blackwell { kind: Tcgen05Op, args: Vec<Variable> },
 }
 
 impl OperationReflect for CoopMma {
@@ -244,7 +267,7 @@ impl OperationReflect for CoopMma {
             | CoopMma::SliceTensorLayout { .. }
             | CoopMma::LoadTensor { .. }
             | CoopMma::StoreTensor { .. } => None,
-            CoopMma::Elementwise { .. } => None,
+            CoopMma::Elementwise { .. } | CoopMma::Blackwell { .. } => None,
             CoopMma::Cast { input } => Some(vec![*input]),
         }
     }
@@ -266,7 +289,7 @@ impl OperationReflect for CoopMma {
             | CmmaOpCode::SliceTensorLayout
             | CmmaOpCode::LoadTensor
             | CmmaOpCode::StoreTensor => None,
-            CmmaOpCode::Elementwise => None,
+            CmmaOpCode::Elementwise | CmmaOpCode::Blackwell => None,
             CmmaOpCode::Cast => Some(CoopMma::Cast { input: args[0] }),
         }
     }
@@ -275,6 +298,7 @@ impl OperationReflect for CoopMma {
 impl Display for CoopMma {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            CoopMma::Blackwell { kind, args } => write!(f, "tcgen05::{kind:?}({args:?})"),
             CoopMma::Fill { value } => write!(f, "{value}"),
             CoopMma::Load {
                 value,

@@ -113,8 +113,8 @@ def remove_casts(text):
             text = text[:start] + text[start+len(token):end-1] + text[end:]
     return text
 
-@pytest.mark.parametrize('name,digest', [('pointwise','c8d0f2da5555f7b34813cdc2bf658e138185ef6892467f6b8ddfc31a14e47f42'), ('softmax','1b0b58c61d703ef7a8eaa9968f27dd016b852e96b4b12377ad2b4647a2a33276')])
-def test_original_scalar_formulas_are_preserved(name, digest):
+@pytest.mark.parametrize('name,digest', [('pointwise','c8d0f2da5555f7b34813cdc2bf658e138185ef6892467f6b8ddfc31a14e47f42'), ('softmax','024597a2ae3e35873cb2ad1ddaf06af94bc9568452e6830297ec98b4f6a2d1ff')])
+def test_scalar_formula_snapshots(name, digest):
     text = (ROOT / 'ruda-torch/src/kernels.rs').read_text()
     start = text.index('#[ruda(launch)]\npub fn '+name+'<')
     end = text.index('\n#[ruda', start+25)
